@@ -38,7 +38,7 @@ export function ShareDialog({
   const [wallet, setWallet] = useState("");
   const [role, setRole] = useState<"viewer" | "editor">("viewer");
   const [busy, setBusy] = useState(false);
-  const [sellOn, setSellOn] = useState(false);
+  const [editingSell, setEditingSell] = useState(focusSection === "sell");
   const [price, setPrice] = useState("");
 
   async function load() {
@@ -54,15 +54,8 @@ export function ShareDialog({
   // Existing paid share for this exact path (most recent first)
   const paidShare = shares.find(s => s.path === defaultPath && s.price_usdc !== null);
 
-  // If a paid share already exists, surface it as the active state
-  useEffect(() => {
-    if (paidShare) setSellOn(true);
-  }, [paidShare]);
-
-  // Auto-expand based on focusSection
-  useEffect(() => {
-    if (focusSection === "sell" && !paidShare) setSellOn(true);
-  }, [focusSection, paidShare]);
+  // Toggle is derived: ON when an active paid share exists, OR user opened the form
+  const sellOn = !!paidShare || editingSell;
 
   async function saveSell() {
     const num = Number(price);
@@ -176,7 +169,7 @@ export function ShareDialog({
               <div className="flex items-center gap-2 text-sm font-medium">
                 <DollarSign className="w-4 h-4" /> Sell this {defaultPath.includes("/") || defaultPath ? "item" : "drive"}
               </div>
-              <Toggle on={sellOn} disabled={!!paidShare} onChange={setSellOn} />
+              <Toggle on={sellOn} disabled={!!paidShare} onChange={setEditingSell} />
             </div>
 
             {/* Active state: existing paid share (read-only) */}

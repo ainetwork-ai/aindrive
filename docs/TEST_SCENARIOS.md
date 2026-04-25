@@ -73,7 +73,7 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 58. 🟢 Owner adds wallet to deeper path "docs" → only authorizes that subtree
 59. 🟢 Wallet visitor lists / before allowlist → 401/403
 60. 🟢 Wallet visitor lists / after allowlist → 200 with role=viewer
-61. 🔴 Wallet visitor lists subfolder authorized via prefix → 200
+61. 🟢 Wallet visitor lists subfolder authorized via prefix → 200
 62. 🟢 Wallet visitor lists sibling not under allowed prefix → 403
 63. 🟢 Wallet visitor write attempt with role=viewer → 403
 64. 🟢 Owner revokes wallet → next visitor list returns 401
