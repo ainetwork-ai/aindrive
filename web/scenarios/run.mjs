@@ -1,6 +1,10 @@
 /**
  * Scenario runner — loads test cases from scenarios/cases.mjs and runs them
  * sequentially, printing PASS/FAIL summary and updating docs/TEST_SCENARIOS.md.
+ *
+ * NOTE: vitest is the new primary test path. Use `npm test` (vitest run) for
+ * parallelization, watch mode, snapshots, and JUnit XML output.
+ * This file is kept for lightweight CI scripts that don't have vitest installed.
  */
 import { cases } from "./cases.mjs";
 import { readFileSync, writeFileSync } from "node:fs";

@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { Toaster } from "sonner";
+import { WalletProvider } from "@/components/wallet-provider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -9,7 +11,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-drive-bg text-drive-text font-sans antialiased">{children}</body>
+      <body className="bg-drive-bg text-drive-text font-sans antialiased">
+        <WalletProvider>
+          {children}
+          <Toaster position="bottom-right" richColors closeButton />
+        </WalletProvider>
+      </body>
     </html>
   );
 }

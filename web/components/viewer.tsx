@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { useDebouncedCallback } from "use-debounce";
 import dynamic from "next/dynamic";
 import { X, Save, Download, Loader2, Wifi, WifiOff } from "lucide-react";
 import * as Y from "yjs";
@@ -42,6 +43,30 @@ export function Viewer({
   const bindingRef = useRef<MonacoBinding | null>(null);
   const docIdRef = useRef<string>("");
   const [presence, setPresence] = useState<Array<{ id: number; name: string; color: string }>>([]);
+
+  // Debounced autosave: trailing edge after 5s of no typing, max 15s between saves.
+  const debouncedAutosave = useDebouncedCallback(
+    async () => {
+      if (!canEdit || !providerRef.current || !docIdRef.current) return;
+      const provider = providerRef.current;
+      const text = provider.doc.getText("content").toString();
+      const update = Y.encodeStateAsUpdate(provider.doc);
+      try {
+        await Promise.all([
+          fetch(`/api/drives/${driveId}/fs/write`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
+          }),
+          fetch(`/api/drives/${driveId}/yjs`, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ docId: docIdRef.current, path: entry.path, data: bytesToBase64(update) }),
+          }),
+        ]);
+      } catch (e) { console.warn("autosave failed:", e); }
+    },
+    5000,
+    { maxWait: 15000 },
+  );
 
   // Set up Y.js provider for text files
   useEffect(() => {
@@ -146,51 +171,28 @@ export function Viewer({
     provider.awareness.on("change", refreshPresence);
     refreshPresence();
 
-    // Autosave: 5s debounce after last update + on tab close
-    let saveTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleSave = (reason: "tick" | "unload" | "close" = "tick") => {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        tracer?.("autosave-trigger", { reason });
-        void doAutosave();
-      }, 5000);
-    };
-    const triggerSave = () => scheduleSave("tick");
-    const doAutosave = async () => {
-      if (!canEdit || !providerRef.current || !docIdRef.current) return;
-      const text = provider.doc.getText("content").toString();
-      const update = Y.encodeStateAsUpdate(provider.doc);
-      const fsByteLen = new TextEncoder().encode(text).byteLength;
-      const yjsByteLen = update.byteLength;
-      try {
-        const [fsRes, yjsRes] = await Promise.all([
-          fetch(`/api/drives/${driveId}/fs/write`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
-          }),
-          fetch(`/api/drives/${driveId}/yjs`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ docId: docIdRef.current, path: entry.path, data: bytesToBase64(update) }),
-          }),
-        ]);
-        tracer?.("autosave-flush", { okFs: fsRes.ok, okYjs: yjsRes.ok, fsByteLen, yjsByteLen });
-      } catch (e) { console.warn("autosave failed:", e); }
+    // Autosave: trailing-edge 5s debounce with maxWait 15s (via useDebouncedCallback above).
+    const triggerSave = () => {
+      tracer?.("autosave-trigger", { reason: "tick" });
+      void debouncedAutosave();
     };
     provider.doc.on("update", triggerSave);
-    const onUnload = () => { void doAutosave(); };
+    // beforeunload: flush any pending debounce immediately.
+    const onUnload = () => {
+      debouncedAutosave.flush();
+    };
     window.addEventListener("beforeunload", onUnload);
 
     return () => {
       cancelled = true;
-      if (saveTimer) clearTimeout(saveTimer);
-      void doAutosave();
+      debouncedAutosave.flush();
       window.removeEventListener("beforeunload", onUnload);
       provider.doc.off("update", triggerSave);
       off();
       bindingRef.current?.destroy(); bindingRef.current = null;
       provider.destroy(); providerRef.current = null;
     };
-  }, [driveId, entry.path, isText, canEdit]);
+  }, [driveId, entry.path, isText, canEdit, debouncedAutosave]);
 
   // Load binary preview (image / PDF)
   useEffect(() => {

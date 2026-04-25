@@ -1,4 +1,6 @@
-import { db } from "./db";
+import { eq, and } from "drizzle-orm";
+import { drizzleDb } from "./db";
+import { drives, drive_members, folder_access } from "../drizzle/schema";
 import { getWallet } from "./wallet";
 
 export type Role = "viewer" | "commenter" | "editor" | "owner";
@@ -12,14 +14,18 @@ function isAncestorOrSelf(ancestor: string, target: string): boolean {
 
 /** Owner-of-drive or member-of-drive role lookup by user id. */
 export function resolveRoleByUser(driveId: string, userId: string, targetPath: string): Role | "none" {
-  const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId) as
-    | { owner_id: string }
-    | undefined;
+  const drive = drizzleDb
+    .select({ owner_id: drives.owner_id })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .get();
   if (!drive) return "none";
   if (drive.owner_id === userId) return "owner";
-  const members = db
-    .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
-    .all(driveId, userId) as { path: string; role: Role }[];
+  const members = drizzleDb
+    .select({ path: drive_members.path, role: drive_members.role })
+    .from(drive_members)
+    .where(and(eq(drive_members.drive_id, driveId), eq(drive_members.user_id, userId)))
+    .all() as { path: string; role: Role }[];
   let best: Role | "none" = "none";
   for (const m of members) {
     if (isAncestorOrSelf(m.path, targetPath) && rank[m.role] > rank[best]) best = m.role;
@@ -29,9 +35,11 @@ export function resolveRoleByUser(driveId: string, userId: string, targetPath: s
 
 /** Folder-access list lookup by wallet address. Returns the highest matching row's role. */
 export function resolveRoleByWallet(driveId: string, wallet: string, targetPath: string): Role | "none" {
-  const rows = db
-    .prepare("SELECT path, role FROM folder_access WHERE drive_id = ? AND wallet_address = ?")
-    .all(driveId, wallet.toLowerCase()) as { path: string; role: Role }[];
+  const rows = drizzleDb
+    .select({ path: folder_access.path, role: folder_access.role })
+    .from(folder_access)
+    .where(and(eq(folder_access.drive_id, driveId), eq(folder_access.wallet_address, wallet.toLowerCase())))
+    .all() as { path: string; role: Role }[];
   let best: Role | "none" = "none";
   for (const r of rows) {
     if (isAncestorOrSelf(r.path, targetPath) && rank[r.role] > rank[best]) best = r.role;

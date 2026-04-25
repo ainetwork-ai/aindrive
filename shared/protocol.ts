@@ -1,7 +1,7 @@
 /**
- * Wire protocol shared between the Vercel web API and the local `aindrive` CLI agent.
+ * Wire protocol shared between the aindrive web server and the local `aindrive` CLI agent.
  *
- * Every message crossing the bus is Vercel-signed (HMAC-SHA256). The agent verifies
+ * Every message crossing the bus is server-signed (HMAC-SHA256). The agent verifies
  * the signature before touching the filesystem. The web side verifies the response
  * signature before handing bytes to the UI.
  */

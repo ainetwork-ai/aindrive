@@ -1,0 +1,21 @@
+aindrive.ainetwork.ai {
+	encode zstd gzip
+
+	# Long timeouts for WebSocket sync sessions.
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	reverse_proxy @websocket web:3737 {
+		flush_interval -1
+	}
+
+	reverse_proxy web:3737
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}

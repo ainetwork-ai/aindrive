@@ -105,7 +105,6 @@ backend is one config switch:
 |---|---|---|---|
 | **Local model** (Ollama, llama.cpp) | none | localhost only | Zero egress; perfect for sensitive folders |
 | **[Flock](https://flock.io)** (Web3 inference network) | **none** — pay per call via wallet | decentralised | Combined with [x402](https://x402.org) + wallet auth → **fully login-free** stack |
-| **[Bittensor](https://bittensor.com)** subnets | none — wallet-paid | decentralised | Permissionless inference network |
 | OpenAI / Anthropic | API key | centralised | Familiar default; needs `*_API_KEY` env |
 
 The "login-free" path is the most interesting design: with **Flock for

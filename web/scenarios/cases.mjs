@@ -1,4 +1,5 @@
 import { privateKeyToAccount } from "viem/accounts";
+import { SiweMessage } from "siwe";
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { spawn, execSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -49,7 +50,17 @@ function eq(a, b, msg) {
 
 async function signWalletNonce(wallet) {
   const nr = await jget("/api/wallet/nonce", { method: "POST" });
-  const message = `aindrive wants you to sign in with your wallet.\n\nAddress: ${wallet.address.toLowerCase()}\nNonce: ${nr.body.nonce}`;
+  const url = new URL(BASE);
+  const siweMsg = new SiweMessage({
+    domain: url.host,
+    address: wallet.address,
+    statement: "aindrive wants you to sign in with your wallet.",
+    uri: BASE,
+    version: "1",
+    chainId: 1,
+    nonce: nr.body.nonce,
+  });
+  const message = siweMsg.prepareMessage();
   const signature = await wallet.signMessage({ message });
   return { nonce: nr.body.nonce, signature };
 }

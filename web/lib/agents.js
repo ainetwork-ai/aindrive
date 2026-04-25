@@ -3,6 +3,7 @@ import { db } from "./db.js";
 import { verifyPayload, signPayload } from "./sig.js";
 import { broadcastReload } from "./dochub.js";
 import { trace, docIdFor } from "./trace.js";
+import { log } from "./logger.js";
 
 /**
  * In-memory registry of currently-connected agent WebSockets.
@@ -53,10 +54,10 @@ export async function sendRpc(driveId, params, opts = {}) {
     }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     entry.pending.set(reqId, { resolve, reject, timer });
     try {
-      console.log(`[sendRpc] driveId=${driveId} method=${params.method} reqId=${reqId} ws.readyState=${entry.ws.readyState}`);
+      log.debug({ driveId, method: params.method, reqId, readyState: entry.ws.readyState }, "[sendRpc]");
       try { trace("server", "rpc-out", { docId: docIdFor(driveId, params.path || ""), extra: { method: params.method, reqId } }); } catch {}
       entry.ws.send(JSON.stringify(frame));
-      console.log(`[sendRpc] sent ${reqId}`);
+      log.debug({ reqId }, "[sendRpc] sent");
     } catch (e) {
       clearTimeout(timer);
       entry.pending.delete(reqId);
@@ -104,7 +105,7 @@ export async function onAgentConnect(ws, req, query) {
   agents.set(driveId, entry);
   db.prepare("UPDATE drives SET last_seen_at = datetime('now') WHERE id = ?").run(driveId);
 
-  console.log(`agent connected: drive=${driveId}`);
+  log.info({ drive: driveId }, "agent connected");
   try { trace("server", "agent-connect", { docId: "agent-" + driveId }); } catch {}
   try { ws.send(JSON.stringify({ type: "hello", v: PROTOCOL_VERSION })); } catch {}
 
@@ -121,7 +122,7 @@ export async function onAgentConnect(ws, req, query) {
     // Agent → server fs.watch notification: forward to live editors as 'reload'.
     if (msg?.type === "fs-changed" && typeof msg.path === "string") {
       const sent = broadcastReload(driveId, msg.path);
-      if (sent > 0) console.log(`[fs-changed] drive=${driveId} path=${msg.path} → ${sent} editors reloaded`);
+      if (sent > 0) log.info({ drive: driveId, path: msg.path, editors: sent }, "[fs-changed] editors reloaded");
       return;
     }
     // Multi-device sync frames — broadcast to OTHER connected agents on the same drive.
@@ -138,7 +139,7 @@ export async function onAgentConnect(ws, req, query) {
     if (!msg || msg.type !== "response" || !msg.reqId) return;
     const { sig, type, ...rest } = msg;
     if (!verifyPayload(entry.driveSecret, rest, sig)) {
-      console.warn(`[agents] dropped response with bad sig: reqId=${msg.reqId}`);
+      log.warn({ reqId: msg.reqId }, "[agents] dropped response with bad sig");
       return;
     }
     const pending = entry.pending.get(msg.reqId);
@@ -169,12 +170,12 @@ export async function onAgentConnect(ws, req, query) {
       reject(e);
     }
     entry.pending.clear();
-    console.log(`agent disconnected: drive=${driveId}`);
+    log.info({ drive: driveId }, "agent disconnected");
     try { trace("server", "agent-disconnect", { docId: "agent-" + driveId }); } catch {}
   });
 
   ws.on("error", (e) => {
-    console.warn(`agent ws error: drive=${driveId}: ${e?.message || e}`);
+    log.warn({ drive: driveId, err: e?.message || String(e) }, "agent ws error");
   });
 }
 

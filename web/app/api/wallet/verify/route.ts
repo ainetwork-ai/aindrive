@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { verifyMessage, isAddress } from "viem";
+import { isAddress } from "viem";
+import { SiweMessage } from "siwe";
 import { challengeMessage, consumeNonce, setWalletCookie } from "@/lib/wallet";
 
 const Body = z.object({
@@ -21,14 +22,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unknown or expired nonce" }, { status: 400 });
   }
 
-  const message = challengeMessage(nonce, address.toLowerCase());
+  const messageStr = challengeMessage(nonce, address.toLowerCase());
   let ok = false;
   try {
-    ok = await verifyMessage({
-      address: address as `0x${string}`,
-      message,
-      signature: signature as `0x${string}`,
-    });
+    const siweMsg = new SiweMessage(messageStr);
+    const result = await siweMsg.verify({ signature });
+    ok = result.success;
   } catch {
     ok = false;
   }

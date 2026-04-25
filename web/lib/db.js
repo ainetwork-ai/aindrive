@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import * as schema from "../drizzle/schema.js";
 
 function dataDir() {
   const dir = process.env.AINDRIVE_DATA_DIR || join(homedir(), ".aindrive");
@@ -91,3 +93,6 @@ function open() {
 
 export const db = globalThis.__aindrive_db ?? open();
 if (!globalThis.__aindrive_db) globalThis.__aindrive_db = db;
+
+export const drizzleDb = globalThis.__aindrive_drizzle_db ?? drizzle(db, { schema });
+if (!globalThis.__aindrive_drizzle_db) globalThis.__aindrive_drizzle_db = drizzleDb;

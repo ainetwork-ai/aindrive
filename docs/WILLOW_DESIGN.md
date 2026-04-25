@@ -1,10 +1,10 @@
 # aindrive on Willow Protocol — Design
 
-> Replace the current Postgres-queue RPC bridge with [Willow Protocol](https://willowprotocol.org) so file sharing uses capability-based P2P sync instead of "Vercel proxies every file op."
+> Replace the current Postgres-queue RPC bridge with [Willow Protocol](https://willowprotocol.org) so file sharing uses capability-based P2P sync instead of "the relay proxies every file op."
 
 ## Why Willow
 
-The current architecture treats Vercel as a **trusted middle-man** — every byte the browser sees has been pulled by the Vercel function from the local CLI agent over our own RPC. That works, but:
+The current architecture treats the web server as a **trusted middle-man** — every byte the browser sees has been pulled by the Next.js server from the local CLI agent over our own RPC. That works, but:
 
 - Sharing is bespoke: tokens, roles, expiry — all hand-rolled in Postgres.
 - The web app must hold a live agent connection for *every* read.
@@ -46,40 +46,40 @@ Filesystem semantics:
 
 ```
 ┌───────────────────────────────┐                     ┌───────────────────────────────┐
-│  aindrive CLI (your machine)  │  WGPS over WSS  ⇄  │   Vercel relay + mirror peer  │
-│  • full Willow store          │                     │  • Willow store (Neon Postgres │
-│  • owns the namespace key     │                     │     for entries/caps,          │
-│  • indexes local FS as        │                     │     Vercel Blob for payloads)  │
-│    Entries (lazy hashing)     │                     │  • mirrors only what its caps  │
-│  • outbound only              │                     │     authorize                  │
-└──────────────┬────────────────┘                     └──────────────┬────────────────┘
-               │                                                     │
+│  aindrive CLI (your machine)  │  WGPS over WSS  ⇄  │  self-hosted relay + mirror   │
+│  • full Willow store          │                     │  • Willow store (SQLite for   │
+│  • owns the namespace key     │                     │     entries/caps,             │
+│  • indexes local FS as        │                     │     local disk volume for     │
+│    Entries (lazy hashing)     │                     │     payloads)                 │
+│  • outbound only              │                     │  • mirrors only what its caps │
+└──────────────┬────────────────┘                     │     authorize                 │
+               │                                      └──────────────┬────────────────┘
                │ Meadowcap delegations                               │ HTTP GET / Server
                │ (caps in URLs or in DM)                             │ Components read
                ▼                                                     ▼
 ┌───────────────────────────────┐                     ┌───────────────────────────────┐
 │  Collaborator's CLI           │                     │   Browser (you / collaborator) │
-│  • runs WGPS to Vercel relay  │                     │  • thin Willow read client     │
-│  • or directly to your CLI    │                     │  • Drive UI reads Vercel       │
+│  • runs WGPS to relay         │                     │  • thin Willow read client     │
+│  • or directly to your CLI    │                     │  • Drive UI reads relay's      │
 │    when both online           │                     │     mirror; falls back to      │
 └───────────────────────────────┘                     │     direct WGPS in WebSocket   │
                                                        │     where supported            │
                                                        └───────────────────────────────┘
 ```
 
-Vercel is **a Willow peer**, not a privileged broker. It can only read what its capabilities allow. A private folder on your laptop never crosses the wire unless you grant Vercel (or a specific collaborator) a cap.
+The relay is **a Willow peer**, not a privileged broker. It can only read what its capabilities allow. A private folder on your laptop never crosses the wire unless you grant the relay (or a specific collaborator) a cap.
 
 ## Sync flow
 
-1. `aindrive login` → generate user namespace keypair (kept on disk, never sent), register the public key + Vercel-issued mirror cap in DB.
+1. `aindrive login` → generate user namespace keypair (kept on disk, never sent), register the public key + relay-issued mirror cap in the server DB.
 2. `aindrive` in a folder:
    - First run: create/open a local Willow store; set namespace = user-owned, subspace = this device's key.
    - Walk the folder; for each file, hash the bytes (lazy, only on change) and write an Entry whose payload digest matches.
-   - Open WSS to `wss://aindrive.vercel.app/api/willow/sync`.
+   - Open WSS to `wss://aindrive.ainetwork.ai/api/willow/sync`.
    - Run **WGPS handshake**: present caps proving "I am the namespace owner," declare an AreaOfInterest covering the whole drive.
-   - Stream Entries + Payloads to Vercel mirror.
-3. Browser navigates to `/d/<namespace_pubkey>` → Server Component reads Vercel's local Willow store at that namespace and renders the directory listing — **no live RPC to your laptop**.
-4. Edit a file in the browser → POST `/api/willow/write` (the user is authenticated via session) → server-side, Vercel signs an Entry on behalf of the *user's delegated cap to itself* (created once at pairing) → entry replicates back to your laptop on next WGPS round, and the agent materializes the bytes onto disk.
+   - Stream Entries + Payloads to the relay's mirror.
+3. Browser navigates to `/d/<namespace_pubkey>` → Server Component reads the relay's local Willow store at that namespace and renders the directory listing — **no live RPC to your laptop**.
+4. Edit a file in the browser → POST `/api/willow/write` (the user is authenticated via session) → server-side, the relay signs an Entry on behalf of the *user's delegated cap to itself* (created once at pairing) → entry replicates back to your laptop on next WGPS round, and the agent materializes the bytes onto disk.
 
 ## Sharing model (Meadowcap)
 
@@ -96,36 +96,36 @@ aindrive://cap/<base64url(SerializedCap)>
 - `access_mode` = `read` | `write`
 - `delegations` = chain ending at either the recipient's public key (named share) **or** `()` (anyone-with-the-link share)
 
-The web UI's "Share" dialog generates this cap server-side using the owner's *delegation key* (a sub-key the owner uploaded to Vercel during pairing for exactly this purpose; the root namespace key never leaves the laptop). The Vercel relay can then authorize any peer that presents the cap — including the browser session of the recipient.
+The web UI's "Share" dialog generates this cap server-side using the owner's *delegation key* (a sub-key the owner uploaded to the relay during pairing for exactly this purpose; the root namespace key never leaves the laptop). The relay can then authorize any peer that presents the cap — including the browser session of the recipient.
 
-**Revocation:** publish a "max-timestamp clip" entry inside a well-known revocation subspace; peers reject caps whose `created_at < clip`. Or simpler v1: rely on short expiries + the fact that Vercel can refuse to mirror to a revoked recipient.
+**Revocation:** publish a "max-timestamp clip" entry inside a well-known revocation subspace; peers reject caps whose `created_at < clip`. Or simpler v1: rely on short expiries + the fact that the relay can refuse to mirror to a revoked recipient.
 
 ## What this changes in our codebase
 
 | Today | After |
 |---|---|
-| `web/lib/rpc.ts` (Postgres queue) | Delete. Replaced by direct Willow store reads on Vercel. |
+| `web/lib/rpc.ts` (Postgres queue) | Delete. Replaced by direct Willow store reads on the relay. |
 | `cli/src/agent.js` (HTTP long-poll) | Replaced by `cli/src/willow-peer.js` — WGPS over WebSocket. |
 | `web/lib/access.ts` (role table) | Replaced by Meadowcap cap verification. |
 | `shares` table | Becomes `share_caps` table — stores serialized caps for revocation tracking. |
 | `drive_members` table | Becomes `cap_grants` — same shape, but each row is a Meadowcap delegation. |
-| File preview (`/api/drives/.../fs/read`) | Replaced by Vercel reading its own Willow store; payloads served from Vercel Blob. |
+| File preview (`/api/drives/.../fs/read`) | Replaced by the relay reading its own Willow store; payloads served from local disk volume. |
 | Drive id | Switch from `nanoid(12)` to `base32(namespace_pubkey)`. |
 
 The browser-facing UI (`drive-shell.tsx`, `viewer.tsx`, `share-dialog.tsx`) stays the same shape — only the data source under it changes.
 
-## Storage on Vercel
+## Storage on the relay
 
 | Data | Where |
 |---|---|
-| Entries (metadata, signatures) | Neon Postgres — one row per entry, indexed `(namespace, subspace, path, timestamp)` |
-| Payloads (file bytes) | Vercel Blob (already supports public + private). Deduped by digest. |
-| Caps | Postgres `share_caps`, plus an in-memory verifier on every API request |
+| Entries (metadata, signatures) | SQLite — one row per entry, indexed `(namespace, subspace, path, timestamp)` |
+| Payloads (file bytes) | Local disk volume mounted into the container. Deduped by digest. |
+| Caps | SQLite `share_caps`, plus an in-memory verifier on every API request |
 | Sync session state | Per-WSS-connection memory; no persistence |
 
 ## Picking a Willow implementation
 
-- **JS/TS**: [`@earthstar-project/willow-js`](https://github.com/earthstar-project/willow-js) — most complete, runs in Node and the browser. Probably what we use on both CLI and Vercel.
+- **JS/TS**: [`@earthstar-project/willow-js`](https://github.com/earthstar-project/willow-js) — most complete, runs in Node and the browser. Probably what we use on both CLI and the relay.
 - **Rust**: `willow-rs` — better perf, but adds a build pipeline.
 
 Default: TypeScript everywhere → reuse types and signing logic across CLI, server, and browser. Only swap to Rust if hashing throughput on large folders becomes a bottleneck.
@@ -140,8 +140,7 @@ Default: TypeScript everywhere → reuse types and signing logic across CLI, ser
 
 ## Open questions (decide before we cut code)
 
-1. **Vercel WebSocket lifetime.** Vercel Functions can hold a WSS for the duration of one invocation (~5 min on Fluid Compute) — long enough for a sync session, but reconnects every few minutes. Acceptable, or do we host the WGPS endpoint on a separate always-on service (Fly/Railway) and keep Vercel just for UI/API?
-2. **Where does the user's namespace root key live?** On the laptop only? Or escrowed (encrypted) on Vercel for "sign in from a new device"? Affects how scary "lost laptop" is.
-3. **Anonymous share links** (cap with no delegation chain endpoint) — convenient but harder to revoke. Allow them, or always require named recipients?
-4. **Large files (>100 MB).** Willow streams payloads in chunks; we need to decide how many we hold in Vercel Blob (cost) vs only synced peer-to-peer (browser can't preview).
-5. **End-to-end encryption for private namespaces.** Willow itself is plaintext on the wire to the relay. If a user wants Vercel to only ever see ciphertext for their private folder, we need an E2EE layer on top — out of scope for v1, but the design shouldn't preclude it.
+1. **Where does the user's namespace root key live?** On the laptop only? Or escrowed (encrypted) on the relay for "sign in from a new device"? Affects how scary "lost laptop" is.
+2. **Anonymous share links** (cap with no delegation chain endpoint) — convenient but harder to revoke. Allow them, or always require named recipients?
+3. **Large files (>100 MB).** Willow streams payloads in chunks; we need to decide how many we hold on the relay's disk (cost) vs only synced peer-to-peer (browser can't preview).
+4. **End-to-end encryption for private namespaces.** Willow itself is plaintext on the wire to the relay. If a user wants the relay to only ever see ciphertext for their private folder, we need an E2EE layer on top — out of scope for v1, but the design shouldn't preclude it.
