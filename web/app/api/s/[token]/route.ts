@@ -120,18 +120,91 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     txHash = "0xdev_bypass_" + nanoid(20);
     console.log(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
   } else {
+    // Run fn with an AbortController that fires after `ms` ms.
+    async function withTimeout<T>(
+      ms: number,
+      fn: (signal: AbortSignal) => Promise<T>,
+    ): Promise<{ ok: true; value: T } | { ok: false; timedOut: boolean; error: unknown }> {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), ms);
+      try {
+        const value = await fn(ac.signal);
+        return { ok: true, value };
+      } catch (e) {
+        return { ok: false, timedOut: ac.signal.aborted, error: e };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    // True for network/timeout errors that warrant a retry.
+    function isFacilitatorUnavailable(e: unknown): boolean {
+      if (e instanceof Error) {
+        const n = e.name;
+        return n === "AbortError" || n === "TimeoutError" || n === "TypeError";
+      }
+      return false;
+    }
+
+    // Strip wallet addresses and cap length for safe user-facing messages.
+    function sanitizeSettleError(msg: string): string {
+      return msg.replace(/0x[0-9a-fA-F]{40,}/g, "0x\u2026").slice(0, 200);
+    }
+
     const facilitator = useFacilitator({ url: FACILITATOR_URL });
-    const verifyRes = await facilitator.verify(payload, requirements);
+
+    // --- verify: 10 s timeout, one retry on facilitator error ---
+    type VerifyResult = Awaited<ReturnType<typeof facilitator.verify>>;
+    let verifyRes: VerifyResult | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await withTimeout<VerifyResult>(10_000, (_signal) =>
+        facilitator.verify(payload, requirements),
+      );
+      if (r.ok) { verifyRes = r.value; break; }
+      if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
+        return NextResponse.json(
+          { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+          { status: 402 },
+        );
+      }
+    }
+    if (!verifyRes) {
+      return NextResponse.json(
+        { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+        { status: 402 },
+      );
+    }
     if (!verifyRes.isValid) {
       return NextResponse.json(
         { x402Version: 1, accepts: [requirements], error: verifyRes.invalidReason || "verification failed" },
         { status: 402 }
       );
     }
-    const settleRes = await facilitator.settle(payload, requirements);
+
+    // --- settle: 15 s timeout, one retry on facilitator error ---
+    type SettleResult = Awaited<ReturnType<typeof facilitator.settle>>;
+    let settleRes: SettleResult | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await withTimeout<SettleResult>(15_000, (_signal) =>
+        facilitator.settle(payload, requirements),
+      );
+      if (r.ok) { settleRes = r.value; break; }
+      if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
+        return NextResponse.json(
+          { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+          { status: 402 },
+        );
+      }
+    }
+    if (!settleRes) {
+      return NextResponse.json(
+        { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+        { status: 402 },
+      );
+    }
     if (!settleRes.success) {
       return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], error: settleRes.errorReason || "settlement failed" },
+        { x402Version: 1, accepts: [requirements], error: sanitizeSettleError(settleRes.errorReason || "settlement failed") },
         { status: 402 }
       );
     }

@@ -11,6 +11,8 @@ function dataDir(): string {
 
 function loadOrCreateSecret(): string {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
+  // In production the env var is required — no file fallback.
+  if (process.env.NODE_ENV === "production") return "";
   const file = join(dataDir(), "session-secret");
   if (existsSync(file)) return readFileSync(file, "utf8").trim();
   const secret = randomBytes(32).toString("hex");
