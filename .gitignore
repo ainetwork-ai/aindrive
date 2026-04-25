@@ -8,17 +8,7 @@ dist
 .env.*.local
 .vercel
 .aindrive
-sample/
-
-# Tooling artifacts
-.omc/
-.playwright-mcp/
-.claude/
 *.tsbuildinfo
 next-env.d.ts
-
-# Test artifacts
 playwright-report/
 test-results/
-*.png
-!docs/**/*.png

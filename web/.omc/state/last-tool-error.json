@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"pkill -9 -f start-agent.mjs 2>/dev/null; sleep 1; cd /mnt/newdata/git/aindrive/sample && nohup node start-agent.mjs > /tmp/agent.log 2>&1 & disown; sleep 4; tail -3 /tmp/agent.log\",\"timeou...",
+  "error": "Exit code 1",
+  "timestamp": "2026-04-25T02:15:03.271Z",
+  "retry_count": 1
+}

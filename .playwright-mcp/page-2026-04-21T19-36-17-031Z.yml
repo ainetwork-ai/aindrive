@@ -1,0 +1,21 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e12]
+  - main [ref=e13]:
+    - generic [ref=e14]:
+      - heading "My drives" [level=1] [ref=e15]
+      - button "Sign out (test-1776589408@example.com)" [ref=e17] [cursor=pointer]
+    - list [ref=e18]:
+      - listitem [ref=e19]:
+        - link "sample2 last seen 4/21/2026, 7:36:01 PM" [ref=e20] [cursor=pointer]:
+          - /url: /d/QEA67OLywqpJ
+          - img [ref=e21]
+          - generic [ref=e23]:
+            - generic [ref=e24]: sample2
+            - generic [ref=e25]: last seen 4/21/2026, 7:36:01 PM
+      - listitem [ref=e26]:
+        - link "sample waiting for agent…" [ref=e27] [cursor=pointer]:
+          - /url: /d/m2XIjlJgS57a
+          - img [ref=e28]
+          - generic [ref=e30]:
+            - generic [ref=e31]: sample
+            - generic [ref=e32]: waiting for agent…
