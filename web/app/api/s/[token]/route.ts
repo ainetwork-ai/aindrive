@@ -77,6 +77,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     payTo,
     maxTimeoutSeconds: 300,
     asset: USDC_BASE_SEPOLIA,
+    // ERC-3009 EIP-712 domain for the asset above. Required by the x402
+    // exact-evm scheme so the client can sign transferWithAuthorization;
+    // facilitator rejects the request as `invalid_exact_evm_missing_eip712_domain`
+    // when this is absent.
+    extra: {
+      name: "USDC",
+      version: "2",
+    },
   };
 
   const xPayment = req.headers.get("X-PAYMENT");
