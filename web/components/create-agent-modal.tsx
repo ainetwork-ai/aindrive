@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { toast } from "sonner";
-import { X, Bot, Brain, KeyRound, Shield, Loader2, Copy } from "lucide-react";
+import { X, Bot, Sparkles, BookOpen, Cpu, Shield, Loader2, Copy } from "lucide-react";
 
 /**
  * Create Agent modal — owner-only UI for registering a RAG agent
@@ -28,9 +28,13 @@ export type EditableAgent = {
   folder: string;
   name: string;
   description: string;
+  persona: string;
   llm: { provider: string; model: string };
   access: { policies: string[] };
 };
+
+const PERSONA_PLACEHOLDER =
+  "e.g. You are the friendly product guide for Acme. Greet visitors warmly, explain product features in plain language, and surface release dates when asked.";
 
 type Props = {
   driveId: string;
@@ -50,6 +54,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
   const isEdit = !!existing;
   const [name, setName] = useState(existing?.name ?? "");
   const [description, setDescription] = useState(existing?.description ?? "");
+  const [persona, setPersona] = useState(existing?.persona ?? "");
   const [folder, setFolder] = useState(existing?.folder ?? defaultFolder ?? "");
   const [provider, setProvider] = useState<(typeof PROVIDERS)[number]["id"]>(
     (existing?.llm.provider as (typeof PROVIDERS)[number]["id"]) ?? "flock",
@@ -88,6 +93,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
           folder,
           name: name.trim(),
           description: description.trim(),
+          persona: persona.trim(),
           knowledge: { strategy: "dump-all-text" },
           llm: {
             provider,
@@ -112,7 +118,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
         setCreated({
           agent: a,
           askUrl: `${window.location.origin}/api/drives/${a.driveId}/agents/${a.id}/ask`,
-          cardUrl: `${window.location.origin}/.well-known/agent-card/${a.driveId}/${a.id}`,
+          cardUrl: `${window.location.origin}/api/drives/${a.driveId}/agents/${a.id}/.well-known/agent-card.json`,
         });
         toast.success("Agent created");
       }
@@ -180,18 +186,33 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
               </label>
             </div>
 
-            {/* knowledge */}
-            <Section icon={<Brain className="w-4 h-4 text-purple-600" />} title="Knowledge">
-              <select className="border rounded px-2 py-1.5 w-full" disabled>
-                <option>Dump all text (.txt, .md, .log, .csv)</option>
-              </select>
+            {/* persona */}
+            <Section icon={<Sparkles className="w-4 h-4 text-violet-600" />} title="Persona">
+              <textarea
+                className="w-full border rounded px-2 py-1.5 text-sm resize-y"
+                rows={4}
+                placeholder={PERSONA_PLACEHOLDER}
+                value={persona}
+                onChange={(e) => setPersona(e.target.value)}
+                maxLength={1500}
+              />
               <p className="text-xs text-gray-500 mt-1">
-                v1: ignores query, sends every text file in the folder. Future: vector RAG, hybrid.
+                How the agent introduces itself and replies. Leave empty for a friendly default.
               </p>
             </Section>
 
-            {/* llm */}
-            <Section icon={<KeyRound className="w-4 h-4 text-amber-600" />} title="LLM">
+            {/* context */}
+            <Section icon={<BookOpen className="w-4 h-4 text-emerald-600" />} title="Context">
+              <select className="border rounded px-2 py-1.5 w-full" disabled>
+                <option>Folder documents</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                The agent draws on the documents in this folder when answering. Best for small to mid-size knowledge bases.
+              </p>
+            </Section>
+
+            {/* model */}
+            <Section icon={<Cpu className="w-4 h-4 text-amber-600" />} title="Model">
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
                   <span className="text-gray-700">Provider</span>
@@ -227,27 +248,25 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
                 />
               </label>
               <label className="block">
-                <span className="text-gray-700">API Key</span>
+                <span className="text-gray-700">API key</span>
                 <input
                   type="password"
                   className="mt-1 border rounded px-2 py-1.5 w-full font-mono text-xs"
-                  placeholder="leave empty to use server default"
+                  placeholder={isEdit ? "leave empty to keep current key" : "leave empty to use platform default"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Stored in <code className="text-xs">{".aindrive/agents/<id>.json"}</code> on
-                  the owner&apos;s drive. Cap-bearers cannot read{" "}
-                  <code className="text-xs">.aindrive/</code>, but a drive backup will carry the key.
+                  Stored privately within this drive. Not shared with visitors.
                 </p>
               </label>
             </Section>
 
             {/* access */}
-            <Section icon={<Shield className="w-4 h-4 text-green-600" />} title="Access">
+            <Section icon={<Shield className="w-4 h-4 text-sky-600" />} title="Audience">
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked disabled />
-                <span>Owner (always allowed)</span>
+                <span>You (always)</span>
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -255,11 +274,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
                   checked={policiesAllowCap}
                   onChange={(e) => setPoliciesAllowCap(e.target.checked)}
                 />
-                <span>Drive cap holders (anyone with a share link to this drive)</span>
-              </label>
-              <label className="flex items-center gap-2 opacity-50">
-                <input type="checkbox" disabled />
-                <span>x402 payers (coming soon)</span>
+                <span>Anyone you share this drive with</span>
               </label>
             </Section>
 

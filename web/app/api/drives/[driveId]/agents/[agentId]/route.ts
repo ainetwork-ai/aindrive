@@ -19,6 +19,7 @@ import type { Agent } from "@/shared/domain/agent/types";
 const Patch = z.object({
   name: z.string().max(80).optional(),
   description: z.string().max(500).optional(),
+  persona: z.string().max(1500).optional(),
   folder: z.string().max(1024).optional(),
   knowledge: z.object({ strategy: z.string() }).optional(),
   llm: z.object({
@@ -102,6 +103,7 @@ function toPublicAgent(agent: Agent) {
     folder: agent.folder,
     name: agent.name,
     description: agent.description,
+    persona: agent.persona,
     knowledge: agent.knowledge,
     llm: { provider: agent.llm.provider, model: agent.llm.model },
     access: agent.access,

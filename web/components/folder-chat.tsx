@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2 } from "lucide-react";
+import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { pathCovers } from "@/shared/domain/policy/path";
 import { CreateAgentModal, type EditableAgent } from "./create-agent-modal";
@@ -19,6 +19,7 @@ type AgentSummary = {
   id: string;
   name: string;
   description: string;
+  persona: string;
   folder: string;
   llm: { provider: string; model: string };
   access: { policies: string[] };
@@ -109,6 +110,7 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
       folder: target.folder,
       name: target.name,
       description: target.description,
+      persona: target.persona,
       llm: target.llm,
       access: target.access,
     });
@@ -218,7 +220,9 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 text-sm">
         {msgs.length === 0 ? (
           <p className="text-gray-400 text-xs text-center mt-6">
-            Ask a question about the contents of this folder.
+            {selectedAgent
+              ? `Ask ${selectedAgent.name} anything about this drive.`
+              : "Pick an agent to start chatting."}
           </p>
         ) : (
           msgs.map((m, i) => <MessageBubble key={i} msg={m} />)
@@ -232,7 +236,11 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
         <textarea
           className="flex-1 border rounded px-2 py-1.5 text-sm resize-none"
           rows={2}
-          placeholder={agentId ? "Ask the folder…" : "No agent selected"}
+          placeholder={
+            agentId && selectedAgent
+              ? `Message ${selectedAgent.name}…`
+              : "No agent selected"
+          }
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -281,26 +289,53 @@ function MessageBubble({ msg }: { msg: Msg }) {
     );
   }
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1">
       <div className="flex items-start gap-1.5">
         <Bot className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
         <div className="bg-gray-100 rounded-lg px-3 py-1.5 max-w-[85%] whitespace-pre-wrap">
           {msg.text}
         </div>
       </div>
-      {msg.sources.length > 0 && (
-        <div className="ml-5 space-y-1">
-          {msg.sources.map((s, i) => (
-            <div key={i} className="text-[11px] bg-amber-50 border border-amber-200 rounded px-2 py-1">
-              <code className="font-mono text-amber-900">{s.path}</code>
-              <p className="text-amber-800 mt-0.5 line-clamp-2">{s.snippet}</p>
-            </div>
+      {msg.sources.length > 0 && <SourcesFooter sources={msg.sources} />}
+    </div>
+  );
+}
+
+function SourcesFooter({ sources }: { sources: Source[] }) {
+  const [open, setOpen] = useState(false);
+  // Dedupe by path so multiple chunks from one file collapse into a single chip.
+  const paths = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const s of sources) {
+      if (seen.has(s.path)) continue;
+      seen.add(s.path);
+      out.push(s.path);
+    }
+    return out;
+  }, [sources]);
+  if (paths.length === 0) return null;
+  return (
+    <div className="ml-5 mt-1 text-[11px] text-gray-500">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-0.5 hover:text-gray-700"
+      >
+        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        Referenced {paths.length} {paths.length === 1 ? "source" : "sources"}
+      </button>
+      {open && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {paths.map((p) => (
+            <span
+              key={p}
+              className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-mono text-[10px]"
+              title={p}
+            >
+              {p}
+            </span>
           ))}
-        </div>
-      )}
-      {msg.policyName && (
-        <div className="ml-5 text-[10px] text-gray-400 font-mono">
-          via {msg.policyName}
         </div>
       )}
     </div>

@@ -20,6 +20,7 @@ const Body = z.object({
   folder: z.string().max(1024).default(""),
   name: z.string().min(1).max(80),
   description: z.string().max(500).default(""),
+  persona: z.string().max(1500).default(""),
   knowledge: z.object({ strategy: z.string() }).default({ strategy: "dump-all-text" }),
   llm: z.object({
     provider: z.string(),
@@ -66,6 +67,7 @@ export async function POST(
     folder: body.folder,
     name: body.name,
     description: body.description,
+    persona: body.persona,
     knowledge: body.knowledge,
     llm: body.llm,
     access: body.access,
@@ -109,6 +111,7 @@ function toPublicAgent(agent: Agent) {
     folder: agent.folder,
     name: agent.name,
     description: agent.description,
+    persona: agent.persona,
     knowledge: agent.knowledge,
     llm: { provider: agent.llm.provider, model: agent.llm.model },
     access: agent.access,

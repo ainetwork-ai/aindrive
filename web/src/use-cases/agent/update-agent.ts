@@ -79,6 +79,12 @@ export async function updateAgent(
     next.description = description;
   }
 
+  if (input.patch.persona !== undefined) {
+    const persona = input.patch.persona.trim();
+    if (persona.length > PERSONA_MAX) return reject("persona_too_long");
+    next.persona = persona;
+  }
+
   if (input.patch.folder !== undefined) {
     const folder = normalizeFolder(input.patch.folder);
     if (folder.length > FOLDER_MAX) return reject("folder_too_long");
