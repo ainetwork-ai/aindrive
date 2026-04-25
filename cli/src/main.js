@@ -6,6 +6,7 @@ import { cmdLogin } from "./commands/login.js";
 import { cmdServe } from "./commands/serve.js";
 import { cmdRotate } from "./commands/rotate.js";
 import { cmdStatus } from "./commands/status.js";
+import { readGlobalCreds, readDriveConfig } from "./config.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -27,7 +28,7 @@ export async function runCli(argv) {
     .option("--name <name>", "name for this drive on first pairing")
     .option("--no-open", "do not open the browser");
 
-  // Default command: serve a folder
+  // Default command: serve a folder (auto-login on first use)
   program
     .argument("[folder]", "folder to connect (default: .)")
     .action(async (folder, opts) => {
@@ -35,19 +36,26 @@ export async function runCli(argv) {
       const dir = resolve(resolvedFolder);
       if (!existsSync(dir)) throw new Error(`folder does not exist: ${dir}`);
       const args = buildArgs(opts, []);
+      const drive = await readDriveConfig(dir);
+      if (!drive && !(await readGlobalCreds())) {
+        await cmdLogin(buildArgs(opts, ["login"]));
+      }
       await cmdServe({ ...args, dir });
     });
 
-  // login subcommand
+  // login subcommand — also pairs and serves the current folder
   program
     .command("login")
-    .description("pair this machine with an aindrive account via a one-time code")
+    .description("sign in and serve the current folder")
     .option("--server <url>", "server URL", DEFAULT_SERVER)
     .option("--no-open", "do not open the browser")
     .action(async (opts) => {
       const parentOpts = program.opts();
       const mergedOpts = { ...parentOpts, ...opts };
-      await cmdLogin(buildArgs(mergedOpts, ["login"]));
+      const args = buildArgs(mergedOpts, ["login"]);
+      await cmdLogin(args);
+      const dir = resolve(".");
+      if (existsSync(dir)) await cmdServe({ ...args, dir });
     });
 
   // status subcommand

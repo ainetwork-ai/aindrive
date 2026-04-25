@@ -7,23 +7,23 @@
 
 ```
 npm i -g aindrive
-aindrive login                 # opens browser → paste the one-time code
 cd ~/Documents
 aindrive
-# → opens https://aindrive.ainetwork.ai/d/<drive-id>
+# first run: opens browser → click Authorize → folder is served at
+# https://aindrive.ainetwork.ai/d/<drive-id>
 ```
 
-`aindrive login` creates a one-time pairing link, opens
-`https://aindrive.ainetwork.ai/cli-login/<linkId>` in your browser, and
-polls in the background. Sign in (if you aren't already) and click
-**Authorize** on that page — the CLI picks it up within a couple of
-seconds. Each link is single-use and expires in 10 minutes.
+`aindrive` will sign you in on first use. If you prefer to do it explicitly,
+`aindrive login` does the same thing — it opens
+`https://aindrive.ainetwork.ai/cli-login/<linkId>`, polls for your approval,
+and then immediately starts serving the current folder. Each pairing link is
+single-use and expires in 10 minutes.
 
 ## Commands
 
 ```
-aindrive [folder]          serve a folder (default: current dir)
-aindrive login             authenticate this machine with the server
+aindrive [folder]          serve a folder (default: current dir; logs in on first use)
+aindrive login             sign in and serve the current folder
 aindrive status [folder]   show drive id, server URL, connection state
 aindrive rotate-token      rotate the per-drive agent token
 ```
