@@ -310,6 +310,71 @@ summary instead of negotiating intersections cryptographically.
 Once both stores converge, opening the file in a browser on EITHER device
 replays the same entries → same Y.Doc state → same text.
 
+### 6. Willow vs Y.js — why both?
+
+A common question: "Willow is a CRDT-style protocol. Why do we need Y.js on
+top of it?"
+
+The two operate at completely different granularities:
+
+| | **Willow** | **Y.js** |
+|---|---|---|
+| Merge unit | Entry (whole file version) | Character (inside text) |
+| Conflict resolution | Last-writer-wins per `(subspace, path)` | True CRDT merge — both edits preserved |
+| Payload semantics | Opaque bytes — Willow doesn't look inside | Structured (Text, Map, List) |
+| Permissions | Meadowcap built-in | None |
+| Multi-device sync | WGPS protocol | Save/load only |
+
+Willow is "CRDT-like" only at the entry level — it gives you eventual
+consistency for "what is the current version of file X" — but if two peers
+write to the same path concurrently, **the newer timestamp wins entirely**
+and the other write is lost.
+
+#### What goes wrong with Willow alone
+
+```
+Tab A types "AAAA" → autosave → Willow entry { path: notes.md, payload: "AAAA", t: t1 }
+Tab B types "BBBB" → autosave → Willow entry { path: notes.md, payload: "BBBB", t: t2 }
+t2 > t1  →  B wins, A's "AAAA" is gone forever.
+```
+
+There is no character-level merge in Willow. It is a *data sync* protocol,
+not an *editing* CRDT.
+
+#### How Y.js fits
+
+Y.js does the actual character-level merge. Each Y.Doc update is a small
+binary delta (NOT the whole file content). aindrive stores those deltas
+**as Willow entry payloads**:
+
+```
+Tab A types "AAAA"  →  Y.js update bytes (delta)  ──┐
+Tab B types "BBBB"  →  Y.js update bytes (delta)  ──┤
+                                                     ▼
+                          ┌────────────────────────────────────┐
+                          │  Each update = one Willow entry    │
+                          │  appendUpdate(docId, payloadBytes) │
+                          └─────────────────┬──────────────────┘
+                                            │
+                              Multi-device sync (Willow's job)
+                                            │
+                                            ▼
+                  Other device replays ALL entry payloads:
+                    for (e of entries) Y.applyUpdate(doc, e.payload)
+                  →  CRDT-merged final state. Both AAAA and BBBB present.
+```
+
+The two layers compose cleanly:
+
+- **Y.js layer**: "How do many edits to the same content merge correctly?"
+- **Willow layer**: "How do we store, authorize, and sync those edit
+  records across devices?"
+
+Earthstar (Willow's reference application) recommends exactly this pattern
+— Willow Store + Y.js update payloads — as the standard collaborative
+editing recipe. The Willow spec even explicitly describes "running CRDTs on
+top of Willow" as the intended composition.
+
 ### Why bother with Willow instead of just "file + Y.Doc binary"?
 
 - **Capability-native sharing** — Meadowcap caps work without a server. We
