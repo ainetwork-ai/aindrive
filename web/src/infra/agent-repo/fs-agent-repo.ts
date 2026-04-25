@@ -84,4 +84,21 @@ export const fsAgentRepo = (fs: FsBrowser): AgentRepo => ({
     );
     return agent;
   },
+
+  async update(next: Agent): Promise<Agent> {
+    await fs.write(
+      next.driveId,
+      agentPath(next.id),
+      JSON.stringify(serialize(next), null, 2),
+    );
+    return next;
+  },
+
+  async delete(driveId: DriveId, id: AgentId): Promise<void> {
+    try {
+      await fs.delete(driveId, agentPath(id));
+    } catch {
+      // ENOENT etc — treat as already-deleted
+    }
+  },
 });

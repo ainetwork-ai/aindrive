@@ -38,6 +38,12 @@ export const compose = {
   createAgent: {
     agents,
   },
+  updateAgent: {
+    agents,
+  },
+  deleteAgent: {
+    agents,
+  },
   // Direct handles for routes that need to do their own thing
   // (e.g. the create route loads the drive's namespace pubkey before
   // calling createAgent — no port abstraction for that yet).

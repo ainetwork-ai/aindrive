@@ -42,6 +42,14 @@ export interface AgentRepo {
   byId(driveId: DriveId, id: AgentId): Promise<Agent | null>;
   listByDrive(driveId: DriveId): Promise<Agent[]>;
   create(input: NewAgentInput): Promise<Agent>;
+  /**
+   * Replace the stored agent with `next`. The id/driveId/ownerId/createdAt
+   * fields of `next` MUST match the existing entry — repo doesn't validate
+   * that, the use-case does. Returns the saved entry.
+   */
+  update(next: Agent): Promise<Agent>;
+  /** No-op if the agent doesn't exist. */
+  delete(driveId: DriveId, id: AgentId): Promise<void>;
 }
 
 // ─── FS browser: thin port for AgentRepo ───────────────────────────────────
@@ -65,6 +73,7 @@ export interface FsBrowser {
   list(driveId: DriveId, path: string): Promise<FileEntry[]>;
   read(driveId: DriveId, path: string, maxBytes?: number): Promise<string>;
   write(driveId: DriveId, path: string, content: string): Promise<void>;
+  delete(driveId: DriveId, path: string): Promise<void>;
 }
 
 // ─── AgentExecutor: forward ask to the CLI for actual execution ────────────
