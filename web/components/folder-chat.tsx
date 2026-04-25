@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
 import { pathCovers } from "@/shared/domain/policy/path";
 import { CreateAgentModal, type EditableAgent } from "./create-agent-modal";
@@ -292,8 +294,56 @@ function MessageBubble({ msg }: { msg: Msg }) {
     <div className="space-y-1">
       <div className="flex items-start gap-1.5">
         <Bot className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-        <div className="bg-gray-100 rounded-lg px-3 py-1.5 max-w-[85%] whitespace-pre-wrap">
-          {msg.text}
+        <div className="bg-gray-100 rounded-lg px-3 py-2 max-w-[85%] agent-prose">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: (props) => (
+                <a
+                  {...props}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 underline hover:text-blue-800"
+                />
+              ),
+              code: ({ className, children, ...props }) => {
+                const inline = !/language-/.test(className ?? "");
+                return inline ? (
+                  <code
+                    {...props}
+                    className="px-1 py-0.5 rounded bg-gray-200 text-gray-800 font-mono text-[0.85em]"
+                  >
+                    {children}
+                  </code>
+                ) : (
+                  <pre className="my-1.5 p-2 rounded bg-gray-900 text-gray-100 overflow-x-auto text-xs">
+                    <code className={className} {...props}>{children}</code>
+                  </pre>
+                );
+              },
+              ul: (props) => <ul {...props} className="list-disc pl-5 my-1 space-y-0.5" />,
+              ol: (props) => <ol {...props} className="list-decimal pl-5 my-1 space-y-0.5" />,
+              li: (props) => <li {...props} className="leading-snug" />,
+              p: (props) => <p {...props} className="my-1 leading-snug" />,
+              h1: (props) => <h1 {...props} className="text-base font-semibold mt-1 mb-0.5" />,
+              h2: (props) => <h2 {...props} className="text-sm font-semibold mt-1 mb-0.5" />,
+              h3: (props) => <h3 {...props} className="text-sm font-semibold mt-1 mb-0.5" />,
+              blockquote: (props) => (
+                <blockquote {...props} className="border-l-2 border-gray-300 pl-2 my-1 text-gray-700 italic" />
+              ),
+              table: (props) => (
+                <div className="my-1.5 overflow-x-auto">
+                  <table {...props} className="border-collapse text-xs" />
+                </div>
+              ),
+              th: (props) => <th {...props} className="border border-gray-300 px-1.5 py-0.5 bg-gray-100 text-left font-medium" />,
+              td: (props) => <td {...props} className="border border-gray-200 px-1.5 py-0.5" />,
+              hr: () => <hr className="my-2 border-gray-200" />,
+              strong: (props) => <strong {...props} className="font-semibold" />,
+            }}
+          >
+            {msg.text}
+          </ReactMarkdown>
         </div>
       </div>
       {msg.sources.length > 0 && <SourcesFooter sources={msg.sources} />}
