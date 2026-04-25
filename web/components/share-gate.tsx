@@ -6,6 +6,7 @@ import { wrapFetchWithPayment } from "x402-fetch";
 import { toast } from "sonner";
 import { Lock, Loader2 } from "lucide-react";
 import { DriveShell } from "./drive-shell";
+import { PaidContentView } from "./paid-content-view";
 
 type PaymentRequirements = {
   scheme: string;
@@ -20,7 +21,7 @@ type PaymentRequirements = {
 };
 
 type CheckResponse =
-  | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string }
+  | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string; viaPayment?: boolean }
   | { x402Version: number; accepts: PaymentRequirements[]; error: string };
 
 type State = "loading" | "ok" | "paywall" | "error";
@@ -89,7 +90,17 @@ export function ShareGate({ token }: { token: string }) {
     return <main className="p-10 text-center">{msg}</main>;
   }
   if (state === "ok" && data && "driveId" in data) {
-    return <DriveShell driveId={data.driveId} driveName={data.driveName} />;
+    // Buyers (paid via x402) and free-share guests don't have full drive access —
+    // they only have folder_access for the share's specific path. Render a scoped
+    // view rather than DriveShell (which would try to list drive root and 401).
+    return (
+      <PaidContentView
+        driveId={data.driveId}
+        driveName={data.driveName}
+        path={data.path}
+        txHash={data.txHash}
+      />
+    );
   }
   if (state === "paywall" && requirement) {
     const usdc = (Number(requirement.maxAmountRequired) / 1_000_000).toFixed(2);
