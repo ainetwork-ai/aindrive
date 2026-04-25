@@ -1,0 +1,8 @@
+{
+  "git.repositoryScanMaxDepth": 3,
+  "git.autoRepositoryDetection": "subFolders",
+  "files.watcherExclude": {
+    "**/.worktrees/*/node_modules/**": true,
+    "**/.worktrees/*/.next/**": true
+  }
+}
