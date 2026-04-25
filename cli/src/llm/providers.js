@@ -22,11 +22,14 @@ export const PROVIDERS = {
     authPrefix: "",
     defaultModel: "qwen3-30b-a3b-instruct-2507",
   },
-  "gemma-local": {
-    baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
+  // Local vLLM serving Gemma-4 (or any HF model). Discovered on the
+  // demo box at http://localhost:8100/v1 with --served-model-name
+  // gemma-4-31B-it. Owners can repoint via env without redeploying.
+  "gemma-vllm": {
+    baseUrl: process.env.GEMMA_VLLM_BASE_URL || "http://localhost:8100/v1",
     authHeader: null,
     authPrefix: "",
-    defaultModel: "gemma3:4b",
+    defaultModel: process.env.GEMMA_VLLM_MODEL || "gemma-4-31B-it",
     noAuth: true,
   },
 };
