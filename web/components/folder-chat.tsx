@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Send, Loader2, MessageSquare, X } from "lucide-react";
+import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { pathCovers } from "@/shared/domain/policy/path";
+import { CreateAgentModal, type EditableAgent } from "./create-agent-modal";
 
 /**
  * Folder Chat sidebar — picks one agent from the drive (defaults to
