@@ -40,7 +40,7 @@ export function isAgentId(s: unknown): s is AgentId {
  * Public projections (e.g. `/.well-known/agent-card`) MUST omit `apiKey`.
  */
 export type LlmConfig = {
-  provider: string;          // "openai", "anthropic", "vercel-gateway", …
+  provider: string;          // "openai", "anthropic", "ainetwork", …
   model: string;             // provider-specific model id
   temperature?: number;      // default 0.2 if omitted
   maxTokens?: number;        // default 400 if omitted

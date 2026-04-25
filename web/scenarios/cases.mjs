@@ -5,6 +5,7 @@ import { spawn, execSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import * as Y from "yjs";
 import Database from "better-sqlite3";
 import { WebSocket } from "ws";
@@ -163,7 +164,9 @@ async function ensureDrive() {
 }
 
 async function dbHandle() {
-  return new Database("/tmp/aindrive-test/data.sqlite", { readonly: true });
+  // Mirrors web/lib/db.js: AINDRIVE_DATA_DIR or ~/.aindrive
+  const dir = process.env.AINDRIVE_DATA_DIR || join(homedir(), ".aindrive");
+  return new Database(join(dir, "data.sqlite"), { readonly: true });
 }
 
 // ──────────────────────── case factory ────────────────────────
@@ -531,8 +534,10 @@ const TMP_NAME = `__scen-${Date.now()}.txt`;
 add(41, "list root", async () => {
   await ensureDrive();
   const cookie = await reEnsureOwner();
+  const marker = `__list-root-${Date.now()}.txt`;
+  await jget(`/api/drives/${state.driveId}/fs/write`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ path: marker, content: "x", encoding: "utf8" }) });
   const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
-  assert(r.body.entries.some((e) => e.name === "README.md"));
+  assert(r.body.entries.some((e) => e.name === marker), "freshly-written marker not in root listing");
 });
 
 add(42, "list subfolder", async () => {
@@ -772,69 +777,9 @@ add(67, "paid share without wallet → 402", async () => {
   eq(share.status, 402);
 });
 
-add(68, "402 carries PAYMENT-REQUIRED header", async () => {
-  const r = await jget(`/api/s/${state.paidShareToken}`, { headers: { cookie: "" } });
-  const hdr = r.headers.get("payment-required");
-  assert(hdr && hdr.includes("USDC"));
-});
-
-add(69, "pay with txHash (DEV_BYPASS) → 200 + folder_access", async () => {
-  const r = await jget(`/api/s/${state.paidShareToken}/pay`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ txHash: "0xpaytest" + Date.now() }),
-  });
-  eq(r.status, 200);
-  state.payerCookie = r.headers.get("set-cookie")?.split(";")[0];
-  assert(state.payerCookie?.includes("aindrive_wallet"));
-});
-
-add(70, "after pay GET /api/s/[token] → 200", async () => {
-  const r = await jget(`/api/s/${state.paidShareToken}`, { headers: { cookie: state.payerCookie } });
-  eq(r.status, 200);
-  assert(r.body.driveId === state.driveId);
-});
-
-add(71, "paid wallet can list drive contents", async () => {
-  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: state.payerCookie } });
-  eq(r.status, 200);
-});
-
-add(72, "facilitator URL contains 'x402' (sanity)", async () => {
-  const r = await jget(`/api/s/${state.paidShareToken}`, { headers: { cookie: "" } });
-  if (r.status === 402) {
-    const hdr = JSON.parse(r.headers.get("payment-required"));
-    assert(hdr.facilitator?.includes("x402") || hdr.facilitator?.includes("http"));
-  }
-});
-
-add(73, "owner sees added_by='payment'", async () => {
-  const cookie = await reEnsureOwner();
-  const r = await jget(`/api/drives/${state.driveId}/access`, { headers: { cookie } });
-  const paid = r.body.access.find((a) => a.added_by === "payment");
-  assert(paid?.payment_tx?.startsWith("0xpaytest"));
-});
-
-add(74, "pay for free share → 400", async () => {
-  const r = await jget(`/api/s/${state.freeShareToken}/pay`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ txHash: "0xnot-needed" }),
-  });
-  eq(r.status, 400);
-});
-
-add(75, "pay returns Meadowcap cap", async () => {
-  const cookie = await reEnsureOwner();
-  // Make a fresh paid share + pay so we get a fresh cap
-  const s = await jget(`/api/drives/${state.driveId}/shares`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ path: "", role: "viewer", price_usdc: 0.1 }),
-  });
-  const r = await jget(`/api/s/${s.body.token}/pay`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ txHash: "0xanother" + Date.now() }),
-  });
-  assert(typeof r.body.cap === "string" && r.body.cap.length > 50);
-});
+// #68–#75 removed: legacy /api/s/<token>/pay endpoint and PAYMENT-REQUIRED
+// header are gone. Modern x402 X-PAYMENT GET flow is covered by
+// collab-cases.mjs #109.
 
 // ──────────────────────── H. Meadowcap ────────────────────────
 
@@ -1124,7 +1069,8 @@ add(94, "agent disconnect path cleans up", async () => {
   assert(Array.isArray(r.body.drives));
 });
 
-add(95, "server restart simulated (skip — would interrupt suite)", async () => { throw new Error("intentionally skipped"); }, { skip: true });
+// #95 removed: was a no-op skip placeholder for "server restart simulated".
+// Restart-resilience is implicitly covered by #96 (agent reconnect after WS drop).
 
 add(96, "agent reconnect after WS drop", async () => {
   await ensureDrive();

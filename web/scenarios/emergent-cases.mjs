@@ -320,7 +320,7 @@ export function registerEmergentCases(add, state, helpers) {
       ...events.filter((e) => e.event === "ws-doc-fwd" || e.event === "ws-doc-sub"),
     ];
     const out = runDiagnose(synthetic);
-    assert(!/V9/.test(out), "loop detected in live session: " + out);
+    assert(!/V9 autosave-induced-reload-loop/.test(out), "loop detected in live session: " + out);
   });
 
   t(154, "live: after 1 keystroke, NO autosave-flush should be followed by reload within 1s", async () => {
@@ -471,7 +471,7 @@ export function registerEmergentCases(add, state, helpers) {
     ];
     const out = runDiagnose(synth);
     assert(!/V9 autosave-induced-reload-loop/.test(out), "loop detected in long session: " + out);
-    assert(!/V10/.test(out), "echo detected in long session: " + out);
+    assert(!/V10 reload-echo-no-op/.test(out), "echo detected in long session: " + out);
     A.close();
   });
 }
