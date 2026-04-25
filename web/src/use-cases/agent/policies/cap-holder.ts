@@ -19,6 +19,10 @@ function pathCovers(prefix: string, target: string): boolean {
   return target.startsWith(prefix + "/");
 }
 
+function toHex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
+}
+
 export const capHolderPolicy: AccessPolicy = {
   name: "cap-holder",
   async decide({ agent, caller }) {
@@ -27,6 +31,9 @@ export const capHolderPolicy: AccessPolicy = {
     }
     if (caller.expiresAt <= Date.now()) {
       return { kind: "deny", reason: "cap_expired" };
+    }
+    if (caller.namespacePubHex !== toHex(agent.namespacePub)) {
+      return { kind: "deny", reason: "cap_namespace_mismatch" };
     }
     if (!pathCovers(caller.pathPrefix, agent.folder)) {
       return { kind: "deny", reason: "cap_path_out_of_scope" };

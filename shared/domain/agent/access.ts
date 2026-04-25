@@ -31,10 +31,14 @@ export type CallerIdentity =
   /**
    * Presented a verified Meadowcap capability covering some path prefix.
    * `recipientHex` uniquely identifies the cap holder for rate limiting.
+   * `namespacePubHex` is the owned-namespace key the cap is rooted at —
+   * the policy checks this against the agent's drive namespace so a cap
+   * for drive A can't be used to access an agent in drive B.
    */
   | {
       kind: "cap-bearer";
       recipientHex: string;
+      namespacePubHex: string;
       pathPrefix: string;
       expiresAt: number; // ms
     }
