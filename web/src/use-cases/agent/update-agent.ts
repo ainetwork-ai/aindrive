@@ -2,7 +2,7 @@
  * updateAgent — owner-only edit of an existing agent's editable fields.
  *
  * Immutable: id, driveId, ownerId, namespacePub, createdAt.
- * Editable:  name, description, folder, knowledge, llm, access.
+ * Editable:  name, description, persona, folder, knowledge, llm, access.
  *
  * apiKey semantics:
  *   - undefined in patch  → keep existing
@@ -20,6 +20,7 @@ import type {
   LlmConfig,
   UserId,
 } from "@/shared/domain/agent/types";
+import { PERSONA_MAX } from "@/shared/domain/agent/types";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import {
   isKnowledgeStrategy,
@@ -36,6 +37,7 @@ export type UpdateAgentInput = {
   patch: {
     name?: string;
     description?: string;
+    persona?: string;
     folder?: string;
     knowledge?: KnowledgeConfig;
     llm?: Partial<LlmConfig>;
@@ -74,6 +76,12 @@ export async function updateAgent(
     const description = input.patch.description.trim();
     if (description.length > DESC_MAX) return reject("description_too_long");
     next.description = description;
+  }
+
+  if (input.patch.persona !== undefined) {
+    const persona = input.patch.persona.trim();
+    if (persona.length > PERSONA_MAX) return reject("persona_too_long");
+    next.persona = persona;
   }
 
   if (input.patch.folder !== undefined) {

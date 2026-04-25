@@ -18,6 +18,7 @@ import type {
   LlmConfig,
   UserId,
 } from "@/shared/domain/agent/types";
+import { PERSONA_MAX } from "@/shared/domain/agent/types";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import {
   isKnowledgeStrategy,
@@ -36,6 +37,8 @@ export type CreateAgentInput = {
   folder: string;
   name: string;
   description: string;
+  /** Empty string allowed → runner falls back to DEFAULT_AGENT_PERSONA. */
+  persona: string;
   knowledge: KnowledgeConfig;
   llm: LlmConfig;
   access: AccessConfig;
@@ -60,6 +63,9 @@ export async function createAgent(
 
   const description = (input.description ?? "").trim();
   if (description.length > DESC_MAX) return reject("description_too_long");
+
+  const persona = (input.persona ?? "").trim();
+  if (persona.length > PERSONA_MAX) return reject("persona_too_long");
 
   const folder = normalizeFolder(input.folder);
   if (folder.length > FOLDER_MAX) return reject("folder_too_long");
@@ -94,6 +100,7 @@ export async function createAgent(
       folder,
       name,
       description,
+      persona,
       namespacePub: input.namespacePub,
       knowledge: input.knowledge,
       llm: input.llm,

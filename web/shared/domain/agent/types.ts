@@ -69,6 +69,21 @@ export type AccessConfig = {
   policies: string[];        // ["owner", "cap-holder", "x402-payer", …]
 };
 
+/**
+ * Default agent persona used when the owner doesn't supply one. Kept in
+ * the domain layer so backend, CLI runner, and the modal placeholder
+ * stay in sync.
+ */
+export const DEFAULT_AGENT_PERSONA =
+  "You are this drive's helpful guide. Welcome visitors warmly, " +
+  "answer their questions about its contents using the documents you " +
+  "have access to, and weave specifics in naturally. If a question is " +
+  "outside your knowledge, say so kindly and point them toward what " +
+  "is. Speak like a knowledgeable teammate giving a tour — avoid " +
+  "listing filenames or technical metadata in your reply.";
+
+export const PERSONA_MAX = 1500;
+
 export type Agent = {
   id: AgentId;
   driveId: DriveId;
@@ -77,6 +92,12 @@ export type Agent = {
   folder: string;
   name: string;
   description: string;
+  /**
+   * Owner-authored system instruction shaping the agent's voice and
+   * stance. Prepended to the runtime system prompt before the knowledge
+   * dump. Empty string → use DEFAULT_AGENT_PERSONA at runtime.
+   */
+  persona: string;
   /**
    * Public ed25519 of the drive's owned namespace. Required by the
    * cap-holder policy to verify presented capabilities are for this drive.
@@ -97,6 +118,7 @@ export type NewAgentInput = {
   folder: string;
   name: string;
   description: string;
+  persona: string;
   namespacePub: Uint8Array;
   knowledge: KnowledgeConfig;
   llm: LlmConfig;
