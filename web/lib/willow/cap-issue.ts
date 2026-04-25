@@ -53,7 +53,13 @@ export async function issueShareCap(opts: {
   };
 }
 
+export function bytesToHex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
+}
+
 export type DecodedCap = {
+  /** Owned namespace this cap is rooted at (= drive's namespace pubkey). */
+  namespacePub: Uint8Array;
   receiverPub: Uint8Array;
   pathPrefix: string;
   timeStart: bigint;
@@ -68,7 +74,12 @@ export async function decodeAndDescribeCap(capBase64: string): Promise<DecodedCa
     const valid = await mc.isValidCap(cap);
     const area = mc.getCapGrantedArea(cap);
     const receiverPub = mc.getCapReceiver(cap);
+    // Meadowcap caps have namespaceKey as a direct field (no class getter
+    // exposed for it). Cast through any to satisfy TS without dragging in
+    // the full McCapability generic chain.
+    const namespacePub = (cap as unknown as { namespaceKey: Uint8Array }).namespaceKey;
     return {
+      namespacePub,
       receiverPub,
       pathPrefix: pathToString(area.pathPrefix),
       timeStart: area.timeRange.start,

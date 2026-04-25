@@ -58,10 +58,10 @@ export type CapVerifyResult = CapVerifyOk | CapVerifyError;
 // ─────────────────────────────────────────────────────────────────────────
 
 export type RagSource = {
-  path: string;       // drive-relative, e.g. "docs/q1-okr.md"
-  lineStart: number;  // 1-indexed
-  lineEnd: number;    // inclusive
-  snippet: string;    // up to ~300 chars, the chunk text
+  path: string;        // drive-relative, e.g. "docs/q1-okr.md"
+  snippet: string;     // up to ~300 chars, the chunk text
+  lineStart?: number;  // 1-indexed; absent when KB doesn't track lines
+  lineEnd?: number;    // inclusive
 };
 
 export type RagAnswer = {

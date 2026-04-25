@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import * as Y from "yjs";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
+import { runAgentAsk } from "./agent-runner.js";
 
 import { log, trace as pinoTrace } from "./logger.js";
 
@@ -61,6 +62,7 @@ export function isSelfWrite(path) {
 const RPC_METHODS = new Set([
   "list", "stat", "read", "write", "mkdir", "rename", "delete",
   "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
+  "agent-ask",
 ]);
 
 const HIDDEN = new Set([".aindrive", ".DS_Store", ".git"]);
@@ -247,6 +249,15 @@ export async function handleRpc(params, root) {
       const docId = String(params.docId || "");
       if (!/^[A-Za-z0-9_-]{8,64}$/.test(docId)) throw new Error("invalid docId");
       return { method: "yjs-stats", ...statsForDoc(root, docId) };
+    }
+    case "agent-ask": {
+      // Web side has already verified caller identity + access policy.
+      // Here we trust the RPC and run the agent locally — that's how
+      // llm.apiKey stays on the owner's machine.
+      const agentId = String(params.agentId || "");
+      const query = String(params.query || "");
+      const result = await runAgentAsk({ root, agentId, query });
+      return { method: "agent-ask", ...result };
     }
   }
 }
