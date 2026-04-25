@@ -22,6 +22,13 @@ export const PROVIDERS = {
     authPrefix: "",
     defaultModel: "qwen3-30b-a3b-instruct-2507",
   },
+  "gemma-local": {
+    baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
+    authHeader: null,
+    authPrefix: "",
+    defaultModel: "gemma3:4b",
+    noAuth: true,
+  },
 };
 
 export function isKnownProvider(name) {

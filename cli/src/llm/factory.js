@@ -21,13 +21,13 @@ export function resolveLlmClient(config) {
 
   const apiKey =
     config.apiKey || process.env[`${config.provider.toUpperCase()}_API_KEY`];
-  if (!apiKey) {
+  if (!wire.noAuth && !apiKey) {
     throw new Error(`no_api_key:${config.provider}`);
   }
 
   return makeOpenAiCompatibleClient({
     wire,
-    apiKey,
+    apiKey: wire.noAuth ? null : apiKey,
     model: config.model || wire.defaultModel,
     temperature: typeof config.temperature === "number" ? config.temperature : DEFAULT_TEMPERATURE,
     maxTokens: typeof config.maxTokens === "number" ? config.maxTokens : DEFAULT_MAX_TOKENS,
