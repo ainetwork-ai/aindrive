@@ -14,18 +14,23 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+import pkg from "../../package.json" assert { type: "json" };
 import { createClient } from "./client.js";
 import { TOOLS } from "./tools.js";
 import { listResources, readResource, makeResourceTemplates } from "./resources.js";
 
-const VERSION = "0.1.0";
+const cliVersion = pkg.version;
+
+function err(line) {
+  process.stderr.write(line + "\n");
+}
 
 export async function runMcpServer({ server: serverUrl } = {}) {
   const client = await createClient({ server: serverUrl });
   const ctx = { client };
 
   const server = new Server(
-    { name: "aindrive", version: VERSION },
+    { name: "aindrive", version: cliVersion },
     {
       capabilities: {
         tools: {},
@@ -67,14 +72,39 @@ export async function runMcpServer({ server: serverUrl } = {}) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Greeting on stderr so the user knows the server is alive (Claude Desktop
-  // captures both streams; stdout MUST stay reserved for MCP frames).
+  // --- Banner (stderr only — stdout is the MCP wire) ---
   const authBits = [
     ctx.client.hasOwnerAuth ? "owner" : null,
     ctx.client.hasWallet ? "wallet" : null,
     ctx.client.hasCap ? "cap" : null,
   ].filter(Boolean);
-  process.stderr.write(
-    `aindrive-mcp ${VERSION} ready · server=${ctx.client.server} · auth=${authBits.join("+") || "none"}\n`,
-  );
+  const authLabel = authBits.join("+") || "none";
+  err(`aindrive-mcp ${cliVersion} · server=${ctx.client.server} · auth=${authLabel}`);
+
+  // --- Auth hint: no creds found ---
+  if (authLabel === "none") {
+    err("  No credentials found. To authenticate:");
+    err("    aindrive login               # interactive login via browser");
+    err("    export AINDRIVE_SESSION=...  # or set a raw session cookie");
+    err("    export AINDRIVE_WALLET_COOKIE=...  # or set a wallet cookie");
+    err("  Continuing anyway — cap-only tools (e.g. verify_cap) still work.");
+  }
+
+  // --- Connectivity probe with 5 s timeout ---
+  try {
+    const probe = ctx.client.get("/api/whoami");
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(Object.assign(new Error("timeout"), { code: "TIMEOUT" })), 5000),
+    );
+    await Promise.race([probe, timeout]);
+  } catch (e) {
+    const code = e?.code || (e?.status ? `HTTP ${e.status}` : "ERR");
+    let hint = "check --server or AINDRIVE_SERVER";
+    if (code === "TIMEOUT") hint = "is the aindrive web running? (timed out after 5 s)";
+    else if (code === "ECONNREFUSED") hint = "is the aindrive web running?";
+    else if (code === "ENOTFOUND") hint = "check --server or AINDRIVE_SERVER (DNS lookup failed)";
+    else if (e?.status >= 500) hint = "server returned an error — check web server logs";
+    err(`cannot reach ${ctx.client.server} (${code}): ${hint}`);
+    err("  Continuing — tools that don't need the server (e.g. verify_cap) still work.");
+  }
 }

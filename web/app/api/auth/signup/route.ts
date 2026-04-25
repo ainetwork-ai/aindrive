@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { setCookie } from "@/lib/session";
+import { tryConsume, clientKey } from "@/lib/rate-limit";
 
 const Body = z.object({
   email: z.string().email(),
@@ -12,6 +13,11 @@ const Body = z.object({
 });
 
 export async function POST(req: Request) {
+  const rl = tryConsume({ name: "auth-signup", key: clientKey(req, "auth-signup"), limit: 5, windowMs: 300_000 });
+  if (!rl.ok) {
+    const retryAfter = Math.ceil(rl.retryAfterMs / 1000);
+    return NextResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": String(retryAfter) } });
+  }
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const { email, name, password } = body.data;

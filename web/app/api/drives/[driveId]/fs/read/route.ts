@@ -4,6 +4,8 @@ import { getDrive } from "@/lib/drives";
 import { resolveAccess, atLeast } from "@/lib/access";
 import { AgentError, callAgent } from "@/lib/rpc";
 
+const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16 * 1024 * 1024), 10);
+
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const url = new URL(req.url);
@@ -19,6 +21,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   }
   try {
     const result = await callAgent(driveId, drive.drive_secret, { method: "read", path, encoding });
+    if (result && typeof result.content === "string") {
+      const byteLength = encoding === "base64"
+        ? Math.ceil(result.content.length * 3 / 4)
+        : Buffer.byteLength(result.content, "utf8");
+      if (byteLength > MAX_READ_BYTES) {
+        return NextResponse.json(
+          { error: "file too large to stream", limit: MAX_READ_BYTES, size: byteLength },
+          { status: 413 },
+        );
+      }
+    }
     return NextResponse.json(result);
   } catch (e) {
     const err = e as AgentError;
