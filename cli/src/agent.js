@@ -10,25 +10,69 @@ import { log } from "./logger.js";
 const PROTOCOL_VERSION = 1;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
 const FS_DEBOUNCE_MS = 500;
+const DRAIN_TIMEOUT_MS = 10_000;
+
+// Graceful shutdown state — module-level so signal handlers can reach it.
+let shuttingDown = false;
+let inFlightCount = 0;
+let activeWs = null; // set by connectOnce while open
+
+function installShutdownHandlers() {
+  let shutdownStarted = false;
+
+  const doShutdown = async (signal) => {
+    if (shuttingDown && shutdownStarted) {
+      // Second signal during drain → force exit immediately
+      log.warn({ signal }, "second signal received during shutdown — forcing exit");
+      process.exit(1);
+    }
+    shuttingDown = true;
+    shutdownStarted = true;
+    log.info({ signal, inFlightCount }, "agent shutting down");
+
+    // Wait up to DRAIN_TIMEOUT_MS for in-flight RPCs to complete
+    const deadline = Date.now() + DRAIN_TIMEOUT_MS;
+    while (inFlightCount > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (inFlightCount > 0) {
+      log.warn({ inFlightCount }, "drain timeout — forcing close with pending RPCs");
+    }
+
+    // Close the WebSocket cleanly
+    if (activeWs && activeWs.readyState === WebSocket.OPEN) {
+      try { activeWs.close(1001, "agent shutting down"); } catch {}
+      // Give the close handshake a moment
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    // Flush pino logger if it exposes a flush method
+    if (typeof log.flush === "function") {
+      try { await new Promise((r) => { log.flush(r); }); } catch {}
+    }
+
+    process.exit(0);
+  };
+
+  process.on("SIGTERM", () => doShutdown("SIGTERM"));
+  process.on("SIGINT",  () => doShutdown("SIGINT"));
+}
 
 export async function runAgent({ root, drive, server }) {
   setTraceServer(server); // direct trace POSTs to the right server
   const wsUrl = toWsUrl(server, drive.driveId);
   let attempt = 0;
-  let stopped = false;
 
-  const shutdown = () => { if (!stopped) { stopped = true; process.exit(0); } };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  installShutdownHandlers();
 
-  while (!stopped) {
+  while (!shuttingDown) {
     try {
       await connectOnce({ root, drive, wsUrl });
       attempt = 0;
     } catch (e) {
       log.error({ err: e.message || String(e) }, "agent connection error");
     }
-    if (stopped) break;
+    if (shuttingDown) break;
     const wait = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
     attempt++;
     log.info({ waitSec: wait / 1000 }, "reconnecting");
@@ -56,6 +100,7 @@ function connectOnce({ root, drive, wsUrl }) {
 
     ws.once("open", () => {
       opened = true;
+      activeWs = ws;
       log.info({ driveId: drive.driveId }, "connected");
       // Tell the server which machine this agent is running on so it can show
       // the hostname next to the drive in the UI.
@@ -103,7 +148,21 @@ function connectOnce({ root, drive, wsUrl }) {
         log.warn("dropped forged request");
         return;
       }
+
+      // Reject new RPCs once shutdown is in progress
+      if (shuttingDown) {
+        log.debug({ method: frame.params?.method }, "[agent] rejecting RPC — shutting down");
+        let response = { type: "response", reqId: frame.reqId, ok: false, error: "agent shutting down" };
+        try {
+          const { type: _t, ...payloadForSig } = response;
+          response.sig = signPayload(drive.driveSecret, payloadForSig);
+          ws.send(JSON.stringify(response));
+        } catch {}
+        return;
+      }
+
       log.debug({ method: frame.params?.method }, "[agent] handling");
+      inFlightCount++;
       let response;
       try {
         const result = await handleRpc(frame.params, root);
@@ -112,6 +171,8 @@ function connectOnce({ root, drive, wsUrl }) {
       } catch (e) {
         log.error({ err: e.message }, "[agent] handleRpc threw");
         response = { type: "response", reqId: frame.reqId, ok: false, error: sanitize(e.message) };
+      } finally {
+        inFlightCount--;
       }
       try {
         const { type: _t, ...payloadForSig } = response;
@@ -124,6 +185,7 @@ function connectOnce({ root, drive, wsUrl }) {
 
     ws.once("close", (code, reason) => {
       const msg = `disconnected${code ? ` (${code}${reason ? `: ${reason.toString()}` : ""})` : ""}`;
+      if (activeWs === ws) activeWs = null;
       if (watcher) { try { watcher.close(); } catch {} }
       for (const t of recentChanges.values()) clearTimeout(t);
       recentChanges.clear();
