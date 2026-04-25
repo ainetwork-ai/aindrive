@@ -1,15 +1,13 @@
 /**
  * askAgent — orchestrates one ask against an agent.
  *
- * Pipeline (deliberately small, will not change as features grow):
- *   1. Load agent.
- *   2. Identify caller via injected resolver.
- *   3. Ask injected policy whether to allow.
- *   4. If allowed, fetch knowledge from injected KnowledgeBase
- *      (v1: dumps all text files; future: real RAG).
- *   5. Build system prompt from chunks.
- *   6. Generate answer via injected LlmClient.
- *   7. Map chunks → sources for the response.
+ * Web side responsibility (this function):
+ *   1. Load agent metadata via AgentRepo.
+ *   2. Identify caller via injected IdentityResolver.
+ *   3. Ask injected AccessPolicy whether to allow.
+ *   4. If allowed, forward execution to the CLI via AgentExecutor —
+ *      the agent's KnowledgeBase + LlmClient run on the owner's machine,
+ *      so the API key (agent.llm.apiKey) never crosses to web.
  *
  * Output is a discriminated union; HTTP adapter is a pure switch
  * over `kind`.
@@ -22,10 +20,8 @@ import type {
 } from "../../../../shared/domain/agent/access.js";
 import type {
   AccessPolicyFactory,
+  AgentExecutor,
   AgentRepo,
-  KnowledgeBaseFactory,
-  KnowledgeChunk,
-  LlmClientFactory,
 } from "../../../../shared/domain/agent/ports.js";
 import type {
   AgentId,
@@ -38,13 +34,13 @@ export type AskAgentDeps = {
   agents: AgentRepo;
   identityResolver: IdentityResolver;
   /**
-   * Per-agent resolution. Each agent's stored `access` / `knowledge` /
-   * `llm` config drives which concrete impl is used. The factory itself
-   * is a single instance shared across asks; it dispatches by config key.
+   * Per-agent policy resolution. Each agent's stored `access` config
+   * drives which combination of policies decides the call. The factory
+   * itself is one shared instance; it dispatches by config key.
    */
   policyFactory: AccessPolicyFactory;
-  knowledgeFactory: KnowledgeBaseFactory;
-  llmFactory: LlmClientFactory;
+  /** Forwards allowed asks to the CLI agent on the owner's machine. */
+  executor: AgentExecutor;
 };
 
 export type AskAgentInput = {
@@ -67,14 +63,11 @@ export async function askAgent(
   const agent = await deps.agents.byId(input.driveId, input.agentId);
   if (!agent) return { kind: "denied", reason: "agent_not_found" };
 
-  // Resolve per-agent impls from stored config. Unknown keys (mistyped
-  // provider, removed policy, …) → hard deny so the route returns 4xx
-  // rather than crashing.
-  let policy, knowledgeBase, llm;
+  // Resolve the policy from agent.access; unknown policy name → hard
+  // deny so the route returns 4xx rather than crashing.
+  let policy;
   try {
     policy = deps.policyFactory.make(agent.access);
-    knowledgeBase = deps.knowledgeFactory.make(agent.knowledge);
-    llm = await deps.llmFactory.make(agent.llm);
   } catch (e) {
     return { kind: "denied", reason: `agent_misconfigured:${(e as Error).message}` };
   }
@@ -95,50 +88,19 @@ export async function askAgent(
       break;
   }
 
-  const chunks = await knowledgeBase.fetch({
-    agent,
-    query: input.askRequest.q,
-  });
+  // Trust boundary crossed: web has authorized this call. Forward to
+  // the CLI which runs KB + LLM with the local agent.json (apiKey
+  // included). Web never sees the apiKey for this request.
+  let result: AskResult;
+  try {
+    result = await deps.executor.ask({
+      driveId: input.driveId,
+      agentId: input.agentId,
+      request: input.askRequest,
+    });
+  } catch (e) {
+    return { kind: "denied", reason: `agent_execution_failed:${(e as Error).message}` };
+  }
 
-  const answer = await llm.complete({
-    system: buildSystemPrompt(chunks, agent.name),
-    user: input.askRequest.q,
-  });
-
-  return {
-    kind: "ok",
-    result: {
-      answer,
-      sources: chunks.map(toSource),
-    },
-    policyName: policy.name,
-  };
-}
-
-// ─── Prompt + source mapping (small enough to live inline) ─────────────────
-
-function buildSystemPrompt(chunks: ReadonlyArray<KnowledgeChunk>, agentName: string): string {
-  const knowledge = chunks.length === 0
-    ? "(no knowledge available — the folder is empty or contains no readable text files)"
-    : chunks.map(c => `── ${c.path} ──\n${c.text}`).join("\n\n");
-  return [
-    `You are "${agentName}", an AI assistant answering questions strictly from the documents below.`,
-    `Rules:`,
-    `  - Answer ONLY using the documents. Do not invent facts.`,
-    `  - If the answer is not in the documents, reply exactly: "I don't see that in this folder."`,
-    `  - Cite source files in parentheses, e.g. "(see docs/q1-okr.md)".`,
-    `  - Keep answers concise.`,
-    ``,
-    `DOCUMENTS:`,
-    knowledge,
-  ].join("\n");
-}
-
-function toSource(chunk: KnowledgeChunk) {
-  return {
-    path: chunk.path,
-    lineStart: chunk.lineStart ?? 1,
-    lineEnd: chunk.lineEnd ?? 1,
-    snippet: chunk.text.length > 280 ? chunk.text.slice(0, 280) + "…" : chunk.text,
-  };
+  return { kind: "ok", result, policyName: policy.name };
 }

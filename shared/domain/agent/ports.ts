@@ -1,27 +1,30 @@
 /**
- * Domain ports for the Agent feature.
+ * Domain ports for the Agent feature (web side).
  *
- * Two axes of future change are isolated behind ports:
- *   1. KnowledgeBase — HOW we produce relevant context for a query.
- *      v1: dump all .txt/.md content of the agent's folder (no retrieval).
- *      Future: vector RAG, BM25, hybrid, summarization, query rewriting…
- *      Swapping the strategy = swap one composition wire. askAgent unchanged.
+ * v1 architecture splits responsibility between web and CLI:
  *
- *   2. LlmClient — WHICH model does the actual generation.
- *      v1: OpenAI gpt-4o-mini.
- *      Future: Anthropic, local llama.cpp, Vercel AI Gateway routing, …
+ *   web side  — identity, access policy, agent metadata CRUD, A2A card
+ *               publication. Holds NO secrets.
+ *   CLI side  — actual agent execution: KnowledgeBase + LlmClient run
+ *               on the owner's machine. The API key never crosses to web.
  *
- * Plus a small file-browsing port that v1 KnowledgeBase impls use to
- * read the drive's files via the existing CLI agent RPC bridge.
+ * So this file declares ports for the WEB side only:
+ *   - AgentRepo      CRUD of agent JSON files (via FsBrowser)
+ *   - FsBrowser      thin RPC wrapper for list/read/write
+ *   - AgentExecutor  forwards "run this agent with this query" to the CLI
+ *   - AccessPolicyFactory  composes named policies for an agent
+ *
+ * KnowledgeBase / LlmClient (and their factories) live in cli/src/
+ * because they only run there.
  */
 
 import type {
   AccessConfig,
   Agent,
   AgentId,
+  AskRequest,
+  AskResult,
   DriveId,
-  KnowledgeConfig,
-  LlmConfig,
   NewAgentInput,
 } from "./types.js";
 import type { AccessPolicy } from "./access.js";
@@ -30,11 +33,7 @@ import type { AccessPolicy } from "./access.js";
 
 /**
  * Where agent metadata lives. v1 stores each agent as a JSON file inside
- * the drive itself at <drive>/.aindrive/agents/<id>.json — no separate DB,
- * no migration, agent travels with the drive on export/sync.
- *
- * Future impls (e.g. Willow-backed, Postgres-backed) implement the same
- * interface; consumers only see the port.
+ * the drive itself at <drive>/.aindrive/agents/<id>.json — no separate DB.
  *
  * `byId` takes driveId because each impl scopes by drive (the file lives
  * inside that drive's tree). HTTP routes always carry driveId in the URL.
@@ -45,49 +44,7 @@ export interface AgentRepo {
   create(input: NewAgentInput): Promise<Agent>;
 }
 
-// ─── KnowledgeBase: where context comes from ───────────────────────────────
-
-/**
- * A single piece of knowledge handed to the LLM.
- *
- * v1 may produce one big chunk per file (whole file as text); future
- * impls may produce many smaller chunks with line ranges and scores.
- * The shape is forward-compatible — extra optional fields can be added
- * without breaking consumers.
- */
-export type KnowledgeChunk = {
-  path: string;          // drive-relative file path
-  lineStart?: number;    // optional; v1 omits, citation falls back to whole file
-  lineEnd?: number;
-  text: string;
-  /** 0..1 relevance — populated by retrieval impls; v1 leaves undefined. */
-  score?: number;
-};
-
-export interface KnowledgeBase {
-  /**
-   * Produce knowledge chunks relevant to `query` from the agent's folder.
-   *
-   * Implementations decide the strategy entirely:
-   *   - DumpAllTextKb: ignore `query`, return every .txt/.md file as one chunk each
-   *   - VectorRagKb (future): embed query, return top-k chunks
-   *   - HybridKb (future): combine
-   */
-  fetch(input: { agent: Agent; query: string; maxChunks?: number }): Promise<KnowledgeChunk[]>;
-}
-
-// ─── LLM: how the answer is generated ──────────────────────────────────────
-
-export interface LlmClient {
-  complete(input: {
-    system: string;
-    user: string;
-    /** Soft cap on output tokens; impls may clamp further. */
-    maxTokens?: number;
-  }): Promise<string>;
-}
-
-// ─── FS browser: thin port the v1 KnowledgeBase uses to read drive files ───
+// ─── FS browser: thin port for AgentRepo ───────────────────────────────────
 
 export type FileEntry = {
   path: string;       // drive-relative
@@ -97,13 +54,12 @@ export type FileEntry = {
 };
 
 /**
- * Minimal filesystem port. Two consumers:
- *   - KnowledgeBase impls (read drive content as knowledge)
- *   - FsAgentRepo (read/write agent metadata under .aindrive/agents/)
+ * Minimal filesystem port. v1 consumer is FsAgentRepo (read/write agent
+ * metadata under .aindrive/agents/). Concrete impl forwards to the
+ * existing CLI agent over WSS RPC.
  *
- * Concrete impl in v1 forwards to the existing CLI agent over WSS RPC
- * (`sendRpc(driveId, {method:"list"|"read"|"write", ...})`). Write
- * implicitly mkdirs parents — same as the underlying RPC.
+ * Server-internal callers bypass the cap-bearer .aindrive/ block — that
+ * block lives at the HTTP middleware layer, not here.
  */
 export interface FsBrowser {
   list(driveId: DriveId, path: string): Promise<FileEntry[]>;
@@ -111,29 +67,27 @@ export interface FsBrowser {
   write(driveId: DriveId, path: string, content: string): Promise<void>;
 }
 
-// ─── Factories — pick the right impl based on per-agent config ─────────────
+// ─── AgentExecutor: forward ask to the CLI for actual execution ────────────
 
 /**
- * Builds an LlmClient from a per-agent LlmConfig.
+ * Runs an agent's ask end-to-end on the owner's machine. The web side
+ * has already verified caller identity + access policy by the time
+ * this is called.
  *
- * The API key comes from `config.apiKey` (stored in the drive's agent
- * JSON, protected from cap-bearers by the .aindrive/ path block) or
- * falls back to a server env var if absent. Either way, no separate
- * "owner secrets" port is needed for v1.
- *
- * Throws if `config.provider` is unknown or no key is resolvable.
+ * v1 impl: RpcAgentExecutor — sends an `agent-ask` RPC to the CLI which
+ * loads the agent JSON locally, runs the configured KnowledgeBase, and
+ * calls the configured LlmClient. The API key (in agent.llm.apiKey)
+ * never crosses to web.
  */
-export interface LlmClientFactory {
-  make(config: LlmConfig): Promise<LlmClient>;
+export interface AgentExecutor {
+  ask(input: {
+    driveId: DriveId;
+    agentId: AgentId;
+    request: AskRequest;
+  }): Promise<AskResult>;
 }
 
-/**
- * Builds a KnowledgeBase from a per-agent KnowledgeConfig.
- * Throws if `config.strategy` is unknown.
- */
-export interface KnowledgeBaseFactory {
-  make(config: KnowledgeConfig): KnowledgeBase;
-}
+// ─── AccessPolicyFactory ───────────────────────────────────────────────────
 
 /**
  * Builds a composed AccessPolicy from a per-agent AccessConfig.

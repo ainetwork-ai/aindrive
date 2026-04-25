@@ -12,7 +12,15 @@ export type RpcParams =
   | { method: "rename"; from: string; to: string }
   | { method: "delete"; path: string }
   | { method: "yjs-write"; docId: string; data: string }
-  | { method: "yjs-read"; docId: string };
+  | { method: "yjs-read"; docId: string }
+  | { method: "agent-ask"; agentId: string; query: string };
+
+export type AskSource = {
+  path: string;
+  lineStart: number;
+  lineEnd: number;
+  snippet: string;
+};
 
 export type DriveEntry = {
   name: string;
@@ -33,7 +41,8 @@ export type RpcResult =
   | { method: "rename"; ok: true }
   | { method: "delete"; ok: true }
   | { method: "yjs-write"; ok: true; bytes: number }
-  | { method: "yjs-read"; data: string; bytes: number };
+  | { method: "yjs-read"; data: string; bytes: number }
+  | { method: "agent-ask"; answer: string; sources: AskSource[] };
 
 export type SendRpcOpts = { timeoutMs?: number };
 
