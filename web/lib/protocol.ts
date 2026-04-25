@@ -2,7 +2,9 @@ export const PROTOCOL_VERSION = 1;
 
 export type RpcMethod =
   | "list" | "stat" | "read" | "write" | "mkdir" | "rename" | "delete"
-  | "upload-chunk" | "download-chunk";
+  | "upload-chunk" | "download-chunk"
+  | "yjs-write" | "yjs-read"
+  | "agent-ask";
 
 export type RpcParams =
   | { method: "list"; path: string }
@@ -15,7 +17,15 @@ export type RpcParams =
   | { method: "upload-chunk"; path: string; chunkId: number; total: number; data: string }
   | { method: "download-chunk"; path: string; offset: number; length: number }
   | { method: "yjs-write"; docId: string; data: string }
-  | { method: "yjs-read"; docId: string };
+  | { method: "yjs-read"; docId: string }
+  | { method: "agent-ask"; agentId: string; query: string };
+
+export type AskSource = {
+  path: string;
+  lineStart: number;
+  lineEnd: number;
+  snippet: string;
+};
 
 export type DriveEntry = {
   name: string;
@@ -38,7 +48,8 @@ export type RpcResult =
   | { method: "upload-chunk"; ok: true; receivedBytes: number }
   | { method: "download-chunk"; data: string; eof: boolean }
   | { method: "yjs-write"; ok: true; bytes: number }
-  | { method: "yjs-read"; data: string; bytes: number };
+  | { method: "yjs-read"; data: string; bytes: number }
+  | { method: "agent-ask"; answer: string; sources: AskSource[] };
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;

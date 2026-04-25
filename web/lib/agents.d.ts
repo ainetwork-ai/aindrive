@@ -1,56 +1,21 @@
 /**
  * Type shim for the legacy `lib/agents.js` (custom server side).
- * Mirrors db.d.ts pattern.
+ * Type definitions for RPC params/results live in `./protocol.ts`
+ * (the team's single source of truth) — we re-use them here so any
+ * additions there propagate automatically to TS callers of sendRpc.
  */
 
-export type RpcParams =
-  | { method: "list"; path: string }
-  | { method: "stat"; path: string }
-  | { method: "read"; path: string; encoding?: "utf8" | "base64"; maxBytes?: number }
-  | { method: "write"; path: string; content: string; encoding?: "utf8" | "base64" }
-  | { method: "mkdir"; path: string }
-  | { method: "rename"; from: string; to: string }
-  | { method: "delete"; path: string }
-  | { method: "yjs-write"; docId: string; data: string }
-  | { method: "yjs-read"; docId: string }
-  | { method: "agent-ask"; agentId: string; query: string };
+import type { RpcParams, RpcResult, SendRpcOpts as _SendRpcOpts } from "./protocol";
 
-export type AskSource = {
-  path: string;
-  lineStart: number;
-  lineEnd: number;
-  snippet: string;
-};
-
-export type DriveEntry = {
-  name: string;
-  path: string;
-  isDir: boolean;
-  size: number;
-  mtimeMs: number;
-  ext: string;
-  mime: string;
-};
-
-export type RpcResult =
-  | { method: "list"; entries: DriveEntry[] }
-  | { method: "stat"; entry: DriveEntry | null }
-  | { method: "read"; content: string; encoding: "utf8" | "base64"; truncated?: boolean }
-  | { method: "write"; ok: true; bytes: number }
-  | { method: "mkdir"; ok: true }
-  | { method: "rename"; ok: true }
-  | { method: "delete"; ok: true }
-  | { method: "yjs-write"; ok: true; bytes: number }
-  | { method: "yjs-read"; data: string; bytes: number }
-  | { method: "agent-ask"; answer: string; sources: AskSource[] };
+export type { RpcParams, RpcResult } from "./protocol";
 
 export type SendRpcOpts = { timeoutMs?: number };
 
-export function sendRpc<T extends RpcParams>(
+export function sendRpc<M extends RpcParams["method"]>(
   driveId: string,
-  params: T,
+  params: Extract<RpcParams, { method: M }>,
   opts?: SendRpcOpts,
-): Promise<Extract<RpcResult, { method: T["method"] }>>;
+): Promise<Extract<RpcResult, { method: M }>>;
 
 export function isAgentConnected(driveId: string): boolean;
 export function listConnectedDrives(): string[];
