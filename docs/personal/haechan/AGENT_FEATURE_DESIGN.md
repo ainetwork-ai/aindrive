@@ -18,6 +18,108 @@
 
 ---
 
+## Per-agent config — 각 axis는 agent 자체에 박힘
+
+owner마다·agent마다 *다른 모델·다른 retrieval 전략·다른 정책 조합*을 쓸 수 있어야 한다. agent JSON에 `llm/knowledge/access` 섹션을 두고, 런타임에 factory가 그 키로 구체 impl을 골라낸다.
+
+### 안전 분리: config in drive, secrets server-side
+
+| 데이터 | 저장 위치 | 누가 봄 |
+|---|---|---|
+| `llm.provider`, `llm.model`, `llm.temperature` | `<drive>/.aindrive/agents/<id>.json` | drive cap holder |
+| `knowledge.strategy`, `access.policies` | 같은 곳 | 같음 |
+| **API keys (secrets)** | `<server data>/owner-secrets.json` (또는 KMS) | server only, owner profile으로만 |
+
+**불변식**: API key는 *절대* drive 파일에 안 들어간다. cap holder는 agent JSON을 다 읽을 수 있으므로 거기에 key를 넣으면 owner의 카드를 cap에 묶어 파는 셈.
+
+### Agent JSON 예시 (full v1)
+```json
+{
+  "id": "agt_8f2a1c",
+  "driveId": "drv_xxx",
+  "ownerId": "usr_yyy",
+  "folder": "docs",
+  "name": "OKR 봇",
+  "description": "Q1 OKR 묻는 봇",
+  "namespacePub": "<base64url>",
+  "knowledge": { "strategy": "dump-all-text" },
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "temperature": 0.2,
+    "maxTokens": 400
+  },
+  "access": { "policies": ["owner", "cap-holder"] },
+  "createdAt": 1745000000000
+}
+```
+
+### 새 ports — Factory 패턴
+
+```ts
+interface OwnerSecretStore {
+  get(ownerId: UserId, provider: string): Promise<string | null>;
+}
+interface LlmClientFactory   { make(cfg: LlmConfig, ownerId: UserId): Promise<LlmClient>; }
+interface KnowledgeBaseFactory { make(cfg: KnowledgeConfig): KnowledgeBase; }
+interface AccessPolicyFactory  { make(cfg: AccessConfig): AccessPolicy; }
+```
+
+### v1 LlmClientFactory impl
+```ts
+export const v1LlmFactory = (secrets: OwnerSecretStore): LlmClientFactory => ({
+  async make(config, ownerId) {
+    const apiKey =
+      (await secrets.get(ownerId, config.provider))
+      ?? process.env[`${config.provider.toUpperCase()}_API_KEY`];
+    if (!apiKey) throw new Error(`no_api_key:${config.provider}`);
+
+    switch (config.provider) {
+      case "openai":   return makeOpenAi({ apiKey, model: config.model, temp: config.temperature });
+      // 미래: case "anthropic": return makeAnthropic(...)
+      default: throw new Error(`unknown_provider:${config.provider}`);
+    }
+  }
+});
+```
+
+### v1 OwnerSecretStore impl (FileOwnerSecretStore)
+- 파일: `<server data dir>/owner-secrets.json` (정확한 경로는 `AINDRIVE_DATA_DIR` env로)
+- 형식: `{ "<ownerId>": { "openai": "<encrypted>" } }`
+- 암호화: 서버의 session secret으로 AES-GCM (이미 있는 비밀)
+- demo시: API key 입력 비우면 `process.env.OPENAI_API_KEY`로 fallback
+
+### Create Agent UI (제안)
+
+```
+Name              [OKR 봇                                    ]
+Description       [Q1 OKR 묻는 봇                          ]
+Folder            [docs/                                     ]
+
+── Knowledge ─────────────────────────────────────────────────
+Strategy          [Dump all text                ▾]
+                   (Coming: Vector RAG, Hybrid, …)
+
+── LLM ───────────────────────────────────────────────────────
+Provider          [OpenAI                       ▾]
+Model             [gpt-4o-mini                  ▾]
+Temperature       [────●──────────────────────] 0.2
+API Key           [                                          ]
+                   비워두면 플랫폼 기본 키 사용. 입력 시 server에
+                   owner 전용으로 암호화 저장. drive엔 안 들어감.
+
+── Access ────────────────────────────────────────────────────
+☑ Owner (always allowed)
+☑ Drive cap holders
+☐ x402 payers (coming soon)
+
+                                       [Cancel]    [Create]
+```
+
+UI 자체가 3 port를 그대로 비춰줌. 새 옵션 = 드롭다운에 entry 추가 + factory 등록.
+
+---
+
 ## v1 데모 시나리오 (최소 스펙)
 
 1. owner: 웹 UI에서 [Create Agent] 클릭 → DB에 row 추가. **인덱싱 없음**, 즉시 ready.

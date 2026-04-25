@@ -15,7 +15,17 @@
  * read the drive's files via the existing CLI agent RPC bridge.
  */
 
-import type { Agent, AgentId, DriveId, NewAgentInput } from "./types.js";
+import type {
+  AccessConfig,
+  Agent,
+  AgentId,
+  DriveId,
+  KnowledgeConfig,
+  LlmConfig,
+  NewAgentInput,
+  UserId,
+} from "./types.js";
+import type { AccessPolicy } from "./access.js";
 
 // ─── Persistence ───────────────────────────────────────────────────────────
 
@@ -100,4 +110,51 @@ export interface FsBrowser {
   list(driveId: DriveId, path: string): Promise<FileEntry[]>;
   read(driveId: DriveId, path: string, maxBytes?: number): Promise<string>;
   write(driveId: DriveId, path: string, content: string): Promise<void>;
+}
+
+// ─── Owner secrets — server-side, never in drive ───────────────────────────
+
+/**
+ * Per-owner credential lookup. Implementations decide where secrets live
+ * (encrypted file outside any drive, KMS, env vars, …) and how the owner
+ * configures them (UI in profile settings, CLI, environment).
+ *
+ * `null` from `get()` means "no owner-specific secret"; consumers may
+ * fall back to a server-default key (env var) for the demo, or refuse.
+ *
+ * KEY INVARIANT: secrets resolved by this port MUST NEVER be written
+ * into agent JSON files inside any drive — cap-holders read those.
+ */
+export interface OwnerSecretStore {
+  get(ownerId: UserId, provider: string): Promise<string | null>;
+}
+
+// ─── Factories — pick the right impl based on per-agent config ─────────────
+
+/**
+ * Builds an LlmClient from a per-agent LlmConfig + the owner's secret.
+ * Throws if `config.provider` is unknown to the registry.
+ */
+export interface LlmClientFactory {
+  make(config: LlmConfig, ownerId: UserId): Promise<LlmClient>;
+}
+
+/**
+ * Builds a KnowledgeBase from a per-agent KnowledgeConfig.
+ * Throws if `config.strategy` is unknown.
+ */
+export interface KnowledgeBaseFactory {
+  make(config: KnowledgeConfig): KnowledgeBase;
+}
+
+/**
+ * Builds a composed AccessPolicy from a per-agent AccessConfig.
+ * Throws if any policy name in `config.policies` is unknown.
+ *
+ * v1 supports: "owner", "cap-holder".
+ * Adding "x402-payer" / "subscriber" / … = register a new policy with
+ * the factory implementation; this interface stays unchanged.
+ */
+export interface AccessPolicyFactory {
+  make(config: AccessConfig): AccessPolicy;
 }

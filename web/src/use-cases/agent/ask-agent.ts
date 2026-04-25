@@ -16,16 +16,16 @@
  */
 
 import type {
-  AccessPolicy,
   IdentityResolveInput,
   IdentityResolver,
   PaymentRequirement,
 } from "../../../../shared/domain/agent/access.js";
 import type {
+  AccessPolicyFactory,
   AgentRepo,
-  KnowledgeBase,
+  KnowledgeBaseFactory,
   KnowledgeChunk,
-  LlmClient,
+  LlmClientFactory,
 } from "../../../../shared/domain/agent/ports.js";
 import type {
   AgentId,
@@ -37,9 +37,14 @@ import type {
 export type AskAgentDeps = {
   agents: AgentRepo;
   identityResolver: IdentityResolver;
-  accessPolicy: AccessPolicy;
-  knowledgeBase: KnowledgeBase;
-  llm: LlmClient;
+  /**
+   * Per-agent resolution. Each agent's stored `access` / `knowledge` /
+   * `llm` config drives which concrete impl is used. The factory itself
+   * is a single instance shared across asks; it dispatches by config key.
+   */
+  policyFactory: AccessPolicyFactory;
+  knowledgeFactory: KnowledgeBaseFactory;
+  llmFactory: LlmClientFactory;
 };
 
 export type AskAgentInput = {
@@ -62,8 +67,20 @@ export async function askAgent(
   const agent = await deps.agents.byId(input.driveId, input.agentId);
   if (!agent) return { kind: "denied", reason: "agent_not_found" };
 
+  // Resolve per-agent impls from stored config. Unknown keys (mistyped
+  // provider, removed policy, …) → hard deny so the route returns 4xx
+  // rather than crashing.
+  let policy, knowledgeBase, llm;
+  try {
+    policy = deps.policyFactory.make(agent.access);
+    knowledgeBase = deps.knowledgeFactory.make(agent.knowledge);
+    llm = await deps.llmFactory.make(agent.llm, agent.ownerId);
+  } catch (e) {
+    return { kind: "denied", reason: `agent_misconfigured:${(e as Error).message}` };
+  }
+
   const caller = await deps.identityResolver.resolve(input.http);
-  const decision = await deps.accessPolicy.decide({
+  const decision = await policy.decide({
     agent,
     caller,
     request: input.askRequest,
@@ -78,12 +95,12 @@ export async function askAgent(
       break;
   }
 
-  const chunks = await deps.knowledgeBase.fetch({
+  const chunks = await knowledgeBase.fetch({
     agent,
     query: input.askRequest.q,
   });
 
-  const answer = await deps.llm.complete({
+  const answer = await llm.complete({
     system: buildSystemPrompt(chunks, agent.name),
     user: input.askRequest.q,
   });
@@ -94,7 +111,7 @@ export async function askAgent(
       answer,
       sources: chunks.map(toSource),
     },
-    policyName: deps.accessPolicy.name,
+    policyName: policy.name,
   };
 }
 
