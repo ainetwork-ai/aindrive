@@ -10,7 +10,7 @@
  *   - non-empty           → replace
  */
 
-import type { AgentRepo } from "../../../../shared/domain/agent/ports";
+import type { AgentRepo } from "@/shared/domain/agent/ports";
 import type {
   AccessConfig,
   Agent,
@@ -19,13 +19,13 @@ import type {
   KnowledgeConfig,
   LlmConfig,
   UserId,
-} from "../../../../shared/domain/agent/types";
-import { isSystemPath } from "../../../../shared/domain/policy/system-paths";
+} from "@/shared/domain/agent/types";
+import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import {
   isKnowledgeStrategy,
   isLlmProvider,
   isPolicyName,
-} from "../../../../shared/domain/agent/registry";
+} from "@/shared/domain/agent/registry";
 
 export type UpdateAgentDeps = { agents: AgentRepo };
 

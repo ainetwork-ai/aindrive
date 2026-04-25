@@ -6,8 +6,8 @@
  * proper 403 instead of a silent 204.
  */
 
-import type { AgentRepo } from "../../../../shared/domain/agent/ports";
-import type { AgentId, DriveId, UserId } from "../../../../shared/domain/agent/types";
+import type { AgentRepo } from "@/shared/domain/agent/ports";
+import type { AgentId, DriveId, UserId } from "@/shared/domain/agent/types";
 
 export type DeleteAgentDeps = { agents: AgentRepo };
 

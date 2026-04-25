@@ -14,7 +14,7 @@ import { getDrive } from "@/lib/drives";
 import { compose } from "@/src/composition";
 import { updateAgent } from "@/src/use-cases/agent/update-agent";
 import { deleteAgent } from "@/src/use-cases/agent/delete-agent";
-import type { Agent } from "@/../shared/domain/agent/types";
+import type { Agent } from "@/shared/domain/agent/types";
 
 const Patch = z.object({
   name: z.string().max(80).optional(),
