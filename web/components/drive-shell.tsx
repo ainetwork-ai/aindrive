@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import {
   ChevronRight, Folder, FileText, FileCode, FileImage, File as FileIcon,
   FolderPlus, Upload, Share2, Loader2, HardDrive,
-  Bot, MessageSquare,
+  Bot, MessageSquare, Menu,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import { Viewer } from "./viewer";
@@ -41,6 +41,7 @@ export function DriveShell({ driveId, driveName }: Props) {
   const [shares, setShares] = useState<ShareSummary[]>([]);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -157,8 +158,25 @@ export function DriveShell({ driveId, driveName }: Props) {
 
   return (
     <div className="h-screen flex overflow-hidden">
-      <aside className="hidden md:flex flex-col w-64 bg-drive-sidebar border-r border-drive-border p-4 gap-2">
-        <Link href="/" className="flex items-center gap-2 font-semibold text-lg px-2 py-1.5">
+      {sidebarOpen && (
+        <button
+          aria-label="Close menu"
+          onClick={() => setSidebarOpen(false)}
+          className="md:hidden fixed inset-0 z-30 bg-black/30"
+        />
+      )}
+      <aside
+        className={clsx(
+          "fixed inset-y-0 left-0 z-40 w-64 bg-drive-sidebar border-r border-drive-border p-4 gap-2 flex flex-col transform transition-transform duration-200",
+          "md:static md:translate-x-0",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+        )}
+      >
+        <Link
+          href="/"
+          onClick={() => setSidebarOpen(false)}
+          className="flex items-center gap-2 font-semibold text-lg px-2 py-1.5"
+        >
           <HardDrive className="w-5 h-5 text-drive-accent" /> aindrive
         </Link>
         <div className="mt-2">
@@ -205,8 +223,15 @@ export function DriveShell({ driveId, driveName }: Props) {
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="flex items-center justify-between gap-3 px-6 py-3 border-b border-drive-border bg-white">
+        <header className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
           <div className="flex items-center gap-1 min-w-0 text-sm">
+            <button
+              aria-label="Open menu"
+              onClick={() => setSidebarOpen(true)}
+              className="md:hidden mr-1 p-1.5 -ml-1 rounded hover:bg-drive-hover shrink-0"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
             {crumbs.map((c, i) => (
               <span key={c.path} className="flex items-center gap-1 min-w-0">
                 {i > 0 && <ChevronRight className="w-4 h-4 text-drive-muted shrink-0" />}
@@ -214,31 +239,40 @@ export function DriveShell({ driveId, driveName }: Props) {
               </span>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <label className={clsx("cursor-pointer flex items-center gap-2 rounded-full px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover", !canEdit && "opacity-50 pointer-events-none")}>
-              <Upload className="w-4 h-4" /> Upload
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <label
+              aria-label="Upload"
+              className={clsx(
+                "cursor-pointer flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover",
+                !canEdit && "opacity-50 pointer-events-none",
+              )}
+            >
+              <Upload className="w-4 h-4" /> <span className="hidden sm:inline">Upload</span>
               <input type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
             </label>
             <button
+              aria-label="Share"
               onClick={() => setShareOpen({ path })}
-              className="flex items-center gap-2 rounded-full bg-drive-accent text-white px-3 py-1.5 text-sm hover:bg-drive-accentHover"
+              className="flex items-center gap-2 rounded-full bg-drive-accent text-white px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-accentHover"
             >
-              <Share2 className="w-4 h-4" /> Share
+              <Share2 className="w-4 h-4" /> <span className="hidden sm:inline">Share</span>
             </button>
             {role === "owner" && (
               <button
+                aria-label="Create Agent"
                 onClick={() => setAgentModalOpen(true)}
                 title="Create Agent"
-                className="flex items-center gap-2 rounded-full border border-drive-border px-3 py-1.5 text-sm hover:bg-drive-hover"
+                className="flex items-center gap-2 rounded-full border border-drive-border px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-hover"
               >
-                <Bot className="w-4 h-4" /> Agent
+                <Bot className="w-4 h-4" /> <span className="hidden sm:inline">Agent</span>
               </button>
             )}
             <button
+              aria-label="Folder chat"
               onClick={() => setChatOpen((v) => !v)}
               title="Folder chat"
               className={clsx(
-                "flex items-center gap-2 rounded-full border border-drive-border px-3 py-1.5 text-sm hover:bg-drive-hover",
+                "flex items-center gap-2 rounded-full border border-drive-border px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-hover",
                 chatOpen && "bg-blue-50 border-blue-300",
               )}
             >
@@ -248,7 +282,7 @@ export function DriveShell({ driveId, driveName }: Props) {
         </header>
 
         <section className="flex-1 flex min-h-0">
-          <div className="flex-1 overflow-auto scrollbar-thin p-6">
+          <div className="flex-1 overflow-auto scrollbar-thin p-3 sm:p-6">
             {loading ? (
               <div className="flex items-center justify-center text-drive-muted gap-2 py-20">
                 <Loader2 className="w-4 h-4 animate-spin" /> connecting to your agent…

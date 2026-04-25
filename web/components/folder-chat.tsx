@@ -158,7 +158,7 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
   }
 
   return (
-    <aside className="hidden lg:flex flex-col w-80 border-l border-drive-border bg-white">
+    <aside className="fixed inset-0 z-30 w-full lg:static lg:inset-auto lg:z-auto lg:w-80 border-l border-drive-border bg-white flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b">
         <div className="flex items-center gap-2 text-sm font-medium">
           <MessageSquare className="w-4 h-4 text-blue-600" />

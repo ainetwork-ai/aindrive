@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Instrument_Serif } from "next/font/google";
 import { Toaster } from "sonner";
 import { WalletProvider } from "@/components/wallet-provider";
@@ -15,6 +15,15 @@ const display = Instrument_Serif({
 export const metadata: Metadata = {
   title: "aindrive — your folder, on the web",
   description: "Self-hosted Google Drive. Run `aindrive` in any local folder and share it like a Drive.",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f8fafd" },
+    { media: "(prefers-color-scheme: dark)",  color: "#1f1f1f" },
+  ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

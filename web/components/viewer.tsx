@@ -237,7 +237,7 @@ export function Viewer({
   }
 
   return (
-    <aside className="w-full sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
+    <aside className="fixed inset-0 z-30 w-full sm:static sm:inset-auto sm:z-auto sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
       <header className="flex items-center justify-between gap-2 p-3 border-b border-drive-border">
         <div className="truncate font-medium flex items-center gap-2 min-w-0 flex-1">
           <span className="truncate">{entry.name}</span>
