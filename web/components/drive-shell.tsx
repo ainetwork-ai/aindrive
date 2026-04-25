@@ -186,7 +186,7 @@ export function DriveShell({ driveId, driveName }: Props) {
   }
 
   return (
-    <div className="h-screen flex overflow-hidden">
+    <div className="h-screen h-[100dvh] flex overflow-hidden">
       {sidebarOpen && (
         <button
           aria-label="Close menu"

@@ -8,7 +8,7 @@ export default async function Home() {
   const user = await getUser();
   if (!user) {
     return (
-      <main className="min-h-screen flex items-center justify-center px-6">
+      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
         <div className="max-w-xl w-full">
           <h1 className="text-4xl font-semibold tracking-tight">aindrive</h1>
           <p className="mt-3 text-drive-muted">
@@ -34,7 +34,7 @@ aindrive`}
 
   const drives = listUserDrives(user.id);
   return (
-    <main className="min-h-screen max-w-5xl mx-auto px-6 py-10">
+    <main className="min-h-screen min-h-[100dvh] max-w-5xl mx-auto px-6 py-10">
       <header className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-semibold">My drives</h1>
         <form action="/api/auth/logout" method="POST">

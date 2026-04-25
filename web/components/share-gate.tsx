@@ -80,7 +80,7 @@ export function ShareGate({ token }: { token: string }) {
 
   if (state === "loading") {
     return (
-      <main className="min-h-screen flex items-center justify-center text-drive-muted">
+      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center text-drive-muted">
         <Loader2 className="w-5 h-5 animate-spin" />
       </main>
     );
@@ -105,7 +105,7 @@ export function ShareGate({ token }: { token: string }) {
   if (state === "paywall" && requirement) {
     const usdc = (Number(requirement.maxAmountRequired) / 1_000_000).toFixed(2);
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
+      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-4">
         <div className="max-w-md w-full bg-white border border-drive-border rounded-2xl shadow-drive p-6">
           <Lock className="w-8 h-8 text-drive-accent" />
           <h1 className="mt-3 text-xl font-semibold">Payment required</h1>

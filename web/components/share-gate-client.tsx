@@ -14,7 +14,7 @@ export const ShareGate = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="min-h-screen flex items-center justify-center text-drive-muted gap-2">
+      <div className="min-h-screen min-h-[100dvh] flex items-center justify-center text-drive-muted gap-2">
         <Loader2 className="w-4 h-4 animate-spin" />
         loading…
       </div>

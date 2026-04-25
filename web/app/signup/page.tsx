@@ -25,7 +25,7 @@ export default function SignupPage() {
     router.push("/");
   }
   return (
-    <main className="min-h-screen flex items-center justify-center px-6">
+    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
       <form onSubmit={onSubmit} className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
         <h1 className="text-xl font-semibold">Create your aindrive</h1>
         <label className="block mt-5 text-sm">Name

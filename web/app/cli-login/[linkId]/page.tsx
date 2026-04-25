@@ -129,7 +129,7 @@ export default function CliLoginByLinkPage({
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen flex items-center justify-center px-6">
+    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
       <div className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
         {children}
       </div>

@@ -59,7 +59,7 @@ export function PaidContentView({
   const canGoUp = !atRoot && (parentPath === rootPath || parentPath.startsWith(rootPath + "/") || rootPath === "");
 
   return (
-    <main className="min-h-screen bg-drive-bg p-8">
+    <main className="min-h-screen min-h-[100dvh] bg-drive-bg p-4 sm:p-8">
       <div className="max-w-3xl mx-auto">
         <header className="mb-6 pb-4 border-b border-drive-border">
           <div className="flex items-center gap-2 text-sm text-green-700">
