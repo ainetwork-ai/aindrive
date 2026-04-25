@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { watch } from "node:fs";
+import { hostname as osHostname } from "node:os";
 import { join, relative, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
 import { signPayload, verifyPayload, stripSig } from "./sig.js";
@@ -56,6 +57,9 @@ function connectOnce({ root, drive, wsUrl }) {
     ws.once("open", () => {
       opened = true;
       log.info({ driveId: drive.driveId }, "connected");
+      // Tell the server which machine this agent is running on so it can show
+      // the hostname next to the drive in the UI.
+      try { ws.send(JSON.stringify({ type: "agent-hello", hostname: osHostname() })); } catch {}
       // Multi-device sync: gossip yjs_entries with peers via the same WS
       try { attachSync(ws, drive, root); } catch (e) { log.warn({ err: e.message }, "attachSync failed"); }
       // Start fs watcher — sends {type:'fs-changed', path} frames so the server can
