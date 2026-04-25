@@ -2,7 +2,7 @@
 
 > **Your local folder, on the web — accessible to humans and AI agents.**
 > Files stay on your machine. Sharing is capability-based. Access is paid (or free).
-> Agents pay micropayments for folder access via x402 and use A2A to negotiate
+> Agents pay micropayments for folder access via [x402](https://x402.org) and use [A2A](https://a2a-protocol.org) to negotiate
 > permissions, collaborate on edits, and feed the contents into RAG pipelines.
 
 ```
@@ -104,8 +104,8 @@ backend is one config switch:
 | Provider | Login | Network | Notes |
 |---|---|---|---|
 | **Local model** (Ollama, llama.cpp) | none | localhost only | Zero egress; perfect for sensitive folders |
-| **Flock** (Web3 inference network) | **none** — pay per call via wallet | decentralised | Combined with x402 + wallet auth → **fully login-free** stack |
-| **Bittensor** subnets | none — wallet-paid | decentralised | Permissionless inference network |
+| **[Flock](https://flock.io)** (Web3 inference network) | **none** — pay per call via wallet | decentralised | Combined with [x402](https://x402.org) + wallet auth → **fully login-free** stack |
+| **[Bittensor](https://bittensor.com)** subnets | none — wallet-paid | decentralised | Permissionless inference network |
 | OpenAI / Anthropic | API key | centralised | Familiar default; needs `*_API_KEY` env |
 
 The "login-free" path is the most interesting design: with **Flock for
@@ -165,7 +165,7 @@ Server verifies the capability on every request — no DB lookup needed for
 revocation if cap has expired. The drive's namespace keypair is generated
 on drive creation and stored per drive.
 
-### 3. x402 paid access
+### 3. [x402](https://x402.org) paid access
 
 Owner can mark a share link as paid:
 
@@ -448,7 +448,7 @@ discussion of where aindrive maps onto the Willow spec.
 
 ---
 
-## How AI agents fit in (A2A + RAG)
+## How AI agents fit in ([A2A](https://a2a-protocol.org) + RAG)
 
 aindrive's primary insight: **a folder of files is a perfect RAG corpus, and
 the app itself runs an AI agent over it — collaboratively editing alongside
@@ -470,7 +470,7 @@ The only thing that leaves the box is the LLM API call (with the user's
 own key — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc., set per-deployment).
 Embeddings, indexing, retrieval, edit application all happen inside aindrive.
 
-### A2A is the door (for both internal and external agents)
+### [A2A](https://a2a-protocol.org) is the door (for both internal and external agents)
 
 The same A2A interface is used:
 
@@ -480,7 +480,7 @@ The same A2A interface is used:
    another aindrive instance) discovers the AgentCard, possibly pays via
    x402, then issues A2A calls.
 
-### Discovery (A2A AgentCard)
+### Discovery ([A2A](https://a2a-protocol.org) AgentCard)
 
 Each drive exposes an A2A AgentCard at:
 
@@ -515,7 +515,7 @@ GET /d/<driveId>/.well-known/agent.json
 A 3rd-party agent (Claude, ChatGPT plugin, custom) discovers the card,
 sees the price, decides to pay.
 
-### Pay → access (x402)
+### Pay → access ([x402](https://x402.org))
 
 ```
 agent → POST /api/agent/skill/read-file { path: "research/notes.md" }
@@ -527,7 +527,7 @@ server → folder_access INSERT, returns 200 + Meadowcap cap
 The cap is what the agent presents on subsequent calls. The agent's wallet
 address becomes its identity in `folder_access`.
 
-### Permission management (A2A messages)
+### Permission management ([A2A](https://a2a-protocol.org) messages)
 
 Agents can negotiate role upgrades via A2A messages:
 
