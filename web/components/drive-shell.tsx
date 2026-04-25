@@ -7,11 +7,14 @@ import { toast } from "sonner";
 import {
   ChevronRight, Folder, FileText, FileCode, FileImage, File as FileIcon,
   FolderPlus, Upload, Share2, Loader2, HardDrive, DollarSign,
+  Bot, MessageSquare,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import { Viewer } from "./viewer";
 import { ShareDialog } from "./share-dialog";
 import { RowMenu } from "./row-menu";
+import { CreateAgentModal } from "./create-agent-modal";
+import { FolderChat } from "./folder-chat";
 
 type Props = { driveId: string; driveName: string };
 
@@ -32,6 +35,8 @@ export function DriveShell({ driveId, driveName }: Props) {
   const [selected, setSelected] = useState<DriveEntry | null>(null);
   const [shareOpen, setShareOpen] = useState<{ path: string; focus?: "sell" } | null>(null);
   const [shares, setShares] = useState<ShareSummary[]>([]);
+  const [agentModalOpen, setAgentModalOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -183,6 +188,25 @@ export function DriveShell({ driveId, driveName }: Props) {
             >
               <Share2 className="w-4 h-4" /> Share
             </button>
+            {role === "owner" && (
+              <button
+                onClick={() => setAgentModalOpen(true)}
+                title="Create Agent"
+                className="flex items-center gap-2 rounded-full border border-drive-border px-3 py-1.5 text-sm hover:bg-drive-hover"
+              >
+                <Bot className="w-4 h-4" /> Agent
+              </button>
+            )}
+            <button
+              onClick={() => setChatOpen((v) => !v)}
+              title="Folder chat"
+              className={clsx(
+                "flex items-center gap-2 rounded-full border border-drive-border px-3 py-1.5 text-sm hover:bg-drive-hover",
+                chatOpen && "bg-blue-50 border-blue-300",
+              )}
+            >
+              <MessageSquare className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
@@ -261,6 +285,14 @@ export function DriveShell({ driveId, driveName }: Props) {
               onSaved={load}
             />
           )}
+          {chatOpen && (
+            <FolderChat
+              driveId={driveId}
+              currentFolder={path}
+              isOwner={role === "owner"}
+              onClose={() => setChatOpen(false)}
+            />
+          )}
         </section>
       </main>
 
@@ -270,6 +302,13 @@ export function DriveShell({ driveId, driveName }: Props) {
           defaultPath={shareOpen.path}
           focusSection={shareOpen.focus}
           onClose={() => { setShareOpen(null); loadShares(); }}
+        />
+      )}
+      {agentModalOpen && (
+        <CreateAgentModal
+          driveId={driveId}
+          defaultFolder={path}
+          onClose={() => setAgentModalOpen(false)}
         />
       )}
     </div>
