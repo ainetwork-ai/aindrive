@@ -15,6 +15,7 @@ import { getDrive, getDriveNamespace } from "@/lib/drives";
 import { compose } from "@/src/composition";
 import { createAgent } from "@/src/use-cases/agent/create-agent";
 import type { Agent } from "@/shared/domain/agent/types";
+import { requireLift } from "@/lib/x402-lift-gate";
 
 const Body = z.object({
   folder: z.string().max(1024).default(""),
@@ -59,6 +60,19 @@ export async function POST(
     return NextResponse.json({ error: "bad_request", issues: parsed.error.issues }, { status: 400 });
   }
   const body = parsed.data;
+
+  // Local LLM providers (currently gemma-vllm) are gated behind a one-time
+  // x402 AIN payment per drive owner. The gate accepts an X-PAYMENT header
+  // for inline pay, falls back to wallet-cookie lookup, and otherwise
+  // returns 402 with the v2 PaymentRequirements.
+  if (body.llm.provider === "gemma-vllm") {
+    const gate = await requireLift(req, {
+      scope: "gemma_agent",
+      priceAin: 5,
+      description: "aindrive: enable Gemma local-vLLM agent",
+    });
+    if (!gate.ok) return gate.response;
+  }
 
   const out = await createAgent(compose.createAgent, {
     driveId,
