@@ -1,10 +1,13 @@
 "use client";
 import Link from "next/link";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
+  const search = useSearchParams();
+  const next = search.get("next");
+  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -18,7 +21,7 @@ export default function LoginPage() {
     });
     setLoading(false);
     if (!res.ok) { setErr((await res.json()).error || "login failed"); return; }
-    router.push("/");
+    router.push(safeNext);
   }
   return (
     <main className="min-h-screen flex items-center justify-center px-6">

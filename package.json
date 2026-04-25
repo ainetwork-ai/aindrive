@@ -1,0 +1,16 @@
+{
+  "name": "aindrive",
+  "version": "0.1.0",
+  "description": "Your local folder, served like Google Drive — with x402 paywalls, A2A agent access, and Willow CRDT collaboration.",
+  "type": "module",
+  "bin": { "aindrive": "./bin/aindrive.mjs" },
+  "files": ["bin", "dist", "cli/src", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "cd web && node_modules/.bin/next build && mkdir -p ../dist && cp -r .next/standalone/. ../dist/ && mkdir -p ../dist/.next && cp -r .next/static ../dist/.next/static && cp -r public ../dist/public 2>/dev/null || true",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "open": "^10.1.0"
+  },
+  "engines": { "node": ">=20" }
+}

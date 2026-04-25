@@ -29,6 +29,5 @@ n43-test.mjs
 tsconfig.tsbuildinfo
 docker-compose.yml
 docker-compose.*.yml
-Caddyfile
 Dockerfile
 .dockerignore

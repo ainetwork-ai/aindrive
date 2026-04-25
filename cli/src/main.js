@@ -10,7 +10,7 @@ import { cmdStatus } from "./commands/status.js";
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
 
-const DEFAULT_SERVER = process.env.AINDRIVE_SERVER || "http://localhost:3737";
+const DEFAULT_SERVER = process.env.AINDRIVE_SERVER || "https://aindrive.ainetwork.ai";
 
 export async function runCli(argv) {
   const program = new Command();
@@ -41,10 +41,9 @@ export async function runCli(argv) {
   // login subcommand
   program
     .command("login")
-    .description("authenticate this machine")
+    .description("pair this machine with an aindrive account via a one-time code")
     .option("--server <url>", "server URL", DEFAULT_SERVER)
-    .option("--email <email>", "email address")
-    .option("--password <password>", "password")
+    .option("--no-open", "do not open the browser")
     .action(async (opts) => {
       const parentOpts = program.opts();
       const mergedOpts = { ...parentOpts, ...opts };
@@ -90,8 +89,6 @@ function buildArgs(opts, positional) {
       server: opts.server ?? DEFAULT_SERVER,
       name: opts.name,
       open: opts.open !== false,
-      email: opts.email,
-      password: opts.password,
     },
   };
 }

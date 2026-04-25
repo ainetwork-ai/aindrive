@@ -16,30 +16,8 @@ services:
       AINDRIVE_DATA_DIR: /data
     volumes:
       - aindrive-data:/data
-    expose:
-      - "3737"
-    networks:
-      - edge
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    depends_on:
-      - web
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    networks:
-      - edge
-
-networks:
-  edge:
+      - "127.0.0.1:3738:3737"
 
 volumes:
   aindrive-data:
-  caddy-data:
-  caddy-config:

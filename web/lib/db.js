@@ -69,6 +69,15 @@ function open() {
       UNIQUE(drive_id, path, wallet_address),
       FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS cli_auth_codes (
+      code TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_cli_auth_codes_expires ON cli_auth_codes(expires_at);
     CREATE INDEX IF NOT EXISTS idx_drive_members_user ON drive_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_drive_members_drive ON drive_members(drive_id);
     CREATE INDEX IF NOT EXISTS idx_shares_drive ON shares(drive_id);
