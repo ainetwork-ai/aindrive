@@ -45,11 +45,17 @@ LLM provider call (OpenAI, Anthropic, etc.) is external, via a user-supplied
 API key. Optional 3rd-party agents can connect over the same A2A interface.
 
 ```
-                                       LLM provider API
-                                       (OpenAI/Anthropic/…)
-                                              ▲
-                                              │  user-supplied API key
-                                              │
+                                       LLM inference
+                                ┌──────────────┴────────────────┐
+                                │ Local model (Ollama/llama.cpp)│
+                                │   ── OR ──                    │
+                                │ Web3 model (Flock, Bittensor) │
+                                │   ── OR ──                    │
+                                │ Cloud API (OpenAI/Anthropic)  │
+                                └──────────────┬────────────────┘
+                                               │
+                                               │  pluggable provider
+                                               │  (Flock = login-free)
 ┌─────────────┐      HTTPS        ┌──────────┴──────────────────────┐
 │   Browser   │ ────────────────▶ │     Next.js custom server       │
 │  (humans)   │ ◀──── WSS ──────  │   (web/server.js)               │
@@ -89,6 +95,25 @@ Next.js process, reuses the same auth, the same DocHub, the same Willow
 Store. It is just another peer that happens to be an LLM under the hood.
 This is what makes RAG + collaborative editing first-class instead of
 bolted-on.
+
+### LLM provider is pluggable — including login-free Web3 models
+
+aindrive doesn't lock you to a specific LLM vendor. The agent's inference
+backend is one config switch:
+
+| Provider | Login | Network | Notes |
+|---|---|---|---|
+| **Local model** (Ollama, llama.cpp) | none | localhost only | Zero egress; perfect for sensitive folders |
+| **Flock** (Web3 inference network) | **none** — pay per call via wallet | decentralised | Combined with x402 + wallet auth → **fully login-free** stack |
+| **Bittensor** subnets | none — wallet-paid | decentralised | Permissionless inference network |
+| OpenAI / Anthropic | API key | centralised | Familiar default; needs `*_API_KEY` env |
+
+The "login-free" path is the most interesting design: with **Flock for
+inference + x402 for folder payments + wallet for identity**, a user can
+use aindrive end-to-end without ever signing up for anything. They open
+the URL, connect a wallet, pay for what they use, and get an AI agent
+collaborating on their files — all without an account, an API key, or a
+SaaS subscription.
 
 ### Layer responsibilities
 
@@ -551,16 +576,25 @@ peer, not a feature.
 ## How RAG is implemented
 
 RAG is **part of aindrive itself**. The built-in agent indexes each drive's
-files and serves retrieval queries. The only external dependency is the
-embedding API (configurable: OpenAI text-embedding-3, Voyage, local
-sentence-transformers, etc.) — called with the operator's own API key.
+files and serves retrieval queries. Embedding generation is pluggable:
+
+- **Local** — `nomic-embed-text` via Ollama, sentence-transformers via
+  Python sidecar. Zero network egress.
+- **Web3** — Flock embedding subnet, paid per call from the user's wallet.
+  No API key, no signup.
+- **Cloud** — OpenAI `text-embedding-3-small`, Voyage, Cohere. Needs an
+  API key per provider.
+
+When configured with **local + Flock**, aindrive can run **completely
+account-free**: no provider signup, no API key, no SaaS bill — just a
+wallet, a folder, and a URL.
 
 | Step | Where | Notes |
 |---|---|---|
 | 1. Enumerate | aindrive built-in agent | walks `fs/list` recursively, respects `.aindrive` ignore |
 | 2. Read | built-in agent calls `fs/read` | utf8 for text, base64 for binaries (skipped) |
 | 3. Chunk | built-in agent | configurable strategy (paragraph, fixed-tokens, semantic) |
-| 4. Embed | LLM provider | only network egress — uses user's `OPENAI_API_KEY` etc. |
+| 4. Embed | pluggable: local model / Flock / OpenAI | local has no egress; Flock has no API key; cloud needs key |
 | 5. Store | per-drive `embeddings` table in SQLite | sqlite-vec / pgvector if scaled later |
 | 6. Query | A2A skill `search { query }` | top-k retrieval, returns chunks + paths |
 | 7. Edit | built-in agent joins Y.js as a peer | inserts answers/rewrites live into the doc |
