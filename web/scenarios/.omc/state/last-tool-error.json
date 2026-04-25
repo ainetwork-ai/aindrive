@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd /mnt/newdata/git/aindrive/web && node --check scenarios/collab-cases.mjs && SCENARIO='10[1-9]|11[0-9]|120' node scenarios/run.mjs 2>&1 | tail -35\",\"timeout\":600000,\"description\":\"Run co...",
-  "error": "Exit code 1\n/mnt/newdata/git/aindrive/web/scenarios/collab-cases.mjs:481\n    });\n     ^\n\nSyntaxError: missing ) after argument list\n    at checkSyntax (node:internal/main/check_syntax:74:5)\n\nNode.js v20.20.0",
-  "timestamp": "2026-04-25T01:26:04.607Z",
-  "retry_count": 1
-}
