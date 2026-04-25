@@ -9,7 +9,15 @@
 npm i -g aindrive
 cd ~/Documents
 aindrive
-# → opens https://aindrive.app/d/<your-drive-id>
+# → opens https://aindrive.ainetwork.ai/d/<your-drive-id>
+```
+
+To plug aindrive into Claude Desktop / Claude Code as an MCP server:
+
+```
+aindrive mcp
+# stdio Model Context Protocol server exposing every drive operation
+# (list/read/write/share/grant/ask-agent/…) to AI assistants
 ```
 
 ---
@@ -38,11 +46,14 @@ on your computer.
 
 ## Architecture
 
-aindrive is a **single application** with three runtime components — browser
-UI, Next.js server, local CLI — plus a **built-in AI agent runtime** that
-the server hosts. The agent is a first-class citizen of the app; only the
-LLM provider call (OpenAI, Anthropic, etc.) is external, via a user-supplied
-API key. Optional 3rd-party agents can connect over the same A2A interface.
+aindrive is a **single application** with four runtime components — browser
+UI, Next.js server, local CLI, and an MCP stdio server (`aindrive mcp`) for
+AI assistants — plus a **built-in AI agent runtime** that the server hosts.
+The agent is a first-class citizen of the app; only the LLM provider call
+(OpenAI, Anthropic, etc.) is external, via a user-supplied API key. Optional
+3rd-party agents can connect over the A2A interface, and any MCP-aware
+client (Claude Code, Claude Desktop, Cursor, …) can drive the same drive
+operations through `aindrive mcp`.
 
 ```
                                        LLM inference
@@ -70,7 +81,7 @@ API key. Optional 3rd-party agents can connect over the same A2A interface.
                                   │  │  aindrive AI agent      │    │
 ┌─────────────┐    A2A JSON-RPC   │  │  ─ A2A AgentCard server │    │
 │ 3rd-party   │ ─────────────────▶│  │  ─ x402 paywall handler │    │
-│ agent       │ ◀─── x402 402 ─── │  │  ─ Folder RAG (embed +  │    │
+│ agent       │ ◀─ x402 X-PAYMENT │  │  ─ Folder RAG (embed +  │    │
 │ (optional)  │       payment     │  │     index + retrieve)   │    │
 └─────────────┘                   │  │  ─ Y.js peer (live edit)│    │
                                   │  └─────────────────────────┘    │
@@ -87,6 +98,16 @@ API key. Optional 3rd-party agents can connect over the same A2A interface.
                            │     for Y.Doc binary entries │
                            │   ─ fs.watch + self-write    │
                            │     suppression              │
+                           │   ─ MCP stdio server         │
+                           │     (`aindrive mcp` mode)    │
+                           └──────────────┬──────────────┘
+                                          │  stdio MCP (JSON-RPC)
+                                          ▼
+                           ┌─────────────────────────────┐
+                           │  AI assistant (Claude Code, │
+                           │  Claude Desktop, Cursor, …) │
+                           │  drives every aindrive op   │
+                           │  via MCP tools + resources  │
                            └─────────────────────────────┘
 ```
 
@@ -173,26 +194,48 @@ shares(token, path, role, price_usdc, payment_chain)
 ```
 
 When a visitor without a wallet allowlist entry hits `/api/s/<token>`, the
-server responds with **HTTP 402 Payment Required**:
+server responds with **HTTP 402 Payment Required** following the
+[x402 spec](https://x402.org) (body, not header):
 
 ```
 HTTP/1.1 402 Payment Required
-PAYMENT-REQUIRED: {
-  "scheme": "exact",
-  "network": "base-sepolia",
-  "asset": "USDC",
-  "amount": 0.5,
-  "recipient": "0x...owner-payout",
-  "facilitator": "https://x402.org/facilitator",
-  "payTo": "/api/s/<token>/pay"
+Content-Type: application/json
+
+{
+  "x402Version": 1,
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "base-sepolia",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "maxAmountRequired": "500000",
+      "payTo": "0x...owner-payout",
+      "resource": "https://aindrive.ainetwork.ai/api/s/<token>",
+      "description": "aindrive: access to share <token>",
+      "maxTimeoutSeconds": 300,
+      "mimeType": "application/json"
+    }
+  ],
+  "error": "X-PAYMENT header is required"
 }
 ```
 
-The visitor (human via wallet popup, or AI agent automatically) sends USDC,
-POSTs the txHash to `/api/s/<token>/pay`. Server verifies through the
-facilitator, then **inserts the payer wallet into folder_access** and issues
-a Meadowcap cap. From that moment, the wallet has permanent access (until
-owner revokes).
+The visitor (human via wallet popup, or AI agent automatically) signs an
+EIP-3009 USDC authorisation, base64-encodes the resulting payload, and
+**re-issues the same `GET /api/s/<token>` with an `X-PAYMENT` header**.
+Server hands the payload to the x402 facilitator (`AINDRIVE_X402_FACILITATOR`,
+default `https://x402.org/facilitator`) for `verify` + `settle`, then
+**inserts the payer wallet into folder_access** and issues a Meadowcap cap.
+From that moment, the wallet has permanent access (until owner revokes).
+
+> **Spec note.** aindrive uses **[x402 protocol v1](https://x402.org)**
+> (`x402Version: 1` in every envelope). v1 communicates payment requirements
+> in the **JSON body** (`accepts: [PaymentRequirements]`), the client carries
+> the signed `PaymentPayload` in an `X-PAYMENT` header on retry, and on
+> success the server may set an `X-PAYMENT-RESPONSE` header with the
+> facilitator's settle receipt. (x402 v2 renames these to
+> `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`; aindrive
+> tracks v2 via the `x402` npm package and will move with it.)
 
 Payment is a **one-shot, lifetime grant** — no recurring billing, no per-file
 charges. The mental model is "buying a key", not "paying per door open".
@@ -242,84 +285,104 @@ Server checks, in order:
 3. Is the share **free** (`price_usdc IS NULL`)? → return `200`.
 4. Does the requester have a `aindrive_wallet` cookie + a row in
    `folder_access` for this `(drive_id, path, wallet_address)`? → return `200`.
-5. Otherwise → return `402` with payment requirements.
+5. Otherwise → return `402` with the x402 payment requirements in the body.
 
-The `402` response includes the [x402](https://x402.org) `PAYMENT-REQUIRED`
-header so any x402-aware client (browser wallet, AI agent, autonomous
-script) can pay automatically:
+The `402` response follows the [x402 spec](https://x402.org): the
+requirements live in the JSON body under `accepts[]`, not in a header. Any
+x402-aware client (browser wallet, AI agent, autonomous script) can pay
+automatically:
 
 ```http
 HTTP/1.1 402 Payment Required
-PAYMENT-REQUIRED: {
-  "scheme": "exact",
-  "network": "base-sepolia",
-  "asset": "USDC",
-  "amount": 0.50,
-  "recipient": "0x...owner-payout",
-  "facilitator": "https://x402.org/facilitator",
-  "payTo": "/api/s/<token>/pay",
-  "description": "Access to share <token>"
+Content-Type: application/json
+
+{
+  "x402Version": 1,
+  "accepts": [{
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "maxAmountRequired": "500000",
+    "payTo": "0x...owner-payout",
+    "resource": "https://aindrive.ainetwork.ai/api/s/<token>",
+    "description": "aindrive: access to share <token>",
+    "maxTimeoutSeconds": 300,
+    "mimeType": "application/json"
+  }],
+  "error": "X-PAYMENT header is required"
 }
 ```
 
-### Step 3 — visitor pays
+### Step 3 — visitor pays (X-PAYMENT header)
 
-The visitor sends `0.50 USDC` on Base to the owner's payout address. They
-get a `txHash` back from the wallet/RPC. Then:
+The visitor signs an EIP-3009 `transferWithAuthorization` for `0.50 USDC`
+on Base to the owner's payout address — no separate broadcast needed; the
+facilitator submits and confirms it. The result is wrapped in a
+`PaymentPayload` and base64-encoded:
 
 ```http
-POST /api/s/<token>/pay
-Content-Type: application/json
-Cookie: aindrive_wallet=<their-jwt>     ← OR include payerAddress + signature
-{
-  "txHash": "0x..."
-}
+GET /api/s/<token>
+Cookie: aindrive_wallet=<their-jwt>     ← optional; binds payer to a session
+X-PAYMENT: <base64(JSON.stringify({
+  x402Version: 1,
+  scheme: "exact",
+  network: "base-sepolia",
+  payload: {
+    authorization: { from, to, value, validAfter, validBefore, nonce },
+    signature
+  }
+}))>
 ```
+
+In `AINDRIVE_DEV_BYPASS_X402=1` mode the server accepts a minimally-shaped
+JSON for local demos; in prod it parses with the official `PaymentPayloadSchema`
+from `x402/types`.
 
 ### Step 4 — server verifies + grants
 
-Server-side flow (atomic):
+Server-side flow (atomic, in `web/app/api/s/[token]/route.ts`):
 
 ```js
-// 1. Load share row
+// 1. Load share row + decode the X-PAYMENT envelope
 const share = db.prepare("SELECT * FROM shares WHERE token = ?").get(token);
+const payload = PaymentPayloadSchema.parse(JSON.parse(safeBase64Decode(xPayment)));
 
-// 2. Identify the payer wallet
-//    a) cookie-bound wallet (preferred), OR
-//    b) explicit payerAddress + signature over `${token}:${txHash}` message
-const payer = await getWallet() ?? recoverFromSig(body.payerAddress, body.signature, msg);
+// 2. verify + settle via the x402 facilitator (AINDRIVE_X402_FACILITATOR,
+//    defaults to https://x402.org/facilitator)
+const facilitator = useFacilitator({ url: FACILITATOR_URL });
+const v = await facilitator.verify(payload, requirements);
+if (!v.isValid) return 402;
+const s = await facilitator.settle(payload, requirements);
+if (!s.success) return 402;
+const payer = (s.payer || payload.payload.authorization.from).toLowerCase();
+const txHash = s.transaction;
 
-// 3. Verify payment via x402 facilitator
-const ok = await fetch(`${facilitator}/verify`, {
-  method: "POST",
-  body: JSON.stringify({
-    txHash, network, expectedAmount, expectedAsset: "USDC",
-    expectedRecipient: PAYOUT_ADDRESS, payer
-  })
-}).then(r => r.ok);
-
-// 4. INSERT the wallet into folder_access (UNIQUE constraint = idempotent)
+// 3. INSERT the wallet into folder_access (UNIQUE constraint = idempotent)
 db.prepare(`
   INSERT INTO folder_access
     (id, drive_id, path, wallet_address, added_by, payment_tx, role)
   VALUES (?, ?, ?, ?, 'payment', ?, ?)
 `).run(nanoid(), share.drive_id, share.path, payer, txHash, share.role);
 
-// 5. Issue a Meadowcap capability for the same area
+// 4. Issue a Meadowcap capability for the same area
 const cap = await issueShareCap({
   namespacePub:    drive.namespace_pubkey,
   namespaceSecret: drive.namespace_secret,
   pathPrefix:      share.path,
   accessMode:      share.role === "viewer" ? "read" : "write",
-  ttlMs:           30 * 24 * 60 * 60 * 1000, // 30 days, refreshable
 });
 
-// 6. Set the wallet cookie so subsequent requests are auto-authorized
+// 5. Set the wallet cookie so subsequent requests are auto-authorized
 await setWalletCookie(payer);
 
-return { ok: true, payer, driveId: share.drive_id, path: share.path,
-         cap: cap.capBase64 };
+return { ok: true, driveId: share.drive_id, path: share.path,
+         txHash, cap: cap.capBase64 };
 ```
+
+The `200` response carries the same JSON body. Per x402 v1, the server MAY
+also include an `X-PAYMENT-RESPONSE` header whose value is the base64-encoded
+JSON receipt returned by `facilitator.settle(...)` — clients that need to
+audit the on-chain settlement should read that header.
 
 After this single roundtrip, the wallet has **two independent proofs of
 access** (defense in depth):
@@ -373,22 +436,33 @@ wallet across browsers, devices, even AI agents holding the same key.
 
 ### Step 7 — AI agent pays (no human in the loop)
 
-An autonomous agent does exactly the same flow, with one difference: it
-manages its own wallet:
+An autonomous agent does exactly the same x402 flow, with one difference:
+it manages its own wallet:
 
 ```python
 # pseudo-code
-resp = httpx.get(share_url, follow_redirects=False)
+resp = httpx.get(share_url)
 if resp.status_code == 402:
-    req = json.loads(resp.headers["PAYMENT-REQUIRED"])
-    tx = wallet.send_usdc(amount=req["amount"], to=req["recipient"], network=req["network"])
-    httpx.post(f"{share_url}/pay", json={"txHash": tx.hash})
-# Agent now has the wallet cookie. From here on:
+    accepts = resp.json()["accepts"]
+    req = next(a for a in accepts if a["scheme"] == "exact")
+    auth = wallet.sign_eip3009_transfer(
+        to=req["payTo"], value=req["maxAmountRequired"],
+        asset=req["asset"], network=req["network"],
+    )
+    payment = base64.b64encode(json.dumps({
+        "x402Version": 1, "scheme": "exact", "network": req["network"],
+        "payload": { "authorization": auth.message, "signature": auth.signature }
+    }).encode()).decode()
+    resp = httpx.get(share_url, headers={"X-PAYMENT": payment})
+# 200 → response body has { driveId, path, txHash, cap }; cookie is now set.
 files = httpx.get(f"{base}/api/drives/{driveId}/fs/list?path=research/").json()
 for f in files["entries"]:
     content = httpx.get(f"{base}/api/drives/{driveId}/fs/read?path={f['path']}").json()
     embed_and_index(content)
 ```
+
+For agents driving aindrive over MCP rather than HTTP, the same flow is
+exposed as the `resolve_share` tool (see [`aindrive mcp`](#mcp-server) below).
 
 Whenever the agent comes back, the wallet is recognized, no payment is
 required again. Persistent agent memory of "I paid for folder X with wallet Y"
@@ -733,9 +807,18 @@ GET /d/<driveId>/.well-known/agent.json
       "description": "RAG endpoint over the folder's files" }
   ],
   "auth": [
-    { "type": "bearer",     "description": "Owner-issued API token" },
-    { "type": "x402",       "scheme": "exact",
-      "amount": 0.50, "asset": "USDC", "network": "base",
+    { "type": "bearer", "description": "Owner-issued API token" },
+    { "type": "x402",
+      "x402Version": 1,
+      "accepts": [{
+        "scheme": "exact",
+        "network": "base-sepolia",
+        "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "maxAmountRequired": "500000",
+        "payTo": "0x...owner-payout",
+        "maxTimeoutSeconds": 300,
+        "mimeType": "application/json"
+      }],
       "description": "Pay for one-time lifetime read access" }
   ]
 }
@@ -747,10 +830,12 @@ sees the price, decides to pay.
 ### Pay → access ([x402](https://x402.org))
 
 ```
-agent → POST /api/agent/skill/read-file { path: "research/notes.md" }
-server → 402 Payment Required + AgentCard's price
-agent → sends USDC, POSTs txHash to /api/s/<token>/pay
-server → folder_access INSERT, returns 200 + Meadowcap cap
+agent  → POST /api/agent/skill/read-file { path: "research/notes.md" }
+server → 402 Payment Required (body: x402 accepts[] with the AgentCard price)
+agent  → signs an EIP-3009 USDC authorisation, base64-encodes the
+         PaymentPayload, retries the call with X-PAYMENT header
+server → facilitator.verify + settle, folder_access INSERT,
+         returns 200 + Meadowcap cap
 ```
 
 The cap is what the agent presents on subsequent calls. The agent's wallet
@@ -840,6 +925,53 @@ merge live with the human's keystrokes — no overwrites.
 
 ---
 
+## MCP server (`aindrive mcp`) <a id="mcp-server"></a>
+
+Every aindrive install ships an [MCP](https://modelcontextprotocol.io)
+stdio server bundled into the same single binary. AI assistants
+(Claude Code, Claude Desktop, Cursor, …) can drive every drive operation
+without any aindrive-specific glue.
+
+```bash
+npm i -g aindrive
+aindrive mcp        # stdio MCP server
+```
+
+**Claude Code / Desktop config:**
+
+```json
+{
+  "mcpServers": {
+    "aindrive": { "command": "aindrive", "args": ["mcp"] }
+  }
+}
+```
+
+**Auth precedence** (set as env on the MCP process):
+1. `AINDRIVE_SESSION` — full owner cookie (`aindrive_session=...`)
+2. `AINDRIVE_WALLET_COOKIE` — wallet cookie (`aindrive_wallet=...`)
+3. Falls back to `~/.aindrive/credentials.json` from `aindrive login`.
+
+`AINDRIVE_SERVER` (or `--server`) overrides the target host.
+`AINDRIVE_CAP` adds a Meadowcap cap header to every call.
+
+**Tools exposed:**
+
+| Group | Tools |
+|---|---|
+| Discovery | `list_drives`, `drive_info` |
+| Files | `list_files`, `read_file`, `write_file`, `rename`, `delete_path`, `stat`, `search` |
+| Sharing | `create_share`, `list_shares` |
+| Wallet allowlist | `grant_access`, `list_access`, `revoke_access` |
+| Capabilities | `verify_cap` |
+| Paid shares | `resolve_share` (auto-builds the x402 X-PAYMENT envelope) |
+| Agents | `list_agents`, `ask_agent` (A2A) |
+
+**Resources exposed:** `aindrive://drive/<driveId>/{+path}` — Claude can
+attach drive files directly via `@aindrive://...` references.
+
+---
+
 ## Storage layout
 
 | Where | What |
@@ -887,9 +1019,10 @@ node web/server.js | jq 'select(.ns == "aindrive.trace")'
 curl 'http://localhost:3737/api/dev/trace/dump?docId=<docId>&limit=2000' | jq
 
 # Run the analyzer to find invariant violations + root-cause hints
+#  diagnose.mjs takes a JSONL file path (one event per line)
 curl -s 'http://localhost:3737/api/dev/trace/dump?docId=<docId>&limit=2000' \
-  | jq -c '.events[]' \
-  | node tools/diagnose.mjs --stdin
+  | jq -c '.events[]' > /tmp/trace.jsonl
+node tools/diagnose.mjs /tmp/trace.jsonl
 ```
 
 `tools/diagnose.mjs` understands these invariants and prints the violating
@@ -898,6 +1031,9 @@ event + a code-pointer to the likely fix:
 | ID | Pattern | Hint |
 |---|---|---|
 | V1 | `disk-seed-apply` after `idb-load` (with content) | viewer.tsx synced-handler — gate on `whenReady` |
+| V2 | `autosave-flush` without any preceding `ydoc-update` | autosave fired even though Y.Doc didn't change |
+| V3 | `autosave-flush` while a remote sync is still pulling | wait until `provider-sub-ok` settles before flushing |
+| V4 | Willow replay produces a digest that doesn't match the entry | store corruption or replay-order bug |
 | V5 | local update doubles textLen after `idb-load` | IDB content was applied twice |
 | V6 | `rpc-out` without `rpc-in-resp` for 25s | agent timed out / disconnected |
 | V7 | `provider-sub-ok` before `provider-connect` | impossible — replay or test bug |
@@ -929,13 +1065,13 @@ aindrive/
 │   │   │   ├── auth/      # signup, login, logout
 │   │   │   ├── wallet/    # SIWE-style wallet sign-in
 │   │   │   ├── drives/    # drive CRUD + per-drive fs/yjs/access/shares
-│   │   │   ├── s/         # share token endpoints (incl. /pay for x402)
+│   │   │   ├── s/         # share token endpoint (single GET; x402 X-PAYMENT)
 │   │   │   ├── cap/       # capability decode + verify
 │   │   │   └── dev/trace/ # POST sink + ring buffer dump
 │   │   ├── d/[driveId]    # owner / member view
 │   │   └── s/[token]      # share link landing
 │   ├── components/        # DriveShell, Viewer, ShareDialog, ShareGate
-│   └── scenarios/         # 160 integration tests (cases + collab + trace + emergent)
+│   └── scenarios/         # ~150 integration tests (cases + collab + trace + emergent)
 │
 ├── cli/                   # `npm i -g aindrive`
 │   ├── bin/aindrive.mjs   # CLI entry
@@ -944,7 +1080,8 @@ aindrive/
 │       ├── rpc.js         # RPC method allowlist + handlers
 │       ├── willow-store.js  # SQLite-backed yjs_entries + compaction
 │       ├── willow-sync.js   # multi-device entry-diff gossip
-│       └── commands/      # login, serve, rotate-token, status
+│       ├── commands/      # login, serve, rotate-token, status, mcp
+│       └── mcp/           # MCP stdio server (tools, resources, HTTP client)
 │
 ├── tools/
 │   └── diagnose.mjs       # trace analyzer + invariant checker
@@ -984,12 +1121,19 @@ AINDRIVE_SERVER=http://localhost:3737 node /path/to/cli/bin/aindrive.mjs
 ```bash
 cd web
 node scenarios/run.mjs
-# → 160 scenarios across auth, fs, sharing, x402, Y.js editing,
-#   multi-device sync, observability, emergent steady-state behavior
+# → ~150 scenarios across auth, fs, sharing, x402, Y.js editing,
+#   multi-device sync, observability, emergent steady-state behavior.
+#   IDs are sparse 1–160 (a handful, e.g. #68–#75 around the legacy
+#   /pay endpoint, were retired when the API moved to x402 X-PAYMENT).
 
 # Filter by group:
 SCENARIO='14[1-9]|15[0-9]|160' node scenarios/run.mjs   # emergent only
 ```
+
+> **Sample folder.** Several scenarios pair `web/scenarios/sample/` (or
+> `sample/` at the repo root) as the agent's served folder, then write
+> their own marker files before asserting on listings — they don't depend
+> on any specific pre-existing files in the sample folder.
 
 ## License
 
