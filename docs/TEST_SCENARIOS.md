@@ -28,7 +28,7 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 
 ## C. Drives (21–30)
 21. 🟢 Owner creates drive → driveId, agentToken, driveSecret returned
-22. 🔴 Each new drive gets unique namespace_pubkey/secret (Ed25519 keypair)
+22. 🟢 Each new drive gets unique namespace_pubkey/secret (Ed25519 keypair)
 23. 🟢 Anonymous POST /api/drives → 401
 24. 🟢 GET /api/drives lists owner's drives
 25. 🟢 Drive listing shows online=true while agent is connected
@@ -72,7 +72,7 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 57. 🟢 Owner adds same wallet twice to same path → 409 UNIQUE conflict
 58. 🟢 Owner adds wallet to deeper path "docs" → only authorizes that subtree
 59. 🟢 Wallet visitor lists / before allowlist → 401/403
-60. 🔴 Wallet visitor lists / after allowlist → 200 with role=viewer
+60. 🟢 Wallet visitor lists / after allowlist → 200 with role=viewer
 61. 🔴 Wallet visitor lists subfolder authorized via prefix → 200
 62. 🟢 Wallet visitor lists sibling not under allowed prefix → 403
 63. 🟢 Wallet visitor write attempt with role=viewer → 403
