@@ -200,6 +200,236 @@ charges. The mental model is "buying a key", not "paying per door open".
 
 ---
 
+## Payment → permission lifecycle (deep dive)
+
+This is the core economic loop: a wallet pays once, gets durable folder access,
+keeps that access across sessions/devices/agents until the owner revokes.
+
+### Step 1 — owner publishes a paid share
+
+Owner opens the Share dialog, sets a price + role:
+
+```http
+POST /api/drives/<driveId>/shares
+Cookie: aindrive_session=<owner-jwt>
+{
+  "path": "research/",
+  "role": "viewer",
+  "price_usdc": 0.50,
+  "expiresAt": null      // optional — share LINK expiry (not access expiry)
+}
+```
+
+Server inserts:
+```sql
+INSERT INTO shares
+  (id, drive_id, path, role, token, price_usdc, payment_chain, created_by)
+VALUES (?, ?, 'research/', 'viewer', <random-token>, 0.50, 'base', <owner-id>);
+```
+
+Owner gets back `https://aindrive.app/s/<token>` — that's what they paste
+into Twitter / Slack / Telegram.
+
+### Step 2 — visitor (human or AI agent) loads the share
+
+```
+GET /api/s/<token>
+```
+
+Server checks, in order:
+
+1. Is the token still valid? (`shares` row exists, `expires_at` not past)
+2. Is the requester the owner? → return `200` immediately.
+3. Is the share **free** (`price_usdc IS NULL`)? → return `200`.
+4. Does the requester have a `aindrive_wallet` cookie + a row in
+   `folder_access` for this `(drive_id, path, wallet_address)`? → return `200`.
+5. Otherwise → return `402` with payment requirements.
+
+The `402` response includes the [x402](https://x402.org) `PAYMENT-REQUIRED`
+header so any x402-aware client (browser wallet, AI agent, autonomous
+script) can pay automatically:
+
+```http
+HTTP/1.1 402 Payment Required
+PAYMENT-REQUIRED: {
+  "scheme": "exact",
+  "network": "base-sepolia",
+  "asset": "USDC",
+  "amount": 0.50,
+  "recipient": "0x...owner-payout",
+  "facilitator": "https://x402.org/facilitator",
+  "payTo": "/api/s/<token>/pay",
+  "description": "Access to share <token>"
+}
+```
+
+### Step 3 — visitor pays
+
+The visitor sends `0.50 USDC` on Base to the owner's payout address. They
+get a `txHash` back from the wallet/RPC. Then:
+
+```http
+POST /api/s/<token>/pay
+Content-Type: application/json
+Cookie: aindrive_wallet=<their-jwt>     ← OR include payerAddress + signature
+{
+  "txHash": "0x..."
+}
+```
+
+### Step 4 — server verifies + grants
+
+Server-side flow (atomic):
+
+```js
+// 1. Load share row
+const share = db.prepare("SELECT * FROM shares WHERE token = ?").get(token);
+
+// 2. Identify the payer wallet
+//    a) cookie-bound wallet (preferred), OR
+//    b) explicit payerAddress + signature over `${token}:${txHash}` message
+const payer = await getWallet() ?? recoverFromSig(body.payerAddress, body.signature, msg);
+
+// 3. Verify payment via x402 facilitator
+const ok = await fetch(`${facilitator}/verify`, {
+  method: "POST",
+  body: JSON.stringify({
+    txHash, network, expectedAmount, expectedAsset: "USDC",
+    expectedRecipient: PAYOUT_ADDRESS, payer
+  })
+}).then(r => r.ok);
+
+// 4. INSERT the wallet into folder_access (UNIQUE constraint = idempotent)
+db.prepare(`
+  INSERT INTO folder_access
+    (id, drive_id, path, wallet_address, added_by, payment_tx, role)
+  VALUES (?, ?, ?, ?, 'payment', ?, ?)
+`).run(nanoid(), share.drive_id, share.path, payer, txHash, share.role);
+
+// 5. Issue a Meadowcap capability for the same area
+const cap = await issueShareCap({
+  namespacePub:    drive.namespace_pubkey,
+  namespaceSecret: drive.namespace_secret,
+  pathPrefix:      share.path,
+  accessMode:      share.role === "viewer" ? "read" : "write",
+  ttlMs:           30 * 24 * 60 * 60 * 1000, // 30 days, refreshable
+});
+
+// 6. Set the wallet cookie so subsequent requests are auto-authorized
+await setWalletCookie(payer);
+
+return { ok: true, payer, driveId: share.drive_id, path: share.path,
+         cap: cap.capBase64 };
+```
+
+After this single roundtrip, the wallet has **two independent proofs of
+access** (defense in depth):
+
+| Proof | Where it lives | Verified by | Survives if… |
+|---|---|---|---|
+| `folder_access` row | server SQLite | every API request via `resolveAccess()` | server is up |
+| Meadowcap capability | client cookie (`aindrive_caps`) + downloadable | Ed25519 signature on the cap | server compromised — only owner can forge |
+
+### Step 5 — visitor returns later (lifetime access)
+
+The visitor closes the browser, walks away, comes back next week:
+
+```http
+GET /api/drives/<driveId>/fs/list?path=research/
+Cookie: aindrive_wallet=<their-jwt-from-pay-step>
+```
+
+Server:
+
+```js
+const wallet = await getWallet();   // decodes cookie → 0xabc…
+const role = await resolveAccess(driveId, path, /* userId */ null);
+// resolveAccess fans out to:
+//   resolveRoleByUser(...)   → none (no session)
+//   resolveRoleByWallet(...) → SELECT role FROM folder_access
+//                              WHERE drive_id=? AND wallet_address=?
+//                              AND path is ancestor-or-self of requested path
+//   → returns 'viewer'
+```
+
+The wallet stays authorized **forever** until either:
+- Owner revokes via `DELETE /api/drives/<id>/access/<rowId>` (→ `folder_access` row deleted), OR
+- The visitor's wallet cookie expires (30d JWT — they re-prove ownership via SIWE and continue).
+
+There's no per-request payment, no recurring billing, no rate-limit on
+reads. The mental model is **buying a key** — once you have it, you use it
+as much as you like.
+
+### Step 6 — same wallet, second device
+
+The user's second laptop:
+
+1. Visit the share URL → cookie-less request → `402`.
+2. The wallet (e.g. WalletConnect on mobile) signs a SIWE challenge on
+   `/api/wallet/verify` → `aindrive_wallet` cookie set on this device too.
+3. Now this device's request matches the same `folder_access` row → `200`.
+
+No second payment needed. The wallet IS the identity; access follows the
+wallet across browsers, devices, even AI agents holding the same key.
+
+### Step 7 — AI agent pays (no human in the loop)
+
+An autonomous agent does exactly the same flow, with one difference: it
+manages its own wallet:
+
+```python
+# pseudo-code
+resp = httpx.get(share_url, follow_redirects=False)
+if resp.status_code == 402:
+    req = json.loads(resp.headers["PAYMENT-REQUIRED"])
+    tx = wallet.send_usdc(amount=req["amount"], to=req["recipient"], network=req["network"])
+    httpx.post(f"{share_url}/pay", json={"txHash": tx.hash})
+# Agent now has the wallet cookie. From here on:
+files = httpx.get(f"{base}/api/drives/{driveId}/fs/list?path=research/").json()
+for f in files["entries"]:
+    content = httpx.get(f"{base}/api/drives/{driveId}/fs/read?path={f['path']}").json()
+    embed_and_index(content)
+```
+
+Whenever the agent comes back, the wallet is recognized, no payment is
+required again. Persistent agent memory of "I paid for folder X with wallet Y"
+means it never accidentally re-pays.
+
+### Step 8 — owner sees + manages the new member
+
+The owner's Share dialog now shows the wallet, who paid, and the txHash:
+
+```
+Wallet access:
+  0x70997970…dC79c8   research/   payment   tx 0xDEADBEEF…   added 2 days ago
+```
+
+Owner clicks `Remove` → `DELETE /api/drives/<id>/access/<rowId>` →
+`folder_access` row gone → wallet's next request returns `403`.
+
+The `cap` cookie is still in the visitor's browser, but on every fs/* call
+the server short-circuits with `resolveAccess() === 'none'`. (Future work:
+publish a Meadowcap revocation entry to a well-known subspace so even
+peer-to-peer Willow sync respects revocation without needing the server.)
+
+### Why this design
+
+- **Self-serve by AI agents** — agents are the original use case for
+  [x402](https://x402.org). They need to pay for resources without a human
+  clicking buttons. aindrive treats agents and humans identically here.
+- **Wallet is identity** — no separate user account needed for paid
+  visitors. Combined with login-free LLM (Flock) → entire flow runs without
+  signup.
+- **Owner keeps control** — payment grants persistent access, but owner
+  can revoke at any time. Revocation is a single DB row delete.
+- **Two-tier proof** — server-side `folder_access` row is the primary
+  authority; Meadowcap cap is a portable backup/proof that works even when
+  the visitor is offline or syncing P2P.
+- **Path-scoped** — payment for `research/` doesn't grant access to
+  `private/`. Owner publishes one share per area they want to monetize.
+
+---
+
 ## How collaborative editing works
 
 Built on **Y.js** (CRDTs) — character-level merge with no central authority.
