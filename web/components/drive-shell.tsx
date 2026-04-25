@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { toast } from "sonner";
 import {
   ChevronRight, Folder, FileText, FileCode, FileImage, File as FileIcon,
-  FolderPlus, Upload, Share2, Loader2, HardDrive, DollarSign,
+  FolderPlus, Upload, Share2, Loader2, HardDrive,
   Bot, MessageSquare,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
@@ -245,15 +245,7 @@ export function DriveShell({ driveId, driveName }: Props) {
                         <td className="py-2 flex items-center gap-3 min-w-0">
                           <EntryIcon entry={e} />
                           <span className="truncate">{e.name}</span>
-                          {paid && (
-                            <span
-                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 text-[11px] font-medium border border-green-200"
-                              title={`Selling at $${paid.price_usdc?.toFixed(2)} USDC`}
-                            >
-                              <DollarSign className="w-3 h-3" />
-                              {paid.price_usdc?.toFixed(2)}
-                            </span>
-                          )}
+                          {paid && <X402Badge price={paid.price_usdc!} />}
                         </td>
                         <td className="py-2 hidden sm:table-cell text-drive-muted">
                           {new Date(e.mtimeMs).toLocaleString()}
@@ -312,6 +304,22 @@ export function DriveShell({ driveId, driveName }: Props) {
         />
       )}
     </div>
+  );
+}
+
+function X402Badge({ price }: { price: number }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black text-[11px] font-mono leading-none border border-blue-500/40 shadow-sm"
+      title={`Selling for $${price.toFixed(2)} USDC via x402`}
+    >
+      <span className="font-bold tracking-tight">
+        <span className="text-blue-400">x</span>
+        <span className="text-white">402</span>
+      </span>
+      <span className="w-px h-3 bg-blue-500/40" />
+      <span className="text-white font-semibold">${price.toFixed(2)}</span>
+    </span>
   );
 }
 

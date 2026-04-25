@@ -53,6 +53,10 @@ export async function issueShareCap(opts: {
   };
 }
 
+export function bytesToHex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
+}
+
 export type DecodedCap = {
   /** Owned namespace this cap is rooted at (= drive's namespace pubkey). */
   namespacePub: Uint8Array;
