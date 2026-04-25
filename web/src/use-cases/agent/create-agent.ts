@@ -37,8 +37,8 @@ export type CreateAgentInput = {
   folder: string;
   name: string;
   description: string;
-  /** Empty string allowed → runner falls back to DEFAULT_AGENT_PERSONA. */
-  persona: string;
+  /** Empty string or omitted → runner falls back to DEFAULT_AGENT_PERSONA. */
+  persona?: string;
   knowledge: KnowledgeConfig;
   llm: LlmConfig;
   access: AccessConfig;
