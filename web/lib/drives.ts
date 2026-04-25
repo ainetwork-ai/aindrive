@@ -13,6 +13,7 @@ export type DriveRow = {
   drive_secret: string;
   agent_token_hash: string;
   last_seen_at: string | null;
+  last_hostname: string | null;
   created_at: string;
   namespace_pubkey: Buffer | null;
   namespace_secret: Buffer | null;

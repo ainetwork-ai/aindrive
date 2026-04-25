@@ -2,11 +2,12 @@
  * updateAgent — owner-only edit of an existing agent's editable fields.
  *
  * Immutable: id, driveId, ownerId, namespacePub, createdAt.
- * Editable:  name, description, folder, knowledge, llm, access.
+ * Editable:  name, description, persona, folder, knowledge, llm, access.
  *
- * apiKey semantics:
+ * apiKey / persona semantics:
  *   - undefined in patch  → keep existing
- *   - "" (empty)           → clear existing (use server env fallback)
+ *   - "" (empty)           → clear existing (apiKey falls back to env;
+ *                            persona falls back to DEFAULT_AGENT_PERSONA)
  *   - non-empty           → replace
  */
 
@@ -20,6 +21,7 @@ import type {
   LlmConfig,
   UserId,
 } from "@/shared/domain/agent/types";
+import { PERSONA_MAX } from "@/shared/domain/agent/types";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import {
   isKnowledgeStrategy,
@@ -36,6 +38,7 @@ export type UpdateAgentInput = {
   patch: {
     name?: string;
     description?: string;
+    persona?: string;
     folder?: string;
     knowledge?: KnowledgeConfig;
     llm?: Partial<LlmConfig>;
