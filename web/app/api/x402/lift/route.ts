@@ -15,7 +15,7 @@ import {
   encodePaymentResponse,
   verify,
 } from "@/lib/x402-ain";
-import { hasActiveLift, addLift, txHashUsed } from "@/lib/paid-lifts.js";
+import { getActiveLiftExpiry, addLift, txHashUsed } from "@/lib/paid-lifts.js";
 import { getWallet, setWalletCookie } from "@/lib/wallet";
 
 const LIFT_TTL_MS = 24 * 60 * 60 * 1000; // 24 h
@@ -30,18 +30,9 @@ export async function GET(req: NextRequest) {
   // 1. Already lifted?
   const wallet = await getWallet();
   if (wallet) {
-    const active = hasActiveLift(wallet, scope);
-    if (active) {
-      // Fetch the expiry from DB for the response
-      const { db } = await import("@/lib/db");
-      const row = (db as import("better-sqlite3").Database)
-        .prepare(
-          `SELECT expires_at FROM paid_lifts
-           WHERE wallet = ? AND scope = ? AND expires_at > ?
-           ORDER BY expires_at DESC LIMIT 1`
-        )
-        .get(wallet, scope, Date.now()) as { expires_at: number } | undefined;
-      return NextResponse.json({ ok: true, lifted: true, expiresAt: row?.expires_at ?? null });
+    const expiresAt = getActiveLiftExpiry(wallet, scope);
+    if (expiresAt != null) {
+      return NextResponse.json({ ok: true, lifted: true, expiresAt });
     }
   }
 

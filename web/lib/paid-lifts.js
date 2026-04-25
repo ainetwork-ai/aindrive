@@ -34,15 +34,25 @@ db.exec(`
  * @returns {boolean}
  */
 export function hasActiveLift(wallet, scope) {
+  return getActiveLiftExpiry(wallet, scope) != null;
+}
+
+/**
+ * Returns the expiry timestamp (ms) of the latest active lift, or null if none.
+ * @param {string} wallet  — lowercase 0x address
+ * @param {string} scope
+ * @returns {number | null}
+ */
+export function getActiveLiftExpiry(wallet, scope) {
   const now = Date.now();
   const row = db
     .prepare(
-      `SELECT id FROM paid_lifts
+      `SELECT expires_at FROM paid_lifts
        WHERE wallet = ? AND scope = ? AND expires_at > ?
-       LIMIT 1`
+       ORDER BY expires_at DESC LIMIT 1`
     )
     .get(wallet.toLowerCase(), scope, now);
-  return row != null;
+  return row ? row.expires_at : null;
 }
 
 /**
