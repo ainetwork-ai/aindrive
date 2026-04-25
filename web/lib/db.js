@@ -16,6 +16,10 @@ function open() {
   const handle = new Database(path);
   handle.pragma("journal_mode = WAL");
   handle.pragma("foreign_keys = ON");
+  if (process.env.AINDRIVE_SQLITE_NO_WAL !== "1") {
+    handle.pragma("synchronous = NORMAL");
+    handle.pragma("busy_timeout = 5000");
+  }
   handle.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -107,3 +111,8 @@ if (!globalThis.__aindrive_db) globalThis.__aindrive_db = db;
 
 export const drizzleDb = globalThis.__aindrive_drizzle_db ?? drizzle(db, { schema });
 if (!globalThis.__aindrive_drizzle_db) globalThis.__aindrive_drizzle_db = drizzleDb;
+
+if (!globalThis.__aindrive_maintenance_started) {
+  globalThis.__aindrive_maintenance_started = true;
+  import("./sqlite-maintenance.js").then(({ startSqliteMaintenance }) => startSqliteMaintenance()).catch(() => {});
+}
