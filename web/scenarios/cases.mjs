@@ -12,8 +12,8 @@ import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import * as syncProtocol from "y-protocols/sync";
 
-const BASE = "http://localhost:3737";
-const WS_BASE = "ws://localhost:3737";
+const BASE = process.env.AINDRIVE_BASE || "http://localhost:3737";
+const WS_BASE = process.env.AINDRIVE_WS_BASE || "ws://localhost:3737";
 const SAMPLE = "/mnt/newdata/git/aindrive/sample";
 
 // ──────────────────────── helpers ────────────────────────
@@ -62,15 +62,15 @@ async function signWalletNonce(wallet) {
   });
   const message = siweMsg.prepareMessage();
   const signature = await wallet.signMessage({ message });
-  return { nonce: nr.body.nonce, signature };
+  return { nonce: nr.body.nonce, signature, message };
 }
 
 async function loginWallet(wallet) {
-  const { nonce, signature } = await signWalletNonce(wallet);
+  const { nonce, signature, message } = await signWalletNonce(wallet);
   const r = await jget("/api/wallet/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ address: wallet.address, signature, nonce }),
+    body: JSON.stringify({ address: wallet.address, signature, nonce, message }),
   });
   return r.headers.get("set-cookie")?.split(";")[0] || null;
 }
@@ -93,6 +93,9 @@ async function reEnsureOwner() {
     const t = await jget("/api/wallet/me", { headers: { cookie: state.ownerCookie } });
     if (t.status === 200) return state.ownerCookie;
   }
+  // If ownerEmail not set (e.g. running with SCENARIO filter that skips scenario 1),
+  // fall back to ensureOwner which will sign up a new owner.
+  if (!state.ownerEmail) return ensureOwner();
   // re-login
   const r = await jget("/api/auth/login", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -260,11 +263,11 @@ add(13, "verify with valid sig → 200, cookie", async () => {
 });
 
 add(14, "verify with bad sig → 401", async () => {
-  const { nonce } = await signWalletNonce(state.walletA);
+  const { nonce, message } = await signWalletNonce(state.walletA);
   const r = await jget("/api/wallet/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ address: state.walletA.address, signature: "0x" + "00".repeat(65), nonce }),
+    body: JSON.stringify({ address: state.walletA.address, signature: "0x" + "00".repeat(65), nonce, message }),
   });
   eq(r.status, 401);
 });
@@ -280,17 +283,17 @@ add(15, "verify with unknown nonce → 400", async () => {
 });
 
 add(16, "verify reuses consumed nonce → 400", async () => {
-  const { nonce, signature } = await signWalletNonce(state.walletA);
+  const { nonce, signature, message } = await signWalletNonce(state.walletA);
   const ok = await jget("/api/wallet/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ address: state.walletA.address, signature, nonce }),
+    body: JSON.stringify({ address: state.walletA.address, signature, nonce, message }),
   });
   eq(ok.status, 200);
   const again = await jget("/api/wallet/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ address: state.walletA.address, signature, nonce }),
+    body: JSON.stringify({ address: state.walletA.address, signature, nonce, message }),
   });
   eq(again.status, 400);
 });
