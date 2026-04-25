@@ -13,10 +13,11 @@ aindrive
 # → opens https://aindrive.ainetwork.ai/d/<drive-id>
 ```
 
-`aindrive login` opens `https://aindrive.ainetwork.ai/cli-login` in your
-browser. Sign in there (if you aren't already), copy the code shown on the
-page, and paste it back into the CLI prompt. The code is single-use and
-expires in 10 minutes.
+`aindrive login` creates a one-time pairing link, opens
+`https://aindrive.ainetwork.ai/cli-login/<linkId>` in your browser, and
+polls in the background. Sign in (if you aren't already) and click
+**Authorize** on that page — the CLI picks it up within a couple of
+seconds. Each link is single-use and expires in 10 minutes.
 
 ## Commands
 
