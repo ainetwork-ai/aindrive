@@ -1,8 +1,21 @@
+> 🔒 **PERSONAL NOTES — Haechan**
+>
+> 이 문서는 해커톤에 임하는 **해찬 개인의 전략·진행 메모**입니다. 팀 합의
+> 사항이 아니에요. 자유롭게 읽으셔도 좋지만, 여기 적힌 트랙 분배·계약·
+> 타임라인 등을 *팀 표준*으로 받아들이지 마세요. 진짜 팀 공유 자료는
+> [`README.md`](../../../README.md) 와 [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) 에 있습니다.
+>
+> *Personal hackathon strategy notes by Haechan. Read freely, but do not
+> treat the track assignments / contracts / timeline here as team-wide
+> consensus. Team-shared docs live in README.md and docs/ARCHITECTURE.md.*
+
+---
+
 # aindrive 해커톤 실행 플랜 (2026-04-25)
 
 > **한 줄 미션**: 어떤 폴더든 *결제하면 열리는 RAG 에이전트*로 발행하는 도구. 외부 A2A 클라이언트는 표준 `a2a-x402`로 호출하고, aindrive에서 폴더를 산 buyer는 Meadowcap cap으로 무제한 면제받는다.
 
-> 같이 보기: [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) — 코드 디자인·레이어 분리·트랙별 ownership
+> 같이 보기: [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) — 코드 디자인·레이어 분리·트랙별 ownership
 
 ---
 
