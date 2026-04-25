@@ -7,11 +7,16 @@
 
 ```
 npm i -g aindrive
-aindrive login
+aindrive login                 # opens browser → paste the one-time code
 cd ~/Documents
 aindrive
-# → opens https://aindrive.app/d/<drive-id>
+# → opens https://aindrive.ainetwork.ai/d/<drive-id>
 ```
+
+`aindrive login` opens `https://aindrive.ainetwork.ai/cli-login` in your
+browser. Sign in there (if you aren't already), copy the code shown on the
+page, and paste it back into the CLI prompt. The code is single-use and
+expires in 10 minutes.
 
 ## Commands
 
@@ -25,7 +30,7 @@ aindrive rotate-token      rotate the per-drive agent token
 ## Flags
 
 ```
---server <url>   server URL (default: $AINDRIVE_SERVER or http://localhost:3737)
+--server <url>   server URL (default: $AINDRIVE_SERVER or https://aindrive.ainetwork.ai)
 --name <name>    name for this drive on first pairing
 --no-open        do not open the browser
 --version        print version
