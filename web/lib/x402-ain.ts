@@ -6,8 +6,9 @@
  * ERC-20 transfer and submits the txHash for on-chain verification.
  */
 
-import { createPublicClient, http, parseAbiItem, type Log } from "viem";
+import { createPublicClient, http, parseAbiItem, decodeEventLog, type Log } from "viem";
 import { mainnet } from "viem/chains";
+import { txHashUsed } from "./paid-lifts.js";
 
 // ─── Wire types ──────────────────────────────────────────────────────────────
 
@@ -130,10 +131,6 @@ export async function verify(
   const txHash = payload.payload.transaction as `0x${string}`;
   const fromAddr = payload.payload.from.toLowerCase();
 
-  // Dynamic import to avoid circular dependency — paid-lifts imports db,
-  // x402-ain.ts is pure; we only need txHashUsed at verify time.
-  const { txHashUsed } = await import("./paid-lifts.js");
-
   // Anti-replay check first (cheap, no network call)
   if (await txHashUsed(txHash)) {
     return { ok: false, error: "tx already used" };
@@ -197,7 +194,6 @@ export async function verify(
   // Decode the log
   let decoded: { args: { from: string; to: string; value: bigint } };
   try {
-    const { decodeEventLog } = await import("viem");
     decoded = decodeEventLog({
       abi: [TRANSFER_EVENT],
       data: transferLog.data,
