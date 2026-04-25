@@ -261,12 +261,48 @@ export function DriveShell({ driveId, driveName }: Props) {
             >
               <Menu className="w-5 h-5" />
             </button>
-            {crumbs.map((c, i) => (
-              <span key={c.path} className="flex items-center gap-1 min-w-0">
-                {i > 0 && <ChevronRight className="w-4 h-4 text-drive-muted shrink-0" />}
-                <button onClick={() => setPath(c.path)} className="truncate hover:underline">{c.label}</button>
-              </span>
-            ))}
+            {crumbs.map((c, i) => {
+              // On <sm screens, collapse middle crumbs into "…" so the current
+              // folder always stays visible. Keep the first (drive root) and
+              // the last (current folder), drop the rest behind a tappable
+              // collapse that jumps to the parent.
+              const isFirst = i === 0;
+              const isLast = i === crumbs.length - 1;
+              const isMiddle = !isFirst && !isLast;
+              const collapseMiddle = crumbs.length > 3;
+              const hideOnMobile = isMiddle && collapseMiddle && i !== crumbs.length - 2;
+              const isLastHidden = collapseMiddle && i === crumbs.length - 2;
+              return (
+                <span key={c.path} className="flex items-center gap-1 min-w-0">
+                  {i > 0 && (
+                    <ChevronRight
+                      className={clsx(
+                        "w-4 h-4 text-drive-muted shrink-0",
+                        hideOnMobile && "hidden sm:inline-block",
+                      )}
+                    />
+                  )}
+                  {isLastHidden && (
+                    <button
+                      onClick={() => setPath(c.path)}
+                      title={`Go to ${c.label}`}
+                      className="sm:hidden px-1.5 rounded hover:bg-drive-hover text-drive-muted"
+                    >
+                      …
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setPath(c.path)}
+                    className={clsx(
+                      "truncate hover:underline",
+                      hideOnMobile && "hidden sm:inline",
+                    )}
+                  >
+                    {c.label}
+                  </button>
+                </span>
+              );
+            })}
           </div>
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <label
@@ -342,20 +378,20 @@ export function DriveShell({ driveId, driveName }: Props) {
                         )}
                         onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
                       >
-                        <td className="py-2 align-middle">
+                        <td className="py-3 sm:py-2 align-middle">
                           <div className="flex items-center gap-3 min-w-0">
                             <EntryIcon entry={e} />
                             <span className="truncate">{e.name}</span>
                             {paid && <X402Badge price={paid.price_usdc!} />}
                           </div>
                         </td>
-                        <td className="py-2 hidden sm:table-cell text-drive-muted">
+                        <td className="py-3 sm:py-2 hidden sm:table-cell text-drive-muted">
                           {new Date(e.mtimeMs).toLocaleString()}
                         </td>
-                        <td className="py-2 hidden md:table-cell text-right text-drive-muted">
+                        <td className="py-3 sm:py-2 hidden md:table-cell text-right text-drive-muted">
                           {e.isDir ? "—" : prettyBytes(e.size)}
                         </td>
-                        <td className="py-2 text-right whitespace-nowrap">
+                        <td className="py-3 sm:py-2 text-right whitespace-nowrap">
                           {canEdit && (
                             <RowMenu
                               hasPaidShare={!!paid}
