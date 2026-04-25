@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Send, Loader2, MessageSquare, X } from "lucide-react";
-import { pathCovers } from "../../shared/domain/policy/path";
+import { pathCovers } from "@/shared/domain/policy/path";
 
 /**
  * Folder Chat sidebar — picks one agent from the drive (defaults to

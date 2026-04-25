@@ -15,8 +15,8 @@ import { sendRpc } from "../../../lib/agents";
 import type {
   FileEntry,
   FsBrowser,
-} from "../../../../shared/domain/agent/ports";
-import type { DriveId } from "../../../../shared/domain/agent/types";
+} from "@/shared/domain/agent/ports";
+import type { DriveId } from "@/shared/domain/agent/types";
 
 /** Limits passed to read; matches CLI agent's LIMITS.maxReadBytes default. */
 const DEFAULT_READ_MAX = 8 * 1024 * 1024;

@@ -17,18 +17,18 @@ import type {
   IdentityResolveInput,
   IdentityResolver,
   PaymentRequirement,
-} from "../../../../shared/domain/agent/access";
+} from "@/shared/domain/agent/access";
 import type {
   AccessPolicyFactory,
   AgentExecutor,
   AgentRepo,
-} from "../../../../shared/domain/agent/ports";
+} from "@/shared/domain/agent/ports";
 import type {
   AgentId,
   AskRequest,
   AskResult,
   DriveId,
-} from "../../../../shared/domain/agent/types";
+} from "@/shared/domain/agent/types";
 
 export type AskAgentDeps = {
   agents: AgentRepo;

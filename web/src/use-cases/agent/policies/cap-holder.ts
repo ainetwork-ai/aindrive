@@ -7,8 +7,8 @@
  * pathPrefix is an ancestor of the agent's folder.
  */
 
-import type { AccessPolicy } from "../../../../../shared/domain/agent/access";
-import { pathCovers } from "../../../../../shared/domain/policy/path";
+import type { AccessPolicy } from "@/shared/domain/agent/access";
+import { pathCovers } from "@/shared/domain/policy/path";
 import { bytesToHex } from "../../../../lib/willow/cap-issue";
 
 export const capHolderPolicy: AccessPolicy = {

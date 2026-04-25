@@ -15,11 +15,11 @@ import {
   type AgentId,
   type DriveId,
   type NewAgentInput,
-} from "../../../../shared/domain/agent/types";
+} from "@/shared/domain/agent/types";
 import type {
   AgentRepo,
   FsBrowser,
-} from "../../../../shared/domain/agent/ports";
+} from "@/shared/domain/agent/ports";
 
 const AGENT_DIR = ".aindrive/agents";
 
