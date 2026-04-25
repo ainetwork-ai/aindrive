@@ -38,21 +38,40 @@ on your computer.
 
 ## Architecture
 
+aindrive is a **single application** with three runtime components — browser
+UI, Next.js server, local CLI — plus a **built-in AI agent runtime** that
+the server hosts. The agent is a first-class citizen of the app; only the
+LLM provider call (OpenAI, Anthropic, etc.) is external, via a user-supplied
+API key. Optional 3rd-party agents can connect over the same A2A interface.
+
 ```
-┌─────────────┐      HTTPS        ┌─────────────────────────────────┐
+                                       LLM provider API
+                                       (OpenAI/Anthropic/…)
+                                              ▲
+                                              │  user-supplied API key
+                                              │
+┌─────────────┐      HTTPS        ┌──────────┴──────────────────────┐
 │   Browser   │ ────────────────▶ │     Next.js custom server       │
 │  (humans)   │ ◀──── WSS ──────  │   (web/server.js)               │
 └─────────────┘   /api/agent/doc  │                                 │
-                                  │  ┌──────────────────────────┐   │
-┌─────────────┐    A2A JSON-RPC   │  │  DocHub  (per-doc broadcast)
-│  AI agent   │ ─────────────────▶│  │  AgentMap (drive RPC)      │
-│  (Claude /  │ ◀─── x402 402 ─── │  │  Trace ring buffer         │
-│  ChatGPT /  │       payment     │  │  Auth + Sessions + Wallets │
-│  custom)    │                   │  └──────────────────────────┬──┘
-└─────────────┘                   │     SQLite (better-sqlite3) │
-                                  └─────────────────────────────┴───┘
+                                  │  ┌─────────────────────────┐    │
+                                  │  │  DocHub (per-doc bcast) │    │
+                                  │  │  AgentMap (drive RPC)   │    │
+                                  │  │  Trace ring buffer      │    │
+                                  │  │  Auth + Wallets + Caps  │    │
+                                  │  └─────────────────────────┘    │
+                                  │  ┌─────────────────────────┐    │
+                                  │  │  aindrive AI agent      │    │
+┌─────────────┐    A2A JSON-RPC   │  │  ─ A2A AgentCard server │    │
+│ 3rd-party   │ ─────────────────▶│  │  ─ x402 paywall handler │    │
+│ agent       │ ◀─── x402 402 ─── │  │  ─ Folder RAG (embed +  │    │
+│ (optional)  │       payment     │  │     index + retrieve)   │    │
+└─────────────┘                   │  │  ─ Y.js peer (live edit)│    │
+                                  │  └─────────────────────────┘    │
+                                  │  SQLite (better-sqlite3)        │
+                                  └────────────────┬────────────────┘
                                        │  WSS  /api/agent/connect
-                                       │  (outbound only — agent dials in)
+                                       │  (outbound only — CLI dials in)
                                        ▼
                            ┌─────────────────────────────┐
                            │   aindrive CLI (your machine)│
@@ -64,6 +83,12 @@ on your computer.
                            │     suppression              │
                            └─────────────────────────────┘
 ```
+
+**Key point:** the AI agent is **inside aindrive**. It runs on the same
+Next.js process, reuses the same auth, the same DocHub, the same Willow
+Store. It is just another peer that happens to be an LLM under the hood.
+This is what makes RAG + collaborative editing first-class instead of
+bolted-on.
 
 ### Layer responsibilities
 
@@ -401,7 +426,34 @@ discussion of where aindrive maps onto the Willow spec.
 ## How AI agents fit in (A2A + RAG)
 
 aindrive's primary insight: **a folder of files is a perfect RAG corpus, and
-AI agents need a standard way to access + modify it with permissions.**
+the app itself runs an AI agent over it — collaboratively editing alongside
+humans, with capabilities and payments first-class.**
+
+### The built-in agent
+
+Every aindrive deployment ships an internal AI agent runtime inside the
+Next.js process. It owns:
+
+- **Folder RAG** — walks the drive's files, chunks + embeds them, stores
+  vectors in a per-drive table, answers semantic queries.
+- **Live editor peer** — opens its own `/api/agent/doc` connection just
+  like a human tab; appears as a presence avatar in the UI.
+- **A2A endpoint** — exposes the standard Agent-to-Agent JSON-RPC interface
+  so other apps / agents can talk to it without any aindrive-specific glue.
+
+The only thing that leaves the box is the LLM API call (with the user's
+own key — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc., set per-deployment).
+Embeddings, indexing, retrieval, edit application all happen inside aindrive.
+
+### A2A is the door (for both internal and external agents)
+
+The same A2A interface is used:
+
+1. **Internally** — the browser UI talks to the built-in agent via A2A
+   when the user clicks "Ask aindrive about this folder".
+2. **Externally** — a 3rd-party app (Claude desktop, custom workflow,
+   another aindrive instance) discovers the AgentCard, possibly pays via
+   x402, then issues A2A calls.
 
 ### Discovery (A2A AgentCard)
 
@@ -498,20 +550,30 @@ peer, not a feature.
 
 ## How RAG is implemented
 
-aindrive doesn't ship its own embedding model — it exposes the surface
-for agents to BUILD a RAG over the folder:
+RAG is **part of aindrive itself**. The built-in agent indexes each drive's
+files and serves retrieval queries. The only external dependency is the
+embedding API (configurable: OpenAI text-embedding-3, Voyage, local
+sentence-transformers, etc.) — called with the operator's own API key.
 
-| Step | API | Notes |
+| Step | Where | Notes |
 |---|---|---|
-| 1. Enumerate | `GET /api/drives/<id>/fs/list?path=<dir>` | Recursive traversal possible |
-| 2. Read | `GET /api/drives/<id>/fs/read?path=<file>&encoding=utf8` | Or `base64` for binaries |
-| 3. Embed | (agent-side, any model) | Agent decides chunking + model |
-| 4. Index | (agent-side) | Agent stores embeddings in its own vector DB |
-| 5. Query | A2A skill: `search { query: "..." }` | Agent does retrieval, returns results |
-| 6. Edit | Y.js subscribe to `<file>` and insert | Live collaborative |
+| 1. Enumerate | aindrive built-in agent | walks `fs/list` recursively, respects `.aindrive` ignore |
+| 2. Read | built-in agent calls `fs/read` | utf8 for text, base64 for binaries (skipped) |
+| 3. Chunk | built-in agent | configurable strategy (paragraph, fixed-tokens, semantic) |
+| 4. Embed | LLM provider | only network egress — uses user's `OPENAI_API_KEY` etc. |
+| 5. Store | per-drive `embeddings` table in SQLite | sqlite-vec / pgvector if scaled later |
+| 6. Query | A2A skill `search { query }` | top-k retrieval, returns chunks + paths |
+| 7. Edit | built-in agent joins Y.js as a peer | inserts answers/rewrites live into the doc |
+| 8. Re-index | fs.watch fires → debounce → re-embed changed files | incremental, append-only embeddings |
 
-The folder owner pays only for the bytes — the agent provides the intelligence.
-Multiple agents can index the same folder differently.
+External agents can either:
+- **Use aindrive's RAG** via the A2A `search` skill (one HTTP call) — pay
+  per query via x402 or with allowlisted access.
+- **Build their own** by enumerating + reading via the same fs APIs and
+  bringing their own embedding pipeline.
+
+In either case, **edits go through Y.js**, so an external agent's writes
+merge live with the human's keystrokes — no overwrites.
 
 ---
 
