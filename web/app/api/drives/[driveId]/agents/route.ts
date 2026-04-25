@@ -14,7 +14,7 @@ import { getUser } from "@/lib/session";
 import { getDrive, getDriveNamespace } from "@/lib/drives";
 import { compose } from "@/src/composition";
 import { createAgent } from "@/src/use-cases/agent/create-agent";
-import type { Agent } from "../../../../../../shared/domain/agent/types";
+import type { Agent } from "@/../shared/domain/agent/types";
 
 const Body = z.object({
   folder: z.string().max(1024).default(""),

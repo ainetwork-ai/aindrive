@@ -9,9 +9,9 @@
  * authenticated and policy is already enforced upstream.
  */
 
-import { sendRpc } from "../../../lib/agents.js";
-import type { AgentExecutor } from "../../../../shared/domain/agent/ports.js";
-import type { AskResult } from "../../../../shared/domain/agent/types.js";
+import { sendRpc } from "../../../lib/agents";
+import type { AgentExecutor } from "../../../../shared/domain/agent/ports";
+import type { AskResult } from "../../../../shared/domain/agent/types";
 
 export const rpcAgentExecutor: AgentExecutor = {
   async ask({ driveId, agentId, request }): Promise<AskResult> {

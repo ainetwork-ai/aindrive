@@ -18,8 +18,8 @@ import {
   SCHEME_X402,
   SCHEME_CAP,
   type AindriveAgentCard,
-} from "../../../../../../../shared/contracts/http";
-import type { Agent } from "../../../../../../../shared/domain/agent/types";
+} from "@/../shared/contracts/http";
+import type { Agent } from "@/../shared/domain/agent/types";
 
 export async function GET(
   _req: NextRequest,

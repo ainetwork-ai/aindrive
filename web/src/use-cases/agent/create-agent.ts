@@ -9,7 +9,7 @@
  * drive) and writes the agent JSON via AgentRepo.
  */
 
-import type { AgentRepo } from "../../../../shared/domain/agent/ports.js";
+import type { AgentRepo } from "../../../../shared/domain/agent/ports";
 import type {
   AccessConfig,
   Agent,
@@ -17,13 +17,13 @@ import type {
   KnowledgeConfig,
   LlmConfig,
   UserId,
-} from "../../../../shared/domain/agent/types.js";
-import { isSystemPath } from "../../../../shared/domain/policy/system-paths.js";
+} from "../../../../shared/domain/agent/types";
+import { isSystemPath } from "../../../../shared/domain/policy/system-paths";
 import {
   isKnowledgeStrategy,
   isLlmProvider,
   isPolicyName,
-} from "../../../../shared/domain/agent/registry.js";
+} from "../../../../shared/domain/agent/registry";
 
 export type CreateAgentDeps = { agents: AgentRepo };
 

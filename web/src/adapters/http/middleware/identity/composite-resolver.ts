@@ -12,7 +12,7 @@ import type {
   CallerIdentity,
   IdentityResolveInput,
   IdentityResolver,
-} from "../../../../../../shared/domain/agent/access.js";
+} from "../../../../../../shared/domain/agent/access";
 
 export function compositeResolver(
   children: ReadonlyArray<IdentityResolver>,

@@ -10,7 +10,7 @@ import type {
   AccessDecision,
   AccessPolicy,
   AccessRequest,
-} from "../../../../../shared/domain/agent/access.js";
+} from "../../../../../shared/domain/agent/access";
 
 /**
  * First `allow` wins. If none allow, returns the most informative
