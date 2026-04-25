@@ -3,7 +3,7 @@
 Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 
 ## A. Auth & accounts (1–10)
-1. 🔴 POST /api/auth/signup with valid email+password → 200 + session cookie
+1. 🟢 POST /api/auth/signup with valid email+password → 200 + session cookie
 2. 🟢 Signup with duplicate email → 409
 3. 🟢 Signup with short password (<8) → 400
 4. 🟢 Signup with malformed email → 400

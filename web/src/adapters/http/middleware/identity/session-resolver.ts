@@ -13,7 +13,7 @@ import type {
   CallerIdentity,
   IdentityResolveInput,
   IdentityResolver,
-} from "../../../../../../shared/domain/agent/access";
+} from "@/shared/domain/agent/access";
 
 export const sessionResolver: IdentityResolver = {
   name: "session",

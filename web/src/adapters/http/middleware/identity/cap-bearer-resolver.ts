@@ -16,7 +16,7 @@ import type {
   CallerIdentity,
   IdentityResolveInput,
   IdentityResolver,
-} from "../../../../../../shared/domain/agent/access";
+} from "@/shared/domain/agent/access";
 
 function readCapToken(req: IdentityResolveInput): string | null {
   const auth = req.headers.get("authorization");

@@ -87,10 +87,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     );
   }
 
-  // Decode + validate payment payload
+  // Decode + validate payment payload.
+  // In DEV_BYPASS we accept any well-formed JSON so local demos / scenarios
+  // don't need to construct a real EIP-3009 authorisation.
   let payload;
   try {
-    payload = PaymentPayloadSchema.parse(JSON.parse(safeBase64Decode(xPayment)));
+    const raw = JSON.parse(safeBase64Decode(xPayment));
+    payload = DEV_BYPASS ? raw : PaymentPayloadSchema.parse(raw);
   } catch {
     return NextResponse.json(
       { x402Version: 1, accepts: [requirements], error: "invalid X-PAYMENT header" },

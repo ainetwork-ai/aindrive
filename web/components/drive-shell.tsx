@@ -15,6 +15,7 @@ import { ShareDialog } from "./share-dialog";
 import { RowMenu } from "./row-menu";
 import { CreateAgentModal } from "./create-agent-modal";
 import { FolderChat } from "./folder-chat";
+import { X402Badge } from "./x402-badges";
 
 type Props = { driveId: string; driveName: string };
 
@@ -29,6 +30,7 @@ type ShareSummary = {
 export function DriveShell({ driveId, driveName }: Props) {
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<DriveEntry[]>([]);
+  const [rootFolders, setRootFolders] = useState<DriveEntry[]>([]);
   const [role, setRole] = useState<string>("viewer");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -44,7 +46,15 @@ export function DriveShell({ driveId, driveName }: Props) {
     if (!res.ok) { setErr((await res.json()).error || "failed to list"); setLoading(false); return; }
     const { entries, role } = await res.json();
     setEntries(entries); setRole(role); setLoading(false);
+    if (!path) setRootFolders(entries.filter((e: DriveEntry) => e.isDir));
   }, [driveId, path]);
+
+  const loadRootFolders = useCallback(async () => {
+    const res = await fetch(`/api/drives/${driveId}/fs/list?path=`);
+    if (!res.ok) return;
+    const { entries } = await res.json();
+    setRootFolders(entries.filter((e: DriveEntry) => e.isDir));
+  }, [driveId]);
 
   const loadShares = useCallback(async () => {
     const res = await fetch(`/api/drives/${driveId}/shares`);
@@ -52,6 +62,7 @@ export function DriveShell({ driveId, driveName }: Props) {
   }, [driveId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadRootFolders(); }, [loadRootFolders]);
   useEffect(() => { loadShares(); }, [loadShares]);
 
   // Map: path → paid share (most recent), for badge rendering and ⋮ menu state
@@ -80,7 +91,8 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: target }),
     });
-    if (!res.ok) alert((await res.json()).error); else load();
+    if (!res.ok) alert((await res.json()).error);
+    else { load(); loadRootFolders(); }
   }
 
   async function onUpload(files: FileList | null) {
@@ -119,7 +131,8 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: e.path }),
     });
-    if (!res.ok) toast.error((await res.json()).error); else load();
+    if (!res.ok) toast.error((await res.json()).error);
+    else { load(); loadRootFolders(); }
   }
 
   async function onRename(e: DriveEntry) {
@@ -131,7 +144,8 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: e.path, to: parts.join("/") }),
     });
-    if (!res.ok) toast.error((await res.json()).error); else load();
+    if (!res.ok) toast.error((await res.json()).error);
+    else { load(); loadRootFolders(); }
   }
 
   function onRowAction(entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") {
@@ -158,11 +172,33 @@ export function DriveShell({ driveId, driveName }: Props) {
             <FolderPlus className="w-5 h-5 text-drive-accent" /> New folder
           </button>
         </div>
-        <nav className="mt-3 text-sm">
-          <div className={clsx("flex items-center gap-2 px-3 py-2 rounded-full", !path && "bg-drive-selected")}>
-            <Folder className="w-4 h-4" />
-            <button onClick={() => setPath("")} className="truncate">{driveName}</button>
-          </div>
+        <nav className="mt-3 text-sm space-y-0.5 overflow-y-auto scrollbar-thin">
+          <button
+            onClick={() => setPath("")}
+            className={clsx(
+              "w-full flex items-center gap-2 px-3 py-2 rounded-full text-left",
+              !path && "bg-drive-selected",
+            )}
+          >
+            <HardDrive className="w-4 h-4 text-drive-accent shrink-0" />
+            <span className="truncate font-medium">{driveName}</span>
+          </button>
+          {rootFolders.map((f) => {
+            const active = path === f.path || path.startsWith(f.path + "/");
+            return (
+              <button
+                key={f.path}
+                onClick={() => setPath(f.path)}
+                className={clsx(
+                  "w-full flex items-center gap-2 pl-6 pr-3 py-1.5 rounded-full text-left",
+                  active ? "bg-drive-selected" : "hover:bg-drive-hover",
+                )}
+              >
+                <Folder className="w-4 h-4 text-drive-accent shrink-0" />
+                <span className="truncate">{f.name}</span>
+              </button>
+            );
+          })}
         </nav>
         <div className="mt-auto text-xs text-drive-muted px-2">Role: {role}</div>
       </aside>
@@ -242,10 +278,12 @@ export function DriveShell({ driveId, driveName }: Props) {
                         )}
                         onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
                       >
-                        <td className="py-2 flex items-center gap-3 min-w-0">
-                          <EntryIcon entry={e} />
-                          <span className="truncate">{e.name}</span>
-                          {paid && <X402Badge price={paid.price_usdc!} />}
+                        <td className="py-2 align-middle">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <EntryIcon entry={e} />
+                            <span className="truncate">{e.name}</span>
+                            {paid && <X402Badge price={paid.price_usdc!} />}
+                          </div>
                         </td>
                         <td className="py-2 hidden sm:table-cell text-drive-muted">
                           {new Date(e.mtimeMs).toLocaleString()}
@@ -304,22 +342,6 @@ export function DriveShell({ driveId, driveName }: Props) {
         />
       )}
     </div>
-  );
-}
-
-function X402Badge({ price }: { price: number }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black text-[11px] font-mono leading-none border border-blue-500/40 shadow-sm"
-      title={`Selling for $${price.toFixed(2)} USDC via x402`}
-    >
-      <span className="font-bold tracking-tight">
-        <span className="text-blue-400">x</span>
-        <span className="text-white">402</span>
-      </span>
-      <span className="w-px h-3 bg-blue-500/40" />
-      <span className="text-white font-semibold">${price.toFixed(2)}</span>
-    </span>
   );
 }
 

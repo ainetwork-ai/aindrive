@@ -32,13 +32,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd -r app && useradd -r -g app -d /app -s /usr/sbin/nologin app \
     && mkdir -p /data && chown -R app:app /data /app
 
-# Production deps only (rebuild native modules with prod toolchain not needed —
-# we copy the prebuilt node_modules to keep better-sqlite3's compiled binding).
 COPY --from=builder --chown=app:app /app/node_modules ./node_modules
 COPY --from=builder --chown=app:app /app/.next ./.next
 COPY --from=builder --chown=app:app /app/server.js ./server.js
 COPY --from=builder --chown=app:app /app/lib ./lib
 COPY --from=builder --chown=app:app /app/drizzle ./drizzle
+COPY --from=builder --chown=app:app /app/src ./src
+COPY --from=builder --chown=app:app /app/shared ./shared
 COPY --from=builder --chown=app:app /app/package.json ./package.json
 COPY --from=builder --chown=app:app /app/next.config.ts ./next.config.ts
 

@@ -28,7 +28,8 @@ export async function runCli(argv) {
     .option("--name <name>", "name for this drive on first pairing")
     .option("--no-open", "do not open the browser");
 
-  // Default command: serve a folder (auto-login on first use)
+  // Default command: serve a folder (auto-login on first use, or when
+  // --server points somewhere different from the saved credentials)
   program
     .argument("[folder]", "folder to connect (default: .)")
     .action(async (folder, opts) => {
@@ -37,8 +38,11 @@ export async function runCli(argv) {
       if (!existsSync(dir)) throw new Error(`folder does not exist: ${dir}`);
       const args = buildArgs(opts, []);
       const drive = await readDriveConfig(dir);
-      if (!drive && !(await readGlobalCreds())) {
-        await cmdLogin(buildArgs(opts, ["login"]));
+      if (!drive) {
+        const creds = await readGlobalCreds();
+        if (!creds || creds.server !== args.flags.server) {
+          await cmdLogin(buildArgs(opts, ["login"]));
+        }
       }
       await cmdServe({ ...args, dir });
     });

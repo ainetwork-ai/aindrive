@@ -21,8 +21,8 @@ const AGENT_DIR = ".aindrive/agents";
 
 export async function runAgentAsk({ root, agentId, query }) {
   if (typeof agentId !== "string" || !/^agt_[A-Za-z0-9_-]{6,32}$/.test(agentId)) {
-    // Mirrors shared/domain/agent/types.ts isAgentId. Inlined here because
-    // CLI is plain ESM JS and doesn't compile shared/*.ts.
+    // Mirrors web/shared/domain/agent/types.ts isAgentId. Inlined here because
+    // CLI is plain ESM JS and doesn't compile web/shared/*.ts.
     throw new Error(`bad_agent_id:${agentId}`);
   }
   if (typeof query !== "string" || query.length === 0) {

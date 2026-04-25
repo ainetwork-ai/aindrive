@@ -8,13 +8,13 @@
 
 import type {
   AccessPolicy,
-} from "../../../../../shared/domain/agent/access";
+} from "@/shared/domain/agent/access";
 import type {
   AccessPolicyFactory,
-} from "../../../../../shared/domain/agent/ports";
+} from "@/shared/domain/agent/ports";
 import type {
   AccessConfig,
-} from "../../../../../shared/domain/agent/types";
+} from "@/shared/domain/agent/types";
 import { ownerPolicy } from "./owner";
 import { capHolderPolicy } from "./cap-holder";
 import { firstAllow } from "./compose";
