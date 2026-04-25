@@ -3,15 +3,25 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
 import clsx from "clsx";
+import { toast } from "sonner";
 import {
   ChevronRight, Folder, FileText, FileCode, FileImage, File as FileIcon,
-  FolderPlus, Upload, Share2, Trash2, Pencil, LogOut, Loader2, HardDrive,
+  FolderPlus, Upload, Share2, Loader2, HardDrive, DollarSign,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import { Viewer } from "./viewer";
 import { ShareDialog } from "./share-dialog";
+import { RowMenu } from "./row-menu";
 
 type Props = { driveId: string; driveName: string };
+
+type ShareSummary = {
+  id: string;
+  token: string;
+  path: string;
+  role: string;
+  price_usdc: number | null;
+};
 
 export function DriveShell({ driveId, driveName }: Props) {
   const [path, setPath] = useState("");
@@ -20,7 +30,8 @@ export function DriveShell({ driveId, driveName }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<DriveEntry | null>(null);
-  const [shareOpen, setShareOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState<{ path: string; focus?: "sell" } | null>(null);
+  const [shares, setShares] = useState<ShareSummary[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
@@ -30,7 +41,22 @@ export function DriveShell({ driveId, driveName }: Props) {
     setEntries(entries); setRole(role); setLoading(false);
   }, [driveId, path]);
 
+  const loadShares = useCallback(async () => {
+    const res = await fetch(`/api/drives/${driveId}/shares`);
+    if (res.ok) setShares((await res.json()).shares);
+  }, [driveId]);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadShares(); }, [loadShares]);
+
+  // Map: path → paid share (most recent), for badge rendering and ⋮ menu state
+  const paidByPath = useMemo(() => {
+    const m = new Map<string, ShareSummary>();
+    for (const s of shares) {
+      if (s.price_usdc !== null && !m.has(s.path)) m.set(s.path, s);
+    }
+    return m;
+  }, [shares]);
 
   const canEdit = role === "editor" || role === "owner";
   const crumbs = useMemo(() => {
@@ -54,6 +80,7 @@ export function DriveShell({ driveId, driveName }: Props) {
 
   async function onUpload(files: FileList | null) {
     if (!files || !canEdit) return;
+    const uploadedPaths: string[] = [];
     for (const file of Array.from(files)) {
       const arr = await file.arrayBuffer();
       const b64 = arrayBufferToBase64(arr);
@@ -62,9 +89,22 @@ export function DriveShell({ driveId, driveName }: Props) {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ path: target, content: b64, encoding: "base64" }),
       });
-      if (!res.ok) alert(`${file.name}: ${(await res.json()).error}`);
+      if (!res.ok) toast.error(`${file.name}: ${(await res.json()).error}`);
+      else uploadedPaths.push(target);
     }
     load();
+    if (uploadedPaths.length === 1) {
+      const p = uploadedPaths[0];
+      toast(`Uploaded "${p.split("/").pop()}"`, {
+        action: {
+          label: "Set price",
+          onClick: () => setShareOpen({ path: p, focus: "sell" }),
+        },
+        duration: 7000,
+      });
+    } else if (uploadedPaths.length > 1) {
+      toast.success(`Uploaded ${uploadedPaths.length} files`);
+    }
   }
 
   async function onDelete(e: DriveEntry) {
@@ -74,7 +114,7 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: e.path }),
     });
-    if (!res.ok) alert((await res.json()).error); else load();
+    if (!res.ok) toast.error((await res.json()).error); else load();
   }
 
   async function onRename(e: DriveEntry) {
@@ -86,7 +126,16 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: e.path, to: parts.join("/") }),
     });
-    if (!res.ok) alert((await res.json()).error); else load();
+    if (!res.ok) toast.error((await res.json()).error); else load();
+  }
+
+  function onRowAction(entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") {
+    switch (action) {
+      case "sell": return setShareOpen({ path: entry.path, focus: "sell" });
+      case "share": return setShareOpen({ path: entry.path });
+      case "rename": return onRename(entry);
+      case "delete": return onDelete(entry);
+    }
   }
 
   return (
@@ -129,7 +178,7 @@ export function DriveShell({ driveId, driveName }: Props) {
               <input type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
             </label>
             <button
-              onClick={() => setShareOpen(true)}
+              onClick={() => setShareOpen({ path })}
               className="flex items-center gap-2 rounded-full bg-drive-accent text-white px-3 py-1.5 text-sm hover:bg-drive-accentHover"
             >
               <Share2 className="w-4 h-4" /> Share
@@ -158,39 +207,47 @@ export function DriveShell({ driveId, driveName }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {entries.map((e) => (
-                    <tr
-                      key={e.path}
-                      className={clsx(
-                        "border-b border-drive-border/70 hover:bg-drive-hover cursor-pointer",
-                        selected?.path === e.path && "bg-drive-selected/60"
-                      )}
-                      onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
-                    >
-                      <td className="py-2 flex items-center gap-3 min-w-0">
-                        <EntryIcon entry={e} />
-                        <span className="truncate">{e.name}</span>
-                      </td>
-                      <td className="py-2 hidden sm:table-cell text-drive-muted">
-                        {new Date(e.mtimeMs).toLocaleString()}
-                      </td>
-                      <td className="py-2 hidden md:table-cell text-right text-drive-muted">
-                        {e.isDir ? "—" : prettyBytes(e.size)}
-                      </td>
-                      <td className="py-2 text-right whitespace-nowrap">
-                        {canEdit && (
-                          <span className="inline-flex items-center gap-1">
-                            <button onClick={(ev) => { ev.stopPropagation(); onRename(e); }} className="p-1.5 rounded hover:bg-drive-hover" title="Rename">
-                              <Pencil className="w-4 h-4" />
-                            </button>
-                            <button onClick={(ev) => { ev.stopPropagation(); onDelete(e); }} className="p-1.5 rounded hover:bg-drive-hover" title="Delete">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </span>
+                  {entries.map((e) => {
+                    const paid = paidByPath.get(e.path);
+                    return (
+                      <tr
+                        key={e.path}
+                        className={clsx(
+                          "border-b border-drive-border/70 hover:bg-drive-hover cursor-pointer",
+                          selected?.path === e.path && "bg-drive-selected/60"
                         )}
-                      </td>
-                    </tr>
-                  ))}
+                        onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
+                      >
+                        <td className="py-2 flex items-center gap-3 min-w-0">
+                          <EntryIcon entry={e} />
+                          <span className="truncate">{e.name}</span>
+                          {paid && (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 text-[11px] font-medium border border-green-200"
+                              title={`Selling at $${paid.price_usdc?.toFixed(2)} USDC`}
+                            >
+                              <DollarSign className="w-3 h-3" />
+                              {paid.price_usdc?.toFixed(2)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 hidden sm:table-cell text-drive-muted">
+                          {new Date(e.mtimeMs).toLocaleString()}
+                        </td>
+                        <td className="py-2 hidden md:table-cell text-right text-drive-muted">
+                          {e.isDir ? "—" : prettyBytes(e.size)}
+                        </td>
+                        <td className="py-2 text-right whitespace-nowrap">
+                          {canEdit && (
+                            <RowMenu
+                              hasPaidShare={!!paid}
+                              onAction={(a) => onRowAction(e, a)}
+                            />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
@@ -210,8 +267,9 @@ export function DriveShell({ driveId, driveName }: Props) {
       {shareOpen && (
         <ShareDialog
           driveId={driveId}
-          defaultPath={path}
-          onClose={() => setShareOpen(false)}
+          defaultPath={shareOpen.path}
+          focusSection={shareOpen.focus}
+          onClose={() => { setShareOpen(null); loadShares(); }}
         />
       )}
     </div>

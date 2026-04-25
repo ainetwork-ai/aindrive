@@ -4,6 +4,7 @@ import { join, relative, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
 import { signPayload, verifyPayload, stripSig } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
+import { log } from "./logger.js";
 
 const PROTOCOL_VERSION = 1;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
@@ -24,12 +25,12 @@ export async function runAgent({ root, drive, server }) {
       await connectOnce({ root, drive, wsUrl });
       attempt = 0;
     } catch (e) {
-      console.error(`  ${e.message || e}`);
+      log.error({ err: e.message || String(e) }, "agent connection error");
     }
     if (stopped) break;
     const wait = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
     attempt++;
-    console.log(`  reconnecting in ${wait / 1000}s…`);
+    log.info({ waitSec: wait / 1000 }, "reconnecting");
     await new Promise((r) => setTimeout(r, wait));
   }
 }
@@ -54,9 +55,9 @@ function connectOnce({ root, drive, wsUrl }) {
 
     ws.once("open", () => {
       opened = true;
-      console.log(`  connected  (driveId=${drive.driveId})`);
+      log.info({ driveId: drive.driveId }, "connected");
       // Multi-device sync: gossip yjs_entries with peers via the same WS
-      try { attachSync(ws, drive, root); } catch (e) { console.warn("attachSync:", e.message); }
+      try { attachSync(ws, drive, root); } catch (e) { log.warn({ err: e.message }, "attachSync failed"); }
       // Start fs watcher — sends {type:'fs-changed', path} frames so the server can
       // broadcast 'reload' to any open editors of that path.
       try {
@@ -75,46 +76,46 @@ function connectOnce({ root, drive, wsUrl }) {
             }
             try { cliTrace(root, docIdFor(root, rel), "fs-changed", { extra: { path: rel } }); } catch {}
             try { ws.send(JSON.stringify({ type: "fs-changed", path: rel })); }
-            catch (e) { console.warn("fs-changed send failed:", e.message); }
+            catch (e) { log.warn({ err: e.message }, "fs-changed send failed"); }
           }, FS_DEBOUNCE_MS);
           recentChanges.set(rel, t);
         });
-      } catch (e) { console.warn("fs.watch unavailable:", e.message); }
+      } catch (e) { log.warn({ err: e.message }, "fs.watch unavailable"); }
     });
 
     ws.on("message", async (data) => {
-      console.log(`[agent recv] ${data.toString("utf8").slice(0, 200)}`);
+      log.debug({ raw: data.toString("utf8").slice(0, 200) }, "[agent recv]");
       let frame;
       try { frame = JSON.parse(data.toString("utf8")); }
-      catch (e) { console.log(`[agent recv] parse fail: ${e.message}`); return; }
-      if (frame?.type === "hello") { console.log("[agent recv] hello"); return; }
-      if (frame?.type !== "request" || !frame.reqId) { console.log(`[agent recv] ignored type=${frame?.type}`); return; }
-      if (frame.v !== PROTOCOL_VERSION) { console.log(`[agent] bad version ${frame.v}`); return; }
+      catch (e) { log.debug({ err: e.message }, "[agent recv] parse fail"); return; }
+      if (frame?.type === "hello") { log.debug("[agent recv] hello"); return; }
+      if (frame?.type !== "request" || !frame.reqId) { log.debug({ type: frame?.type }, "[agent recv] ignored"); return; }
+      if (frame.v !== PROTOCOL_VERSION) { log.debug({ v: frame.v }, "[agent] bad version"); return; }
       const { sig, type, ...rest } = frame;
-      console.log(`[agent] sig=${sig?.slice(0,8)} secret=${drive.driveSecret?.slice(0,8)} keys=${Object.keys(rest).sort().join(",")}`);
+      log.debug({ sig: sig?.slice(0,8), keys: Object.keys(rest).sort().join(",") }, "[agent] verifying");
       const verified = verifyPayload(drive.driveSecret, rest, sig);
-      console.log(`[agent] verified=${verified}`);
+      log.debug({ verified }, "[agent] verified");
       if (!verified) {
-        console.warn("  dropped forged request");
+        log.warn("dropped forged request");
         return;
       }
-      console.log(`[agent] handling ${frame.params?.method} root=${root}`);
+      log.debug({ method: frame.params?.method }, "[agent] handling");
       let response;
       try {
         const result = await handleRpc(frame.params, root);
-        console.log(`[agent] handleRpc ok, entries=${result?.entries?.length}`);
+        log.debug({ entries: result?.entries?.length }, "[agent] handleRpc ok");
         response = { type: "response", reqId: frame.reqId, ok: true, result };
       } catch (e) {
-        console.error(`[agent] handleRpc threw: ${e.message}`);
+        log.error({ err: e.message }, "[agent] handleRpc threw");
         response = { type: "response", reqId: frame.reqId, ok: false, error: sanitize(e.message) };
       }
       try {
         const { type: _t, ...payloadForSig } = response;
         response.sig = signPayload(drive.driveSecret, payloadForSig);
-        console.log(`[agent] sending response sig=${response.sig.slice(0,8)}`);
+        log.debug({ sig: response.sig.slice(0,8) }, "[agent] sending response");
         ws.send(JSON.stringify(response));
-        console.log(`[agent] response sent`);
-      } catch (e) { console.error(`  send/sign failed: ${e.message}`); }
+        log.debug("[agent] response sent");
+      } catch (e) { log.error({ err: e.message }, "send/sign failed"); }
     });
 
     ws.once("close", (code, reason) => {
@@ -122,7 +123,7 @@ function connectOnce({ root, drive, wsUrl }) {
       if (watcher) { try { watcher.close(); } catch {} }
       for (const t of recentChanges.values()) clearTimeout(t);
       recentChanges.clear();
-      if (opened) { console.log(`  ${msg}`); resolve(); }
+      if (opened) { log.info({ msg }, "disconnected"); resolve(); }
       else reject(new Error(msg));
     });
 

@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import { SiweMessage } from "siwe";
 import { env } from "./env";
 
 const COOKIE = "aindrive_wallet";
@@ -80,5 +81,15 @@ export function consumeNonce(ip: string, value: string): boolean {
 }
 
 export function challengeMessage(nonce: string, address: string): string {
-  return `aindrive wants you to sign in with your wallet.\n\nAddress: ${address}\nNonce: ${nonce}`;
+  const url = new URL(env.publicUrl);
+  const msg = new SiweMessage({
+    domain: url.host,
+    address,
+    statement: "aindrive wants you to sign in with your wallet.",
+    uri: env.publicUrl,
+    version: "1",
+    chainId: 1,
+    nonce,
+  });
+  return msg.prepareMessage();
 }

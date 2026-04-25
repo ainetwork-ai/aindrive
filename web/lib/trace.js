@@ -12,6 +12,7 @@
  *                       node server.js 2>&1 | grep '"event":' | jq
  */
 import { createHash } from "node:crypto";
+import { trace as pinoTrace } from "./logger.js";
 
 const ENABLED = process.env.AINDRIVE_TRACE !== "off";
 const RING_MAX = parseInt(process.env.AINDRIVE_TRACE_RING_SIZE || "10000", 10);
@@ -52,7 +53,7 @@ export function writeTrace(entries) {
       ...(raw.extra && { extra: raw.extra }),
     };
     // Structured stdout — pickup by any log shipper
-    try { console.log(JSON.stringify({ level: "info", ns: "aindrive.trace", ...e })); } catch {}
+    try { pinoTrace.info(e, e.event); } catch {}
     // Ring buffer for live API queries
     ring.push(e);
     if (ring.length > RING_MAX) ring.shift();
@@ -66,7 +67,10 @@ export function trace(src, event, extra = {}) {
   writeTrace({ src, event, ...extra });
 }
 
-/** Query the ring buffer. */
+/**
+ * Query the ring buffer.
+ * @param {{ docId?: string; since?: number; limit?: number }} [opts]
+ */
 export function queryRing({ docId, since, limit = 500 } = {}) {
   let out = ring;
   if (docId) out = out.filter((e) => e.docId === docId);

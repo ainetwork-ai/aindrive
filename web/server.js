@@ -4,6 +4,7 @@ import next from "next";
 import { WebSocketServer } from "ws";
 import { onAgentConnect } from "./lib/agents.js";
 import { onDocConnect } from "./lib/dochub.js";
+import { log } from "./lib/logger.js";
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
@@ -25,7 +26,7 @@ server.on("upgrade", (req, socket, head) => {
   if (pathname === "/api/agent/connect") {
     wss.handleUpgrade(req, socket, head, (ws) => {
       onAgentConnect(ws, req, query).catch((e) => {
-        console.error("agent connect error:", e?.message || e);
+        log.error({ err: e?.message || String(e) }, "agent connect error");
         try { ws.close(1011, "internal error"); } catch {}
       });
     });
@@ -34,7 +35,7 @@ server.on("upgrade", (req, socket, head) => {
   if (pathname === "/api/agent/doc") {
     wss.handleUpgrade(req, socket, head, (ws) => {
       onDocConnect(ws, req, query).catch((e) => {
-        console.error("doc connect error:", e?.message || e);
+        log.error({ err: e?.message || String(e) }, "doc connect error");
         try { ws.close(1011, "internal error"); } catch {}
       });
     });
@@ -45,5 +46,5 @@ server.on("upgrade", (req, socket, head) => {
 
 server.listen(port, hostname, () => {
   const shown = hostname === "0.0.0.0" ? "localhost" : hostname;
-  console.log(`▲ aindrive  http://${shown}:${port}`);
+  log.info({ url: `http://${shown}:${port}` }, "▲ aindrive");
 });

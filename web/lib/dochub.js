@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { db } from "./db.js";
 import { jwtVerify } from "jose";
 import { trace } from "./trace.js";
+import { log } from "./logger.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -107,7 +108,7 @@ export async function onDocConnect(ws, req, query) {
   if (!bucket) { bucket = new Set(); hubs.set(docId, bucket); }
   bucket.add(peer);
 
-  console.log(`[doc] sub ${docId} role=${role} (${userId || address || "anon"}) peers=${bucket.size}`);
+  log.info({ docId, role, user: userId || address || "anon", peers: bucket.size }, "[doc] sub");
   try {
     ws.send(JSON.stringify({ t: "sub-ok", role, peers: bucket.size }));
   } catch {}
@@ -133,11 +134,11 @@ export async function onDocConnect(ws, req, query) {
   ws.on("close", () => {
     bucket.delete(peer);
     if (bucket.size === 0) hubs.delete(docId);
-    console.log(`[doc] unsub ${docId} peers=${bucket.size}`);
+    log.info({ docId, peers: bucket.size }, "[doc] unsub");
     try { trace("server", "ws-doc-unsub", { docId, extra: { peers: bucket.size } }); } catch {}
   });
 
-  ws.on("error", (e) => console.warn(`[doc] ws error: ${e.message}`));
+  ws.on("error", (e) => log.warn({ err: e.message }, "[doc] ws error"));
 }
 
 /** Used by the agent's external-edit watcher to invalidate live editors. */

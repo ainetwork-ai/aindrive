@@ -15,28 +15,28 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 10. 🟢 GET / when logged in → renders drives list
 
 ## B. Wallet auth (SIWE-style) (11–20)
-11. 🟢 POST /api/wallet/nonce → returns {nonce, expiresAt}
-12. 🟢 Two consecutive nonces are unique
-13. 🟢 POST /api/wallet/verify with valid sig → 200, cookie set
-14. 🟢 Verify with bad sig → 401
-15. 🟢 Verify with expired nonce → 400
-16. 🟢 Verify reuse of consumed nonce → 400
-17. 🟢 Verify with malformed address → 400
-18. 🟢 GET /api/wallet/me with cookie → returns {address}
-19. 🟢 GET /api/wallet/me without cookie → returns {address: null}
-20. 🟢 Two different signers create independent wallet sessions
+11. 🔴 POST /api/wallet/nonce → returns {nonce, expiresAt}
+12. 🔴 Two consecutive nonces are unique
+13. 🔴 POST /api/wallet/verify with valid sig → 200, cookie set
+14. 🔴 Verify with bad sig → 401
+15. 🔴 Verify with expired nonce → 400
+16. 🔴 Verify reuse of consumed nonce → 400
+17. 🔴 Verify with malformed address → 400
+18. 🔴 GET /api/wallet/me with cookie → returns {address}
+19. 🔴 GET /api/wallet/me without cookie → returns {address: null}
+20. 🔴 Two different signers create independent wallet sessions
 
 ## C. Drives (21–30)
-21. 🟢 Owner creates drive → driveId, agentToken, driveSecret returned
-22. 🟢 Each new drive gets unique namespace_pubkey/secret (Ed25519 keypair)
-23. 🟢 Anonymous POST /api/drives → 401
-24. 🟢 GET /api/drives lists owner's drives
-25. 🟢 Drive listing shows online=true while agent is connected
-26. 🟢 Drive listing shows online=false after agent disconnect
-27. 🟢 POST /api/drives/[id]/rotate → new agentToken issued (owner only)
-28. 🟢 Non-owner cannot rotate
-29. 🟢 GET /d/[id] without session → redirect to /login
-30. 🟢 GET /d/[id] for unauthorized wallet → "no access" message
+21. 🔴 Owner creates drive → driveId, agentToken, driveSecret returned
+22. 🔴 Each new drive gets unique namespace_pubkey/secret (Ed25519 keypair)
+23. 🔴 Anonymous POST /api/drives → 401
+24. 🔴 GET /api/drives lists owner's drives
+25. 🔴 Drive listing shows online=true while agent is connected
+26. 🔴 Drive listing shows online=false after agent disconnect
+27. 🔴 POST /api/drives/[id]/rotate → new agentToken issued (owner only)
+28. 🔴 Non-owner cannot rotate
+29. 🔴 GET /d/[id] without session → redirect to /login
+30. 🔴 GET /d/[id] for unauthorized wallet → "no access" message
 
 ## D. Agent ↔ Server WS (31–40)
 31. 🟢 Agent connects with valid token → "agent connected" log + last_seen_at updated
@@ -68,16 +68,16 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 55. 🟢 delete root denied
 
 ## F. Folder access / wallet allowlist (56–65)
-56. 🟢 Owner adds wallet to / path → folder_access row created with role=viewer
-57. 🟢 Owner adds same wallet twice to same path → 409 UNIQUE conflict
-58. 🟢 Owner adds wallet to deeper path "docs" → only authorizes that subtree
-59. 🟢 Wallet visitor lists / before allowlist → 401/403
-60. 🟢 Wallet visitor lists / after allowlist → 200 with role=viewer
-61. 🟢 Wallet visitor lists subfolder authorized via prefix → 200
-62. 🟢 Wallet visitor lists sibling not under allowed prefix → 403
-63. 🟢 Wallet visitor write attempt with role=viewer → 403
-64. 🟢 Owner revokes wallet → next visitor list returns 401
-65. 🟢 Wallet allowlist add issues a Meadowcap cap (response.cap)
+56. 🔴 Owner adds wallet to / path → folder_access row created with role=viewer
+57. 🔴 Owner adds same wallet twice to same path → 409 UNIQUE conflict
+58. 🔴 Owner adds wallet to deeper path "docs" → only authorizes that subtree
+59. 🔴 Wallet visitor lists / before allowlist → 401/403
+60. 🔴 Wallet visitor lists / after allowlist → 200 with role=viewer
+61. 🔴 Wallet visitor lists subfolder authorized via prefix → 200
+62. 🔴 Wallet visitor lists sibling not under allowed prefix → 403
+63. 🔴 Wallet visitor write attempt with role=viewer → 403
+64. 🔴 Owner revokes wallet → next visitor list returns 401
+65. 🔴 Wallet allowlist add issues a Meadowcap cap (response.cap)
 
 ## G. Shares + paid access (x402) (66–75)
 66. 🟢 Owner creates free share (price_usdc=null) → token returned, GET /api/s/<token> → 200
@@ -101,11 +101,11 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 ## I. Real-time editing (Y.js) (81–90)
 81. 🟢 Single client opens README.md → editor renders content from disk
 82. 🟢 Two clients on same file → typing in one appears in the other
-83. 🟢 Autosave debounce after 5s writes Y.Doc binary + disk text
-84. 🟢 Reload tab → content NOT duplicated (whenReady gating works)
-85. 🟢 External edit (echo > README.md on disk) → fs-changed → editor reload
-86. 🟢 Y.Doc binary persisted in .aindrive/yjs/<docId>.bin
-87. 🟢 Willow Store has yjs_entries row per autosave
+83. 🔴 Autosave debounce after 5s writes Y.Doc binary + disk text
+84. 🔴 Reload tab → content NOT duplicated (whenReady gating works)
+85. 🔴 External edit (echo > README.md on disk) → fs-changed → editor reload
+86. 🔴 Y.Doc binary persisted in .aindrive/yjs/<docId>.bin
+87. 🔴 Willow Store has yjs_entries row per autosave
 88. 🟢 Snapshot compaction triggers after 50 updates → 1 snapshot, 0 updates
 89. 🟢 Awareness: typing in client A shows cursor in client B
 90. 🟢 Read-only client (role=viewer) cannot push sync updates (server drops)

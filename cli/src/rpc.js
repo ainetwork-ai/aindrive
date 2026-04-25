@@ -4,6 +4,8 @@ import path from "node:path";
 import * as Y from "yjs";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
 
+import { log, trace as pinoTrace } from "./logger.js";
+
 // Standard observability — stdout structured logs + optional POST to server's
 // /api/dev/trace ring buffer. NO file writes.
 let _serverUrl = null;
@@ -32,7 +34,7 @@ function cliTrace(_root, docId, event, extra = {}) {
   if (process.env.AINDRIVE_TRACE === "off") return;
   if (!docId) return;
   const evt = { t: Date.now(), src: "cli", docId, event, ...extra };
-  try { console.log(JSON.stringify({ level: "info", ns: "aindrive.trace", ...evt })); } catch {}
+  try { pinoTrace.info(evt, evt.event); } catch {}
   _pending.push(evt);
   flushSoon();
 }
@@ -208,7 +210,7 @@ export async function handleRpc(params, root) {
       const { seq, digest } = appendUpdate(root, docId, data);
       try { cliTrace(root, params.docId, "willow-append", { extra: { docId: params.docId, seq, digest, byteLen: data.length } }); } catch {}
       // Fire-and-forget compaction check — does not block the RPC response
-      maybeCompact(root, docId).catch((e) => console.warn("[yjs-write] maybeCompact error:", e.message));
+      maybeCompact(root, docId).catch((e) => log.warn({ err: e.message }, "[yjs-write] maybeCompact error"));
       // Also write the latest snapshot as a single .bin for fast cold-start reads
       const yjsDir = path.join(root, ".aindrive", "yjs");
       await fsp.mkdir(yjsDir, { recursive: true });
@@ -230,7 +232,7 @@ export async function handleRpc(params, root) {
           try { cliTrace(root, params.docId, "willow-replay", { extra: { docId: params.docId, entries: entries.length, finalByteLen: merged.length } }); } catch {}
           return { method: "yjs-read", data: Buffer.from(merged).toString("base64"), bytes: merged.length };
         }
-      } catch (e) { console.warn("[yjs-read] willow replay failed:", e.message); }
+      } catch (e) { log.warn({ err: e.message }, "[yjs-read] willow replay failed"); }
       // Fallback: legacy .bin snapshot
       const target = path.join(root, ".aindrive", "yjs", `${docId}.bin`);
       try {

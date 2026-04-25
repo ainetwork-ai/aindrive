@@ -17,6 +17,7 @@
 import { listDocs } from "./willow-store.js";
 import Database from "better-sqlite3";
 import { join } from "node:path";
+import { log } from "./logger.js";
 
 const SUMMARY_INTERVAL_MS = 30_000;
 const MAX_DIGESTS_PER_SUMMARY = 100;
@@ -116,7 +117,7 @@ export function attachSync(ws, drive, root) {
     try {
       const summary = buildSummary(root);
       if (summary.docs.length > 0) send(summary);
-    } catch (e) { console.warn("[sync] summary failed:", e.message); }
+    } catch (e) { log.warn({ err: e.message }, "[sync] summary failed"); }
   };
 
   // Periodic summary broadcast
@@ -133,19 +134,19 @@ export function attachSync(ws, drive, root) {
         for (const w of wants) {
           send({ type: "sync-want", docId: w.docId, digests: w.digests });
         }
-      } catch (e) { console.warn("[sync] handle summary:", e.message); }
+      } catch (e) { log.warn({ err: e.message }, "[sync] handle summary"); }
     } else if (frame.type === "sync-want") {
       try {
         const entries = fulfillWant(root, frame.docId, frame.digests);
         if (entries.length > 0) {
           send({ type: "sync-give", docId: frame.docId, entries });
         }
-      } catch (e) { console.warn("[sync] handle want:", e.message); }
+      } catch (e) { log.warn({ err: e.message }, "[sync] handle want"); }
     } else if (frame.type === "sync-give") {
       try {
         const applied = applyGive(root, frame.docId, frame.entries);
-        if (applied > 0) console.log(`[sync] applied ${applied} entries for doc ${frame.docId}`);
-      } catch (e) { console.warn("[sync] handle give:", e.message); }
+        if (applied > 0) log.info({ applied, docId: frame.docId }, "[sync] applied entries");
+      } catch (e) { log.warn({ err: e.message }, "[sync] handle give"); }
     }
   });
 

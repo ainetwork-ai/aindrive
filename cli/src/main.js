@@ -1,48 +1,97 @@
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { Command } from "commander";
 import { cmdLogin } from "./commands/login.js";
 import { cmdServe } from "./commands/serve.js";
 import { cmdRotate } from "./commands/rotate.js";
 import { cmdStatus } from "./commands/status.js";
 
-const HELP = `aindrive — connect a local folder to your aindrive server
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
 
-Usage:
-  aindrive [folder]              Connect the folder (default: .) to the server
-  aindrive login                 Authenticate this machine
-  aindrive status                Show drive id, server URL, connection
-  aindrive rotate-token          Rotate the per-drive agent token
-
-Flags:
-  --server <url>                 Server URL (default: env AINDRIVE_SERVER or http://localhost:3737)
-  --name <name>                  Name for this drive on first pairing
-  --no-open                      Do not open the browser
-`;
+const DEFAULT_SERVER = process.env.AINDRIVE_SERVER || "http://localhost:3737";
 
 export async function runCli(argv) {
-  const args = parseArgs(argv);
-  if (args.flags.help) return console.log(HELP);
-  const cmd = args.positional[0];
-  if (cmd === "login") return cmdLogin(args);
-  if (cmd === "status") return cmdStatus(args);
-  if (cmd === "rotate-token") return cmdRotate(args);
-  const folder = cmd && cmd !== "serve" ? cmd : ".";
-  const dir = resolve(folder);
-  if (!existsSync(dir)) throw new Error(`folder does not exist: ${dir}`);
-  return cmdServe({ ...args, dir });
+  const program = new Command();
+
+  program
+    .name("aindrive")
+    .description("connect a local folder to your aindrive server")
+    .version(version, "--version")
+    .addHelpCommand(false);
+
+  // Global options shared by all subcommands
+  program
+    .option("--server <url>", "server URL", DEFAULT_SERVER)
+    .option("--name <name>", "name for this drive on first pairing")
+    .option("--no-open", "do not open the browser");
+
+  // Default command: serve a folder
+  program
+    .argument("[folder]", "folder to connect (default: .)")
+    .action(async (folder, opts) => {
+      const resolvedFolder = folder || ".";
+      const dir = resolve(resolvedFolder);
+      if (!existsSync(dir)) throw new Error(`folder does not exist: ${dir}`);
+      const args = buildArgs(opts, []);
+      await cmdServe({ ...args, dir });
+    });
+
+  // login subcommand
+  program
+    .command("login")
+    .description("authenticate this machine")
+    .option("--server <url>", "server URL", DEFAULT_SERVER)
+    .option("--email <email>", "email address")
+    .option("--password <password>", "password")
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const mergedOpts = { ...parentOpts, ...opts };
+      await cmdLogin(buildArgs(mergedOpts, ["login"]));
+    });
+
+  // status subcommand
+  program
+    .command("status")
+    .description("show drive id, server URL, connection")
+    .argument("[folder]", "folder to check (default: .)")
+    .option("--server <url>", "server URL", DEFAULT_SERVER)
+    .action(async (folder, opts) => {
+      const parentOpts = program.opts();
+      const mergedOpts = { ...parentOpts, ...opts };
+      const positional = ["status"];
+      if (folder) positional.push(folder);
+      await cmdStatus(buildArgs(mergedOpts, positional));
+    });
+
+  // rotate-token subcommand
+  program
+    .command("rotate-token")
+    .description("rotate the per-drive agent token")
+    .argument("[folder]", "folder with drive config (default: .)")
+    .option("--server <url>", "server URL", DEFAULT_SERVER)
+    .action(async (folder, opts) => {
+      const parentOpts = program.opts();
+      const mergedOpts = { ...parentOpts, ...opts };
+      const positional = ["rotate-token"];
+      if (folder) positional.push(folder);
+      await cmdRotate(buildArgs(mergedOpts, positional));
+    });
+
+  await program.parseAsync(["node", "aindrive", ...argv]);
 }
 
-function parseArgs(argv) {
-  const positional = [];
-  const flags = { server: process.env.AINDRIVE_SERVER || "http://localhost:3737", open: true };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--help" || a === "-h") flags.help = true;
-    else if (a === "--server") flags.server = argv[++i];
-    else if (a === "--name") flags.name = argv[++i];
-    else if (a === "--no-open") flags.open = false;
-    else if (a.startsWith("--")) flags[a.slice(2)] = argv[++i];
-    else positional.push(a);
-  }
-  return { positional, flags };
+/** Build the args shape expected by command files: { flags, positional } */
+function buildArgs(opts, positional) {
+  return {
+    positional,
+    flags: {
+      server: opts.server ?? DEFAULT_SERVER,
+      name: opts.name,
+      open: opts.open !== false,
+      email: opts.email,
+      password: opts.password,
+    },
+  };
 }
