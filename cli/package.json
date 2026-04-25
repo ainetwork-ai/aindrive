@@ -1,6 +1,6 @@
 {
   "name": "aindrive",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local agent for aindrive — connects any folder to a running aindrive web server (local or remote) via an outbound WebSocket. No inbound ports opened on your machine.",
   "keywords": [
     "drive",
