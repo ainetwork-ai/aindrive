@@ -5,7 +5,7 @@
  * `ownerId`. Anyone else is denied (let other policies in the chain decide).
  */
 
-import type { AccessPolicy } from "../../../../../shared/domain/agent/access.js";
+import type { AccessPolicy } from "../../../../../shared/domain/agent/access";
 
 export const ownerPolicy: AccessPolicy = {
   name: "owner",

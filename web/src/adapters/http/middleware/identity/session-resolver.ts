@@ -8,12 +8,12 @@
  * gets to try.
  */
 
-import { verify } from "../../../../../lib/session.js";
+import { verify } from "../../../../../lib/session";
 import type {
   CallerIdentity,
   IdentityResolveInput,
   IdentityResolver,
-} from "../../../../../../shared/domain/agent/access.js";
+} from "../../../../../../shared/domain/agent/access";
 
 export const sessionResolver: IdentityResolver = {
   name: "session",

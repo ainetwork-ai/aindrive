@@ -11,12 +11,12 @@
  * resolver can fall back to other resolvers.
  */
 
-import { decodeAndDescribeCap, bytesToHex } from "../../../../../lib/willow/cap-issue.js";
+import { decodeAndDescribeCap, bytesToHex } from "../../../../../lib/willow/cap-issue";
 import type {
   CallerIdentity,
   IdentityResolveInput,
   IdentityResolver,
-} from "../../../../../../shared/domain/agent/access.js";
+} from "../../../../../../shared/domain/agent/access";
 
 function readCapToken(req: IdentityResolveInput): string | null {
   const auth = req.headers.get("authorization");

@@ -8,13 +8,13 @@
  * existing port = swap one wire. No other file changes.
  */
 
-import { rpcFsBrowser } from "./infra/fs/rpc-fs-browser.js";
-import { fsAgentRepo } from "./infra/agent-repo/fs-agent-repo.js";
-import { rpcAgentExecutor } from "./infra/agent-executor/rpc-agent-executor.js";
-import { accessPolicyFactory } from "./use-cases/agent/policies/factory.js";
-import { sessionResolver } from "./adapters/http/middleware/identity/session-resolver.js";
-import { capBearerResolver } from "./adapters/http/middleware/identity/cap-bearer-resolver.js";
-import { compositeResolver } from "./adapters/http/middleware/identity/composite-resolver.js";
+import { rpcFsBrowser } from "./infra/fs/rpc-fs-browser";
+import { fsAgentRepo } from "./infra/agent-repo/fs-agent-repo";
+import { rpcAgentExecutor } from "./infra/agent-executor/rpc-agent-executor";
+import { accessPolicyFactory } from "./use-cases/agent/policies/factory";
+import { sessionResolver } from "./adapters/http/middleware/identity/session-resolver";
+import { capBearerResolver } from "./adapters/http/middleware/identity/cap-bearer-resolver";
+import { compositeResolver } from "./adapters/http/middleware/identity/composite-resolver";
 
 // ─── infra (concrete impls of domain ports) ────────────────────────────────
 
