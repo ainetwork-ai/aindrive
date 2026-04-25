@@ -119,6 +119,14 @@ export async function onAgentConnect(ws, req, query) {
     let msg;
     try { msg = JSON.parse(data.toString("utf8")); }
     catch { return; }
+    // Agent → server hello: record the device hostname so the UI can show it
+    // next to the drive name (helpful when the user runs `aindrive` on multiple
+    // machines under the same account).
+    if (msg?.type === "agent-hello" && typeof msg.hostname === "string") {
+      const h = msg.hostname.slice(0, 100);
+      try { db.prepare("UPDATE drives SET last_hostname = ? WHERE id = ?").run(h, driveId); } catch {}
+      return;
+    }
     // Agent → server fs.watch notification: forward to live editors as 'reload'.
     if (msg?.type === "fs-changed" && typeof msg.path === "string") {
       const sent = broadcastReload(driveId, msg.path);

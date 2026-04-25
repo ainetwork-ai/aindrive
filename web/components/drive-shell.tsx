@@ -27,10 +27,12 @@ type ShareSummary = {
   price_usdc: number | null;
 };
 
+type DriveSummary = { id: string; name: string; hostname: string | null; online: boolean };
+
 export function DriveShell({ driveId, driveName }: Props) {
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<DriveEntry[]>([]);
-  const [rootFolders, setRootFolders] = useState<DriveEntry[]>([]);
+  const [drives, setDrives] = useState<DriveSummary[]>([]);
   const [role, setRole] = useState<string>("viewer");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -46,15 +48,14 @@ export function DriveShell({ driveId, driveName }: Props) {
     if (!res.ok) { setErr((await res.json()).error || "failed to list"); setLoading(false); return; }
     const { entries, role } = await res.json();
     setEntries(entries); setRole(role); setLoading(false);
-    if (!path) setRootFolders(entries.filter((e: DriveEntry) => e.isDir));
   }, [driveId, path]);
 
-  const loadRootFolders = useCallback(async () => {
-    const res = await fetch(`/api/drives/${driveId}/fs/list?path=`);
+  const loadDrives = useCallback(async () => {
+    const res = await fetch(`/api/drives`);
     if (!res.ok) return;
-    const { entries } = await res.json();
-    setRootFolders(entries.filter((e: DriveEntry) => e.isDir));
-  }, [driveId]);
+    const { drives } = await res.json();
+    setDrives(drives);
+  }, []);
 
   const loadShares = useCallback(async () => {
     const res = await fetch(`/api/drives/${driveId}/shares`);
@@ -62,7 +63,7 @@ export function DriveShell({ driveId, driveName }: Props) {
   }, [driveId]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { loadRootFolders(); }, [loadRootFolders]);
+  useEffect(() => { loadDrives(); }, [loadDrives]);
   useEffect(() => { loadShares(); }, [loadShares]);
 
   // Map: path → paid share (most recent), for badge rendering and ⋮ menu state
@@ -91,8 +92,7 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: target }),
     });
-    if (!res.ok) alert((await res.json()).error);
-    else { load(); loadRootFolders(); }
+    if (!res.ok) alert((await res.json()).error); else load();
   }
 
   async function onUpload(files: FileList | null) {
@@ -131,8 +131,7 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: e.path }),
     });
-    if (!res.ok) toast.error((await res.json()).error);
-    else { load(); loadRootFolders(); }
+    if (!res.ok) toast.error((await res.json()).error); else load();
   }
 
   async function onRename(e: DriveEntry) {
@@ -144,8 +143,7 @@ export function DriveShell({ driveId, driveName }: Props) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: e.path, to: parts.join("/") }),
     });
-    if (!res.ok) toast.error((await res.json()).error);
-    else { load(); loadRootFolders(); }
+    if (!res.ok) toast.error((await res.json()).error); else load();
   }
 
   function onRowAction(entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") {
@@ -172,31 +170,34 @@ export function DriveShell({ driveId, driveName }: Props) {
             <FolderPlus className="w-5 h-5 text-drive-accent" /> New folder
           </button>
         </div>
-        <nav className="mt-3 text-sm space-y-0.5 overflow-y-auto scrollbar-thin">
-          <button
-            onClick={() => setPath("")}
-            className={clsx(
-              "w-full flex items-center gap-2 px-3 py-2 rounded-full text-left",
-              !path && "bg-drive-selected",
-            )}
-          >
-            <HardDrive className="w-4 h-4 text-drive-accent shrink-0" />
-            <span className="truncate font-medium">{driveName}</span>
-          </button>
-          {rootFolders.map((f) => {
-            const active = path === f.path || path.startsWith(f.path + "/");
+        <div className="mt-3 px-3 text-xs uppercase tracking-wide text-drive-muted">My drives</div>
+        <nav className="mt-1 text-sm space-y-0.5 overflow-y-auto scrollbar-thin">
+          {drives.map((d) => {
+            const active = d.id === driveId;
             return (
-              <button
-                key={f.path}
-                onClick={() => setPath(f.path)}
+              <Link
+                key={d.id}
+                href={`/d/${d.id}`}
                 className={clsx(
-                  "w-full flex items-center gap-2 pl-6 pr-3 py-1.5 rounded-full text-left",
+                  "w-full flex items-center gap-2 px-3 py-1.5 rounded-2xl",
                   active ? "bg-drive-selected" : "hover:bg-drive-hover",
                 )}
               >
-                <Folder className="w-4 h-4 text-drive-accent shrink-0" />
-                <span className="truncate">{f.name}</span>
-              </button>
+                <HardDrive className="w-4 h-4 text-drive-accent shrink-0" />
+                <span className="flex-1 min-w-0">
+                  <span className="block truncate">{d.name}</span>
+                  {d.hostname && (
+                    <span className="block truncate text-xs text-drive-muted">{d.hostname}</span>
+                  )}
+                </span>
+                <span
+                  className={clsx(
+                    "w-2 h-2 rounded-full shrink-0",
+                    d.online ? "bg-emerald-500" : "bg-drive-muted/40",
+                  )}
+                  title={d.online ? "agent online" : "agent offline"}
+                />
+              </Link>
             );
           })}
         </nav>

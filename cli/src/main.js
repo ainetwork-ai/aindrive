@@ -6,6 +6,7 @@ import { cmdLogin } from "./commands/login.js";
 import { cmdServe } from "./commands/serve.js";
 import { cmdRotate } from "./commands/rotate.js";
 import { cmdStatus } from "./commands/status.js";
+import { cmdMcp } from "./commands/mcp.js";
 import { readGlobalCreds, readDriveConfig } from "./config.js";
 
 const require = createRequire(import.meta.url);
@@ -88,6 +89,19 @@ export async function runCli(argv) {
       const positional = ["rotate-token"];
       if (folder) positional.push(folder);
       await cmdRotate(buildArgs(mergedOpts, positional));
+    });
+
+  // mcp subcommand — run an MCP server (stdio) exposing this owner's drives
+  // and aindrive operations to AI assistants (Claude Code, Claude Desktop, …).
+  program
+    .command("mcp")
+    .description("run a Model Context Protocol stdio server for aindrive")
+    .option("--server <url>", "server URL", DEFAULT_SERVER)
+    .action(async (opts) => {
+      const parentOpts = program.opts();
+      const mergedOpts = { ...parentOpts, ...opts };
+      const args = buildArgs(mergedOpts, ["mcp"]);
+      await cmdMcp(args);
     });
 
   await program.parseAsync(["node", "aindrive", ...argv]);

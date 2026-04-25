@@ -4,7 +4,7 @@
 
 aindrive is a self-hosted-with-zero-network-exposure Drive replacement.
 Owner runs the `aindrive` CLI in any folder; that folder becomes
-browseable via a Vercel-hosted web UI. Files never leave owner's
+browseable via a hosted Next.js web UI. Files never leave owner's
 machine — the CLI dials out over WSS, no inbound port opens.
 
 ## Protocol stack

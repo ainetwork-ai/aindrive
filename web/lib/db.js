@@ -93,6 +93,7 @@ function open() {
     "ALTER TABLE drives ADD COLUMN namespace_pubkey BLOB",
     "ALTER TABLE drives ADD COLUMN namespace_secret BLOB",
     "ALTER TABLE folder_access ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
+    "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;

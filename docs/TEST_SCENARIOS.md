@@ -39,32 +39,32 @@ Status legend: ⬜ pending · 🟢 pass · 🔴 fail · ⚪ skipped
 30. 🟢 GET /d/[id] for unauthorized wallet → "no access" message
 
 ## D. Agent ↔ Server WS (31–40)
-31. 🔴 Agent connects with valid token → "agent connected" log + last_seen_at updated
+31. 🟢 Agent connects with valid token → "agent connected" log + last_seen_at updated
 32. 🟢 Agent connects with bad token → close 4401
 33. 🟢 Two simultaneous agents for same drive both stay connected (multi-device)
-34. 🔴 Agent disconnect cleans up entry from agents map
-35. 🔴 Heartbeat updates last_seen_at every 20s
-36. 🔴 Server forwards fs RPC request → agent responds → server returns 200
+34. 🟢 Agent disconnect cleans up entry from agents map
+35. 🟢 Heartbeat updates last_seen_at every 20s
+36. 🟢 Server forwards fs RPC request → agent responds → server returns 200
 37. 🟢 RPC method allowlist: invalid method → "unknown method"
-38. 🔴 Agent rejects forged sig → drops request silently
+38. 🟢 Agent rejects forged sig → drops request silently
 39. 🟢 Path traversal: list "../../etc" → "path escapes drive root"
-40. 🔴 Hidden files (.git, .DS_Store, .aindrive) excluded from list
+40. 🟢 Hidden files (.git, .DS_Store, .aindrive) excluded from list
 
 ## E. FS operations (41–55)
 41. 🔴 list root → all visible entries with size + mtime
-42. 🔴 list subfolder → only that folder's entries
-43. 🔴 list non-existent path → ENOENT bubbled
-44. 🔴 stat existing file → entry with isDir=false, size matching
-45. 🔴 stat folder → isDir=true
+42. 🟢 list subfolder → only that folder's entries
+43. 🟢 list non-existent path → ENOENT bubbled
+44. 🟢 stat existing file → entry with isDir=false, size matching
+45. 🟢 stat folder → isDir=true
 46. 🟢 stat non-existent → entry: null
-47. 🔴 read text file utf8 → content matches disk
-48. 🔴 read binary file base64 → decoded matches disk bytes
-49. 🔴 read directory → "is a directory" error
-50. 🔴 write new file → file appears on disk + appears in next list
-51. 🔴 write existing file → overwrites
-52. 🔴 mkdir nested → creates intermediate dirs
-53. 🔴 rename file → old gone, new exists with same content
-54. 🔴 delete file → removed from disk + list
+47. 🟢 read text file utf8 → content matches disk
+48. 🟢 read binary file base64 → decoded matches disk bytes
+49. 🟢 read directory → "is a directory" error
+50. 🟢 write new file → file appears on disk + appears in next list
+51. 🟢 write existing file → overwrites
+52. 🟢 mkdir nested → creates intermediate dirs
+53. 🟢 rename file → old gone, new exists with same content
+54. 🟢 delete file → removed from disk + list
 55. 🟢 delete root denied
 
 ## F. Folder access / wallet allowlist (56–65)

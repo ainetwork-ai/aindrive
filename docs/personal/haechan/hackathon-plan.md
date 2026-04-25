@@ -425,7 +425,7 @@ T+24:00  발표
 | *"왜 자체 cap 시스템도?"* | *"외부 A2A 클라이언트는 표준 x402로 호출, aindrive에서 폴더 산 buyer는 Meadowcap capability로 결제 면제 — 두 트랙 공존. 어느 쪽도 walled garden 아님."* |
 | *"Willow Protocol 어디?"* | *"Meadowcap(Willow의 권한 레이어)을 공식 구현(`@earthstar/meadowcap`)으로 사용. Willow Data Model과 WGPS 풀 sync는 다음 마일스톤."* |
 | *"owner OpenAI 비용 폭주?"* | *"Cap-bearer 호출은 drive당 분당 60회 / 일당 1000회 토큰버킷. 외부 호출은 호출당 결제라 자체 정산."* |
-| *"Vercel WSS 5분 한계?"* | *"현재는 자체 호스팅 시연. 프로덕션은 always-on relay(Fly/Railway) + Vercel UI 분리가 다음 단계."* |
+| *"호스팅 WSS 타임아웃?"* | *"현재는 자체 호스팅 시연. 프로덕션은 always-on relay(Fly/Railway) + 분리된 UI 호스트가 다음 단계."* |
 
 ---
 

@@ -14,6 +14,7 @@ export async function GET() {
     drives: drives.map((d) => ({
       id: d.id,
       name: d.name,
+      hostname: d.last_hostname ?? null,
       lastSeenAt: d.last_seen_at,
       createdAt: d.created_at,
       online: isOnline(d.id),

@@ -4,9 +4,10 @@
  * Immutable: id, driveId, ownerId, namespacePub, createdAt.
  * Editable:  name, description, persona, folder, knowledge, llm, access.
  *
- * apiKey semantics:
+ * apiKey / persona semantics:
  *   - undefined in patch  → keep existing
- *   - "" (empty)           → clear existing (use server env fallback)
+ *   - "" (empty)           → clear existing (apiKey falls back to env;
+ *                            persona falls back to DEFAULT_AGENT_PERSONA)
  *   - non-empty           → replace
  */
 

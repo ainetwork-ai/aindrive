@@ -28,6 +28,7 @@ export const drives = sqliteTable("drives", {
   agent_token_hash: text("agent_token_hash").notNull(),
   drive_secret: text("drive_secret").notNull(),
   last_seen_at: text("last_seen_at"),
+  last_hostname: text("last_hostname"),
   created_at: text("created_at")
     .notNull()
     .default(sql`(datetime('now'))`),
