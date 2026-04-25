@@ -118,7 +118,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
         setCreated({
           agent: a,
           askUrl: `${window.location.origin}/api/drives/${a.driveId}/agents/${a.id}/ask`,
-          cardUrl: `${window.location.origin}/.well-known/agent-card/${a.driveId}/${a.id}`,
+          cardUrl: `${window.location.origin}/api/drives/${a.driveId}/agents/${a.id}/.well-known/agent-card.json`,
         });
         toast.success("Agent created");
       }

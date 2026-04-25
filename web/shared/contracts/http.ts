@@ -93,38 +93,67 @@ export type PaymentRequiredResponse = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────
-// 4. Agent Card security scheme IDs (Track B owns; Track C displays)
+// 4. Agent Card — A2A v1 spec-conformant subset
+//    Spec: https://a2a-protocol.org/latest/specification/
+//    Discovery: https://a2a-protocol.org/latest/topics/agent-discovery/
+//      → published at {agent-base-url}/.well-known/agent-card.json
 // ─────────────────────────────────────────────────────────────────────────
 
-export const SCHEME_X402 = "x402-payment";
-export const SCHEME_CAP  = "aindrive-cap";
+/** Bearer-style auth backed by a Meadowcap capability. */
+export const SCHEME_CAP = "aindrive-cap";
 
 /**
- * Subset of A2A v1 AgentCard JSON published at
- * GET /.well-known/agent-card/[id].json
- *
- * Spec: https://a2a-protocol.org/latest/specification/
+ * Spec-aligned AgentCard. Field names follow A2A v1 (camelCase from the
+ * proto). Only the subset we actually emit today is typed; optional spec
+ * fields we don't use are simply absent rather than `null`.
  */
 export type AindriveAgentCard = {
   name: string;
   description: string;
   version: string;
+  documentationUrl?: string;
+  iconUrl?: string;
+  /** Self-link to this card; useful for clients verifying the URL they followed. */
+  url?: string;
+  provider?: {
+    organization: string;
+    url: string;
+  };
   supportedInterfaces: Array<{
     url: string;
     protocolBinding: "HTTP+JSON" | "JSONRPC" | "GRPC";
     protocolVersion: string;
   }>;
-  capabilities: { streaming: boolean; pushNotifications: boolean };
-  securitySchemes: {
-    [SCHEME_X402]: { type: "custom"; spec: string };
-    [SCHEME_CAP]:  { type: "http"; scheme: "bearer"; description: string };
+  capabilities: {
+    streaming: boolean;
+    pushNotifications: boolean;
+    stateTransitionHistory?: boolean;
+    extendedAgentCard?: boolean;
   };
+  /**
+   * Per A2A v1 / OpenAPI 3.0: a map of scheme name → SecurityScheme object.
+   * Only OpenAPI-standard types are used (`http` with `scheme: "bearer"`),
+   * so generic A2A clients can authenticate without custom code.
+   */
+  securitySchemes: Record<
+    string,
+    {
+      type: "http" | "apiKey" | "oauth2" | "openIdConnect" | "mutualTLS";
+      scheme?: "bearer" | "basic";
+      bearerFormat?: string;
+      description?: string;
+    }
+  >;
+  /** Empty array = no auth required. */
   security: Array<Record<string, string[]>>;
   skills: Array<{
     id: string;
     name: string;
     description: string;
     tags: string[];
+    examples?: string[];
+    inputModes?: string[];
+    outputModes?: string[];
   }>;
   defaultInputModes: string[];
   defaultOutputModes: string[];
