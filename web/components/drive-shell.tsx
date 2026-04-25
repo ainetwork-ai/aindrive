@@ -243,10 +243,12 @@ export function DriveShell({ driveId, driveName }: Props) {
                         )}
                         onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
                       >
-                        <td className="py-2 flex items-center gap-3 min-w-0">
-                          <EntryIcon entry={e} />
-                          <span className="truncate">{e.name}</span>
-                          {paid && <X402Badge price={paid.price_usdc!} />}
+                        <td className="py-2 align-middle">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <EntryIcon entry={e} />
+                            <span className="truncate">{e.name}</span>
+                            {paid && <X402Badge price={paid.price_usdc!} />}
+                          </div>
                         </td>
                         <td className="py-2 hidden sm:table-cell text-drive-muted">
                           {new Date(e.mtimeMs).toLocaleString()}
