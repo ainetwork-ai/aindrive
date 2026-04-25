@@ -106,6 +106,83 @@ web/src/composition.ts
 
 ---
 
+## 저장: file-based, no DB
+
+agent 메타데이터는 **drive 안에 JSON 파일로** 둔다. SQLite/Postgres 마이그레이션 없음.
+
+```
+<drive>/.aindrive/agents/<agentId>.json
+```
+
+### 파일 한 개 예시
+```json
+{
+  "id": "agt_8f2a1c",
+  "driveId": "drv_xxx",
+  "ownerId": "usr_yyy",
+  "folder": "docs",
+  "name": "OKR Bot",
+  "description": "Q1 OKR 문서 위에서 답하는 에이전트",
+  "namespacePub": "<base64url 32 bytes>",
+  "createdAt": 1745000000000
+}
+```
+
+### 왜 이게 좋은가
+- DB 스키마/마이그레이션 X — 신규 트랙이 `agents` 테이블 추가할 필요 없음
+- agent가 drive와 함께 이동·공유됨 — 폴더 export·복사 시 메타도 따라감
+- cap 권한 자연스럽게 적용 — `.aindrive/agents/` 도 drive 안이라 cap이 커버
+- 미래에 Willow 동기화하면 agent 정의도 자동 sync (별도 동기화 코드 불필요)
+
+### 호환성 메모
+- CLI의 `cli/src/rpc.js` 의 `HIDDEN`은 *parent를 list할 때*만 `.aindrive`를 숨김.
+  `list/.aindrive/agents` 직접 호출은 정상 동작.
+- `write` RPC는 `mkdir -p`를 자동으로 함 (`fsp.mkdir(path.dirname(abs), {recursive: true})`).
+  첫 agent 생성 시 `.aindrive/agents/` 디렉토리 자동 생성.
+- v1엔 lock 없음 — owner 1명이 만드므로 race 없음. 나중에 멀티-device sync 시 별도 처리.
+
+### `FsAgentRepo` (v1 impl)
+```ts
+// web/src/infra/agent-repo/fs-agent-repo.ts
+const AGENT_DIR = ".aindrive/agents";
+
+export const fsAgentRepo = (fs: FsBrowser): AgentRepo => ({
+  async byId(driveId, id) {
+    try {
+      const json = await fs.read(driveId, `${AGENT_DIR}/${id}.json`);
+      return deserializeAgent(JSON.parse(json));
+    } catch (e) { return null; } // ENOENT → null
+  },
+  async listByDrive(driveId) {
+    const entries = await fs.list(driveId, AGENT_DIR).catch(() => []);
+    return Promise.all(
+      entries.filter(e => !e.isDir && e.path.endsWith(".json"))
+        .map(e => fs.read(driveId, e.path).then(j => deserializeAgent(JSON.parse(j))))
+    );
+  },
+  async create(input) {
+    const id = `agt_${nanoid(8)}`;
+    const agent = { ...input, id, createdAt: Date.now() };
+    await fs.write(driveId, `${AGENT_DIR}/${id}.json`, JSON.stringify(serializeAgent(agent), null, 2));
+    return agent;
+  }
+});
+
+// namespacePub Uint8Array <-> base64url 직렬화 함수 따로
+```
+
+### HTTP 라우트는 `driveId`를 항상 URL에 가짐
+```
+POST   /api/drives/[driveId]/agents              create
+GET    /api/drives/[driveId]/agents              list
+POST   /api/drives/[driveId]/agents/[id]/ask     ★ 핵심
+GET    /api/drives/[driveId]/agents/[id]/card    A2A agent card JSON
+```
+
+내일 well-known A2A discovery 추가 시: `/.well-known/agent-card?drive=X&id=Y` redirect.
+
+---
+
 ## v1 KnowledgeBase 구체 (`DumpAllTextKb`)
 
 ```ts

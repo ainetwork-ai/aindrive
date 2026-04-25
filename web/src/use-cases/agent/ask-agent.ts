@@ -31,6 +31,7 @@ import type {
   AgentId,
   AskRequest,
   AskResult,
+  DriveId,
 } from "../../../../shared/domain/agent/types.js";
 
 export type AskAgentDeps = {
@@ -42,6 +43,7 @@ export type AskAgentDeps = {
 };
 
 export type AskAgentInput = {
+  driveId: DriveId;
   agentId: AgentId;
   askRequest: AskRequest;
   http: IdentityResolveInput;
@@ -57,7 +59,7 @@ export async function askAgent(
   deps: AskAgentDeps,
   input: AskAgentInput,
 ): Promise<AskAgentOutput> {
-  const agent = await deps.agents.byId(input.agentId);
+  const agent = await deps.agents.byId(input.driveId, input.agentId);
   if (!agent) return { kind: "denied", reason: "agent_not_found" };
 
   const caller = await deps.identityResolver.resolve(input.http);

@@ -19,8 +19,19 @@ import type { Agent, AgentId, DriveId, NewAgentInput } from "./types.js";
 
 // ─── Persistence ───────────────────────────────────────────────────────────
 
+/**
+ * Where agent metadata lives. v1 stores each agent as a JSON file inside
+ * the drive itself at <drive>/.aindrive/agents/<id>.json — no separate DB,
+ * no migration, agent travels with the drive on export/sync.
+ *
+ * Future impls (e.g. Willow-backed, Postgres-backed) implement the same
+ * interface; consumers only see the port.
+ *
+ * `byId` takes driveId because each impl scopes by drive (the file lives
+ * inside that drive's tree). HTTP routes always carry driveId in the URL.
+ */
 export interface AgentRepo {
-  byId(id: AgentId): Promise<Agent | null>;
+  byId(driveId: DriveId, id: AgentId): Promise<Agent | null>;
   listByDrive(driveId: DriveId): Promise<Agent[]>;
   create(input: NewAgentInput): Promise<Agent>;
 }
@@ -77,11 +88,16 @@ export type FileEntry = {
 };
 
 /**
- * Minimal read-side filesystem port for KnowledgeBase impls. Concrete
- * impl in v1 forwards to the existing CLI agent over WSS RPC
- * (`sendRpc(driveId, {method:"list"|"read", ...})`).
+ * Minimal filesystem port. Two consumers:
+ *   - KnowledgeBase impls (read drive content as knowledge)
+ *   - FsAgentRepo (read/write agent metadata under .aindrive/agents/)
+ *
+ * Concrete impl in v1 forwards to the existing CLI agent over WSS RPC
+ * (`sendRpc(driveId, {method:"list"|"read"|"write", ...})`). Write
+ * implicitly mkdirs parents — same as the underlying RPC.
  */
 export interface FsBrowser {
   list(driveId: DriveId, path: string): Promise<FileEntry[]>;
   read(driveId: DriveId, path: string, maxBytes?: number): Promise<string>;
+  write(driveId: DriveId, path: string, content: string): Promise<void>;
 }
