@@ -1,0 +1,37 @@
+{
+  "name": "aindrive",
+  "version": "0.1.0",
+  "description": "Local agent for aindrive — connects any folder to a running aindrive web server (local or remote) via an outbound WebSocket. No inbound ports opened on your machine.",
+  "keywords": [
+    "drive",
+    "tunnel",
+    "file-manager",
+    "self-hosted",
+    "cli"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "aindrive": "./bin/aindrive.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "scripts": {
+    "start": "node bin/aindrive.mjs"
+  },
+  "dependencies": {
+    "@earthstar/meadowcap": "npm:@jsr/earthstar__meadowcap@^0.6.4",
+    "@earthstar/willow": "npm:@jsr/earthstar__willow@^0.6.1",
+    "@earthstar/willow-utils": "npm:@jsr/earthstar__willow-utils@^2.0.1",
+    "better-sqlite3": "^12.9.0",
+    "mime-types": "^2.1.35",
+    "undici": "^7.2.0",
+    "ws": "^8.18.0",
+    "yjs": "^13.6.30"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
