@@ -15,7 +15,10 @@ import { getDrive, getDriveNamespace } from "@/lib/drives";
 import { compose } from "@/src/composition";
 import { createAgent } from "@/src/use-cases/agent/create-agent";
 import type { Agent } from "@/shared/domain/agent/types";
-import { requireLift } from "@/lib/x402-lift-gate";
+import { getUserTier, TIER_MULTIPLIER, TIER_PRICE_AIN } from "@/lib/tier";
+
+// Free owners get a small per-drive agent budget; Pro/Max scale via TIER_MULTIPLIER.
+const AGENT_BASE_LIMIT_PER_DRIVE = 2;
 
 const Body = z.object({
   folder: z.string().max(1024).default(""),
@@ -61,17 +64,30 @@ export async function POST(
   }
   const body = parsed.data;
 
-  // Local LLM providers (currently gemma-vllm) are gated behind a one-time
-  // x402 AIN payment per drive owner. The gate accepts an X-PAYMENT header
-  // for inline pay, falls back to wallet-cookie lookup, and otherwise
-  // returns 402 with the v2 PaymentRequirements.
-  if (body.llm.provider === "gemma-vllm") {
-    const gate = await requireLift(req, {
-      scope: "gemma_agent",
-      priceAin: 5,
-      description: "aindrive: enable Gemma local-vLLM agent",
-    });
-    if (!gate.ok) return gate.response;
+  // Tiered usage cap on agent count per drive. Owners stay free until they
+  // hit the small base budget, then upgrade Pro/Max via /api/x402/lift?scope=tier:pro|max
+  // (see /api/me/tier for current tier + upgrade URLs).
+  const { tier, expiresAt } = await getUserTier(req);
+  const agentLimit = AGENT_BASE_LIMIT_PER_DRIVE * TIER_MULTIPLIER[tier];
+  const existing = await compose.agents.listByDrive(driveId);
+  if (existing.length >= agentLimit) {
+    return NextResponse.json(
+      {
+        error: "agent_limit_reached",
+        tier,
+        limit: agentLimit,
+        current: existing.length,
+        tierExpiresAt: expiresAt,
+        upgrade: tier === "max" ? null : {
+          to: tier === "free" ? "pro" : "max",
+          priceAin: tier === "free" ? TIER_PRICE_AIN.pro : TIER_PRICE_AIN.max,
+          url: tier === "free"
+            ? `/api/x402/lift?scope=tier:pro&priceAin=${TIER_PRICE_AIN.pro}`
+            : `/api/x402/lift?scope=tier:max&priceAin=${TIER_PRICE_AIN.max}`,
+        },
+      },
+      { status: 429 },
+    );
   }
 
   const out = await createAgent(compose.createAgent, {
