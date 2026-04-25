@@ -22,10 +22,6 @@ import { firstAllow } from "./compose.js";
 const REGISTRY: Record<string, AccessPolicy> = {
   owner: ownerPolicy,
   "cap-holder": capHolderPolicy,
-  // future:
-  // "x402-payer":  x402PaymentPolicy,
-  // "subscriber":  subscriptionPolicy,
-  // "public":      publicPolicy,
 };
 
 export const accessPolicyFactory: AccessPolicyFactory = {

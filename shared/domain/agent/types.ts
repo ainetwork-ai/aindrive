@@ -18,6 +18,12 @@ export type AgentId = string;
 export type DriveId = string;
 export type UserId = string;
 
+export const AGENT_ID_PREFIX = "agt_";
+const AGENT_ID_REGEX = /^agt_[A-Za-z0-9_-]{6,32}$/;
+export function isAgentId(s: unknown): s is AgentId {
+  return typeof s === "string" && AGENT_ID_REGEX.test(s);
+}
+
 /**
  * Per-agent LLM configuration. Stored in the drive's agent JSON file.
  *
@@ -105,9 +111,9 @@ export type AskRequest = {
 
 export type Source = {
   path: string;
-  lineStart: number;
-  lineEnd: number;
   snippet: string;
+  lineStart?: number;
+  lineEnd?: number;
 };
 
 export type AskResult = {

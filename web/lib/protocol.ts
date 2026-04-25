@@ -22,9 +22,9 @@ export type RpcParams =
 
 export type AskSource = {
   path: string;
-  lineStart: number;
-  lineEnd: number;
   snippet: string;
+  lineStart?: number;
+  lineEnd?: number;
 };
 
 export type DriveEntry = {

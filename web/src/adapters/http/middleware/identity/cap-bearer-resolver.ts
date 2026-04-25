@@ -11,7 +11,7 @@
  * resolver can fall back to other resolvers.
  */
 
-import { decodeAndDescribeCap } from "../../../../../lib/willow/cap-issue.js";
+import { decodeAndDescribeCap, bytesToHex } from "../../../../../lib/willow/cap-issue.js";
 import type {
   CallerIdentity,
   IdentityResolveInput,
@@ -21,13 +21,7 @@ import type {
 function readCapToken(req: IdentityResolveInput): string | null {
   const auth = req.headers.get("authorization");
   if (auth && auth.startsWith("Bearer ")) return auth.slice(7).trim();
-  const cookieCap = req.cookies.get("aindrive_cap");
-  if (cookieCap) return cookieCap;
-  return null;
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("hex");
+  return req.cookies.get("aindrive_cap") ?? null;
 }
 
 export const capBearerResolver: IdentityResolver = {
@@ -45,8 +39,8 @@ export const capBearerResolver: IdentityResolver = {
 
     return {
       kind: "cap-bearer",
-      recipientHex: toHex(decoded.receiverPub),
-      namespacePubHex: toHex(decoded.namespacePub),
+      recipientHex: bytesToHex(decoded.receiverPub),
+      namespacePubHex: bytesToHex(decoded.namespacePub),
       pathPrefix: decoded.pathPrefix,
       expiresAt,
     };

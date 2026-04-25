@@ -8,28 +8,19 @@
  * gets to try.
  */
 
-import { jwtVerify } from "jose";
-import { env } from "../../../../../lib/env.js";
+import { verify } from "../../../../../lib/session.js";
 import type {
   CallerIdentity,
   IdentityResolveInput,
   IdentityResolver,
 } from "../../../../../../shared/domain/agent/access.js";
 
-const enc = new TextEncoder();
-
 export const sessionResolver: IdentityResolver = {
   name: "session",
   async resolve(req: IdentityResolveInput): Promise<CallerIdentity> {
     const token = req.cookies.get("aindrive_session");
     if (!token) return { kind: "anonymous" };
-    try {
-      const { payload } = await jwtVerify(token, enc.encode(env.sessionSecret));
-      const userId = typeof payload.sub === "string" ? payload.sub : null;
-      if (!userId) return { kind: "anonymous" };
-      return { kind: "session-user", userId };
-    } catch {
-      return { kind: "anonymous" };
-    }
+    const userId = await verify(token);
+    return userId ? { kind: "session-user", userId } : { kind: "anonymous" };
   },
 };

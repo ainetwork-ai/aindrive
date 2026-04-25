@@ -8,20 +8,8 @@
  */
 
 import type { AccessPolicy } from "../../../../../shared/domain/agent/access.js";
-
-/**
- * "ancestor" means the cap's pathPrefix is "" (whole drive) or
- * equals the agent's folder, or the agent's folder starts with
- * `pathPrefix + "/"`. Same semantics as Willow's path-prefix area.
- */
-function pathCovers(prefix: string, target: string): boolean {
-  if (prefix === "" || prefix === target) return true;
-  return target.startsWith(prefix + "/");
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("hex");
-}
+import { pathCovers } from "../../../../../shared/domain/policy/path.js";
+import { bytesToHex } from "../../../../lib/willow/cap-issue.js";
 
 export const capHolderPolicy: AccessPolicy = {
   name: "cap-holder",
@@ -32,7 +20,7 @@ export const capHolderPolicy: AccessPolicy = {
     if (caller.expiresAt <= Date.now()) {
       return { kind: "deny", reason: "cap_expired" };
     }
-    if (caller.namespacePubHex !== toHex(agent.namespacePub)) {
+    if (caller.namespacePubHex !== bytesToHex(agent.namespacePub)) {
       return { kind: "deny", reason: "cap_namespace_mismatch" };
     }
     if (!pathCovers(caller.pathPrefix, agent.folder)) {

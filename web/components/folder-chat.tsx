@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Send, Loader2, MessageSquare, X } from "lucide-react";
+import { pathCovers } from "../../shared/domain/policy/path";
 
 /**
  * Folder Chat sidebar — picks one agent from the drive (defaults to
@@ -22,10 +23,12 @@ type AgentSummary = {
 
 type Source = {
   path: string;
-  lineStart: number;
-  lineEnd: number;
   snippet: string;
+  lineStart?: number;
+  lineEnd?: number;
 };
+
+const MAX_MSGS = 100;
 
 type Msg =
   | { role: "user"; text: string }
@@ -82,12 +85,16 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs.length]);
 
-  const selectedAgent = agents?.find((a) => a.id === agentId);
+  const selectedAgent = useMemo(
+    () => agents?.find((a) => a.id === agentId) ?? null,
+    [agents, agentId],
+  );
 
   async function ask() {
     const q = input.trim();
     if (!q || !agentId || busy) return;
-    setMsgs((m) => [...m, { role: "user", text: q }]);
+    const append = (msg: Msg) => setMsgs((m) => [...m, msg].slice(-MAX_MSGS));
+    append({ role: "user", text: q });
     setInput("");
     setBusy(true);
     try {
@@ -102,15 +109,12 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
           data.error === "rate_limited"
             ? `Rate limited (retry in ${Math.ceil((data.retryAfterMs ?? 0) / 1000)}s)`
             : data.error || `HTTP ${r.status}`;
-        setMsgs((m) => [...m, { role: "error", text: err }]);
+        append({ role: "error", text: err });
         return;
       }
-      setMsgs((m) => [
-        ...m,
-        { role: "agent", text: data.answer, sources: data.sources ?? [], policyName: data.policyName },
-      ]);
+      append({ role: "agent", text: data.answer, sources: data.sources ?? [], policyName: data.policyName });
     } catch (e) {
-      setMsgs((m) => [...m, { role: "error", text: (e as Error).message }]);
+      append({ role: "error", text: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -255,13 +259,7 @@ function EmptyState({ isOwner }: { isOwner?: boolean }) {
 }
 
 function pickAgentForFolder(agents: AgentSummary[], folder: string): AgentSummary | null {
-  // Prefer the most-specific (longest) folder that is an ancestor of `folder`.
-  const candidates = agents.filter((a) => folderCovers(a.folder, folder));
+  const candidates = agents.filter((a) => pathCovers(a.folder, folder));
   candidates.sort((a, b) => b.folder.length - a.folder.length);
   return candidates[0] ?? null;
-}
-
-function folderCovers(prefix: string, target: string): boolean {
-  if (prefix === "" || prefix === target) return true;
-  return target.startsWith(prefix + "/");
 }

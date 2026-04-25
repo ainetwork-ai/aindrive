@@ -21,6 +21,8 @@ const AGENT_DIR = ".aindrive/agents";
 
 export async function runAgentAsk({ root, agentId, query }) {
   if (typeof agentId !== "string" || !/^agt_[A-Za-z0-9_-]{6,32}$/.test(agentId)) {
+    // Mirrors shared/domain/agent/types.ts isAgentId. Inlined here because
+    // CLI is plain ESM JS and doesn't compile shared/*.ts.
     throw new Error(`bad_agent_id:${agentId}`);
   }
   if (typeof query !== "string" || query.length === 0) {
@@ -51,12 +53,15 @@ export async function runAgentAsk({ root, agentId, query }) {
 
   return {
     answer,
-    sources: chunks.map((c) => ({
-      path: c.path,
-      lineStart: c.lineStart ?? 1,
-      lineEnd: c.lineEnd ?? 1,
-      snippet: c.text.length > 280 ? c.text.slice(0, 280) + "…" : c.text,
-    })),
+    sources: chunks.map((c) => {
+      const src = {
+        path: c.path,
+        snippet: c.text.length > 280 ? c.text.slice(0, 280) + "…" : c.text,
+      };
+      if (typeof c.lineStart === "number") src.lineStart = c.lineStart;
+      if (typeof c.lineEnd === "number") src.lineEnd = c.lineEnd;
+      return src;
+    }),
   };
 }
 

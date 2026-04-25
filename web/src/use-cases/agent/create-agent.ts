@@ -18,6 +18,12 @@ import type {
   LlmConfig,
   UserId,
 } from "../../../../shared/domain/agent/types.js";
+import { isSystemPath } from "../../../../shared/domain/policy/system-paths.js";
+import {
+  isKnowledgeStrategy,
+  isLlmProvider,
+  isPolicyName,
+} from "../../../../shared/domain/agent/registry.js";
 
 export type CreateAgentDeps = { agents: AgentRepo };
 
@@ -43,10 +49,6 @@ const NAME_MAX = 80;
 const DESC_MAX = 500;
 const FOLDER_MAX = 1024;
 
-const KNOWLEDGE_STRATEGIES = new Set(["dump-all-text"]);
-const LLM_PROVIDERS = new Set(["openai", "flock"]);
-const POLICY_NAMES = new Set(["owner", "cap-holder"]);
-
 export async function createAgent(
   deps: CreateAgentDeps,
   input: CreateAgentInput,
@@ -64,16 +66,13 @@ export async function createAgent(
   if (folder.includes("..") || folder.startsWith("/")) {
     return reject("folder_invalid");
   }
-  // .aindrive is reserved — agents about their own metadata == confusion.
-  if (folder === ".aindrive" || folder.startsWith(".aindrive/")) {
-    return reject("folder_reserved");
-  }
+  if (isSystemPath(folder)) return reject("folder_reserved");
 
-  if (!input.knowledge || !KNOWLEDGE_STRATEGIES.has(input.knowledge.strategy)) {
+  if (!input.knowledge || !isKnowledgeStrategy(input.knowledge.strategy)) {
     return reject(`unknown_knowledge_strategy:${input.knowledge?.strategy}`);
   }
 
-  if (!input.llm || !LLM_PROVIDERS.has(input.llm.provider)) {
+  if (!input.llm || !isLlmProvider(input.llm.provider)) {
     return reject(`unknown_llm_provider:${input.llm?.provider}`);
   }
   if (!input.llm.model || typeof input.llm.model !== "string") {
@@ -84,11 +83,7 @@ export async function createAgent(
     return reject("access_policies_required");
   }
   for (const p of input.access.policies) {
-    if (!POLICY_NAMES.has(p)) return reject(`unknown_policy:${p}`);
-  }
-
-  if (!input.namespacePub || input.namespacePub.length === 0) {
-    return reject("drive_namespace_missing");
+    if (!isPolicyName(p)) return reject(`unknown_policy:${p}`);
   }
 
   // ─── persist ─────────────────────────────────────────────────────────

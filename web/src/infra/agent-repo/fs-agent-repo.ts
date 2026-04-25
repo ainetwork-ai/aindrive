@@ -8,11 +8,13 @@
  */
 
 import { nanoid } from "nanoid";
-import type {
-  Agent,
-  AgentId,
-  DriveId,
-  NewAgentInput,
+import {
+  AGENT_ID_PREFIX,
+  isAgentId,
+  type Agent,
+  type AgentId,
+  type DriveId,
+  type NewAgentInput,
 } from "../../../../shared/domain/agent/types.js";
 import type {
   AgentRepo,
@@ -21,7 +23,6 @@ import type {
 
 const AGENT_DIR = ".aindrive/agents";
 
-/** On-wire JSON representation. namespacePub is base64url-encoded. */
 type StoredAgent = Omit<Agent, "namespacePub"> & { namespacePub: string };
 
 function serialize(a: Agent): StoredAgent {
@@ -33,8 +34,7 @@ function deserialize(s: StoredAgent): Agent {
 }
 
 function agentPath(id: AgentId): string {
-  // basic guard: ids are nanoid alphabet; reject anything funky to keep paths safe
-  if (!/^agt_[A-Za-z0-9_-]{6,32}$/.test(id)) throw new Error(`bad_agent_id:${id}`);
+  if (!isAgentId(id)) throw new Error(`bad_agent_id:${id}`);
   return `${AGENT_DIR}/${id}.json`;
 }
 
@@ -75,7 +75,7 @@ export const fsAgentRepo = (fs: FsBrowser): AgentRepo => ({
   },
 
   async create(input: NewAgentInput): Promise<Agent> {
-    const id: AgentId = `agt_${nanoid(10)}`;
+    const id: AgentId = `${AGENT_ID_PREFIX}${nanoid(10)}`;
     const agent: Agent = { ...input, id, createdAt: Date.now() };
     await fs.write(
       input.driveId,
