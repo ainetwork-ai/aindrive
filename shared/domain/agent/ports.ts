@@ -23,7 +23,6 @@ import type {
   KnowledgeConfig,
   LlmConfig,
   NewAgentInput,
-  UserId,
 } from "./types.js";
 import type { AccessPolicy } from "./access.js";
 
@@ -112,31 +111,20 @@ export interface FsBrowser {
   write(driveId: DriveId, path: string, content: string): Promise<void>;
 }
 
-// ─── Owner secrets — server-side, never in drive ───────────────────────────
-
-/**
- * Per-owner credential lookup. Implementations decide where secrets live
- * (encrypted file outside any drive, KMS, env vars, …) and how the owner
- * configures them (UI in profile settings, CLI, environment).
- *
- * `null` from `get()` means "no owner-specific secret"; consumers may
- * fall back to a server-default key (env var) for the demo, or refuse.
- *
- * KEY INVARIANT: secrets resolved by this port MUST NEVER be written
- * into agent JSON files inside any drive — cap-holders read those.
- */
-export interface OwnerSecretStore {
-  get(ownerId: UserId, provider: string): Promise<string | null>;
-}
-
 // ─── Factories — pick the right impl based on per-agent config ─────────────
 
 /**
- * Builds an LlmClient from a per-agent LlmConfig + the owner's secret.
- * Throws if `config.provider` is unknown to the registry.
+ * Builds an LlmClient from a per-agent LlmConfig.
+ *
+ * The API key comes from `config.apiKey` (stored in the drive's agent
+ * JSON, protected from cap-bearers by the .aindrive/ path block) or
+ * falls back to a server env var if absent. Either way, no separate
+ * "owner secrets" port is needed for v1.
+ *
+ * Throws if `config.provider` is unknown or no key is resolvable.
  */
 export interface LlmClientFactory {
-  make(config: LlmConfig, ownerId: UserId): Promise<LlmClient>;
+  make(config: LlmConfig): Promise<LlmClient>;
 }
 
 /**

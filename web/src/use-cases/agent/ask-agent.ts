@@ -74,7 +74,7 @@ export async function askAgent(
   try {
     policy = deps.policyFactory.make(agent.access);
     knowledgeBase = deps.knowledgeFactory.make(agent.knowledge);
-    llm = await deps.llmFactory.make(agent.llm, agent.ownerId);
+    llm = await deps.llmFactory.make(agent.llm);
   } catch (e) {
     return { kind: "denied", reason: `agent_misconfigured:${(e as Error).message}` };
   }

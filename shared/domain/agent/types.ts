@@ -19,17 +19,26 @@ export type DriveId = string;
 export type UserId = string;
 
 /**
- * Per-agent LLM configuration. SAFE TO STORE IN DRIVE.
+ * Per-agent LLM configuration. Stored in the drive's agent JSON file.
  *
- * `provider` is a registry key (looked up by LlmClientFactory). `apiKey`
- * is intentionally NOT here — it lives in OwnerSecretStore server-side
- * so cap-holders reading the agent JSON can't exfiltrate the owner's key.
+ * v1 includes `apiKey` directly here — drive-scoped storage works because
+ * cap-bearers are blocked from reading any path under `.aindrive/` at the
+ * fs/read layer (see `shared/domain/policy/system-paths.ts`). If that
+ * single rule is bypassed, the key leaks. Backups/exports of the drive
+ * carry the key with them — that's owner's responsibility (same as a
+ * `.env` file).
+ *
+ * If absent, the LlmClientFactory falls back to a server env var
+ * (`<PROVIDER>_API_KEY`) so the demo works with a single platform key.
+ *
+ * Public projections (e.g. `/.well-known/agent-card`) MUST omit `apiKey`.
  */
 export type LlmConfig = {
   provider: string;          // "openai", "anthropic", "vercel-gateway", …
   model: string;             // provider-specific model id
   temperature?: number;      // default 0.2 if omitted
   maxTokens?: number;        // default 400 if omitted
+  apiKey?: string;           // optional; falls back to server env if absent
 };
 
 /**
