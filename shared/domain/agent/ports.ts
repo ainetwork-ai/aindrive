@@ -1,36 +1,87 @@
 /**
- * Domain ports for the Agent feature — interfaces only, no I/O.
+ * Domain ports for the Agent feature.
  *
- * Concrete implementations live in `web/src/infra/...` (DB-backed
- * AgentRepo, RPC-backed RagEngine, etc). Use-cases depend only on
- * these interfaces so swapping implementations or mocking for tests
- * is trivial.
+ * Two axes of future change are isolated behind ports:
+ *   1. KnowledgeBase — HOW we produce relevant context for a query.
+ *      v1: dump all .txt/.md content of the agent's folder (no retrieval).
+ *      Future: vector RAG, BM25, hybrid, summarization, query rewriting…
+ *      Swapping the strategy = swap one composition wire. askAgent unchanged.
+ *
+ *   2. LlmClient — WHICH model does the actual generation.
+ *      v1: OpenAI gpt-4o-mini.
+ *      Future: Anthropic, local llama.cpp, Vercel AI Gateway routing, …
+ *
+ * Plus a small file-browsing port that v1 KnowledgeBase impls use to
+ * read the drive's files via the existing CLI agent RPC bridge.
  */
 
-import type { Agent, AgentId, AskRequest, AskResult, DriveId, NewAgentInput } from "./types.js";
+import type { Agent, AgentId, DriveId, NewAgentInput } from "./types.js";
+
+// ─── Persistence ───────────────────────────────────────────────────────────
 
 export interface AgentRepo {
   byId(id: AgentId): Promise<Agent | null>;
   listByDrive(driveId: DriveId): Promise<Agent[]>;
   create(input: NewAgentInput): Promise<Agent>;
-  updateIndexStatus(
-    id: AgentId,
-    status: Agent["indexStatus"],
-    progress?: number,
-  ): Promise<void>;
 }
 
+// ─── KnowledgeBase: where context comes from ───────────────────────────────
+
 /**
- * Reads the agent's folder content somehow and answers questions over it.
+ * A single piece of knowledge handed to the LLM.
  *
- * v1 implementation: forwards `query` and `index` to the CLI agent over
- * the existing WSS RPC bridge (`sendRpc(driveId, {method:"rag-query", ...})`).
- *
- * Future implementations could include a Vercel-side index for drives
- * with caps granted to the relay — same interface, different impl.
+ * v1 may produce one big chunk per file (whole file as text); future
+ * impls may produce many smaller chunks with line ranges and scores.
+ * The shape is forward-compatible — extra optional fields can be added
+ * without breaking consumers.
  */
-export interface RagEngine {
-  query(agent: Agent, request: AskRequest): Promise<AskResult>;
-  /** Trigger (or re-trigger) indexing for the agent's folder. Async; status polled via AgentRepo. */
-  index(agent: Agent): Promise<void>;
+export type KnowledgeChunk = {
+  path: string;          // drive-relative file path
+  lineStart?: number;    // optional; v1 omits, citation falls back to whole file
+  lineEnd?: number;
+  text: string;
+  /** 0..1 relevance — populated by retrieval impls; v1 leaves undefined. */
+  score?: number;
+};
+
+export interface KnowledgeBase {
+  /**
+   * Produce knowledge chunks relevant to `query` from the agent's folder.
+   *
+   * Implementations decide the strategy entirely:
+   *   - DumpAllTextKb: ignore `query`, return every .txt/.md file as one chunk each
+   *   - VectorRagKb (future): embed query, return top-k chunks
+   *   - HybridKb (future): combine
+   */
+  fetch(input: { agent: Agent; query: string; maxChunks?: number }): Promise<KnowledgeChunk[]>;
+}
+
+// ─── LLM: how the answer is generated ──────────────────────────────────────
+
+export interface LlmClient {
+  complete(input: {
+    system: string;
+    user: string;
+    /** Soft cap on output tokens; impls may clamp further. */
+    maxTokens?: number;
+  }): Promise<string>;
+}
+
+// ─── FS browser: thin port the v1 KnowledgeBase uses to read drive files ───
+
+export type FileEntry = {
+  path: string;       // drive-relative
+  isDir: boolean;
+  size: number;
+  ext: string;
+};
+
+/**
+ * Minimal read-side filesystem port for KnowledgeBase impls. Concrete
+ * impl in v1 forwards to the existing CLI agent over WSS RPC
+ * (`sendRpc(driveId, {method:"list"|"read", ...})`).
+ */
+export interface FsBrowser {
+  list(driveId: DriveId, path: string): Promise<FileEntry[]>;
+  read(driveId: DriveId, path: string, maxBytes?: number): Promise<string>;
 }
