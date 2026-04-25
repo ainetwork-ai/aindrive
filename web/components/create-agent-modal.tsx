@@ -22,11 +22,23 @@ type CreatedAgent = {
   description: string;
 };
 
+/** Subset of Agent the parent passes when opening in edit mode. */
+export type EditableAgent = {
+  id: string;
+  folder: string;
+  name: string;
+  description: string;
+  llm: { provider: string; model: string };
+  access: { policies: string[] };
+};
+
 type Props = {
   driveId: string;
   defaultFolder: string;
   onClose: () => void;
   onCreated?: (agent: CreatedAgent) => void;
+  /** When provided, the modal opens in edit mode and PATCHes instead of POSTing. */
+  existing?: EditableAgent;
 };
 
 const PROVIDERS = [
@@ -34,15 +46,20 @@ const PROVIDERS = [
   { id: "openai", label: "OpenAI", defaultModel: "gpt-4o-mini" },
 ] as const;
 
-export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated }: Props) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [folder, setFolder] = useState(defaultFolder ?? "");
-  const [provider, setProvider] = useState<(typeof PROVIDERS)[number]["id"]>("flock");
-  const [model, setModel] = useState<string>(PROVIDERS[0].defaultModel);
+export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, existing }: Props) {
+  const isEdit = !!existing;
+  const [name, setName] = useState(existing?.name ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [folder, setFolder] = useState(existing?.folder ?? defaultFolder ?? "");
+  const [provider, setProvider] = useState<(typeof PROVIDERS)[number]["id"]>(
+    (existing?.llm.provider as (typeof PROVIDERS)[number]["id"]) ?? "flock",
+  );
+  const [model, setModel] = useState<string>(existing?.llm.model ?? PROVIDERS[0].defaultModel);
   const [temperature, setTemperature] = useState(0.2);
   const [apiKey, setApiKey] = useState("");
-  const [policiesAllowCap, setPoliciesAllowCap] = useState(true);
+  const [policiesAllowCap, setPoliciesAllowCap] = useState(
+    existing ? existing.access.policies.includes("cap-holder") : true,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState<{
     agent: CreatedAgent;
@@ -61,8 +78,11 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated }:
     setSubmitting(true);
     try {
       const policies = policiesAllowCap ? ["owner", "cap-holder"] : ["owner"];
-      const r = await fetch(`/api/drives/${driveId}/agents`, {
-        method: "POST",
+      const url = isEdit
+        ? `/api/drives/${driveId}/agents/${existing!.id}`
+        : `/api/drives/${driveId}/agents`;
+      const r = await fetch(url, {
+        method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           folder,
@@ -84,13 +104,18 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated }:
         return;
       }
       const a = data.agent as CreatedAgent;
-      setCreated({
-        agent: a,
-        askUrl: `${window.location.origin}/api/drives/${a.driveId}/agents/${a.id}/ask`,
-        cardUrl: `${window.location.origin}/.well-known/agent-card/${a.driveId}/${a.id}`,
-      });
-      toast.success("Agent created");
       onCreated?.(a);
+      if (isEdit) {
+        toast.success("Agent updated");
+        onClose();
+      } else {
+        setCreated({
+          agent: a,
+          askUrl: `${window.location.origin}/api/drives/${a.driveId}/agents/${a.id}/ask`,
+          cardUrl: `${window.location.origin}/.well-known/agent-card/${a.driveId}/${a.id}`,
+        });
+        toast.success("Agent created");
+      }
     } catch (e) {
       toast.error(`Failed: ${(e as Error).message}`);
     } finally {
@@ -107,7 +132,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated }:
         <div className="flex items-center justify-between p-4 border-b">
           <div className="flex items-center gap-2">
             <Bot className="w-5 h-5 text-blue-600" />
-            <h2 className="text-lg font-semibold">Create Agent</h2>
+            <h2 className="text-lg font-semibold">{isEdit ? "Edit Agent" : "Create Agent"}</h2>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
             <X className="w-5 h-5" />
@@ -252,7 +277,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated }:
                 className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                Create
+                {isEdit ? "Save" : "Create"}
               </button>
             </div>
           </div>

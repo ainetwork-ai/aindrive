@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Send, Loader2, MessageSquare, X } from "lucide-react";
+import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { pathCovers } from "../../shared/domain/policy/path";
+import { CreateAgentModal, type EditableAgent } from "./create-agent-modal";
 
 /**
  * Folder Chat sidebar — picks one agent from the drive (defaults to
@@ -19,6 +21,7 @@ type AgentSummary = {
   description: string;
   folder: string;
   llm: { provider: string; model: string };
+  access: { policies: string[] };
 };
 
 type Source = {
@@ -50,6 +53,8 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<EditableAgent | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Load agent list. For owners we fetch the private list endpoint;
@@ -79,7 +84,35 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
       }
     })();
     return () => { cancel = true; };
-  }, [driveId, currentFolder]);
+  }, [driveId, currentFolder, reloadTick]);
+
+  async function onDelete(target: AgentSummary) {
+    if (!confirm(`Delete agent "${target.name}"? This removes the agent JSON from the drive.`)) return;
+    try {
+      const r = await fetch(`/api/drives/${driveId}/agents/${target.id}`, { method: "DELETE" });
+      if (!r.ok && r.status !== 204) {
+        const data = await r.json().catch(() => ({}));
+        toast.error(`Delete failed: ${data.error || r.status}`);
+        return;
+      }
+      toast.success("Agent deleted");
+      if (agentId === target.id) setAgentId(null);
+      setReloadTick((t) => t + 1);
+    } catch (e) {
+      toast.error(`Delete failed: ${(e as Error).message}`);
+    }
+  }
+
+  function onEdit(target: AgentSummary) {
+    setEditing({
+      id: target.id,
+      folder: target.folder,
+      name: target.name,
+      description: target.description,
+      llm: target.llm,
+      access: target.access,
+    });
+  }
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -154,9 +187,29 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
               ))}
             </select>
             {selectedAgent && (
-              <p className="text-[11px] text-gray-500 mt-1 font-mono">
-                {selectedAgent.llm.provider} · {selectedAgent.llm.model}
-              </p>
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <p className="text-[11px] text-gray-500 font-mono truncate">
+                  {selectedAgent.llm.provider} · {selectedAgent.llm.model}
+                </p>
+                {isOwner && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => onEdit(selectedAgent)}
+                      title="Edit agent"
+                      className="p-1 hover:bg-gray-100 rounded text-gray-600"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => onDelete(selectedAgent)}
+                      title="Delete agent"
+                      className="p-1 hover:bg-red-50 rounded text-red-600"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </label>
         )}
@@ -198,6 +251,14 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
           {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </button>
       </form>
+      {editing && (
+        <CreateAgentModal
+          driveId={driveId}
+          defaultFolder={editing.folder}
+          existing={editing}
+          onClose={() => { setEditing(null); setReloadTick((t) => t + 1); }}
+        />
+      )}
     </aside>
   );
 }

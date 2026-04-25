@@ -45,4 +45,8 @@ export const rpcFsBrowser: FsBrowser = {
   async write(driveId: DriveId, path: string, content: string): Promise<void> {
     await sendRpc(driveId, { method: "write", path, content, encoding: "utf8" });
   },
+
+  async delete(driveId: DriveId, path: string): Promise<void> {
+    await sendRpc(driveId, { method: "delete", path });
+  },
 };
