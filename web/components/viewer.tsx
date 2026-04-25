@@ -34,6 +34,18 @@ export function Viewer({
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"connecting" | "connected" | "offline">("connecting");
   const [peers, setPeers] = useState(1);
+  // Touch devices: Monaco's IME + soft keyboard interplay is fragile, so we
+  // surface the file as read-only and let the user use the Download button
+  // to grab it for editing in a real editor.
+  const [touchOnly, setTouchOnly] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(pointer: coarse) and (hover: none)");
+    const sync = () => setTouchOnly(mq.matches);
+    sync();
+    mq.addEventListener?.("change", sync);
+    return () => mq.removeEventListener?.("change", sync);
+  }, []);
 
   const isText = entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext);
   const isImage = entry.mime.startsWith("image/");
@@ -301,7 +313,7 @@ export function Viewer({
             defaultLanguage={languageFor(entry)}
             onMount={onMonacoMount}
             options={{
-              readOnly: !canEdit,
+              readOnly: !canEdit || touchOnly,
               minimap: { enabled: false },
               fontSize: 13,
               automaticLayout: true,

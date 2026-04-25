@@ -30,7 +30,36 @@ type ShareSummary = {
 type DriveSummary = { id: string; name: string; hostname: string | null; online: boolean };
 
 export function DriveShell({ driveId, driveName }: Props) {
-  const [path, setPath] = useState("");
+  const [path, setPathState] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const url = new URL(window.location.href);
+    return url.searchParams.get("path") || "";
+  });
+  // Wrap setPath so every folder navigation pushes a history entry — this
+  // makes the browser/system back button (especially on mobile) walk the
+  // folder hierarchy instead of leaving the drive.
+  const setPath = useCallback((next: string) => {
+    setPathState((prev) => {
+      if (next === prev) return prev;
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        if (next) url.searchParams.set("path", next);
+        else url.searchParams.delete("path");
+        window.history.pushState(null, "", url.toString());
+      }
+      return next;
+    });
+  }, []);
+  // Sync state when the user hits Back/Forward.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPop = () => {
+      const url = new URL(window.location.href);
+      setPathState(url.searchParams.get("path") || "");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const [entries, setEntries] = useState<DriveEntry[]>([]);
   const [drives, setDrives] = useState<DriveSummary[]>([]);
   const [role, setRole] = useState<string>("viewer");
