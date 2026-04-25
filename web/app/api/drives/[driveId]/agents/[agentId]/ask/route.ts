@@ -16,16 +16,54 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { compose } from "@/src/composition";
 import { askAgent } from "@/src/use-cases/agent/ask-agent";
+import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { getUserTier, tierBudget, TIER_PRICE_AIN } from "@/lib/tier";
 
 const Body = z.object({
   q: z.string().min(1).max(2000),
 });
+
+// Free owners get 5 asks/min; Pro = 25/min, Max = 250/min (tier multiplier).
+// This is the real billing dimension — agent count is intentionally generous.
+const ASK_BASE = { limit: 5, windowMs: 60_000 };
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ driveId: string; agentId: string }> },
 ) {
   const { driveId, agentId } = await params;
+
+  // Tier-aware usage rate limit. Wallet-scoped if a cookie is present so
+  // upgrading on one device follows the wallet to another; otherwise IP.
+  const { tier, expiresAt } = await getUserTier(req);
+  const budget = tierBudget(tier, ASK_BASE);
+  const rl = tryConsume({
+    name: `ask:${tier}`,
+    key: clientKey(req, "ask"),
+    limit: budget.limit,
+    windowMs: budget.windowMs,
+  });
+  if (!rl.ok) {
+    const retryAfter = Math.ceil(rl.retryAfterMs / 1000);
+    return NextResponse.json(
+      {
+        error: "rate_limited",
+        tier,
+        limit: budget.limit,
+        windowMs: budget.windowMs,
+        retryAfterMs: rl.retryAfterMs,
+        tierExpiresAt: expiresAt,
+        upgrade: tier === "max" ? null : {
+          to: tier === "free" ? "pro" : "max",
+          priceAin: tier === "free" ? TIER_PRICE_AIN.pro : TIER_PRICE_AIN.max,
+          url: tier === "free"
+            ? `/api/x402/lift?scope=tier:pro&priceAin=${TIER_PRICE_AIN.pro}`
+            : `/api/x402/lift?scope=tier:max&priceAin=${TIER_PRICE_AIN.max}`,
+        },
+      },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } },
+    );
+  }
 
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {

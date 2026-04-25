@@ -17,8 +17,9 @@ import { createAgent } from "@/src/use-cases/agent/create-agent";
 import type { Agent } from "@/shared/domain/agent/types";
 import { getUserTier, TIER_MULTIPLIER, TIER_PRICE_AIN } from "@/lib/tier";
 
-// Free owners get a small per-drive agent budget; Pro/Max scale via TIER_MULTIPLIER.
-const AGENT_BASE_LIMIT_PER_DRIVE = 2;
+// Generous per-drive agent count cap (anti-abuse only). The real billing
+// dimension is per-call usage on /agents/[agentId]/ask — see that route.
+const AGENT_BASE_LIMIT_PER_DRIVE = 1000;
 
 const Body = z.object({
   folder: z.string().max(1024).default(""),
