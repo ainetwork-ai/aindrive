@@ -7,12 +7,20 @@ import { runAgent } from "../agent.js";
 export async function cmdServe(args) {
   const dir = args.dir;
   let drive = await readDriveConfig(dir);
-  let serverUrl = args.flags.server;
+
+  // Existing pair → drive.serverUrl is the source of truth.
+  // New pair    → caller-supplied --server (args.flags.server) wins.
+  let serverUrl = drive?.serverUrl || args.flags.server;
 
   if (!drive) {
     const creds = await readGlobalCreds();
     if (!creds) throw new Error("run `aindrive login` first");
-    serverUrl = creds.server;
+    if (creds.server && creds.server !== serverUrl) {
+      throw new Error(
+        `signed in to ${creds.server} but trying to pair with ${serverUrl}.\n` +
+        `  run \`aindrive login --server ${serverUrl}\` first`
+      );
+    }
     const name = args.flags.name || basename(dir);
     console.log(`  pairing new drive "${name}" with ${serverUrl}…`);
     const res = await apiCall(serverUrl, "POST", "/api/drives", { name }, creds.sessionCookie);
@@ -26,8 +34,6 @@ export async function cmdServe(args) {
     };
     await writeDriveConfig(dir, drive);
     console.log(`  ✓ paired  ${res.url}`);
-  } else if (!serverUrl || serverUrl === "http://localhost:3737") {
-    serverUrl = drive.serverUrl || serverUrl;
   }
 
   const url = drive.url || `${serverUrl}/d/${drive.driveId}`;

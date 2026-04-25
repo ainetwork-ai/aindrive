@@ -15,6 +15,7 @@ import { ShareDialog } from "./share-dialog";
 import { RowMenu } from "./row-menu";
 import { CreateAgentModal } from "./create-agent-modal";
 import { FolderChat } from "./folder-chat";
+import { X402Badge } from "./x402-badges";
 
 type Props = { driveId: string; driveName: string };
 
@@ -304,22 +305,6 @@ export function DriveShell({ driveId, driveName }: Props) {
         />
       )}
     </div>
-  );
-}
-
-function X402Badge({ price }: { price: number }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black text-[11px] font-mono leading-none border border-blue-500/40 shadow-sm"
-      title={`Selling for $${price.toFixed(2)} USDC via x402`}
-    >
-      <span className="font-bold tracking-tight">
-        <span className="text-blue-400">x</span>
-        <span className="text-white">402</span>
-      </span>
-      <span className="w-px h-3 bg-blue-500/40" />
-      <span className="text-white font-semibold">${price.toFixed(2)}</span>
-    </span>
   );
 }
 

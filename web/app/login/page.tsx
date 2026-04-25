@@ -1,9 +1,9 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next");
@@ -24,23 +24,31 @@ export default function LoginPage() {
     router.push(safeNext);
   }
   return (
+    <form onSubmit={onSubmit} className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
+      <h1 className="text-xl font-semibold">Sign in</h1>
+      <label className="block mt-5 text-sm">Email
+        <input name="email" type="email" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
+      </label>
+      <label className="block mt-3 text-sm">Password
+        <input name="password" type="password" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
+      </label>
+      {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
+      <button disabled={loading} className="mt-5 w-full rounded-lg bg-drive-accent text-white py-2 hover:bg-drive-accentHover disabled:opacity-60">
+        {loading ? "Signing in…" : "Sign in"}
+      </button>
+      <p className="mt-4 text-sm text-drive-muted text-center">
+        New here? <Link className="text-drive-accent hover:underline" href="/signup">Create an account</Link>
+      </p>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <main className="min-h-screen flex items-center justify-center px-6">
-      <form onSubmit={onSubmit} className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
-        <h1 className="text-xl font-semibold">Sign in</h1>
-        <label className="block mt-5 text-sm">Email
-          <input name="email" type="email" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
-        </label>
-        <label className="block mt-3 text-sm">Password
-          <input name="password" type="password" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
-        </label>
-        {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
-        <button disabled={loading} className="mt-5 w-full rounded-lg bg-drive-accent text-white py-2 hover:bg-drive-accentHover disabled:opacity-60">
-          {loading ? "Signing in…" : "Sign in"}
-        </button>
-        <p className="mt-4 text-sm text-drive-muted text-center">
-          New here? <Link className="text-drive-accent hover:underline" href="/signup">Create an account</Link>
-        </p>
-      </form>
+      <Suspense fallback={null}>
+        <LoginForm />
+      </Suspense>
     </main>
   );
 }

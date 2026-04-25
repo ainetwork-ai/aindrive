@@ -273,7 +273,7 @@ export function registerCollabCases(add, state, helpers) {
   }));
 
   add(109, "viewer-role peer denied subscription", wrap(async () => {
-    // Create a paid share with role=viewer; pay; then attempt to push sync.
+    // Create a paid share with role=viewer; pay via X-PAYMENT header (DEV_BYPASS).
     const cookie = state.ownerCookie;
     const p = freshFile("109");
     await ensureFresh(state, p, "viewer-only");
@@ -281,10 +281,13 @@ export function registerCollabCases(add, state, helpers) {
       method: "POST", headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({ path: "", role: "viewer", price_usdc: 0.01 }),
     });
-    const pay = await jget(`/api/s/${s.body.token}/pay`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ txHash: "0xviewer-" + Date.now() }),
-    });
+    // Build a minimal X-PAYMENT payload accepted by AINDRIVE_DEV_BYPASS_X402=1
+    const fakePayer = "0xdemodemodemodemodemodemodemodemodemo0000";
+    const xPayment = Buffer.from(JSON.stringify({
+      x402Version: 1, scheme: "exact", network: "base-sepolia",
+      payload: { authorization: { from: fakePayer } },
+    })).toString("base64");
+    const pay = await jget(`/api/s/${s.body.token}`, { headers: { "X-PAYMENT": xPayment } });
     const visitorCookie = pay.headers.get("set-cookie")?.split(";")[0];
     const V = new Peer("V", visitorCookie, state.driveId, p);
     await V.connect();
@@ -318,6 +321,9 @@ export function registerCollabCases(add, state, helpers) {
   add(111, "external disk overwrite triggers reload event", wrap(async () => {
     const p = freshFile("111");
     await ensureFresh(state, p, "before");
+    // ensureFresh did a fs/write which triggers 2s self-write suppression.
+    // Wait past the TTL before the "external" write so it doesn't get suppressed.
+    await sleep(2500);
     const A = new Peer("A", state.ownerCookie, state.driveId, p);
     await A.connect();
     await sleep(500);
