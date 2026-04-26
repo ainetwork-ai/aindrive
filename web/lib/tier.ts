@@ -27,6 +27,24 @@ export const TIER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Multiplier applied to a route's base rate-limit budget. */
 export const TIER_MULTIPLIER: Record<Tier, number> = { free: 1, pro: 5, max: 50 };
 
+/** Per-owner storage caps (file + folder count, summed across all drives). */
+export const TIER_FILE_LIMIT: Record<Tier, number> = {
+  free: 1_000,
+  pro: 100_000,
+  max: Number.POSITIVE_INFINITY,
+};
+export const TIER_FOLDER_LIMIT: Record<Tier, number> = {
+  free: 100,
+  pro: 10_000,
+  max: Number.POSITIVE_INFINITY,
+};
+
+/**
+ * Hard upper bound on agents per drive — anti-abuse only, NOT a billing
+ * dimension. Real usage is metered on the ask path via tier rate limits.
+ */
+export const HARD_MAX_AGENTS_PER_DRIVE = 1000;
+
 export async function getUserTier(_req?: Request): Promise<{ tier: Tier; expiresAt: number | null }> {
   const wallet = await getWallet();
   if (!wallet) return { tier: "free", expiresAt: null };

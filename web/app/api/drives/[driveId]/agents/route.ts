@@ -15,11 +15,7 @@ import { getDrive, getDriveNamespace } from "@/lib/drives";
 import { compose } from "@/src/composition";
 import { createAgent } from "@/src/use-cases/agent/create-agent";
 import type { Agent } from "@/shared/domain/agent/types";
-import { getUserTier, TIER_MULTIPLIER, TIER_PRICE_AIN } from "@/lib/tier";
-
-// Generous per-drive agent count cap (anti-abuse only). The real billing
-// dimension is per-call usage on /agents/[agentId]/ask — see that route.
-const AGENT_BASE_LIMIT_PER_DRIVE = 1000;
+import { HARD_MAX_AGENTS_PER_DRIVE } from "@/lib/tier";
 
 const Body = z.object({
   folder: z.string().max(1024).default(""),
@@ -65,28 +61,11 @@ export async function POST(
   }
   const body = parsed.data;
 
-  // Tiered usage cap on agent count per drive. Owners stay free until they
-  // hit the small base budget, then upgrade Pro/Max via /api/x402/lift?scope=tier:pro|max
-  // (see /api/me/tier for current tier + upgrade URLs).
-  const { tier, expiresAt } = await getUserTier(req);
-  const agentLimit = AGENT_BASE_LIMIT_PER_DRIVE * TIER_MULTIPLIER[tier];
+  // Hard anti-abuse cap (NOT a billing dimension — usage is metered on /ask).
   const existing = await compose.agents.listByDrive(driveId);
-  if (existing.length >= agentLimit) {
+  if (existing.length >= HARD_MAX_AGENTS_PER_DRIVE) {
     return NextResponse.json(
-      {
-        error: "agent_limit_reached",
-        tier,
-        limit: agentLimit,
-        current: existing.length,
-        tierExpiresAt: expiresAt,
-        upgrade: tier === "max" ? null : {
-          to: tier === "free" ? "pro" : "max",
-          priceAin: tier === "free" ? TIER_PRICE_AIN.pro : TIER_PRICE_AIN.max,
-          url: tier === "free"
-            ? `/api/x402/lift?scope=tier:pro&priceAin=${TIER_PRICE_AIN.pro}`
-            : `/api/x402/lift?scope=tier:max&priceAin=${TIER_PRICE_AIN.max}`,
-        },
-      },
+      { error: "agent_count_limit", limit: HARD_MAX_AGENTS_PER_DRIVE, current: existing.length },
       { status: 429 },
     );
   }

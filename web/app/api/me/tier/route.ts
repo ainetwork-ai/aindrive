@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { getUserTier, TIER_PRICE_AIN, TIER_MULTIPLIER, TIER_TTL_MS } from "@/lib/tier";
+import {
+  getUserTier,
+  TIER_PRICE_AIN,
+  TIER_MULTIPLIER,
+  TIER_TTL_MS,
+  TIER_FILE_LIMIT,
+  TIER_FOLDER_LIMIT,
+} from "@/lib/tier";
 
 /**
  * GET /api/me/tier
@@ -16,11 +23,15 @@ import { getUserTier, TIER_PRICE_AIN, TIER_MULTIPLIER, TIER_TTL_MS } from "@/lib
  */
 export async function GET(req: Request) {
   const { tier, expiresAt } = await getUserTier(req);
+  // Replace Infinity with null in JSON; clients render that as "Unlimited".
+  const finiteOrNull = (n: number) => (Number.isFinite(n) ? n : null);
   return NextResponse.json({
     tier,
     expiresAt,
     prices: TIER_PRICE_AIN,
     multiplier: TIER_MULTIPLIER,
+    fileLimit: { free: TIER_FILE_LIMIT.free, pro: TIER_FILE_LIMIT.pro, max: finiteOrNull(TIER_FILE_LIMIT.max) },
+    folderLimit: { free: TIER_FOLDER_LIMIT.free, pro: TIER_FOLDER_LIMIT.pro, max: finiteOrNull(TIER_FOLDER_LIMIT.max) },
     ttlDays: Math.round(TIER_TTL_MS / (24 * 60 * 60 * 1000)),
     upgradeUrls: {
       pro: `/api/x402/lift?scope=tier:pro&priceAin=${TIER_PRICE_AIN.pro}`,
