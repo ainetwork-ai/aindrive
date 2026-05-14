@@ -1,158 +1,150 @@
 # A2A URL Import — design
 
-Status: draft v3 (MCP-mediated). Supersedes the proxy-with-binding shape
-in v2 (kept below for the trail of reasoning).
+Status: draft v4 (Whisper-compatible). The first agent we'll import
+is **Whisper STT** at `http://localhost:8000/.well-known/agent-card.json`.
+This draft is shaped around what that card actually looks like; the
+MCP-mediated future path from v3 is preserved as a flagged variant.
 
-## Goal
+## The card we have to import
 
-Owner pastes an A2A `agent-card.json` URL into the "Create agent" flow.
-One click → a working remote agent appears in the drive. **First import
-target is an STT agent** that consumes audio from the drive and writes
-transcripts back into a folder.
+Pretty-printed:
 
-Out of scope for v1: importing agents that require user-facing auth
-(cap, x402) on the agent's **own** invoke endpoint. The owner must
-point at an `/ask` endpoint they can call themselves.
-
-## The pivot — why MCP-mediated instead of proxy-with-binding
-
-The previous draft modeled `RemoteAgent` as a proxy: aindrive reads the
-input file, forwards bytes to the upstream A2A agent inside an A2A
-`FilePart`, gets the response, writes the response to a drive folder.
-That works but bakes a lot of policy into aindrive (which MIME types,
-where to write, filename templates, drive-file vs text mode) and makes
-aindrive the data plane for every byte.
-
-The right composition: **aindrive exposes its filesystem as an MCP
-server, and we hand the imported A2A agent a scoped MCP credential at
-invoke time.** The A2A agent fetches inputs and writes outputs itself.
-
-This is clean because:
-
-  - aindrive isn't a data plane. We don't move bytes through us; we
-    move *capabilities*. Our role shrinks to "auth + audit".
-  - It's the right protocol stack. A2A is for agent-to-agent calls;
-    MCP is for an agent accessing tools/resources. They compose
-    naturally — the A2A agent we call is **also** an MCP client.
-  - It generalizes. STT, OCR, summarizer, embedding-indexer, anything
-    that wants drive access — same shape. No per-domain binding
-    config in the agent JSON.
-  - It uses what we already built. `cli/src/mcp/` has the full tool
-    surface (`list_files`, `read_file`, `write_file`, `search`,
-    `verify_cap`, …). Each tool is already a thin shim over the
-    drive's HTTP API. We just need to expose it over a different
-    transport.
-  - Path scoping reuses Meadowcap. The cap we hand the A2A agent has
-    the same shape we hand any cap-bearer; the existing
-    `aindrive-cap` auth scheme on the web HTTP API enforces it.
-
-## Architecture
-
-```
-┌─────────────┐                                    ┌─────────────┐
-│  owner UI   │  1. paste card URL, pick scope    │  aindrive   │
-│  (browser)  │ ────────────────────────────────► │   web       │
-└─────────────┘                                    │             │
-                                                   │  POST       │
-                                                   │  /agents/   │
-                                                   │  import     │
-                                                   └──────┬──────┘
-                                                          │ 2. fetch + validate
-                                                          │    card; mint cap
-                                                          │    scoped to selected
-                                                          │    paths; encrypt at
-                                                          │    rest; persist as
-                                                          │    RemoteAgent
-                                                          ▼
-                                                   ┌─────────────┐
-                                                   │ FsAgentRepo │
-                                                   └─────────────┘
-
-┌─────────────┐                                    ┌─────────────┐
-│  owner UI   │  3. trigger ("transcribe X")      │  aindrive   │
-│  (browser)  │ ────────────────────────────────► │   web       │
-└─────────────┘                                    │  /ask       │
-                                                   └──────┬──────┘
-                                                          │
-                                                          │ 4. POST upstream askUrl
-                                                          ▼
-                                                   ┌─────────────┐
-                                                   │  external   │
-                                                   │  A2A agent  │
-                                                   │   (STT)     │
-                                                   └──────┬──────┘
-                                                          │ 5. uses MCP creds
-                                                          ▼      we passed in step 4
-                                                   ┌─────────────┐    ┌───────────┐
-                                                   │ aindrive web│───►│  drive    │
-                                                   │  /mcp       │    │  fs       │
-                                                   │  (streaming │    └───────────┘
-                                                   │   HTTP)     │
-                                                   └─────────────┘
+```jsonc
+{
+  "name": "Whisper STT Agent",
+  "version": "0.2.0",
+  "protocolVersion": "0.3.0",
+  "description": "Speech-to-text agent powered by faster-whisper …",
+  "url": "http://localhost:8000",
+  "preferredTransport": "JSONRPC",
+  "capabilities": { "streaming": true, "pushNotifications": false },
+  "defaultInputModes": [
+    "audio/wav", "audio/mpeg", "audio/mp4", "audio/webm",
+    "audio/ogg", "audio/flac", "application/octet-stream"
+  ],
+  "defaultOutputModes": ["text/plain", "application/json"],
+  "skills": [
+    {
+      "id": "transcribe",
+      "name": "Transcribe audio",
+      "description": "Batch transcription. Send a FilePart (base64 bytes
+        + mime_type). Optionally include a DataPart with {language,
+        task, align}. task='transcribe'|'translate' (translate →
+        English). language is an ISO 639-1 code …",
+      "inputModes": ["audio/wav", "audio/mpeg", "audio/mp4",
+                     "audio/webm", "audio/ogg", "audio/flac"],
+      "outputModes": ["text/plain", "application/json"],
+      "tags": ["speech","stt","whisper","audio","transcription",
+               "korean","multilingual"]
+    },
+    {
+      "id": "transcribe_stream",
+      "name": "Transcribe live audio (streaming)",
+      "description": "Real-time streaming transcription over WebSocket
+        at `ws://localhost:8000/ws/stream` …",
+      "inputModes": ["audio/pcm;rate=16000;channels=1;encoding=…"],
+      "outputModes": ["application/json", "text/event-stream"]
+    }
+  ]
+}
 ```
 
-Step 5 is the whole point: the A2A agent calls **aindrive's MCP** —
-`read_file("recordings/meeting.m4a")`, runs STT internally, then
-`write_file("transcripts/meeting.transcript.md", ...)`. aindrive
-never touches the audio bytes. The A2A agent's response to step 4 is
-a short status (`{ wrote: ["transcripts/meeting.transcript.md"] }`),
-not the transcript itself.
+Four facts this card forces:
 
-## What we need to build
+1. **The card shape does NOT match our `AindriveAgentCard` type.** A2A
+   v0.3 publishes `url` + `preferredTransport` (+ optional
+   `additionalInterfaces[]`) and **no** `supportedInterfaces[]` /
+   `securitySchemes` / `provider` / `documentationUrl` / `iconUrl`.
+   We need a separate type for *imported* cards and a mapper into our
+   own re-emit shape.
 
-### 1. Web-side MCP endpoint over streamable HTTP
+2. **No MCP affordance.** Whisper takes audio bytes inline in a
+   FilePart. It will not call back into our MCP for the bytes. The
+   MCP-mediated v3 path **does not apply** to this agent.
 
-Today `cli/src/mcp/server.js` uses `StdioServerTransport`. We add a
-**second** transport that runs inside the Next.js web server:
+3. **JSON-RPC is the wire.** `preferredTransport: "JSONRPC"` +
+   spec's `message/send` method. We need a JSON-RPC 2.0 outbound
+   client, not a plain `POST {q}`.
 
-  - Route: `POST /mcp` (and `GET /mcp` for SSE event stream per MCP's
-    Streamable HTTP transport).
-  - Auth: `Authorization: Bearer <base64-cap>` on every request. The
-    handler resolves the cap → driveId + path prefix + r/w bits,
-    parks it on the session for the lifetime of the streamable HTTP
-    connection.
-  - Tool surface: same shape as the CLI's `TOOLS` array, but the
-    handlers go directly through the web's existing in-process
-    drive ops (skip the HTTP-to-self round-trip the CLI does).
-  - Tool **subset** allowed for cap-scoped sessions:
-    `list_files`, `read_file`, `write_file`, `rename`, `delete_path`,
-    `stat`, `search` — all gated by the cap's path prefix and r/w.
-    Owner-only tools (`create_share`, `grant_access`, …) are 403
-    when the session is a cap.
+4. **Localhost.** `url: "http://localhost:8000"` will be blocked by
+   any sane SSRF filter. We need an explicit dev-mode flag to allow
+   loopback imports.
 
-Tool registry lives at `web/shared/mcp/tools.ts` — typed, importable
-by routes. The CLI's stdio MCP keeps its own copy in JS for now (the
-two will diverge slowly; merging is a v2 cleanup, not blocking).
+## v1 decision: byte-proxy with binding
 
-### 2. Scoped cap mint at import time
+The MCP-mediated handoff (v3) is the right *future* architecture, but
+it requires the upstream agent to be MCP-capable. Whisper isn't.
 
-The import modal collects:
-  - `cardUrl` (the A2A card to import)
-  - `readPaths[]` (drive-relative; empty array = no read)
-  - `writePaths[]` (drive-relative; empty array = no read)
+For v1 we ship the **byte-proxy** path:
 
-We mint one Meadowcap per granted prefix using the drive's owned
-namespace (`getDriveNamespace(driveId)`). For v1 we collapse the cap
-set to a single cap with the **broadest common prefix** plus an
-allow-list of leaf prefixes — exact construction lives in
-`web/lib/cap.ts` (existing helpers there).
+  - aindrive reads input file from the drive.
+  - aindrive POSTs JSON-RPC `message/send` to the upstream `url` with
+    a FilePart carrying base64 bytes (+ optional DataPart for
+    skill-specific params).
+  - aindrive writes upstream's text response back to a drive folder.
 
-The cap base64 is stored in the agent JSON, encrypted at rest with a
-per-namespace symmetric key (same key used today for
-`agent.llm.apiKey`). On invoke we decrypt and send.
+We keep the v3 MCP-mediated branch reserved by giving `RemoteAgent` a
+`mediation` discriminator. v1 ships only `proxy-bytes`. MCP support
+gets added when we have an agent that wants it.
 
-The cap's expiry defaults to **never** but the owner can set a TTL
-in the modal (90 day default suggested).
+## Domain shapes
 
-### 3. `RemoteAgent` domain shape (simpler than v2)
+### Imported card (incoming, A2A v0.3-aligned)
 
 ```ts
-// types.ts
+// web/shared/contracts/a2a.ts (new file)
+export type A2AImportedCard = {
+  name: string;
+  description: string;
+  version: string;
+  protocolVersion: string;          // e.g. "0.3.0"
+  url: string;                       // base URL = the RPC endpoint
+  preferredTransport: "JSONRPC" | "HTTP+JSON" | "GRPC";
+  additionalInterfaces?: Array<{
+    url: string;
+    transport: "JSONRPC" | "HTTP+JSON" | "GRPC";
+    protocolVersion?: string;
+  }>;
+  capabilities?: {
+    streaming?: boolean;
+    pushNotifications?: boolean;
+    stateTransitionHistory?: boolean;
+  };
+  defaultInputModes?: string[];
+  defaultOutputModes?: string[];
+  skills: Array<{
+    id: string;
+    name: string;
+    description: string;
+    inputModes?: string[];
+    outputModes?: string[];
+    tags?: string[];
+    examples?: string[];
+  }>;
+  /** v0.3 optional auth — Whisper omits it, so we treat absence = public. */
+  securitySchemes?: Record<string, unknown>;
+  security?: Array<Record<string, string[]>>;
+  iconUrl?: string;
+  provider?: { organization: string; url: string };
+  documentationUrl?: string;
+};
+```
+
+We keep this type separate from `AindriveAgentCard` so each is free
+to follow its own spec target. The mapper that re-emits an imported
+agent's card under our base URL goes from `A2AImportedCard` →
+`AindriveAgentCard`.
+
+### `RemoteAgent`
+
+```ts
+// web/shared/domain/agent/types.ts
+
 export type Agent = LocalAgent | RemoteAgent;
 
 export type LocalAgent = {
   kind: "local";
-  // ...all existing fields unchanged...
+  // ... existing fields unchanged ...
 };
 
 export type RemoteAgent = {
@@ -161,186 +153,276 @@ export type RemoteAgent = {
   driveId: DriveId;
   ownerId: UserId;
 
-  /** Display fields, copied from the imported card. */
+  /** Display, copied from card at import time. */
   name: string;
   description: string;
-  iconUrl?: string;
 
   /** Source of truth for re-sync. */
   cardUrl: string;
-  /** Picked from card.supportedInterfaces. */
-  askUrl: string;
-  protocolBinding: "HTTP+JSON" | "JSONRPC";
-  /** Upstream skill we'll target. v1 = first skill on the card. */
+  /** The endpoint we actually call (derived from card url + chosen interface). */
+  endpointUrl: string;
+  transport: "JSONRPC" | "HTTP+JSON";
+  /** A2A method to invoke. v0.3 = "message/send". */
+  method: string;
+  /** Upstream skill id we target. Drives DataPart construction. */
   skillId: string;
 
-  /** Path scope granted to upstream via MCP. */
-  mcpScope: {
-    readPaths: string[];   // drive-relative
-    writePaths: string[];  // drive-relative
-    expiresAt?: number;    // ms epoch
-  };
-  /** Encrypted base64 cap. Decrypted only at invoke time. */
-  mcpCapEnc: string;
+  mediation:
+    /** v1: aindrive reads input from drive, forwards as FilePart;
+     *      writes upstream text response back to drive. */
+    | { kind: "proxy-bytes"; io: RemoteAgentIo }
+    /** v2 placeholder: hand the upstream a scoped MCP cap; it does I/O itself. */
+    | { kind: "mcp-handoff"; mcpScope: McpScope; mcpCapEnc: string };
 
-  /** Full upstream card cached for our own /.well-known emission. */
-  upstreamCard: AindriveAgentCard;
+  /** Cached imported card for our /.well-known echo and re-sync UI. */
+  importedCard: A2AImportedCard;
   cardFetchedAt: number;
 
-  access: AccessConfig;     // who can trigger this agent on us
+  access: AccessConfig;
   createdAt: number;
+};
+
+export type RemoteAgentIo = {
+  input:
+    /** Inbound `/ask` body has `{ q: string }`. We send a TextPart. */
+    | { mode: "text" }
+    /** Inbound body has `{ inputPath }`. We read drive file as bytes,
+     *  send as FilePart. STT and OCR use this. */
+    | {
+        mode: "drive-file";
+        acceptMimeTypes: string[];
+        /** Skill-specific tuning passed as a DataPart sibling of the file.
+         *  For Whisper: { language?: "ko", task?: "transcribe", align?: bool }. */
+        dataPart?: Record<string, unknown>;
+      };
+
+  output:
+    | { mode: "echo" }
+    | {
+        mode: "drive-file";
+        folder: string;
+        /** Template tokens: {base}, {ts}, {date}, {skillId}, {lang}. */
+        filenameTemplate: string;
+        /** Where in the JSON-RPC result to pull text from. v0.3 is typically
+         *  result.message.parts[*] where kind === "text". This selector keeps
+         *  us robust to agents that wrap differently. */
+        textSelector?:
+          | { kind: "a2a-message-parts" }       // v0.3 default
+          | { kind: "json-path"; path: string }; // fallback
+      };
+};
+
+export type McpScope = {
+  readPaths: string[];
+  writePaths: string[];
+  expiresAt?: number;
 };
 ```
 
-Note what's **gone** from v2: no `io: RemoteAgentIo`, no
-`outputFolder` field, no `filenameTemplate`. The A2A agent is given
-scoped MCP access and decides where its output lands within that
-scope. We removed an entire decision class from our model.
+For **Whisper specifically**, the persisted `mediation` is:
 
-### 4. Invoke path — how we pass the MCP creds
-
-A2A `tasks/send` doesn't standardize "here's an MCP server to use".
-We use a convention until/unless the spec adds one. Outbound body:
-
-```json
+```ts
 {
-  "jsonrpc": "2.0", "method": "tasks/send", "id": "...",
-  "params": {
-    "id": "<task-uuid>",
-    "message": {
-      "role": "user",
-      "parts": [
-        { "kind": "text", "text": "<the actual user request>" }
-      ],
-      "metadata": {
-        "aindrive.mcp": {
-          "url": "https://<our-base>/mcp",
-          "auth": "Bearer <decrypted cap>",
-          "driveId": "<drive-id>",
-          "hint": {
-            "readPaths": ["recordings/"],
-            "writePaths": ["transcripts/"]
-          }
-        }
-      }
+  kind: "proxy-bytes",
+  io: {
+    input: {
+      mode: "drive-file",
+      acceptMimeTypes: ["audio/wav","audio/mpeg","audio/mp4",
+                        "audio/webm","audio/ogg","audio/flac"],
+      dataPart: { task: "transcribe" }   // language omitted → auto-detect
+    },
+    output: {
+      mode: "drive-file",
+      folder: "transcripts",
+      filenameTemplate: "{base}.transcript.md",
+      textSelector: { kind: "a2a-message-parts" }
     }
   }
 }
 ```
 
-We document the `aindrive.mcp` extension on our card and in the
-import response so partner agent authors can pick it up. STT folks
-get a one-pager.
+## Outbound wire format (Whisper-compatible)
 
-### 5. Triggering — how the owner invokes the imported agent
+We POST to `endpointUrl` (= the card's `url`, since v0.3 puts the
+JSON-RPC endpoint at the base):
 
-For STT, the natural UI is:
-  - Right-click an audio file in the drive viewer → "Send to <STT
-    agent name>".
-  - Modal asks for any extra instruction (defaults to "Transcribe
-    this file and save the transcript next to it.").
-  - aindrive picks the inputPath, packages the request, calls the
-    upstream askUrl with `parts[0].text` = the rendered instruction
-    + the inputPath, and `metadata.aindrive.mcp` = scoped creds.
-  - The web route returns whatever upstream returned. Owner refreshes
-    the folder; the transcript is there because the A2A agent wrote
-    it via MCP.
+```http
+POST http://localhost:8000  HTTP/1.1
+Content-Type: application/json
+Accept: application/json
+```
 
-No `/invoke` route forking. We extend `/ask` body to optionally carry
-`{ inputPath?: string }` which gets templated into the outbound text.
+Body:
 
-### 6. Our own card for a `RemoteAgent`
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": "<uuid>",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "role": "user",
+      "messageId": "<uuid>",
+      "parts": [
+        { "kind": "file", "file": {
+            "name": "meeting.m4a",
+            "mimeType": "audio/mp4",
+            "bytes": "<base64 audio>"
+        }},
+        { "kind": "data", "data": { "task": "transcribe" } }
+      ]
+    },
+    "configuration": {
+      "acceptedOutputModes": ["text/plain", "application/json"]
+    }
+  }
+}
+```
 
-`GET /.well-known/agent-card.json` for an imported agent emits our
-card under our base URL:
-  - `name`, `description`, `iconUrl` copied from upstream.
-  - `supportedInterfaces[].url` = **our** `/ask` (we're the entry).
-  - `provider.organization` = `"aindrive (proxied via MCP)"`,
-    `provider.url` = upstream `cardUrl`.
-  - `skills` = the chosen upstream skill, with our base URL.
-  - `security` = `[]` for v1.
-  - Extension `x-aindrive-upstream-card` = upstream `cardUrl`.
-  - Extension `x-aindrive-mcp-mediated` = `true` (signals to anyone
-    chaining downstream that this agent doesn't move data bytes
-    through us).
+Expected response (per A2A v0.3 + the skill's description):
 
-## Security — what cap-scoping must enforce
+```jsonc
+{
+  "jsonrpc": "2.0",
+  "id": "<uuid>",
+  "result": {
+    "id": "<task or message id>",
+    "kind": "message",
+    "role": "agent",
+    "parts": [
+      { "kind": "text", "text": "<the full transcript>" }
+    ]
+    // (or kind: "task" with status / message, depending on which v0.3
+    //  shape Whisper actually emits — see Open Q1 below)
+  }
+}
+```
 
-Hard rules the MCP HTTP route must enforce on every tool call:
-  1. The auth bearer is a valid Meadowcap for **this drive's**
-     namespace (reject any cap rooted at another namespacePub).
-  2. The op (read vs write) matches the cap's r/w bit.
-  3. The target path is `path.startsWith(prefix)` for at least one of
-     the cap's granted prefixes.
-  4. `.aindrive/**` is always blocked, regardless of cap. The existing
-     `system-paths.ts` rule already does this for cap-bearers —
-     same policy applies here.
-  5. Rate-limit per-cap. Default 60 file ops / minute. Tuned later.
-  6. Audit: every MCP tool call hits a JSONL audit log scoped to
-     `(driveId, capRecipientHex)` for owner-visible review.
+Our extractor walks `result.parts[*]` for `kind === "text"` and
+concatenates. If `result` is a Task envelope instead, we walk
+`result.status.message.parts[*]` and `result.history[*].parts[*]`.
+The selector type makes that policy explicit and overridable.
 
-Auditing matters because the owner is granting an external agent
-write access to part of their drive. They need to be able to see what
-it did.
+## Localhost / dev import mode
+
+Whisper is at `http://localhost:8000`. Without an opt-in we **must
+reject** loopback URLs at import time — once persisted, the agent JSON
+travels with the drive (export, copy to another host) and an
+unauthenticated localhost URL becomes a footgun.
+
+Proposal:
+  - Import modal exposes an explicit toggle: **"This is a local
+    development agent (allow loopback)"** off by default.
+  - When on, we still:
+    - require the agent to be in the importing owner's own drive,
+    - prefix the agent name with a `[local]` badge in the UI,
+    - reject the agent JSON from being re-emitted via our own
+      `/.well-known/agent-card.json` (the public card route 404s for
+      loopback-mediated agents).
+
+  - When off, hostname must resolve to a non-private/non-loopback
+    address, and TLS is required.
+
+## Card URL canonicalization
+
+We tried `http://localhost:8000/.well-known/agent-card.json` and it
+returned the card directly, so we accept that shape. If owner pastes
+`http://localhost:8000` we GET it; if the response is HTML/404 we
+retry with `/.well-known/agent-card.json` appended. Same logic for
+non-local URLs.
+
+## Import flow, step by step
+
+1. Owner pastes `http://localhost:8000/.well-known/agent-card.json`
+   and ticks "Local development agent".
+2. Server-side, route POST `/api/drives/[driveId]/agents/import`:
+   a. SSRF check **bypassed** for loopback only when the flag is on.
+   b. GET card with 5s timeout, ≤64KB body.
+   c. Parse against `A2AImportedCard`.
+   d. `security` empty/absent → allowed (public).
+   e. Pick first skill where `outputModes` contains a text type AND
+      `inputModes` contains at least one MIME we recognize. For
+      Whisper, this is `transcribe` (the streaming one would also
+      qualify but JSON-RPC text-out > WebSocket for v1; we explicitly
+      skip skills whose inputModes are PCM streams).
+   f. Infer the binding: input `drive-file` with the skill's audio
+      MIME list; output `drive-file` with default folder
+      `"transcripts"` and template `"{base}.transcript.md"`.
+   g. Owner is shown the inferred binding and may override:
+      - output folder
+      - filename template
+      - DataPart presets (`{ language: "ko", task: "transcribe" }`)
+   h. Persist `RemoteAgent` with `mediation.kind = "proxy-bytes"`.
+3. Owner drops `recordings/meeting.m4a` in the drive, clicks
+   "Transcribe with Whisper STT Agent" from the file's row menu.
+4. Route POST `/api/drives/.../agents/<id>/ask` with
+   `{ inputPath: "recordings/meeting.m4a" }`.
+5. Executor:
+   a. Loads agent.
+   b. Reads `recordings/meeting.m4a` via FsBrowser (binary).
+   c. Sniffs MIME against `acceptMimeTypes`; rejects on mismatch.
+   d. Builds JSON-RPC `message/send` body (above).
+   e. POSTs to `endpointUrl` with 120s timeout (audio takes time).
+      Body size: cap at 50 MB pre-base64 for v1; bigger goes to
+      streaming, which we haven't wired.
+   f. Extracts text from `result` per `textSelector`.
+   g. Renders filename template; writes to
+      `transcripts/meeting.transcript.md` via FsBrowser.
+   h. Returns `{ answer: "<transcript>", sources: [{ path: "transcripts/meeting.transcript.md", snippet: "" }] }`.
+
+## Files to add/touch
+
+- `web/shared/contracts/a2a.ts` — `A2AImportedCard` (new file, this
+  type is for import only and doesn't belong in `http.ts`).
+- `web/shared/domain/agent/types.ts` — `Agent` discriminated union,
+  `RemoteAgent` with `mediation`, `RemoteAgentIo`.
+- `web/shared/domain/agent/ports.ts` — `AgentExecutorRouter`.
+- `web/src/use-cases/agent/import-agent.ts` — new.
+- `web/src/infra/agent-executor/remote-a2a-proxy-executor.ts` — new.
+- `web/src/infra/a2a-client/jsonrpc-a2a-client.ts` — new.
+- `web/src/infra/agent-repo/fs-agent-repo.ts` — `kind`-aware r/w.
+- `web/app/api/drives/[driveId]/agents/import/route.ts` — new.
+- `web/app/api/drives/[driveId]/agents/[agentId]/ask/route.ts` —
+  accept `inputPath`; route via executor router.
+- `web/app/api/drives/[driveId]/agents/[agentId]/.well-known/agent-card.json/route.ts`
+  — branch on `kind`. For remote-loopback agents, refuse to publish.
+- `web/components/create-agent-modal.tsx` — Build / Import tabs +
+  binding panel + "local dev" toggle.
+- `web/components/file-row-actions.tsx` (or wherever the row menu
+  lives) — add "Send to agent…" entry.
+- `cli/` — **no changes** for v1.
 
 ## Open questions
 
-1. **Trigger UX.** "Right-click file → send to agent" is what I'd
-   build. Alternatives: chat-style "/run @stt on recordings/meeting.m4a"
-   in a drive console; or an auto-watcher on a designated input
-   folder. Manual UI first, watcher v1.1. OK?
+1. **Whisper's response shape.** Real A2A v0.3 servers can return
+   either a `Message` directly or a `Task` envelope. Whisper's card
+   doesn't say. Do you know which it uses? If unknown, we wire the
+   message-first extractor with Task fallback (zero-cost branch).
 
-2. **MCP transport.** Streamable HTTP per the current MCP spec, or
-   legacy SSE? I'd go Streamable HTTP (simpler, single endpoint, the
-   SDK supports it). Confirm.
+2. **Default language.** Skill description says language is optional
+   (omit → auto-detect). For first-import demo we default DataPart to
+   `{ task: "transcribe" }` (no language). Override in the modal lets
+   owner pin `language: "ko"` if most audio is Korean. OK?
 
-3. **Cap-encryption key.** Reuse the same per-namespace symmetric key
-   we use for `agent.llm.apiKey`. OK?
+3. **Streaming skill.** The card also publishes `transcribe_stream`
+   over WebSocket with PCM 16k mono input. v1 ignores it (not the
+   common case for "drop a file and transcribe"). Future agent type
+   `"transcribe_stream"` would be a different binding.
 
-4. **Audit retention.** JSONL audit log, 30 days, drive-local file at
-   `.aindrive/audit/mcp-<yyyymm>.jsonl`. OK?
+4. **Body size cap.** 50 MB pre-base64. Bigger files would need a
+   chunking strategy or the streaming skill. Confirm.
 
-5. **Default scope.** Default `readPaths` and `writePaths` to **empty**
-   (owner must explicitly tick boxes) rather than auto-inferring from
-   the upstream skill's MIME types. Safer. OK?
+5. **MIME sniff.** Trust file extension, or actually read the magic
+   bytes? Extension is fine for v1; magic-byte sniffer can come later.
 
-6. **Tool subset.** Cap-bearer sessions get only the file ops
-   (list/read/write/rename/delete/stat/search). All sharing,
-   payment, allow-list tools are 403. OK?
+6. **Loopback re-emit refusal.** When the imported agent's
+   `endpointUrl` is loopback, do we refuse to publish our own
+   `.well-known/agent-card.json` for it (it can't be reached from
+   outside our server anyway and would mislead clients), or publish
+   with a clear note? I lean **refuse** for v1 — local dev should
+   stay local.
 
-7. **A2A `aindrive.mcp` extension.** We need the upstream agent (STT
-   here) to actually read `message.metadata.aindrive.mcp` and use it.
-   This is a partner agreement. Do you have control over the first
-   STT agent we'll import, or do we need to publish the convention
-   somewhere and hope for adoption? If we control it, we can iterate
-   the extension shape freely.
-
-## Files this design touches
-
-  - `web/shared/domain/agent/types.ts` — `Agent` discriminated union,
-    `RemoteAgent` with `mcpScope`
-  - `web/shared/domain/agent/ports.ts` — `AgentExecutorRouter`
-  - `web/shared/mcp/tools.ts` — typed MCP tool registry (new)
-  - `web/src/infra/mcp-server/streamable-http.ts` — new
-  - `web/app/api/mcp/route.ts` — Next.js handler over Streamable HTTP
-  - `web/src/use-cases/agent/import-agent.ts` — new
-  - `web/src/infra/agent-executor/remote-a2a-executor.ts` — sends
-    `tasks/send` with the `aindrive.mcp` metadata
-  - `web/src/infra/agent-repo/fs-agent-repo.ts` — `kind`-aware
-  - `web/app/api/drives/[driveId]/agents/import/route.ts` — new
-  - `web/app/api/drives/[driveId]/agents/[agentId]/.well-known/agent-card.json/route.ts`
-    — branch on `kind`
-  - `web/app/api/drives/[driveId]/agents/[agentId]/ask/route.ts` —
-    route via `executorRouter`
-  - `web/components/create-agent-modal.tsx` — Build/Import tabs +
-    scope picker
-  - `cli/` — **no changes**. (CLI's stdio MCP stays as-is for local
-    clients like Claude Desktop.)
-
-## v2 trail — proxy with binding (deprecated)
-
-The earlier shape had `RemoteAgentIo` with `input.mode = "drive-file"`
-+ `output.mode = "drive-file"` + a filename template, and aindrive
-forwarded file bytes upstream inside A2A `FilePart`s. This works for
-agents that **don't** speak MCP, so we may bring it back as a
-fallback later. For v1 we commit to MCP-mediated only.
+7. **DataPart override at invoke time.** Should `/ask` accept
+   `{ inputPath, dataPart?: object }` so the trigger UI can pass
+   per-call options (e.g. language) without re-saving the agent?
+   I think yes — small surface, big flexibility.
