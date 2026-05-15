@@ -4,10 +4,10 @@
  * hacking is unaffected. In production any violation prints a clear message
  * and calls process.exit(1).
  */
-export function runBootChecks(): void {
+export function runBootChecks() {
   if (process.env.NODE_ENV !== "production") return;
 
-  const errors: string[] = [];
+  const errors = [];
 
   // 1. DEV bypass must never be on in production.
   if (process.env.AINDRIVE_DEV_BYPASS_X402 === "1") {
@@ -16,7 +16,7 @@ export function runBootChecks(): void {
     );
   }
 
-  // 2. Session secret must be present and at least 32 bytes (64 hex chars or 44 base64 chars).
+  // 2. Session secret must be present and at least 32 bytes.
   const secret = process.env.AINDRIVE_SESSION_SECRET ?? "";
   if (!secret) {
     errors.push(
