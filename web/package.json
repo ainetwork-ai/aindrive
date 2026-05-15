@@ -15,9 +15,11 @@
     "test:watch": "vitest scenarios/"
   },
   "dependencies": {
+    "@a2a-js/sdk": "^0.3.13",
     "@earthstar/meadowcap": "npm:@jsr/earthstar__meadowcap@^0.6.4",
     "@earthstar/willow": "npm:@jsr/earthstar__willow@^0.6.1",
     "@earthstar/willow-utils": "npm:@jsr/earthstar__willow-utils@^2.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
     "@noble/ed25519": "^3.1.0",
     "@noble/hashes": "^2.2.0",
@@ -27,6 +29,7 @@
     "better-sqlite3": "^11.7.0",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
+    "express": "^5.2.1",
     "jose": "^5.9.6",
     "lucide-react": "^0.468.0",
     "nanoid": "^5.0.9",
