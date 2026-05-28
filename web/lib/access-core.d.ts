@@ -8,7 +8,7 @@ export declare const ROLE_RANK: Readonly<Record<RoleOrNone, number>>;
 export declare function atLeast(level: RoleOrNone | string, required: RoleOrNone | string): boolean;
 
 export declare function bestMatchingRole(
-  rows: { path: string; role: string }[],
+  rows: { path: string; role: Role }[],
   targetPath: string
 ): RoleOrNone;
 

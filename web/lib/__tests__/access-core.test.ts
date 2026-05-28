@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { ROLE_RANK, atLeast, bestMatchingRole } from "../access-core.js";
+import { ROLE_RANK, atLeast, bestMatchingRole, type Role } from "../access-core.js";
+
+type Row = { path: string; role: Role };
 
 describe("ROLE_RANK", () => {
   it("orders roles strictly", () => {
@@ -31,7 +33,7 @@ describe("bestMatchingRole", () => {
   });
 
   it("returns the highest-rank role among matching ancestors", () => {
-    const rows = [
+    const rows: Row[] = [
       { path: "", role: "viewer" },             // drive-wide viewer
       { path: "docs", role: "commenter" },      // covers target
       { path: "docs/q1", role: "editor" },      // exact cover
@@ -41,7 +43,7 @@ describe("bestMatchingRole", () => {
   });
 
   it("returns drive-wide grant when target has no specific ancestor", () => {
-    const rows = [
+    const rows: Row[] = [
       { path: "", role: "viewer" },
       { path: "specific", role: "editor" },
     ];
@@ -49,13 +51,13 @@ describe("bestMatchingRole", () => {
   });
 
   it("respects exact match", () => {
-    const rows = [{ path: "docs/q1", role: "owner" }];
+    const rows: Row[] = [{ path: "docs/q1", role: "owner" }];
     expect(bestMatchingRole(rows, "docs/q1")).toBe("owner");
     expect(bestMatchingRole(rows, "docs/q1/note.md")).toBe("owner");
   });
 
   it("rejects similar-but-not-ancestor (path prefix without slash boundary)", () => {
-    const rows = [{ path: "docs", role: "editor" }];
+    const rows: Row[] = [{ path: "docs", role: "editor" }];
     expect(bestMatchingRole(rows, "document")).toBe("none");
   });
 });

@@ -2,12 +2,12 @@ import { eq, and } from "drizzle-orm";
 import { drizzleDb } from "./db";
 import { drives, drive_members, folder_access } from "../drizzle/schema";
 import { getWallet } from "./wallet";
-import { ROLE_RANK, atLeast, bestMatchingRole, normalizePath } from "./access-core.js";
+import { ROLE_RANK, atLeast, bestMatchingRole, normalizePath, type Role, type RoleOrNone } from "./access-core.js";
 
-export type Role = "viewer" | "commenter" | "editor" | "owner";
+export type { Role, RoleOrNone };
 
 /** Owner-of-drive or member-of-drive role lookup by user id. */
-export function resolveRoleByUser(driveId: string, userId: string, targetPath: string): Role | "none" {
+export function resolveRoleByUser(driveId: string, userId: string, targetPath: string): RoleOrNone {
   const target = normalizePath(targetPath);
   const drive = drizzleDb
     .select({ owner_id: drives.owner_id })
@@ -21,18 +21,18 @@ export function resolveRoleByUser(driveId: string, userId: string, targetPath: s
     .from(drive_members)
     .where(and(eq(drive_members.drive_id, driveId), eq(drive_members.user_id, userId)))
     .all() as { path: string; role: Role }[];
-  return bestMatchingRole(members, target) as Role | "none";
+  return bestMatchingRole(members, target);
 }
 
 /** Folder-access list lookup by wallet address. Returns the highest matching row's role. */
-export function resolveRoleByWallet(driveId: string, wallet: string, targetPath: string): Role | "none" {
+export function resolveRoleByWallet(driveId: string, wallet: string, targetPath: string): RoleOrNone {
   const target = normalizePath(targetPath);
   const rows = drizzleDb
     .select({ path: folder_access.path, role: folder_access.role })
     .from(folder_access)
     .where(and(eq(folder_access.drive_id, driveId), eq(folder_access.wallet_address, wallet.toLowerCase())))
     .all() as { path: string; role: Role }[];
-  return bestMatchingRole(rows, target) as Role | "none";
+  return bestMatchingRole(rows, target);
 }
 
 /**
@@ -43,7 +43,7 @@ export async function resolveAccess(
   driveId: string,
   targetPath: string,
   userId: string | null
-): Promise<Role | "none"> {
+): Promise<RoleOrNone> {
   if (userId) {
     const r = resolveRoleByUser(driveId, userId, targetPath);
     if (r !== "none") return r;
@@ -57,7 +57,7 @@ export async function resolveAccess(
 }
 
 /** Backwards compat — keep the old name pointing at the user-only path. */
-export function resolveRole(driveId: string, userId: string, targetPath: string): Role | "none" {
+export function resolveRole(driveId: string, userId: string, targetPath: string): RoleOrNone {
   return resolveRoleByUser(driveId, userId, targetPath);
 }
 
