@@ -214,7 +214,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     txHash = settleRes.transaction;
   }
 
-  // Persist permanent access
+  // Persist permanent access (folder_access = grant) AND the receipt
+  // (payment_receipts = audit ledger). They are decoupled so that
+  // re-paying the same share never silently overwrites an older receipt:
+  // the second receipt is rejected by tx_hash UNIQUE (replay defense),
+  // while folder_access stays consistent.
   try {
     db.prepare(
       "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by, payment_tx, role) VALUES (?, ?, ?, ?, 'payment', ?, ?)"
@@ -224,6 +228,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     db.prepare(
       "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"
     ).run(share.role, share.drive_id, share.path, payerWallet);
+  }
+  try {
+    db.prepare(
+      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, X402_NETWORK, share.id);
+  } catch (e) {
+    // tx_hash UNIQUE collision = same on-chain tx already recorded; safe
+    // to ignore (client retried after a successful settle).
+    if (!/UNIQUE/i.test((e as Error).message)) throw e;
   }
   await setWalletCookie(payerWallet);
 
