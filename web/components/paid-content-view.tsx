@@ -3,7 +3,15 @@ import { useEffect, useState } from "react";
 import { Lock, ExternalLink, Loader2, ChevronLeft, Download } from "lucide-react";
 
 type FsEntry = { name: string; path: string; isDir: boolean; size: number; mtimeMs: number };
-type ReadBody = { content: string; encoding: "utf8" | "base64"; mime: string };
+
+/**
+ * Wire shape of GET /api/drives/:id/fs/read. Discriminated on `encoding`
+ * so render code can branch on the variant rather than re-checking the
+ * pair (mime, encoding) at every callsite.
+ */
+type ReadBody =
+  | { content: string; encoding: "utf8"; mime: string }
+  | { content: string; encoding: "base64"; mime: string };
 
 export function PaidContentView({
   driveId, driveName, path, txHash,
