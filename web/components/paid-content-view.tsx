@@ -45,7 +45,7 @@ export function PaidContentView({
         return;
       }
       if (cancelled) return;
-      const status = readRes.ok ? listRes.status : readRes.status;
+      const status = readRes.status; // readRes.ok branch already returned above
       if (status === 401 || status === 403) {
         setError("Permission denied. Your wallet may not have access to this path.");
       } else if (status === 404) {
@@ -141,19 +141,27 @@ export function PaidContentView({
 }
 
 function FileRender({ file, downloadHref }: { file: ReadBody; downloadHref: string }) {
-  const dataUrl = file.encoding === "base64" ? `data:${file.mime};base64,${file.content}` : null;
+  // For PDFs we cannot use a data: URL — the CSP middleware ships
+  // `frame-src 'self' blob:` (no data:), so the iframe gets blocked. Convert
+  // base64 to a blob URL, which the CSP allows. Images go through data: just
+  // fine because img-src allows data:.
+  const pdfBlobUrl = usePdfBlobUrl(file);
+  const imageDataUrl =
+    file.mime.startsWith("image/") && file.encoding === "base64"
+      ? `data:${file.mime};base64,${file.content}`
+      : null;
 
-  if (file.mime.startsWith("image/") && dataUrl) {
+  if (imageDataUrl) {
     return (
       <div className="flex items-center justify-center">
-        <img src={dataUrl} alt="" className="max-w-full max-h-[80vh] object-contain" />
+        <img src={imageDataUrl} alt="" className="max-w-full max-h-[80vh] object-contain" />
       </div>
     );
   }
-  if (file.mime === "application/pdf" && dataUrl) {
+  if (file.mime === "application/pdf" && pdfBlobUrl) {
     return (
       <iframe
-        src={dataUrl}
+        src={pdfBlobUrl}
         className="w-full h-[80vh] border border-drive-border rounded"
         title="PDF preview"
       />
@@ -173,6 +181,24 @@ function FileRender({ file, downloadHref }: { file: ReadBody; downloadHref: stri
       </a>
     </div>
   );
+}
+
+function usePdfBlobUrl(file: ReadBody): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (file.mime !== "application/pdf" || file.encoding !== "base64") {
+      setUrl(null);
+      return;
+    }
+    const bin = atob(file.content);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const objUrl = URL.createObjectURL(blob);
+    setUrl(objUrl);
+    return () => { URL.revokeObjectURL(objUrl); };
+  }, [file.mime, file.encoding, file.content]);
+  return url;
 }
 
 function prettyBytes(n: number) {

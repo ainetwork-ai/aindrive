@@ -25,7 +25,12 @@ export function runNormalizePathsMigration({ dryRun = false } = {}) {
   let skippedInvalid = 0;
 
   for (const t of TABLES) {
-    const rows = db.prepare(`SELECT id, path FROM ${t.name}`).all();
+    // Include added_by where available so collision drops are auditable
+    // (an operator can tell at-a-glance if a `payment` row got dropped vs an
+    // `owner` row, which have very different recovery paths).
+    const hasAddedBy = t.name === "folder_access";
+    const selectCols = hasAddedBy ? "id, path, added_by" : "id, path";
+    const rows = db.prepare(`SELECT ${selectCols} FROM ${t.name}`).all();
     for (const r of rows) {
       let norm;
       try {
@@ -38,7 +43,7 @@ export function runNormalizePathsMigration({ dryRun = false } = {}) {
       if (norm === r.path) continue;
 
       if (dryRun) {
-        log.info({ table: t.name, id: r.id, from: r.path, to: norm }, "[migrate dry] would update");
+        log.info({ table: t.name, id: r.id, from: r.path, to: norm, added_by: r.added_by }, "[migrate dry] would update");
         changed++;
         continue;
       }
@@ -48,7 +53,7 @@ export function runNormalizePathsMigration({ dryRun = false } = {}) {
       } catch (e) {
         if (/UNIQUE/i.test(e.message)) {
           log.warn(
-            { table: t.name, id: r.id, from: r.path, to: norm },
+            { table: t.name, id: r.id, from: r.path, to: norm, added_by: r.added_by },
             "[migrate] UNIQUE collision — dropping younger row",
           );
           db.prepare(`DELETE FROM ${t.name} WHERE id = ?`).run(r.id);
