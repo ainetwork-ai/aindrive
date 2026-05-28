@@ -17,6 +17,7 @@ type Access = {
   id: string;
   wallet_address: string;
   path: string;
+  role: "viewer" | "commenter" | "editor";
   added_by: "owner" | "payment";
   payment_tx: string | null;
   added_at: string;
@@ -36,6 +37,7 @@ export function ShareDialog({
   const [access, setAccess] = useState<Access[]>([]);
   const [email, setEmail] = useState("");
   const [wallet, setWallet] = useState("");
+  const [walletRole, setWalletRole] = useState<"viewer" | "commenter" | "editor">("viewer");
   const [role, setRole] = useState<"viewer" | "editor">("viewer");
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");
@@ -131,7 +133,7 @@ export function ShareDialog({
     const res = await fetch(`/api/drives/${driveId}/access`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ wallet_address: wallet, path: defaultPath }),
+      body: JSON.stringify({ wallet_address: wallet, path: defaultPath, role: walletRole }),
     });
     setBusy(false);
     if (!res.ok) toast.error((await res.json()).error);
@@ -235,6 +237,15 @@ export function ShareDialog({
                 placeholder="0x… (any EVM wallet)"
                 className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
               />
+              <select
+                value={walletRole}
+                onChange={(e) => setWalletRole(e.target.value as "viewer" | "commenter" | "editor")}
+                className="rounded-lg border border-drive-border px-2 text-sm"
+              >
+                <option value="viewer">Viewer</option>
+                <option value="commenter">Commenter</option>
+                <option value="editor">Editor</option>
+              </select>
               <button
                 disabled={busy}
                 onClick={addWallet}
@@ -254,6 +265,9 @@ export function ShareDialog({
                       {a.wallet_address.slice(0, 8)}…{a.wallet_address.slice(-6)}
                     </span>
                     <span className="text-drive-muted">{a.path || "/"}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-700">
+                      {a.role}
+                    </span>
                     <span
                       className={`px-1.5 py-0.5 rounded text-[10px] ${
                         a.added_by === "payment"
