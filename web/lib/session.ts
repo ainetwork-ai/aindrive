@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { env } from "./env";
 import { db } from "./db";
+import { cookieOptions } from "./cookie-config";
 
 const COOKIE = "aindrive_session";
 const enc = new TextEncoder();
@@ -38,13 +39,7 @@ export async function getUser(): Promise<SessionUser | null> {
 
 export async function setCookie(userId: string) {
   const token = await sign(userId);
-  (await cookies()).set(COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production" && !!process.env.AINDRIVE_PUBLIC_URL?.startsWith("https://"),
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
+  (await cookies()).set(COOKIE, token, cookieOptions());
 }
 
 export async function clearCookie() {
