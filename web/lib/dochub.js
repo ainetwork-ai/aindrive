@@ -6,6 +6,7 @@ import { db } from "./db.js";
 import { jwtVerify } from "jose";
 import { trace } from "./trace.js";
 import { log } from "./logger.js";
+import { ROLE_RANK, bestMatchingRole, normalizePath } from "./access-core.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -64,32 +65,27 @@ async function readUserFromCookie(cookieHeader) {
   } catch { return null; }
 }
 
-function isAncestorOrSelf(ancestor, target) {
-  if (!ancestor) return true;
-  if (ancestor === target) return true;
-  return target.startsWith(ancestor + "/");
-}
-
-const ROLE_RANK = { none: 0, viewer: 1, commenter: 2, editor: 3, owner: 4 };
-
 function resolveRole(driveId, userId, address, path) {
+  const target = normalizePath(path);
   const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId);
   if (!drive) return "none";
   if (userId && drive.owner_id === userId) return "owner";
-  let best = "none";
+  const rows = [];
   if (userId) {
-    const members = db.prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?").all(driveId, userId);
-    for (const m of members) {
-      if (isAncestorOrSelf(m.path, path) && ROLE_RANK[m.role] > ROLE_RANK[best]) best = m.role;
-    }
+    rows.push(
+      ...db
+        .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
+        .all(driveId, userId),
+    );
   }
   if (address) {
-    const grants = db.prepare("SELECT path, role FROM folder_access WHERE drive_id = ? AND wallet_address = ?").all(driveId, address);
-    for (const g of grants) {
-      if (isAncestorOrSelf(g.path, path) && ROLE_RANK[g.role] > ROLE_RANK[best]) best = g.role;
-    }
+    rows.push(
+      ...db
+        .prepare("SELECT path, role FROM folder_access WHERE drive_id = ? AND wallet_address = ?")
+        .all(driveId, address),
+    );
   }
-  return best;
+  return bestMatchingRole(rows, target);
 }
 
 export async function onDocConnect(ws, req, query) {

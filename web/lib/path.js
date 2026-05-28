@@ -13,10 +13,14 @@
  *   - rejects ".." segments and null bytes
  *
  * Callers MUST normalize both sides before any isAncestorOrSelf() check.
+ *
+ * Plain ESM .js so it can be imported from both Next.js routes (TypeScript)
+ * and server.js-side handlers (lib/dochub.js, lib/agents.js) which are not
+ * run through the Next.js build.
  */
 
 export class PathError extends Error {
-  constructor(reason: string) {
+  constructor(reason) {
     super(`invalid path: ${reason}`);
     this.name = "PathError";
   }
@@ -25,14 +29,18 @@ export class PathError extends Error {
 // Checks for U+0000. Implemented with charCodeAt rather than a regex/string
 // literal so the source file itself contains no raw NUL byte (which would
 // make git treat this file as binary and break diffs).
-function hasNulByte(s: string): boolean {
+function hasNulByte(s) {
   for (let i = 0; i < s.length; i++) {
     if (s.charCodeAt(i) === 0) return true;
   }
   return false;
 }
 
-export function normalizePath(input: string): string {
+/**
+ * @param {string} input
+ * @returns {string}
+ */
+export function normalizePath(input) {
   if (typeof input !== "string") throw new PathError("must be string");
   if (hasNulByte(input)) throw new PathError("contains null byte");
   const segs = input.split("/").filter((s) => s.length > 0 && s !== ".");
@@ -43,14 +51,11 @@ export function normalizePath(input: string): string {
 }
 
 /**
- * Test whether `ancestor` covers `target`. Both arguments MUST already be
- * normalized — this function does not trim or canonicalize.
- *
- *   - empty ancestor matches any target (drive-wide grants)
- *   - exact equality
- *   - true ancestor: target starts with `ancestor + "/"`
+ * @param {string} ancestor
+ * @param {string} target
+ * @returns {boolean}
  */
-export function isAncestorOrSelf(ancestor: string, target: string): boolean {
+export function isAncestorOrSelf(ancestor, target) {
   if (!ancestor) return true;
   if (ancestor === target) return true;
   return target.startsWith(ancestor + "/");

@@ -2,18 +2,13 @@ import { eq, and } from "drizzle-orm";
 import { drizzleDb } from "./db";
 import { drives, drive_members, folder_access } from "../drizzle/schema";
 import { getWallet } from "./wallet";
+import { ROLE_RANK, atLeast, bestMatchingRole, normalizePath } from "./access-core.js";
 
 export type Role = "viewer" | "commenter" | "editor" | "owner";
-const rank: Record<Role | "none", number> = { none: 0, viewer: 1, commenter: 2, editor: 3, owner: 4 };
-
-function isAncestorOrSelf(ancestor: string, target: string): boolean {
-  if (!ancestor) return true;
-  if (ancestor === target) return true;
-  return target.startsWith(ancestor + "/");
-}
 
 /** Owner-of-drive or member-of-drive role lookup by user id. */
 export function resolveRoleByUser(driveId: string, userId: string, targetPath: string): Role | "none" {
+  const target = normalizePath(targetPath);
   const drive = drizzleDb
     .select({ owner_id: drives.owner_id })
     .from(drives)
@@ -26,25 +21,18 @@ export function resolveRoleByUser(driveId: string, userId: string, targetPath: s
     .from(drive_members)
     .where(and(eq(drive_members.drive_id, driveId), eq(drive_members.user_id, userId)))
     .all() as { path: string; role: Role }[];
-  let best: Role | "none" = "none";
-  for (const m of members) {
-    if (isAncestorOrSelf(m.path, targetPath) && rank[m.role] > rank[best]) best = m.role;
-  }
-  return best;
+  return bestMatchingRole(members, target) as Role | "none";
 }
 
 /** Folder-access list lookup by wallet address. Returns the highest matching row's role. */
 export function resolveRoleByWallet(driveId: string, wallet: string, targetPath: string): Role | "none" {
+  const target = normalizePath(targetPath);
   const rows = drizzleDb
     .select({ path: folder_access.path, role: folder_access.role })
     .from(folder_access)
     .where(and(eq(folder_access.drive_id, driveId), eq(folder_access.wallet_address, wallet.toLowerCase())))
     .all() as { path: string; role: Role }[];
-  let best: Role | "none" = "none";
-  for (const r of rows) {
-    if (isAncestorOrSelf(r.path, targetPath) && rank[r.role] > rank[best]) best = r.role;
-  }
-  return best;
+  return bestMatchingRole(rows, target) as Role | "none";
 }
 
 /**
@@ -73,6 +61,4 @@ export function resolveRole(driveId: string, userId: string, targetPath: string)
   return resolveRoleByUser(driveId, userId, targetPath);
 }
 
-export function atLeast(level: Role | "none", required: Role): boolean {
-  return rank[level] >= rank[required];
-}
+export { atLeast, ROLE_RANK };
