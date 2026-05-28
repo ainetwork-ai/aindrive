@@ -7,9 +7,10 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { env } from "@/lib/env";
+import { zPath } from "@/lib/zod-helpers";
 
 const Body = z.object({
-  path: z.string().default(""),
+  path: zPath.default(""),
   role: z.enum(["viewer", "commenter", "editor"]),
   expiresAt: z.string().datetime().optional(),
   password: z.string().min(4).max(200).optional(),

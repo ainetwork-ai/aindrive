@@ -4,8 +4,9 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveAccess, atLeast } from "@/lib/access";
 import { AgentError, callAgent } from "@/lib/rpc";
+import { zRequiredPath } from "@/lib/zod-helpers";
 
-const Body = z.object({ from: z.string().min(1), to: z.string().min(1) });
+const Body = z.object({ from: zRequiredPath, to: zRequiredPath });
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;

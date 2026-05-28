@@ -3,11 +3,14 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveAccess, atLeast } from "@/lib/access";
 import { AgentError, callAgent } from "@/lib/rpc";
+import { normalizePath } from "@/lib/path";
 
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const url = new URL(req.url);
-  const path = url.searchParams.get("path") || "";
+  let path: string;
+  try { path = normalizePath(url.searchParams.get("path") || ""); }
+  catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
   const user = await getUser();
   const drive = getDrive(driveId);
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });

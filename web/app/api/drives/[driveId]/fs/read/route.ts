@@ -3,15 +3,19 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveAccess, atLeast } from "@/lib/access";
 import { AgentError, callAgent } from "@/lib/rpc";
+import { normalizePath } from "@/lib/path";
 
 const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16 * 1024 * 1024), 10);
 
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const url = new URL(req.url);
-  const path = url.searchParams.get("path");
+  const rawPath = url.searchParams.get("path");
   const encoding = (url.searchParams.get("encoding") === "base64" ? "base64" : "utf8") as "utf8" | "base64";
-  if (!path) return NextResponse.json({ error: "path required" }, { status: 400 });
+  if (!rawPath) return NextResponse.json({ error: "path required" }, { status: 400 });
+  let path: string;
+  try { path = normalizePath(rawPath); }
+  catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
   const user = await getUser();
   const drive = getDrive(driveId);
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
