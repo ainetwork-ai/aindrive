@@ -215,28 +215,45 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   }
 
   // Persist permanent access (folder_access = grant) AND the receipt
-  // (payment_receipts = audit ledger). They are decoupled so that
-  // re-paying the same share never silently overwrites an older receipt:
-  // the second receipt is rejected by tx_hash UNIQUE (replay defense),
-  // while folder_access stays consistent.
+  // (payment_receipts = audit ledger). Decoupled so that re-paying the
+  // same share never silently overwrites an older receipt: the second
+  // receipt is rejected by tx_hash UNIQUE (replay defense) while
+  // folder_access stays consistent.
+  //
+  // Role-downgrade guard: a wallet already holding a HIGHER role at this
+  // path (e.g. owner-added editor) MUST NOT be downgraded just because
+  // they later pay through a viewer-tier share. We rank the new share's
+  // role against the current row and only UPDATE if it's an upgrade.
+  const ROLE_RANK_LOCAL: Record<string, number> = { none: 0, viewer: 1, commenter: 2, editor: 3, owner: 4 };
   try {
     db.prepare(
       "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by, payment_tx, role) VALUES (?, ?, ?, ?, 'payment', ?, ?)"
     ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.role);
   } catch (e) {
     if (!/UNIQUE/i.test((e as Error).message)) throw e;
-    db.prepare(
-      "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"
-    ).run(share.role, share.drive_id, share.path, payerWallet);
+    const existing = db.prepare(
+      "SELECT role FROM folder_access WHERE drive_id = ? AND path = ? AND wallet_address = ?"
+    ).get(share.drive_id, share.path, payerWallet) as { role: string } | undefined;
+    const existingRank = ROLE_RANK_LOCAL[existing?.role ?? "none"] ?? 0;
+    const newRank = ROLE_RANK_LOCAL[share.role] ?? 0;
+    if (newRank > existingRank) {
+      db.prepare(
+        "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"
+      ).run(share.role, share.drive_id, share.path, payerWallet);
+      console.warn(`[paid-grant] role upgraded for ${payerWallet} on ${share.drive_id}/${share.path}: ${existing?.role} -> ${share.role}`);
+    } else {
+      console.warn(`[paid-grant] role NOT downgraded for ${payerWallet} on ${share.drive_id}/${share.path}: kept ${existing?.role} (would-be ${share.role})`);
+    }
   }
   try {
     db.prepare(
       "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, X402_NETWORK, share.id);
   } catch (e) {
-    // tx_hash UNIQUE collision = same on-chain tx already recorded; safe
-    // to ignore (client retried after a successful settle).
     if (!/UNIQUE/i.test((e as Error).message)) throw e;
+    // Same on-chain tx already recorded. Log so observability shows
+    // replay-vs-bug — assume replay but make it auditable.
+    console.warn(`[receipts] tx_hash UNIQUE collision — assuming replay: ${txHash} share=${share.id} payer=${payerWallet}`);
   }
   await setWalletCookie(payerWallet);
 
