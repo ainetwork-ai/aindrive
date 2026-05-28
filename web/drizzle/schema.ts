@@ -145,7 +145,9 @@ export const payment_receipts = sqliteTable(
     path: text("path").notNull().default(""),
     wallet: text("wallet").notNull(),
     tx_hash: text("tx_hash").notNull().unique(),
-    amount_usdc: real("amount_usdc").notNull(),
+    // Nullable: NULL = "amount unknown" (legacy backfilled receipts from
+    // before Phase 4). A real 0-amount is a different signal.
+    amount_usdc: real("amount_usdc"),
     network: text("network").notNull(),
     // Nullable because the originating share may be deleted later.
     share_id: text("share_id"),

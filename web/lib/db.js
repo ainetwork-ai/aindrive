@@ -88,7 +88,10 @@ function open() {
       path TEXT NOT NULL DEFAULT '',
       wallet TEXT NOT NULL,
       tx_hash TEXT NOT NULL UNIQUE,
-      amount_usdc REAL NOT NULL,
+      -- nullable: NULL means "amount unknown" (legacy backfilled receipts
+      -- from before Phase 4 don't carry the original amount). A real 0
+      -- amount is a different signal from "we don't know."
+      amount_usdc REAL,
       network TEXT NOT NULL,
       share_id TEXT,
       settled_at TEXT NOT NULL DEFAULT (datetime('now')),

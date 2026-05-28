@@ -112,7 +112,7 @@ export const payment_receipts = sqliteTable(
     path: text("path").notNull().default(""),
     wallet: text("wallet").notNull(),
     tx_hash: text("tx_hash").notNull().unique(),
-    amount_usdc: real("amount_usdc").notNull(),
+    amount_usdc: real("amount_usdc"),
     network: text("network").notNull(),
     share_id: text("share_id"),
     settled_at: text("settled_at")

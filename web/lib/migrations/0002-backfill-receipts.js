@@ -11,8 +11,10 @@
  * so re-running on subsequent boots is a no-op.
  *
  * Limitations of the seeded rows:
- *   - amount_usdc is unknown (the historical share's price may have changed
- *     since); we record NULL semantically via 0 and log it.
+ *   - amount_usdc is recorded as NULL — the historical share's price may
+ *     have changed since, and "unknown amount" is a different signal from
+ *     "zero amount." Analytics queries should filter `WHERE amount_usdc IS
+ *     NOT NULL` to exclude these legacy rows.
  *   - network is hard-coded to "base-sepolia" — the only network shipped
  *     pre-Phase 4.
  *   - share_id is unknown without joining on (drive_id, path); we leave it
@@ -44,7 +46,7 @@ export function runBackfillReceiptsMigration({ dryRun = false } = {}) {
     }
     try {
       db.prepare(
-        "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id, settled_at) VALUES (?, ?, ?, ?, ?, 0, 'base-sepolia', NULL, ?)",
+        "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id, settled_at) VALUES (?, ?, ?, ?, ?, NULL, 'base-sepolia', NULL, ?)",
       ).run(nanoid(12), r.drive_id, r.path, r.wallet_address, r.payment_tx, r.added_at);
       inserted++;
     } catch (e) {
