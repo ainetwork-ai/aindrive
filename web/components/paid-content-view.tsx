@@ -35,8 +35,15 @@ export function PaidContentView({
         setLoading(false);
         return;
       }
+      // If listing already failed for an access/missing reason, don't bother
+      // probing fs/read — it'll fail the same way and waste a roundtrip.
+      if (listRes.status === 401 || listRes.status === 403 || listRes.status === 404) {
+        if (cancelled) return;
+        setError(await extractError(listRes, listRes.status === 404 ? "File or folder not found." : "Permission denied. Your wallet may not have access to this path."));
+        setLoading(false);
+        return;
+      }
       // 400 = path is a file, not a directory — fall through to fs/read.
-      // 401/403 = no access; 404 = missing; anything else likely agent-side.
       const readRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(currentPath)}`);
       if (!cancelled && readRes.ok) {
         const body: ReadBody = await readRes.json();
@@ -45,13 +52,13 @@ export function PaidContentView({
         return;
       }
       if (cancelled) return;
-      const status = readRes.status; // readRes.ok branch already returned above
+      const status = readRes.status;
       if (status === 401 || status === 403) {
-        setError("Permission denied. Your wallet may not have access to this path.");
+        setError(await extractError(readRes, "Permission denied. Your wallet may not have access to this path."));
       } else if (status === 404) {
-        setError("File or folder not found.");
+        setError(await extractError(readRes, "File or folder not found."));
       } else {
-        setError("Content unavailable. The seller's agent may be offline.");
+        setError(await extractError(readRes, "Content unavailable. The seller's agent may be offline."));
       }
       setLoading(false);
     })();
@@ -145,7 +152,7 @@ function FileRender({ file, downloadHref }: { file: ReadBody; downloadHref: stri
   // `frame-src 'self' blob:` (no data:), so the iframe gets blocked. Convert
   // base64 to a blob URL, which the CSP allows. Images go through data: just
   // fine because img-src allows data:.
-  const pdfBlobUrl = usePdfBlobUrl(file);
+  const pdf = usePdfBlobUrl(file);
   const imageDataUrl =
     file.mime.startsWith("image/") && file.encoding === "base64"
       ? `data:${file.mime};base64,${file.content}`
@@ -158,14 +165,28 @@ function FileRender({ file, downloadHref }: { file: ReadBody; downloadHref: stri
       </div>
     );
   }
-  if (file.mime === "application/pdf" && pdfBlobUrl) {
-    return (
-      <iframe
-        src={pdfBlobUrl}
-        className="w-full h-[80vh] border border-drive-border rounded"
-        title="PDF preview"
-      />
-    );
+  if (file.mime === "application/pdf") {
+    if (pdf.err) {
+      return (
+        <div className="text-sm text-drive-muted space-y-2">
+          <div className="text-red-600">{pdf.err}</div>
+          <a href={downloadHref} className="inline-flex items-center gap-1 text-drive-accent hover:underline">
+            <Download className="w-3 h-3" /> Download
+          </a>
+        </div>
+      );
+    }
+    if (pdf.url) {
+      return (
+        <iframe
+          src={pdf.url}
+          className="w-full h-[80vh] border border-drive-border rounded"
+          title="PDF preview"
+        />
+      );
+    }
+    // PDF but blob URL not ready yet — usePdfBlobUrl effect is still running.
+    return <div className="text-drive-muted text-sm">Preparing PDF preview…</div>;
   }
   if (file.encoding === "utf8") {
     return (
@@ -183,22 +204,47 @@ function FileRender({ file, downloadHref }: { file: ReadBody; downloadHref: stri
   );
 }
 
-function usePdfBlobUrl(file: ReadBody): string | null {
-  const [url, setUrl] = useState<string | null>(null);
+function usePdfBlobUrl(file: ReadBody): { url: string | null; err: string | null } {
+  const [state, setState] = useState<{ url: string | null; err: string | null }>({ url: null, err: null });
   useEffect(() => {
     if (file.mime !== "application/pdf" || file.encoding !== "base64") {
-      setUrl(null);
+      setState({ url: null, err: null });
       return;
     }
-    const bin = atob(file.content);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "application/pdf" });
-    const objUrl = URL.createObjectURL(blob);
-    setUrl(objUrl);
-    return () => { URL.revokeObjectURL(objUrl); };
+    try {
+      const bin = atob(file.content);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const objUrl = URL.createObjectURL(blob);
+      setState({ url: objUrl, err: null });
+      return () => { URL.revokeObjectURL(objUrl); };
+    } catch (e) {
+      console.error("usePdfBlobUrl: failed to decode base64 PDF", e);
+      setState({ url: null, err: "PDF preview failed to load. Try downloading instead." });
+    }
   }, [file.mime, file.encoding, file.content]);
-  return url;
+  return state;
+}
+
+/**
+ * Pull `{ error: "..." }` from a non-OK Response body, fall back to the
+ * caller-supplied default. Console-logs the raw response for dev debugging
+ * regardless. Prevents the "Content unavailable" generic message from
+ * hiding more useful backend codes like "file too large" or "invalid path".
+ */
+async function extractError(res: Response, fallback: string): Promise<string> {
+  try {
+    const body = await res.json().catch(() => null) as { error?: string } | null;
+    if (body && typeof body.error === "string" && body.error.length > 0) {
+      console.error(`PaidContentView: ${res.status} ${body.error}`);
+      return body.error;
+    }
+  } catch (e) {
+    console.error("PaidContentView: failed to parse error body", e);
+  }
+  console.error(`PaidContentView: ${res.status} (no error body)`);
+  return fallback;
 }
 
 function prettyBytes(n: number) {
