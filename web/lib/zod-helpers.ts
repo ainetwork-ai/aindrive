@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizePath, PathError } from "./path";
+import { normalizePath, PathError, type NormalizedPath } from "./path";
 
 /**
  * Zod field for a drive-relative path. Accepts any user input and either:
@@ -32,11 +32,12 @@ export const zRequiredPath = zPath.refine((s) => s.length > 0, { message: "path 
  *   try { path = parseSearchPath(url); }
  *   catch (r) { return r; }
  */
-export function parseSearchPath(url: URL, paramName = "path"): string {
+export function parseSearchPath(url: URL, paramName = "path"): NormalizedPath {
   try {
     return normalizePath(url.searchParams.get(paramName) ?? "");
-  } catch {
-    throw new Response(JSON.stringify({ error: "invalid path" }), {
+  } catch (e) {
+    const message = e instanceof PathError ? e.message : "invalid path";
+    throw new Response(JSON.stringify({ error: message }), {
       status: 400,
       headers: { "content-type": "application/json" },
     });

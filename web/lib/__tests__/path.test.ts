@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { normalizePath, isAncestorOrSelf, PathError } from "../path";
+import { normalizePath, isAncestorOrSelf, PathError, type NormalizedPath } from "../path";
 
 // Construct a string containing a real U+0000 without putting a raw NUL
 // byte in this source file (keeps git from treating it as binary).
 const NUL = String.fromCharCode(0);
+
+// Test helper: assert that a literal is already in canonical form. Used
+// in isAncestorOrSelf tests where we want to drive the comparator with
+// hand-crafted strings without re-running normalizePath each time.
+const n = (s: string) => s as NormalizedPath;
 
 describe("normalizePath", () => {
   it("returns empty string for empty/root variants", () => {
@@ -62,36 +67,37 @@ describe("normalizePath", () => {
 
 describe("isAncestorOrSelf", () => {
   it("empty ancestor matches anything", () => {
-    expect(isAncestorOrSelf("", "")).toBe(true);
-    expect(isAncestorOrSelf("", "docs")).toBe(true);
-    expect(isAncestorOrSelf("", "docs/q1/note.md")).toBe(true);
+    expect(isAncestorOrSelf(n(""), n(""))).toBe(true);
+    expect(isAncestorOrSelf(n(""), n("docs"))).toBe(true);
+    expect(isAncestorOrSelf(n(""), n("docs/q1/note.md"))).toBe(true);
   });
 
   it("exact match returns true", () => {
-    expect(isAncestorOrSelf("docs", "docs")).toBe(true);
-    expect(isAncestorOrSelf("docs/q1", "docs/q1")).toBe(true);
+    expect(isAncestorOrSelf(n("docs"), n("docs"))).toBe(true);
+    expect(isAncestorOrSelf(n("docs/q1"), n("docs/q1"))).toBe(true);
   });
 
   it("true ancestor returns true", () => {
-    expect(isAncestorOrSelf("docs", "docs/q1")).toBe(true);
-    expect(isAncestorOrSelf("docs/q1", "docs/q1/note.md")).toBe(true);
+    expect(isAncestorOrSelf(n("docs"), n("docs/q1"))).toBe(true);
+    expect(isAncestorOrSelf(n("docs/q1"), n("docs/q1/note.md"))).toBe(true);
   });
 
   it("similar but not ancestor returns false", () => {
-    expect(isAncestorOrSelf("docs", "document")).toBe(false);
-    expect(isAncestorOrSelf("docs/q", "docs/q1")).toBe(false);
-    expect(isAncestorOrSelf("docs/q1", "docs/q12")).toBe(false);
+    expect(isAncestorOrSelf(n("docs"), n("document"))).toBe(false);
+    expect(isAncestorOrSelf(n("docs/q"), n("docs/q1"))).toBe(false);
+    expect(isAncestorOrSelf(n("docs/q1"), n("docs/q12"))).toBe(false);
   });
 
   it("siblings return false", () => {
-    expect(isAncestorOrSelf("docs/q1", "docs/q2")).toBe(false);
+    expect(isAncestorOrSelf(n("docs/q1"), n("docs/q2"))).toBe(false);
   });
 
   it("contract: assumes inputs are pre-normalized (does NOT trim slashes)", () => {
     // If callers don't normalize first, mismatches slip through.
-    // This documents the contract — production code calls normalizePath()
-    // on both sides before calling this.
-    expect(isAncestorOrSelf("docs/", "docs/q1")).toBe(false);
-    expect(isAncestorOrSelf("/docs", "docs/q1")).toBe(false);
+    // The NormalizedPath brand prevents this at compile time in production
+    // code; here we deliberately cast un-normalized strings via n() to
+    // verify the runtime contract.
+    expect(isAncestorOrSelf(n("docs/"), n("docs/q1"))).toBe(false);
+    expect(isAncestorOrSelf(n("/docs"), n("docs/q1"))).toBe(false);
   });
 });

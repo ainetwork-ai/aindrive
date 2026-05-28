@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { ROLE_RANK, atLeast, bestMatchingRole, type Role } from "../access-core.js";
+import { type NormalizedPath } from "../path";
 
-type Row = { path: string; role: Role };
+type Row = { path: NormalizedPath; role: Role };
+const n = (s: string) => s as NormalizedPath;
 
 describe("ROLE_RANK", () => {
   it("orders roles strictly", () => {
@@ -28,36 +30,36 @@ describe("atLeast", () => {
 
 describe("bestMatchingRole", () => {
   it("returns 'none' when no row matches", () => {
-    expect(bestMatchingRole([], "docs/q1")).toBe("none");
-    expect(bestMatchingRole([{ path: "other", role: "editor" }], "docs/q1")).toBe("none");
+    expect(bestMatchingRole([], n("docs/q1"))).toBe("none");
+    expect(bestMatchingRole([{ path: n("other"), role: "editor" }], n("docs/q1"))).toBe("none");
   });
 
   it("returns the highest-rank role among matching ancestors", () => {
     const rows: Row[] = [
-      { path: "", role: "viewer" },             // drive-wide viewer
-      { path: "docs", role: "commenter" },      // covers target
-      { path: "docs/q1", role: "editor" },      // exact cover
-      { path: "docs/q2", role: "owner" },       // does NOT cover docs/q1
+      { path: n(""), role: "viewer" },             // drive-wide viewer
+      { path: n("docs"), role: "commenter" },      // covers target
+      { path: n("docs/q1"), role: "editor" },      // exact cover
+      { path: n("docs/q2"), role: "owner" },       // does NOT cover docs/q1
     ];
-    expect(bestMatchingRole(rows, "docs/q1")).toBe("editor");
+    expect(bestMatchingRole(rows, n("docs/q1"))).toBe("editor");
   });
 
   it("returns drive-wide grant when target has no specific ancestor", () => {
     const rows: Row[] = [
-      { path: "", role: "viewer" },
-      { path: "specific", role: "editor" },
+      { path: n(""), role: "viewer" },
+      { path: n("specific"), role: "editor" },
     ];
-    expect(bestMatchingRole(rows, "unrelated")).toBe("viewer");
+    expect(bestMatchingRole(rows, n("unrelated"))).toBe("viewer");
   });
 
   it("respects exact match", () => {
-    const rows: Row[] = [{ path: "docs/q1", role: "owner" }];
-    expect(bestMatchingRole(rows, "docs/q1")).toBe("owner");
-    expect(bestMatchingRole(rows, "docs/q1/note.md")).toBe("owner");
+    const rows: Row[] = [{ path: n("docs/q1"), role: "owner" }];
+    expect(bestMatchingRole(rows, n("docs/q1"))).toBe("owner");
+    expect(bestMatchingRole(rows, n("docs/q1/note.md"))).toBe("owner");
   });
 
   it("rejects similar-but-not-ancestor (path prefix without slash boundary)", () => {
-    const rows: Row[] = [{ path: "docs", role: "editor" }];
-    expect(bestMatchingRole(rows, "document")).toBe("none");
+    const rows: Row[] = [{ path: n("docs"), role: "editor" }];
+    expect(bestMatchingRole(rows, n("document"))).toBe("none");
   });
 });
