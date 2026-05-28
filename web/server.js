@@ -6,8 +6,10 @@ import { onAgentConnect } from "./lib/agents.js";
 import { onDocConnect } from "./lib/dochub.js";
 import { log } from "./lib/logger.js";
 import { runBootChecks } from "./lib/boot-checks.js";
+import { runAllMigrations } from "./lib/migrations/run.js";
 
 runBootChecks();
+runAllMigrations();
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
