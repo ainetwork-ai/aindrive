@@ -12,5 +12,18 @@ export declare function bestMatchingRole(
   targetPath: NormalizedPath
 ): RoleOrNone;
 
+export declare function pickFreeShareRole(
+  shareRows: {
+    drive_id: string;
+    path: NormalizedPath;
+    role: Role;
+    price_usdc: number | null;
+    expires_at: string | null;
+  }[],
+  driveId: string,
+  targetPath: NormalizedPath,
+  now: Date
+): RoleOrNone;
+
 export { normalizePath, isAncestorOrSelf } from "./path";
 export type { PathError, NormalizedPath };

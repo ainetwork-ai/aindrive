@@ -1,8 +1,9 @@
 import { eq, and } from "drizzle-orm";
 import { drizzleDb } from "./db";
-import { drives, drive_members, folder_access } from "../drizzle/schema";
+import { drives, drive_members, folder_access, shares } from "../drizzle/schema";
 import { getWallet } from "./wallet";
-import { ROLE_RANK, atLeast, bestMatchingRole, normalizePath, type Role, type RoleOrNone } from "./access-core.js";
+import { readShareGrants } from "./share-grant";
+import { ROLE_RANK, atLeast, bestMatchingRole, pickFreeShareRole, normalizePath, type Role, type RoleOrNone } from "./access-core.js";
 import { type NormalizedPath } from "./path";
 
 export type { Role, RoleOrNone };
@@ -42,8 +43,56 @@ export function resolveRoleByWallet(driveId: string, wallet: string, targetPath:
 }
 
 /**
- * Combined role resolution: prefers user session, falls back to wallet allowlist.
- * Use this from API routes that may be hit by either authenticated users or wallet-only visitors.
+ * Free-share grant lookup. A link-only visitor carries a signed cookie
+ * listing the share tokens they have opened (see lib/share-grant.ts). For
+ * each token we look up the share and grant its role ONLY when:
+ *   - the share belongs to this drive,
+ *   - the share is FREE (price_usdc IS NULL) — paid shares never grant via
+ *     this path, so a leaked/forged cookie can't bypass a paywall,
+ *   - not expired,
+ *   - and the share's path is an ancestor-or-self of the target.
+ */
+export function resolveRoleByShareGrants(
+  driveId: string,
+  grantedTokens: string[],
+  targetPath: string
+): RoleOrNone {
+  if (grantedTokens.length === 0) return "none";
+  const target = normalizePath(targetPath);
+  // Look the tokens up, then hand the rows to the pure decision function
+  // (pickFreeShareRole) which enforces free-only / not-expired / ancestor.
+  const rows = grantedTokens
+    .map((token) =>
+      drizzleDb
+        .select({
+          drive_id: shares.drive_id,
+          path: shares.path,
+          role: shares.role,
+          price_usdc: shares.price_usdc,
+          expires_at: shares.expires_at,
+        })
+        .from(shares)
+        .where(eq(shares.token, token))
+        .get()
+    )
+    .filter((r): r is NonNullable<typeof r> => r != null) as {
+      drive_id: string;
+      path: NormalizedPath;
+      role: Role;
+      price_usdc: number | null;
+      expires_at: string | null;
+    }[];
+  return pickFreeShareRole(rows, driveId, target, new Date());
+}
+
+/**
+ * Combined role resolution, in priority order:
+ *   1. user session  (drive owner / member)
+ *   2. wallet allowlist  (owner-added or paid grant)
+ *   3. free-share grant cookie  (link-only visitor of a FREE share)
+ *
+ * Use this from API routes that may be hit by authenticated users,
+ * wallet-only visitors, or anonymous free-share visitors.
  */
 export async function resolveAccess(
   driveId: string,
@@ -57,6 +106,11 @@ export async function resolveAccess(
   const wallet = await getWallet();
   if (wallet) {
     const r = resolveRoleByWallet(driveId, wallet, targetPath);
+    if (r !== "none") return r;
+  }
+  const grants = await readShareGrants();
+  if (grants.length > 0) {
+    const r = resolveRoleByShareGrants(driveId, grants, targetPath);
     if (r !== "none") return r;
   }
   return "none";

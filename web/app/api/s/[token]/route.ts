@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { getWallet, setWalletCookie } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
 import { resolveRoleByWallet, atLeast, type Role } from "@/lib/access";
+import { addShareGrant } from "@/lib/share-grant";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
@@ -54,8 +55,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   const user = await getUser();
   if (user && user.id === share.owner_id) return NextResponse.json(okBody);
 
-  // Free share
-  if (!share.price_usdc) return NextResponse.json(okBody);
+  // Free share — grant the visitor a signed share-grant cookie so that
+  // their subsequent fs/* calls resolve through resolveRoleByShareGrants.
+  // Without this the visitor gets 200 here but 401 on the very next
+  // fs/list, because resolveAccess keys on wallet/session, neither of
+  // which a link-only visitor has.
+  if (!share.price_usdc) {
+    await addShareGrant(token);
+    return NextResponse.json(okBody);
+  }
 
   // Paid share — check existing wallet allowlist with prefix matching
   const wallet = await getWallet();
