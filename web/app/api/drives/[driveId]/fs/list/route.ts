@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import { getUser } from "@/lib/session";
-import { getDrive } from "@/lib/drives";
-import { resolveAccess, atLeast } from "@/lib/access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
+import { requireDriveRole } from "@/lib/require-access";
 
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
@@ -11,13 +9,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   let path: string;
   try { path = normalizePath(url.searchParams.get("path") || ""); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
-  const user = await getUser();
-  const drive = getDrive(driveId);
-  if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
-  const role = await resolveAccess(driveId, path, user?.id ?? null);
-  if (!atLeast(role, "viewer")) {
-    return NextResponse.json({ error: "forbidden" }, { status: user ? 403 : 401 });
-  }
+  const gate = await requireDriveRole(driveId, path, { min: "viewer" });
+  if (gate instanceof NextResponse) return gate;
+  const { drive, role } = gate;
   try {
     const result = await callAgent(driveId, drive.drive_secret, { method: "list", path });
     return NextResponse.json({ entries: result.entries, role });
