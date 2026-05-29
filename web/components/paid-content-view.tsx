@@ -1,6 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Lock, ExternalLink, Loader2, ChevronLeft, Download } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Lock, ExternalLink, Loader2, ChevronLeft, Download, KeyRound } from "lucide-react";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { toast } from "sonner";
+import { useWalletLogin } from "./use-wallet-login";
 
 type FsEntry = { name: string; path: string; isDir: boolean; size: number; mtimeMs: number };
 
@@ -26,53 +29,61 @@ export function PaidContentView({
   const [file, setFile] = useState<ReadBody | null>(null);
   const [entries, setEntries] = useState<FsEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [denied, setDenied] = useState(false); // 401/403 → offer wallet re-link
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setFile(null);
-    setEntries(null);
+  const load = useCallback(
+    async (signal?: { cancelled: boolean }) => {
+      const live = () => !signal?.cancelled;
+      setLoading(true);
+      setError(null);
+      setDenied(false);
+      setFile(null);
+      setEntries(null);
 
-    (async () => {
       const listRes = await fetch(`/api/drives/${driveId}/fs/list?path=${encodeURIComponent(currentPath)}`);
-      if (!cancelled && listRes.ok) {
+      if (live() && listRes.ok) {
         const body = await listRes.json();
         setEntries(body.entries || []);
         setLoading(false);
         return;
       }
-      // If listing already failed for an access/missing reason, don't bother
-      // probing fs/read — it'll fail the same way and waste a roundtrip.
+      // Access/missing failure on list → don't probe fs/read (same result).
       if (listRes.status === 401 || listRes.status === 403 || listRes.status === 404) {
-        if (cancelled) return;
-        setError(await extractError(listRes, listRes.status === 404 ? "File or folder not found." : "Permission denied. Your wallet may not have access to this path."));
+        if (!live()) return;
+        if (listRes.status === 401 || listRes.status === 403) setDenied(true);
+        setError(await extractError(listRes, listRes.status === 404 ? "File or folder not found." : "Your wallet may not have access to this path."));
         setLoading(false);
         return;
       }
       // 400 = path is a file, not a directory — fall through to fs/read.
       const readRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(currentPath)}`);
-      if (!cancelled && readRes.ok) {
+      if (live() && readRes.ok) {
         const body: ReadBody = await readRes.json();
         setFile(body);
         setLoading(false);
         return;
       }
-      if (cancelled) return;
+      if (!live()) return;
       const status = readRes.status;
       if (status === 401 || status === 403) {
-        setError(await extractError(readRes, "Permission denied. Your wallet may not have access to this path."));
+        setDenied(true);
+        setError(await extractError(readRes, "Your wallet may not have access to this path."));
       } else if (status === 404) {
         setError(await extractError(readRes, "File or folder not found."));
       } else {
         setError(await extractError(readRes, "Content unavailable. The seller's agent may be offline."));
       }
       setLoading(false);
-    })();
+    },
+    [driveId, currentPath],
+  );
 
-    return () => { cancelled = true; };
-  }, [driveId, currentPath]);
+  useEffect(() => {
+    const signal = { cancelled: false };
+    load(signal);
+    return () => { signal.cancelled = true; };
+  }, [load]);
 
   const atRoot = currentPath === rootPath;
   const parentPath = currentPath.includes("/") ? currentPath.slice(0, currentPath.lastIndexOf("/")) : "";
@@ -128,6 +139,8 @@ export function PaidContentView({
             <div className="flex items-center gap-2 text-drive-muted">
               <Loader2 className="w-4 h-4 animate-spin" /> Loading…
             </div>
+          ) : denied ? (
+            <WalletRelink message={error} onLoggedIn={() => load()} />
           ) : error ? (
             <div className="text-red-600 text-sm">{error}</div>
           ) : entries ? (
@@ -152,6 +165,45 @@ export function PaidContentView({
         </article>
       </div>
     </main>
+  );
+}
+
+/**
+ * Shown when fs/* returns 401/403. The visitor likely paid (or was granted
+ * access) on another device/browser, so this device just lacks the
+ * `aindrive_wallet` cookie. Let them connect the same wallet and re-prove
+ * ownership via SIWE — no second payment. On success we re-run load().
+ */
+function WalletRelink({ message, onLoggedIn }: { message: string | null; onLoggedIn: () => void }) {
+  const { login, busy, isConnected } = useWalletLogin();
+
+  async function handle() {
+    const ok = await login();
+    if (ok) {
+      toast.success("Wallet verified. Restoring access…");
+      onLoggedIn();
+    } else {
+      toast.error("Could not verify wallet");
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-center text-center gap-3 py-6">
+      <KeyRound className="w-8 h-8 text-drive-accent" />
+      <div className="text-sm font-medium">Access needs your wallet</div>
+      <p className="text-xs text-drive-muted max-w-sm">
+        {message || "Your wallet may not have access to this path."} If you paid or were granted
+        access on another device, connect the same wallet to restore it — no second payment.
+      </p>
+      <ConnectButton showBalance={false} chainStatus="icon" />
+      <button
+        onClick={handle}
+        disabled={!isConnected || busy}
+        className="mt-1 rounded-lg bg-drive-accent text-white px-4 py-2 text-sm hover:bg-drive-accentHover disabled:opacity-50"
+      >
+        {busy ? "Verifying…" : isConnected ? "Verify this wallet" : "Connect wallet first"}
+      </button>
+    </div>
   );
 }
 
