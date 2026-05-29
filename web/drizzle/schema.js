@@ -34,6 +34,7 @@ export const drives = sqliteTable("drives", {
     .default(sql`(datetime('now'))`),
   namespace_pubkey: blob("namespace_pubkey"),
   namespace_secret: blob("namespace_secret"),
+  payout_wallet: text("payout_wallet"),
 });
 
 export const drive_members = sqliteTable(

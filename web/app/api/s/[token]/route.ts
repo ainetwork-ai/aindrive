@@ -32,10 +32,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
 
   const share = db.prepare(`
     SELECT s.id, s.drive_id, s.path, s.role, s.expires_at, s.price_usdc, s.payment_chain,
-           d.name AS drive_name, d.owner_id
+           d.name AS drive_name, d.owner_id, d.payout_wallet
     FROM shares s JOIN drives d ON d.id = s.drive_id
     WHERE s.token = ?
-  `).get(token) as (ShareRow & { drive_name: string; owner_id: string }) | undefined;
+  `).get(token) as (ShareRow & { drive_name: string; owner_id: string; payout_wallet: string | null }) | undefined;
 
   if (!share) return NextResponse.json({ error: "share not found" }, { status: 404 });
   if (share.expires_at && new Date(share.expires_at) < new Date()) {
@@ -64,8 +64,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     if (atLeast(role, "viewer")) return NextResponse.json({ ...okBody, role });
   }
 
-  // Build x402 payment requirements
-  const payTo = process.env.AINDRIVE_PAYOUT_WALLET || "0x0000000000000000000000000000000000000000";
+  // Build x402 payment requirements.
+  // Payout priority: the drive's own payout_wallet (set by its owner) wins;
+  // fall back to the global env wallet (single-tenant deployments), then the
+  // zero address as a last resort (which the facilitator will reject).
+  const payTo =
+    share.payout_wallet ||
+    process.env.AINDRIVE_PAYOUT_WALLET ||
+    "0x0000000000000000000000000000000000000000";
   const microAmount = Math.round(share.price_usdc * 1_000_000).toString();
   const requirements: PaymentRequirements = {
     scheme: "exact",

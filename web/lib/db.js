@@ -37,6 +37,7 @@ function open() {
       drive_secret TEXT NOT NULL,
       last_seen_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      payout_wallet TEXT,
       FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS drive_members (
@@ -115,6 +116,7 @@ function open() {
     "ALTER TABLE drives ADD COLUMN namespace_secret BLOB",
     "ALTER TABLE folder_access ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
+    "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;

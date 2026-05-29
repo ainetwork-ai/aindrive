@@ -40,6 +40,9 @@ export const drives = sqliteTable("drives", {
     .default(sql`(datetime('now'))`),
   namespace_pubkey: blob("namespace_pubkey"),
   namespace_secret: blob("namespace_secret"),
+  // EVM wallet that receives x402 payments for this drive's paid shares.
+  // Null = fall back to the AINDRIVE_PAYOUT_WALLET env (single-tenant default).
+  payout_wallet: text("payout_wallet"),
 });
 
 // ---------------------------------------------------------------------------
