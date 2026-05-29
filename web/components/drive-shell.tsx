@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import clsx from "clsx";
 import { toast } from "sonner";
@@ -10,12 +11,18 @@ import {
   Bot, MessageSquare, Menu,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
-import { Viewer } from "./viewer";
-import { ShareDialog } from "./share-dialog";
 import { RowMenu } from "./row-menu";
-import { CreateAgentModal } from "./create-agent-modal";
-import { FolderChat } from "./folder-chat";
 import { X402Badge } from "./x402-badges";
+
+// These four are only rendered on user action (open a file, open chat, open
+// the share/agent modal), so we load them on demand instead of bundling them
+// into the drive workspace's initial JS. Viewer is the heaviest — it pulls in
+// the Monaco editor, y-monaco, and the Yjs provider. ssr:false because they're
+// interactive client-only surfaces with no SSR value.
+const Viewer = dynamic(() => import("./viewer").then((m) => m.Viewer), { ssr: false });
+const ShareDialog = dynamic(() => import("./share-dialog").then((m) => m.ShareDialog), { ssr: false });
+const CreateAgentModal = dynamic(() => import("./create-agent-modal").then((m) => m.CreateAgentModal), { ssr: false });
+const FolderChat = dynamic(() => import("./folder-chat").then((m) => m.FolderChat), { ssr: false });
 
 type Props = { driveId: string; driveName: string };
 

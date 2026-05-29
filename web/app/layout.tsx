@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Instrument_Serif } from "next/font/google";
 import { Toaster } from "sonner";
-import { WalletProvider } from "@/components/wallet-provider";
 import "./globals.css";
 
 const display = Instrument_Serif({
@@ -27,13 +26,18 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // WalletProvider (wagmi + RainbowKit + WalletConnect + MetaMask SDK) is
+  // intentionally NOT mounted here — only the /s/[token] share route uses
+  // wallet hooks, so it owns the provider via app/s/[token]/layout.tsx. This
+  // keeps the ~300-600KB web3 bundle (and its Reown config fetch) off the
+  // landing page, auth pages, and the main drive workspace.
+  // Toaster stays at the root: toast() is called app-wide and does not
+  // depend on the wallet context.
   return (
     <html lang="en" className={display.variable}>
       <body className="bg-drive-bg text-drive-text font-sans antialiased">
-        <WalletProvider>
-          {children}
-          <Toaster position="bottom-right" richColors closeButton />
-        </WalletProvider>
+        {children}
+        <Toaster position="bottom-right" richColors closeButton />
       </body>
     </html>
   );
