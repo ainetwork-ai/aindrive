@@ -1,3 +1,6 @@
+// MUST be first: populates process.env from .env.local before the lib
+// imports below (db / dochub / migrations) read AINDRIVE_* at import time.
+import "./lib/load-env.js";
 import { createServer } from "node:http";
 import { parse as parseUrl } from "node:url";
 import next from "next";

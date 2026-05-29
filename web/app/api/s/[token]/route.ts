@@ -6,7 +6,7 @@ import { PaymentPayloadSchema, type PaymentRequirements } from "x402/types";
 import { db } from "@/lib/db";
 import { getWallet, setWalletCookie } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
-import { resolveRoleByWallet, atLeast, type Role } from "@/lib/access";
+import { resolveRoleByWallet, atLeast, ROLE_RANK, type Role } from "@/lib/access";
 import { addShareGrant } from "@/lib/share-grant";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
@@ -132,7 +132,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
         || "0xdemodemodemodemodemodemodemodemodemo0000"
     ).toLowerCase();
     txHash = "0xdev_bypass_" + nanoid(20);
-    console.log(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
+    console.warn(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
   } else {
     // Run fn with an AbortController that fires after `ms` ms.
     async function withTimeout<T>(
@@ -238,7 +238,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // path (e.g. owner-added editor) MUST NOT be downgraded just because
   // they later pay through a viewer-tier share. We rank the new share's
   // role against the current row and only UPDATE if it's an upgrade.
-  const ROLE_RANK_LOCAL: Record<string, number> = { none: 0, viewer: 1, commenter: 2, editor: 3, owner: 4 };
   try {
     db.prepare(
       "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by, payment_tx, role) VALUES (?, ?, ?, ?, 'payment', ?, ?)"
@@ -248,8 +247,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     const existing = db.prepare(
       "SELECT role FROM folder_access WHERE drive_id = ? AND path = ? AND wallet_address = ?"
     ).get(share.drive_id, share.path, payerWallet) as { role: string } | undefined;
-    const existingRank = ROLE_RANK_LOCAL[existing?.role ?? "none"] ?? 0;
-    const newRank = ROLE_RANK_LOCAL[share.role] ?? 0;
+    const existingRank = ROLE_RANK[(existing?.role ?? "none") as Role | "none"] ?? 0;
+    const newRank = ROLE_RANK[share.role] ?? 0;
     if (newRank > existingRank) {
       db.prepare(
         "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"

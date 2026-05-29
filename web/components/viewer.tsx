@@ -122,9 +122,19 @@ export function Viewer({
         const docId = await sha1Base64(`${driveId}:${entry.path}`);
         docIdRef.current = docId;
 
-        // Set up tracer now that we have the docId
-        tracer = traceClient(docId, SESSION_ID);
-        provider.setTracer(tracer);
+        // Set up tracer only when explicitly debugging. The tracer hashes the
+        // full Yjs state vector (SubtleCrypto SHA-1) on every doc update and
+        // POSTs batches to /api/dev/trace — measurable typing lag on larger
+        // docs. Leaving the provider's tracer null makes onDocUpdate's hash +
+        // POST a no-op for normal editing. Opt in via NEXT_PUBLIC_AINDRIVE_TRACE
+        // or a localStorage flag. (Server-side WS/RPC traces are unaffected.)
+        const traceOn =
+          process.env.NEXT_PUBLIC_AINDRIVE_TRACE === "on" ||
+          (typeof window !== "undefined" && window.localStorage.getItem("aindrive_trace") === "on");
+        if (traceOn) {
+          tracer = traceClient(docId, SESSION_ID);
+          provider.setTracer(tracer);
+        }
 
         // Wait for full readiness (IndexedDB + WS sync) before deciding whether to seed
         await provider.whenReady;
@@ -133,7 +143,7 @@ export function Viewer({
         // Otherwise the existing CRDT state is authoritative — re-seeding would
         // duplicate content on every reload.
         if (ytext.length > 0) {
-          tracer("disk-seed-skip");
+          tracer?.("disk-seed-skip");
         } else {
           const yjsRes = await fetch(`/api/drives/${driveId}/yjs?docId=${docId}&path=${encodeURIComponent(entry.path)}`);
           if (yjsRes.ok) {
@@ -142,7 +152,7 @@ export function Viewer({
               try {
                 const updateBytes = b64ToBytes(data);
                 Y.applyUpdate(provider.doc, updateBytes, provider);
-                tracer("yjs-pull-apply", { byteLen: updateBytes.byteLength });
+                tracer?.("yjs-pull-apply", { byteLen: updateBytes.byteLength });
               }
               catch (e) { console.warn("y-apply-update failed:", e); }
             }
@@ -154,7 +164,7 @@ export function Viewer({
               if (provider.doc.getText("content").length === 0) {
                 const seedContent = fdata.content as string;
                 provider.doc.transact(() => ytext.insert(0, seedContent), provider);
-                tracer("disk-seed-apply", { byteLen: new TextEncoder().encode(seedContent).byteLength });
+                tracer?.("disk-seed-apply", { byteLen: new TextEncoder().encode(seedContent).byteLength });
               }
             }
           }
