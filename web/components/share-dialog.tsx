@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
-  X, Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, Lock,
+  X, Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, Lock, TrendingUp, ExternalLink,
 } from "lucide-react";
 
 type Share = {
@@ -21,6 +21,16 @@ type Access = {
   added_by: "owner" | "payment";
   payment_tx: string | null;
   added_at: string;
+};
+type Receipt = {
+  id: string;
+  path: string;
+  wallet: string;
+  tx_hash: string;
+  amount_usdc: number | null;
+  network: string;
+  share_id: string | null;
+  settled_at: string;
 };
 
 type FocusSection = "sell" | "share" | undefined;
@@ -42,16 +52,51 @@ export function ShareDialog({
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");
   const [price, setPrice] = useState("");
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [payoutWallet, setPayoutWallet] = useState<string>("");
+  const [payoutInput, setPayoutInput] = useState<string>("");
 
   async function load() {
-    const [sRes, aRes] = await Promise.all([
+    const [sRes, aRes, rRes, dRes] = await Promise.all([
       fetch(`/api/drives/${driveId}/shares`),
       fetch(`/api/drives/${driveId}/access`),
+      fetch(`/api/drives/${driveId}/receipts`),
+      fetch(`/api/drives/${driveId}`),
     ]);
     if (sRes.ok) setShares((await sRes.json()).shares);
     if (aRes.ok) setAccess((await aRes.json()).access);
+    if (rRes.ok) setReceipts((await rRes.json()).receipts ?? []);
+    if (dRes.ok) {
+      const d = await dRes.json();
+      setPayoutWallet(d.payout_wallet ?? "");
+      setPayoutInput(d.payout_wallet ?? "");
+    }
   }
   useEffect(() => { load(); }, [driveId]);
+
+  async function savePayoutWallet() {
+    const v = payoutInput.trim();
+    if (v && !/^0x[a-fA-F0-9]{40}$/.test(v)) {
+      toast.error("Payout wallet must be 0x + 40 hex chars");
+      return;
+    }
+    setBusy(true);
+    const res = await fetch(`/api/drives/${driveId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payout_wallet: v || null }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error((await res.json()).error || "Failed to save payout wallet");
+      return;
+    }
+    const { payout_wallet } = await res.json();
+    setPayoutWallet(payout_wallet ?? "");
+    toast.success(payout_wallet ? "Payout wallet saved" : "Payout wallet cleared");
+  }
+
+  const totalEarned = receipts.reduce((sum, r) => sum + (r.amount_usdc ?? 0), 0);
 
   // Existing paid share for this exact path (most recent first)
   const paidShare = shares.find(s => s.path === defaultPath && s.price_usdc !== null);
@@ -165,6 +210,49 @@ export function ShareDialog({
 
         <div className="p-4 space-y-5 overflow-y-auto scrollbar-thin">
 
+          {/* Earnings — payment ledger for this drive */}
+          {receipts.length > 0 && (
+            <section>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <TrendingUp className="w-4 h-4" /> Earnings
+                </div>
+                <span className="text-sm font-semibold text-green-700">
+                  ${totalEarned.toFixed(2)} USDC
+                </span>
+              </div>
+              <ul className="space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
+                {receipts.map((r) => (
+                  <li
+                    key={r.id}
+                    className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
+                  >
+                    <span className="font-mono truncate w-20 shrink-0">
+                      {r.wallet.slice(0, 6)}…{r.wallet.slice(-4)}
+                    </span>
+                    <span className="text-drive-muted truncate flex-1">{r.path || "/"}</span>
+                    <span className="shrink-0">
+                      {r.amount_usdc != null ? `$${r.amount_usdc.toFixed(2)}` : "—"}
+                    </span>
+                    {r.tx_hash.startsWith("0x") && !r.tx_hash.startsWith("0xdev_bypass") ? (
+                      <a
+                        href={`https://sepolia.basescan.org/tx/${r.tx_hash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-0.5 rounded hover:bg-drive-hover shrink-0"
+                        title="View tx"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    ) : (
+                      <span className="w-4 shrink-0" />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           {/* Sell — promoted top-of-mind section */}
           <section className={focusSection === "sell" ? "ring-2 ring-drive-accent/40 rounded-xl p-3 -m-3" : ""}>
             <div className="flex items-center justify-between mb-2">
@@ -191,6 +279,36 @@ export function ShareDialog({
                 <p className="text-xs text-drive-muted">
                   Buyers pay once for permanent access. Send this link to them.
                 </p>
+              </div>
+            )}
+
+            {/* Payout wallet — where x402 payments for THIS drive land.
+                Shown whenever the Sell section is open (editing or active). */}
+            {sellOn && (
+              <div className="rounded-xl border border-drive-border p-3 space-y-2 mb-3">
+                <label className="text-xs text-drive-muted block">
+                  Payout wallet {payoutWallet ? "" : "(not set — payments use the server default)"}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    value={payoutInput}
+                    onChange={(e) => setPayoutInput(e.target.value.trim())}
+                    placeholder="0x… (where you receive USDC)"
+                    className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
+                  />
+                  <button
+                    disabled={busy || payoutInput.trim() === payoutWallet}
+                    onClick={savePayoutWallet}
+                    className="rounded-lg bg-drive-accent text-white px-3 text-sm hover:bg-drive-accentHover disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+                {!payoutWallet && (
+                  <p className="text-xs text-amber-700">
+                    ⚠ Set this before selling, or earnings route to the instance operator&rsquo;s wallet.
+                  </p>
+                )}
               </div>
             )}
 
