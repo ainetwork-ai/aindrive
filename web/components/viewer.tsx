@@ -2,23 +2,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import dynamic from "next/dynamic";
-import { X, Save, Download, Loader2, Wifi, WifiOff } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import * as Y from "yjs";
 import { MonacoBinding } from "y-monaco";
 import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
 import { traceClient, SESSION_ID } from "@/lib/yjs/trace-client";
 import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
+import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
+import { ViewerHeader } from "./viewer-parts";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
   ssr: false,
   loading: () => <div className="flex-1 flex items-center justify-center text-drive-muted"><Loader2 className="w-4 h-4 animate-spin" /></div>,
 });
-
-const TEXT_EXT = new Set([
-  "txt", "md", "json", "js", "mjs", "ts", "tsx", "jsx", "html", "css",
-  "py", "rs", "go", "yml", "yaml", "toml", "sh", "sql", "xml", "csv",
-]);
 
 export function Viewer({
   driveId, entry, canEdit, onClose, onSaved,
@@ -260,54 +257,17 @@ export function Viewer({
 
   return (
     <aside className="fixed inset-0 z-30 w-full sm:static sm:inset-auto sm:z-auto sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
-      <header className="flex items-center justify-between gap-2 p-3 border-b border-drive-border">
-        <div className="truncate font-medium flex items-center gap-2 min-w-0 flex-1">
-          <span className="truncate">{entry.name}</span>
-          {isText && (
-            <span className={`text-xs flex items-center gap-1 shrink-0 ${status === "connected" ? "text-green-600" : status === "connecting" ? "text-amber-600" : "text-red-600"}`}>
-              {status === "connected" ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-              {status === "offline" ? "offline" : status === "connecting" ? "connecting" : ""}
-            </span>
-          )}
-          {isText && presence.length > 0 && (
-            <div className="flex -space-x-1.5 shrink-0 ml-1">
-              {presence.slice(0, 6).map((p) => (
-                <span
-                  key={p.id}
-                  title={p.name}
-                  className="w-6 h-6 rounded-full border-2 border-white text-[10px] font-semibold text-white flex items-center justify-center shadow-sm"
-                  style={{ background: p.color }}
-                >
-                  {p.name.replace(/^0x/, "").slice(0, 2).toUpperCase()}
-                </span>
-              ))}
-              {presence.length > 6 && (
-                <span className="w-6 h-6 rounded-full border-2 border-white bg-drive-muted text-white text-[10px] font-semibold flex items-center justify-center">
-                  +{presence.length - 6}
-                </span>
-              )}
-            </div>
-          )}
-          {isText && !canEdit && (
-            <span className="text-[10px] uppercase tracking-wide text-drive-muted bg-drive-sidebar rounded px-1.5 py-0.5 shrink-0">view-only</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1">
-          {isText && canEdit && (
-            <button onClick={save} disabled={saving} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
-              <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save"}
-            </button>
-          )}
-          {binaryDataUrl && (
-            <a href={binaryDataUrl} download={entry.name} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
-              <Download className="w-4 h-4" /> Download
-            </a>
-          )}
-          <button onClick={onClose} className="rounded p-1.5 hover:bg-drive-hover">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </header>
+      <ViewerHeader
+        name={entry.name}
+        isText={isText}
+        status={status}
+        presence={presence}
+        canEdit={canEdit}
+        saving={saving}
+        onSave={save}
+        binaryDataUrl={binaryDataUrl}
+        onClose={onClose}
+      />
       <div className="flex-1 min-h-0 overflow-auto">
         {loading ? (
           <div className="h-full flex items-center justify-center text-drive-muted">
@@ -338,39 +298,4 @@ export function Viewer({
       </div>
     </aside>
   );
-}
-
-function colorForId(s: string): string {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return `hsl(${Math.abs(h) % 360}, 70%, 50%)`;
-}
-
-async function sha1Base64(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(s));
-  const bytes = new Uint8Array(buf);
-  let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "").slice(0, 22);
-}
-
-function bytesToBase64(arr: Uint8Array): string {
-  let s = ""; const chunk = 0x8000;
-  for (let i = 0; i < arr.length; i += chunk) s += String.fromCharCode(...arr.subarray(i, i + chunk));
-  return btoa(s);
-}
-
-function b64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64); const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-function languageFor(e: DriveEntry): string {
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", js: "javascript", mjs: "javascript", jsx: "javascript",
-    json: "json", md: "markdown", html: "html", css: "css",
-    py: "python", rs: "rust", go: "go", yaml: "yaml", yml: "yaml",
-    sh: "shell", sql: "sql", xml: "xml",
-  };
-  return map[e.ext] || "plaintext";
 }
