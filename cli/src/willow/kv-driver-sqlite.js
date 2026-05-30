@@ -10,9 +10,12 @@
  * matches the semantic ordering the Willow entry driver relies on.
  */
 
-// Use absolute paths since @earthstar/willow does not export these sub-paths.
-import { pack, unpack } from "/mnt/newdata/git/aindrive/cli/node_modules/@earthstar/willow/src/store/storage/kv/key_codec/kv_key_codec.js";
-import { compareKeys, isFirstKeyPrefixOfSecondKey } from "/mnt/newdata/git/aindrive/cli/node_modules/@earthstar/willow/src/store/storage/kv/types.js";
+// @earthstar/willow does not export these sub-paths in its package.json
+// "exports" map, so we reach into the package's src/ directly. Relative paths
+// keep this portable across machines (the previous absolute paths were hard
+// coded to one developer's checkout and broke every other build environment).
+import { pack, unpack } from "../../node_modules/@earthstar/willow/src/store/storage/kv/key_codec/kv_key_codec.js";
+import { compareKeys, isFirstKeyPrefixOfSecondKey } from "../../node_modules/@earthstar/willow/src/store/storage/kv/types.js";
 
 // Re-export key helpers so callers can import from one place.
 export { compareKeys, isFirstKeyPrefixOfSecondKey };

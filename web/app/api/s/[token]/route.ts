@@ -6,7 +6,8 @@ import { PaymentPayloadSchema, type PaymentRequirements } from "x402/types";
 import { db } from "@/lib/db";
 import { getWallet, setWalletCookie } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
-import { resolveRoleByWallet, atLeast, type Role } from "@/lib/access";
+import { resolveRoleByWallet, atLeast, ROLE_RANK, type Role } from "@/lib/access";
+import { addShareGrant } from "@/lib/share-grant";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
@@ -32,10 +33,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
 
   const share = db.prepare(`
     SELECT s.id, s.drive_id, s.path, s.role, s.expires_at, s.price_usdc, s.payment_chain,
-           d.name AS drive_name, d.owner_id
+           d.name AS drive_name, d.owner_id, d.payout_wallet
     FROM shares s JOIN drives d ON d.id = s.drive_id
     WHERE s.token = ?
-  `).get(token) as (ShareRow & { drive_name: string; owner_id: string }) | undefined;
+  `).get(token) as (ShareRow & { drive_name: string; owner_id: string; payout_wallet: string | null }) | undefined;
 
   if (!share) return NextResponse.json({ error: "share not found" }, { status: 404 });
   if (share.expires_at && new Date(share.expires_at) < new Date()) {
@@ -54,8 +55,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   const user = await getUser();
   if (user && user.id === share.owner_id) return NextResponse.json(okBody);
 
-  // Free share
-  if (!share.price_usdc) return NextResponse.json(okBody);
+  // Free share — grant the visitor a signed share-grant cookie so that
+  // their subsequent fs/* calls resolve through resolveRoleByShareGrants.
+  // Without this the visitor gets 200 here but 401 on the very next
+  // fs/list, because resolveAccess keys on wallet/session, neither of
+  // which a link-only visitor has.
+  if (!share.price_usdc) {
+    await addShareGrant(token);
+    return NextResponse.json(okBody);
+  }
 
   // Paid share — check existing wallet allowlist with prefix matching
   const wallet = await getWallet();
@@ -64,8 +72,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     if (atLeast(role, "viewer")) return NextResponse.json({ ...okBody, role });
   }
 
-  // Build x402 payment requirements
-  const payTo = process.env.AINDRIVE_PAYOUT_WALLET || "0x0000000000000000000000000000000000000000";
+  // Build x402 payment requirements.
+  // Payout priority: the drive's own payout_wallet (set by its owner) wins;
+  // fall back to the global env wallet (single-tenant deployments), then the
+  // zero address as a last resort (which the facilitator will reject).
+  const payTo =
+    share.payout_wallet ||
+    process.env.AINDRIVE_PAYOUT_WALLET ||
+    "0x0000000000000000000000000000000000000000";
   const microAmount = Math.round(share.price_usdc * 1_000_000).toString();
   const requirements: PaymentRequirements = {
     scheme: "exact",
@@ -118,7 +132,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
         || "0xdemodemodemodemodemodemodemodemodemo0000"
     ).toLowerCase();
     txHash = "0xdev_bypass_" + nanoid(20);
-    console.log(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
+    console.warn(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
   } else {
     // Run fn with an AbortController that fires after `ms` ms.
     async function withTimeout<T>(
@@ -214,16 +228,45 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     txHash = settleRes.transaction;
   }
 
-  // Persist permanent access
+  // Persist permanent access (folder_access = grant) AND the receipt
+  // (payment_receipts = audit ledger). Decoupled so that re-paying the
+  // same share never silently overwrites an older receipt: the second
+  // receipt is rejected by tx_hash UNIQUE (replay defense) while
+  // folder_access stays consistent.
+  //
+  // Role-downgrade guard: a wallet already holding a HIGHER role at this
+  // path (e.g. owner-added editor) MUST NOT be downgraded just because
+  // they later pay through a viewer-tier share. We rank the new share's
+  // role against the current row and only UPDATE if it's an upgrade.
   try {
     db.prepare(
       "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by, payment_tx, role) VALUES (?, ?, ?, ?, 'payment', ?, ?)"
     ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.role);
   } catch (e) {
     if (!/UNIQUE/i.test((e as Error).message)) throw e;
+    const existing = db.prepare(
+      "SELECT role FROM folder_access WHERE drive_id = ? AND path = ? AND wallet_address = ?"
+    ).get(share.drive_id, share.path, payerWallet) as { role: string } | undefined;
+    const existingRank = ROLE_RANK[(existing?.role ?? "none") as Role | "none"] ?? 0;
+    const newRank = ROLE_RANK[share.role] ?? 0;
+    if (newRank > existingRank) {
+      db.prepare(
+        "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"
+      ).run(share.role, share.drive_id, share.path, payerWallet);
+      console.warn(`[paid-grant] role upgraded for ${payerWallet} on ${share.drive_id}/${share.path}: ${existing?.role} -> ${share.role}`);
+    } else {
+      console.warn(`[paid-grant] role NOT downgraded for ${payerWallet} on ${share.drive_id}/${share.path}: kept ${existing?.role} (would-be ${share.role})`);
+    }
+  }
+  try {
     db.prepare(
-      "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"
-    ).run(share.role, share.drive_id, share.path, payerWallet);
+      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, X402_NETWORK, share.id);
+  } catch (e) {
+    if (!/UNIQUE/i.test((e as Error).message)) throw e;
+    // Same on-chain tx already recorded. Log so observability shows
+    // replay-vs-bug — assume replay but make it auditable.
+    console.warn(`[receipts] tx_hash UNIQUE collision — assuming replay: ${txHash} share=${share.id} payer=${payerWallet}`);
   }
   await setWalletCookie(payerWallet);
 

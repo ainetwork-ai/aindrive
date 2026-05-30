@@ -40,6 +40,9 @@ export const drives = sqliteTable("drives", {
     .default(sql`(datetime('now'))`),
   namespace_pubkey: blob("namespace_pubkey"),
   namespace_secret: blob("namespace_secret"),
+  // EVM wallet that receives x402 payments for this drive's paid shares.
+  // Null = fall back to the AINDRIVE_PAYOUT_WALLET env (single-tenant default).
+  payout_wallet: text("payout_wallet"),
 });
 
 // ---------------------------------------------------------------------------
@@ -110,6 +113,9 @@ export const folder_access = sqliteTable(
     path: text("path").notNull().default(""),
     wallet_address: text("wallet_address").notNull(),
     added_by: text("added_by").notNull(),
+    // Legacy: most-recent payment tx_hash for paid grants. New code writes
+    // receipts to payment_receipts (below) instead. Kept for backward-compat
+    // lookups on rows that pre-date the Phase 4 backfill.
     payment_tx: text("payment_tx"),
     added_at: text("added_at")
       .notNull()
@@ -124,5 +130,36 @@ export const folder_access = sqliteTable(
     ),
     index("idx_folder_access_lookup").on(t.drive_id, t.path, t.wallet_address),
     index("idx_folder_access_wallet").on(t.wallet_address),
+  ]
+);
+
+// ---------------------------------------------------------------------------
+// payment_receipts — append-only ledger of every settled x402 payment.
+// folder_access tells you WHO has access; payment_receipts tells you HOW
+// they got there. tx_hash UNIQUE doubles as replay defense.
+// ---------------------------------------------------------------------------
+export const payment_receipts = sqliteTable(
+  "payment_receipts",
+  {
+    id: text("id").primaryKey(),
+    drive_id: text("drive_id")
+      .notNull()
+      .references(() => drives.id, { onDelete: "cascade" }),
+    path: text("path").notNull().default(""),
+    wallet: text("wallet").notNull(),
+    tx_hash: text("tx_hash").notNull().unique(),
+    // Nullable: NULL = "amount unknown" (legacy backfilled receipts from
+    // before Phase 4). A real 0-amount is a different signal.
+    amount_usdc: real("amount_usdc"),
+    network: text("network").notNull(),
+    // Nullable because the originating share may be deleted later.
+    share_id: text("share_id"),
+    settled_at: text("settled_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    index("idx_payment_receipts_wallet").on(t.wallet),
+    index("idx_payment_receipts_drive_wallet").on(t.drive_id, t.wallet),
   ]
 );

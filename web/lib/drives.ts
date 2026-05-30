@@ -17,7 +17,17 @@ export type DriveRow = {
   created_at: string;
   namespace_pubkey: Buffer | null;
   namespace_secret: Buffer | null;
+  payout_wallet: string | null;
 };
+
+/** Update the payout wallet for a drive. Pass null to clear it. */
+export function setDrivePayoutWallet(driveId: string, payoutWallet: string | null) {
+  drizzleDb
+    .update(drives)
+    .set({ payout_wallet: payoutWallet })
+    .where(eq(drives.id, driveId))
+    .run();
+}
 
 export async function createDrive(ownerId: string, name: string) {
   const driveId = nanoid(12);

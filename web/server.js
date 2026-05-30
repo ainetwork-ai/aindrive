@@ -1,3 +1,6 @@
+// MUST be first: populates process.env from .env.local before the lib
+// imports below (db / dochub / migrations) read AINDRIVE_* at import time.
+import "./lib/load-env.js";
 import { createServer } from "node:http";
 import { parse as parseUrl } from "node:url";
 import next from "next";
@@ -6,8 +9,10 @@ import { onAgentConnect } from "./lib/agents.js";
 import { onDocConnect } from "./lib/dochub.js";
 import { log } from "./lib/logger.js";
 import { runBootChecks } from "./lib/boot-checks.js";
+import { runAllMigrations } from "./lib/migrations/run.js";
 
 runBootChecks();
+runAllMigrations();
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";

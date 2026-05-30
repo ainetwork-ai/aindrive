@@ -5,10 +5,11 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
+import { zPath } from "@/lib/zod-helpers";
 
 const Body = z.object({
   email: z.string().email(),
-  path: z.string().default(""),
+  path: zPath.default(""),
   role: z.enum(["viewer", "commenter", "editor", "owner"]),
 });
 

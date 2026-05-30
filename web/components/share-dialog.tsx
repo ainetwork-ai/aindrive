@@ -1,26 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { X, Lock } from "lucide-react";
+import { apiFetch } from "@/lib/api-client";
 import {
-  X, Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, Lock,
-} from "lucide-react";
-
-type Share = {
-  id: string;
-  token: string;
-  path: string;
-  role: string;
-  expires_at: string | null;
-  price_usdc: number | null;
-};
-type Access = {
-  id: string;
-  wallet_address: string;
-  path: string;
-  added_by: "owner" | "payment";
-  payment_tx: string | null;
-  added_at: string;
-};
+  EarningsSection, SellSection, WalletAccessSection, EmailInviteSection, FreeLinkSection,
+  type Share, type Access, type Receipt,
+} from "./share-dialog-sections";
 
 type FocusSection = "sell" | "share" | undefined;
 
@@ -36,20 +22,54 @@ export function ShareDialog({
   const [access, setAccess] = useState<Access[]>([]);
   const [email, setEmail] = useState("");
   const [wallet, setWallet] = useState("");
+  const [walletRole, setWalletRole] = useState<"viewer" | "commenter" | "editor">("viewer");
   const [role, setRole] = useState<"viewer" | "editor">("viewer");
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");
   const [price, setPrice] = useState("");
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [payoutWallet, setPayoutWallet] = useState<string>("");
+  const [payoutInput, setPayoutInput] = useState<string>("");
 
   async function load() {
-    const [sRes, aRes] = await Promise.all([
-      fetch(`/api/drives/${driveId}/shares`),
-      fetch(`/api/drives/${driveId}/access`),
+    const [s, a, r, d] = await Promise.all([
+      apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
+      apiFetch<{ access: Access[] }>(`/api/drives/${driveId}/access`),
+      apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
+      apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
     ]);
-    if (sRes.ok) setShares((await sRes.json()).shares);
-    if (aRes.ok) setAccess((await aRes.json()).access);
+    if (s.ok) setShares(s.data.shares);
+    if (a.ok) setAccess(a.data.access);
+    if (r.ok) setReceipts(r.data.receipts ?? []);
+    if (d.ok) {
+      setPayoutWallet(d.data.payout_wallet ?? "");
+      setPayoutInput(d.data.payout_wallet ?? "");
+    }
   }
   useEffect(() => { load(); }, [driveId]);
+
+  async function savePayoutWallet() {
+    const v = payoutInput.trim();
+    if (v && !/^0x[a-fA-F0-9]{40}$/.test(v)) {
+      toast.error("Payout wallet must be 0x + 40 hex chars");
+      return;
+    }
+    setBusy(true);
+    const res = await apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payout_wallet: v || null }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error || "Failed to save payout wallet");
+      return;
+    }
+    setPayoutWallet(res.data.payout_wallet ?? "");
+    toast.success(res.data.payout_wallet ? "Payout wallet saved" : "Payout wallet cleared");
+  }
+
+  const totalEarned = receipts.reduce((sum, r) => sum + (r.amount_usdc ?? 0), 0);
 
   // Existing paid share for this exact path (most recent first)
   const paidShare = shares.find(s => s.path === defaultPath && s.price_usdc !== null);
@@ -64,7 +84,7 @@ export function ShareDialog({
       return;
     }
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/shares`, {
+    const res = await apiFetch<{ url: string }>(`/api/drives/${driveId}/shares`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -75,10 +95,10 @@ export function ShareDialog({
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error || "Failed to save");
+      toast.error(res.error || "Failed to save");
       return;
     }
-    const { url } = await res.json();
+    const { url } = res.data;
     const copied = await navigator.clipboard.writeText(url).then(() => true).catch(() => false);
     if (copied) toast.success("Paid share link copied to clipboard");
     else toast.success(`Paid share link created: ${url}`, { duration: 8000 });
@@ -88,17 +108,17 @@ export function ShareDialog({
 
   async function createFreeLink() {
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/shares`, {
+    const res = await apiFetch<{ url: string }>(`/api/drives/${driveId}/shares`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: defaultPath, role }),
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error || "Failed to create link");
+      toast.error(res.error || "Failed to create link");
       return;
     }
-    const { url } = await res.json();
+    const { url } = res.data;
     const copied = await navigator.clipboard.writeText(url).then(() => true).catch(() => false);
     if (copied) toast.success("Free share link copied");
     else toast.success(`Free share link created: ${url}`, { duration: 8000 });
@@ -108,14 +128,14 @@ export function ShareDialog({
   async function invite() {
     if (!email) return;
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/members`, {
+    const res = await apiFetch(`/api/drives/${driveId}/members`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, role, path: defaultPath }),
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error);
+      toast.error(res.error);
     } else {
       setEmail("");
       toast.success("Collaborator added");
@@ -128,20 +148,20 @@ export function ShareDialog({
       return;
     }
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/access`, {
+    const res = await apiFetch(`/api/drives/${driveId}/access`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ wallet_address: wallet, path: defaultPath }),
+      body: JSON.stringify({ wallet_address: wallet, path: defaultPath, role: walletRole }),
     });
     setBusy(false);
-    if (!res.ok) toast.error((await res.json()).error);
+    if (!res.ok) toast.error(res.error);
     else { setWallet(""); load(); }
   }
 
   async function removeAccess(id: string) {
     if (!confirm("Remove this wallet's access?")) return;
-    const res = await fetch(`/api/drives/${driveId}/access/${id}`, { method: "DELETE" });
-    if (!res.ok) toast.error((await res.json()).error);
+    const res = await apiFetch(`/api/drives/${driveId}/access/${id}`, { method: "DELETE" });
+    if (!res.ok) toast.error(res.error);
     else load();
   }
 
@@ -162,182 +182,53 @@ export function ShareDialog({
         </header>
 
         <div className="p-4 space-y-5 overflow-y-auto scrollbar-thin">
+          {receipts.length > 0 && (
+            <EarningsSection receipts={receipts} totalEarned={totalEarned} />
+          )}
 
-          {/* Sell — promoted top-of-mind section */}
-          <section className={focusSection === "sell" ? "ring-2 ring-drive-accent/40 rounded-xl p-3 -m-3" : ""}>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <DollarSign className="w-4 h-4" /> Sell this {defaultPath.includes("/") || defaultPath ? "item" : "drive"}
-              </div>
-              <Toggle on={sellOn} disabled={!!paidShare} onChange={setEditingSell} />
-            </div>
+          <SellSection
+            defaultPath={defaultPath}
+            focusSection={focusSection}
+            sellOn={sellOn}
+            paidShare={paidShare}
+            payoutWallet={payoutWallet}
+            payoutInput={payoutInput}
+            setPayoutInput={setPayoutInput}
+            savePayoutWallet={savePayoutWallet}
+            price={price}
+            setPrice={setPrice}
+            saveSell={saveSell}
+            busy={busy}
+            setEditingSell={setEditingSell}
+            copyLink={copyLink}
+          />
 
-            {/* Active state: existing paid share (read-only) */}
-            {paidShare && sellOn && (
-              <div className="rounded-xl border border-drive-border p-3 space-y-2 bg-drive-sidebar/40">
-                <Row label="Price" value={`$${paidShare.price_usdc?.toFixed(2)} USDC`} />
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-drive-muted w-16 shrink-0">Link</span>
-                  <code className="flex-1 text-xs truncate font-mono">/s/{paidShare.token}</code>
-                  <button
-                    onClick={() => copyLink(paidShare.token)}
-                    className="p-1.5 rounded hover:bg-drive-hover" title="Copy link"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <p className="text-xs text-drive-muted">
-                  Buyers pay once for permanent access. Send this link to them.
-                </p>
-              </div>
-            )}
+          <WalletAccessSection
+            wallet={wallet}
+            setWallet={setWallet}
+            walletRole={walletRole}
+            setWalletRole={setWalletRole}
+            addWallet={addWallet}
+            busy={busy}
+            access={access}
+            removeAccess={removeAccess}
+          />
 
-            {/* Editing state: no paid share yet, toggle on */}
-            {!paidShare && sellOn && (
-              <div className="rounded-xl border border-drive-border p-3 space-y-3">
-                <div>
-                  <label className="text-xs text-drive-muted block mb-1">Price (USDC)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    max="9999.99"
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    placeholder="0.50"
-                    className="w-full rounded-lg border border-drive-border px-3 py-2 text-sm"
-                    autoFocus
-                  />
-                  <p className="text-xs text-drive-muted mt-1">
-                    Buyers pay once for permanent access.
-                  </p>
-                </div>
-                <button
-                  disabled={busy || !price}
-                  onClick={saveSell}
-                  className="w-full rounded-lg bg-drive-accent text-white px-3 py-2 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-                >
-                  Save as paid
-                </button>
-              </div>
-            )}
-          </section>
+          <EmailInviteSection
+            email={email}
+            setEmail={setEmail}
+            role={role}
+            setRole={setRole}
+            invite={invite}
+            busy={busy}
+          />
 
-          {/* Wallet allowlist */}
-          <section>
-            <div className="flex items-center gap-2 text-sm font-medium mb-2">
-              <Wallet className="w-4 h-4" /> Wallet access
-            </div>
-            <div className="flex gap-2">
-              <input
-                value={wallet}
-                onChange={(e) => setWallet(e.target.value.trim())}
-                placeholder="0x… (any EVM wallet)"
-                className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
-              />
-              <button
-                disabled={busy}
-                onClick={addWallet}
-                className="rounded-lg bg-drive-accent text-white px-3 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-              >
-                Add
-              </button>
-            </div>
-            {access.length > 0 && (
-              <ul className="mt-3 space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
-                {access.map((a) => (
-                  <li
-                    key={a.id}
-                    className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
-                  >
-                    <span className="font-mono truncate flex-1">
-                      {a.wallet_address.slice(0, 8)}…{a.wallet_address.slice(-6)}
-                    </span>
-                    <span className="text-drive-muted">{a.path || "/"}</span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] ${
-                        a.added_by === "payment"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-blue-100 text-blue-700"
-                      }`}
-                    >
-                      {a.added_by === "payment" ? "💰 paid" : "owner"}
-                    </span>
-                    <button
-                      onClick={() => removeAccess(a.id)}
-                      className="p-1 rounded hover:bg-drive-hover"
-                      title="Revoke"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/* Email invite */}
-          <section>
-            <div className="flex items-center gap-2 text-sm font-medium mb-2">
-              <UserPlus className="w-4 h-4" /> Invite by email
-            </div>
-            <div className="flex gap-2">
-              <input
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="colleague@example.com"
-                type="email"
-                className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm"
-              />
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as "viewer" | "editor")}
-                className="rounded-lg border border-drive-border px-2 text-sm"
-              >
-                <option value="viewer">Viewer</option>
-                <option value="editor">Editor</option>
-              </select>
-              <button
-                disabled={busy}
-                onClick={invite}
-                className="rounded-lg bg-drive-accent text-white px-3 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-              >
-                Invite
-              </button>
-            </div>
-          </section>
-
-          {/* Free share link */}
-          <section>
-            <div className="flex items-center gap-2 text-sm font-medium mb-2">
-              <LinkIcon className="w-4 h-4" /> Free share link
-            </div>
-            <button
-              onClick={createFreeLink}
-              disabled={busy}
-              className="w-full rounded-lg border border-drive-border px-3 py-2 text-sm hover:bg-drive-hover disabled:opacity-50"
-            >
-              Create free share link
-            </button>
-            {shares.filter(s => !s.price_usdc).length > 0 && (
-              <ul className="mt-3 space-y-2 max-h-40 overflow-auto scrollbar-thin">
-                {shares.filter(s => !s.price_usdc).map((s) => (
-                  <li
-                    key={s.id}
-                    className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
-                  >
-                    <span className="truncate flex-1">{s.path || "/"} · {s.role}</span>
-                    <button
-                      onClick={() => copyLink(s.token)}
-                      className="p-1 rounded hover:bg-drive-hover" title="Copy link"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          <FreeLinkSection
+            shares={shares}
+            createFreeLink={createFreeLink}
+            busy={busy}
+            copyLink={copyLink}
+          />
         </div>
 
         <footer className="flex items-center justify-between gap-2 p-3 border-t border-drive-border shrink-0">
@@ -353,37 +244,5 @@ export function ShareDialog({
         </footer>
       </div>
     </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-drive-muted w-16 shrink-0">{label}</span>
-      <span className="text-sm font-medium">{value}</span>
-    </div>
-  );
-}
-
-function Toggle({
-  on, disabled, onChange,
-}: { on: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-60 ${
-        on ? "bg-drive-accent" : "bg-drive-border"
-      }`}
-    >
-      <span
-        className={`inline-block h-4 w-4 rounded-full bg-white shadow transition transform ${
-          on ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
-    </button>
   );
 }

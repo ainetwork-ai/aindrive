@@ -1,24 +1,19 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getUser } from "@/lib/session";
-import { getDrive } from "@/lib/drives";
-import { resolveAccess, atLeast } from "@/lib/access";
+import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { zRequiredPath } from "@/lib/zod-helpers";
 
-const Body = z.object({ path: z.string().min(1) });
+const Body = z.object({ path: zRequiredPath });
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  const user = await getUser();
-  const drive = getDrive(driveId);
-  if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
-  const role = await resolveAccess(driveId, body.data.path, user?.id ?? null);
-  if (!atLeast(role, "editor")) {
-    return NextResponse.json({ error: "forbidden" }, { status: user ? 403 : 401 });
-  }
+  const gate = await requireDriveRole(driveId, body.data.path, { min: "editor" });
+  if (gate instanceof NextResponse) return gate;
+  const { drive } = gate;
   // Best-effort: figure out if the path was a file or a folder before delete
   // so we can decrement the right counter. Drift on recursive folder deletes
   // is acceptable — limits are upper bounds.

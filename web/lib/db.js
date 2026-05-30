@@ -37,6 +37,7 @@ function open() {
       drive_secret TEXT NOT NULL,
       last_seen_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      payout_wallet TEXT,
       FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS drive_members (
@@ -82,6 +83,21 @@ function open() {
       consumed_at TEXT,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS payment_receipts (
+      id TEXT PRIMARY KEY,
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      wallet TEXT NOT NULL,
+      tx_hash TEXT NOT NULL UNIQUE,
+      -- nullable: NULL means "amount unknown" (legacy backfilled receipts
+      -- from before Phase 4 don't carry the original amount). A real 0
+      -- amount is a different signal from "we don't know."
+      amount_usdc REAL,
+      network TEXT NOT NULL,
+      share_id TEXT,
+      settled_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS idx_cli_link_expires ON cli_link_requests(expires_at);
     CREATE INDEX IF NOT EXISTS idx_drive_members_user ON drive_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_drive_members_drive ON drive_members(drive_id);
@@ -89,6 +105,8 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_folder_access_lookup
       ON folder_access(drive_id, path, wallet_address);
     CREATE INDEX IF NOT EXISTS idx_folder_access_wallet ON folder_access(wallet_address);
+    CREATE INDEX IF NOT EXISTS idx_payment_receipts_wallet ON payment_receipts(wallet);
+    CREATE INDEX IF NOT EXISTS idx_payment_receipts_drive_wallet ON payment_receipts(drive_id, wallet);
   `);
   // Idempotent ALTERs (better-sqlite3 has no IF NOT EXISTS for ALTER)
   for (const stmt of [
@@ -98,6 +116,7 @@ function open() {
     "ALTER TABLE drives ADD COLUMN namespace_secret BLOB",
     "ALTER TABLE folder_access ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
+    "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;

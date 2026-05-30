@@ -21,7 +21,7 @@ type PaymentRequirements = {
 };
 
 type CheckResponse =
-  | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string; viaPayment?: boolean }
+  | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string }
   | { x402Version: number; accepts: PaymentRequirements[]; error: string };
 
 type State = "loading" | "ok" | "paywall" | "error";

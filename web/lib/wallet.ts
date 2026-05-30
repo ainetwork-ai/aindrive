@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { SiweMessage } from "siwe";
 import { env } from "./env";
+import { cookieOptions } from "./cookie-config";
 
 const COOKIE = "aindrive_wallet";
 const enc = new TextEncoder();
@@ -31,13 +32,7 @@ export async function getWallet(): Promise<string | null> {
 
 export async function setWalletCookie(address: string) {
   const token = await signWallet(address);
-  (await cookies()).set(COOKIE, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: env.publicUrl.startsWith("https://"),
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30,
-  });
+  (await cookies()).set(COOKIE, token, cookieOptions());
 }
 
 export async function clearWalletCookie() {

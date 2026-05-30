@@ -6,6 +6,7 @@ import { db } from "./db.js";
 import { jwtVerify } from "jose";
 import { trace } from "./trace.js";
 import { log } from "./logger.js";
+import { ROLE_RANK, bestMatchingRole, pickFreeShareRole, normalizePath } from "./access-core.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -64,30 +65,59 @@ async function readUserFromCookie(cookieHeader) {
   } catch { return null; }
 }
 
-function isAncestorOrSelf(ancestor, target) {
-  if (!ancestor) return true;
-  if (ancestor === target) return true;
-  return target.startsWith(ancestor + "/");
+// Free-share grant tokens from the aindrive_share cookie. Mirrors
+// lib/share-grant.ts (readShareGrants), but reads from the raw WS cookie
+// header instead of next/headers (which is unavailable under raw node).
+async function readShareGrantsFromCookie(cookieHeader) {
+  const m = /aindrive_share=([^;]+)/.exec(cookieHeader || "");
+  if (!m) return [];
+  try {
+    const { payload } = await jwtVerify(m[1], enc.encode(getSessionSecret()));
+    return Array.isArray(payload.tokens) ? payload.tokens : [];
+  } catch { return []; }
 }
 
-const ROLE_RANK = { none: 0, viewer: 1, commenter: 2, editor: 3, owner: 4 };
-
-function resolveRole(driveId, userId, address, path) {
+// Mirrors lib/access.ts resolveAccess: session/member, then wallet allowlist,
+// then free-share grant cookie. Kept here (not imported) because access.ts
+// depends on next/headers, which is unavailable under raw `node server.js`.
+function resolveRole(driveId, userId, address, shareTokens, path) {
+  const target = normalizePath(path);
   const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId);
   if (!drive) return "none";
   if (userId && drive.owner_id === userId) return "owner";
-  let best = "none";
+  const rows = [];
   if (userId) {
-    const members = db.prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?").all(driveId, userId);
-    for (const m of members) {
-      if (isAncestorOrSelf(m.path, path) && ROLE_RANK[m.role] > ROLE_RANK[best]) best = m.role;
-    }
+    rows.push(
+      ...db
+        .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
+        .all(driveId, userId),
+    );
   }
   if (address) {
-    const grants = db.prepare("SELECT path, role FROM folder_access WHERE drive_id = ? AND wallet_address = ?").all(driveId, address);
-    for (const g of grants) {
-      if (isAncestorOrSelf(g.path, path) && ROLE_RANK[g.role] > ROLE_RANK[best]) best = g.role;
-    }
+    rows.push(
+      ...db
+        .prepare("SELECT path, role FROM folder_access WHERE drive_id = ? AND wallet_address = ?")
+        .all(driveId, address),
+    );
+  }
+  let best = bestMatchingRole(rows, target);
+
+  // Free-share grant: a link-only collaborator carries the share token in the
+  // aindrive_share cookie. Look the tokens up and let pickFreeShareRole apply
+  // the free-only / not-expired / ancestor rules (same as the HTTP path). This
+  // is what lets free-share viewers actually join the live editing session.
+  if (shareTokens && shareTokens.length) {
+    const shareRows = shareTokens
+      .map((token) =>
+        db
+          .prepare(
+            "SELECT drive_id, path, role, price_usdc, expires_at FROM shares WHERE token = ?",
+          )
+          .get(token),
+      )
+      .filter(Boolean);
+    const shareRole = pickFreeShareRole(shareRows, driveId, target, new Date());
+    if ((ROLE_RANK[shareRole] ?? 0) > (ROLE_RANK[best] ?? 0)) best = shareRole;
   }
   return best;
 }
@@ -98,8 +128,12 @@ export async function onDocConnect(ws, req, query) {
   if (!driveId) { ws.close(4400, "drive required"); return; }
 
   const cookie = req.headers["cookie"];
-  const [userId, address] = await Promise.all([readUserFromCookie(cookie), readWalletFromCookie(cookie)]);
-  const role = resolveRole(driveId, userId, address, path);
+  const [userId, address, shareTokens] = await Promise.all([
+    readUserFromCookie(cookie),
+    readWalletFromCookie(cookie),
+    readShareGrantsFromCookie(cookie),
+  ]);
+  const role = resolveRole(driveId, userId, address, shareTokens, path);
   if (ROLE_RANK[role] < ROLE_RANK.viewer) { ws.close(4401, "no access"); return; }
 
   const docId = docIdFor(driveId, path);

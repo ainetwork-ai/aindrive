@@ -34,6 +34,7 @@ export const drives = sqliteTable("drives", {
     .default(sql`(datetime('now'))`),
   namespace_pubkey: blob("namespace_pubkey"),
   namespace_secret: blob("namespace_secret"),
+  payout_wallet: text("payout_wallet"),
 });
 
 export const drive_members = sqliteTable(
@@ -101,5 +102,26 @@ export const folder_access = sqliteTable(
     ),
     index("idx_folder_access_lookup").on(t.drive_id, t.path, t.wallet_address),
     index("idx_folder_access_wallet").on(t.wallet_address),
+  ]
+);
+
+export const payment_receipts = sqliteTable(
+  "payment_receipts",
+  {
+    id: text("id").primaryKey(),
+    drive_id: text("drive_id").notNull(),
+    path: text("path").notNull().default(""),
+    wallet: text("wallet").notNull(),
+    tx_hash: text("tx_hash").notNull().unique(),
+    amount_usdc: real("amount_usdc"),
+    network: text("network").notNull(),
+    share_id: text("share_id"),
+    settled_at: text("settled_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => [
+    index("idx_payment_receipts_wallet").on(t.wallet),
+    index("idx_payment_receipts_drive_wallet").on(t.drive_id, t.wallet),
   ]
 );

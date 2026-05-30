@@ -6,10 +6,13 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive, getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
+import { zPath } from "@/lib/zod-helpers";
+import { normalizePath } from "@/lib/path";
 
 const Body = z.object({
   wallet_address: z.string().refine((v) => isAddress(v), "invalid address"),
-  path: z.string().default(""),
+  path: zPath.default(""),
+  role: z.enum(["viewer", "commenter", "editor"]).default("viewer"),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
@@ -21,10 +24,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const url = new URL(req.url);
-  const path = url.searchParams.get("path") ?? null;
+  const rawPath = url.searchParams.get("path");
+  let path: string | null = null;
+  if (rawPath !== null) {
+    try { path = normalizePath(rawPath); }
+    catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
+  }
   const rows = path === null
-    ? db.prepare("SELECT id, path, wallet_address, added_by, payment_tx, added_at FROM folder_access WHERE drive_id = ? ORDER BY added_at DESC").all(driveId)
-    : db.prepare("SELECT id, path, wallet_address, added_by, payment_tx, added_at FROM folder_access WHERE drive_id = ? AND path = ? ORDER BY added_at DESC").all(driveId, path);
+    ? db.prepare("SELECT id, path, wallet_address, added_by, payment_tx, role, added_at FROM folder_access WHERE drive_id = ? ORDER BY added_at DESC").all(driveId)
+    : db.prepare("SELECT id, path, wallet_address, added_by, payment_tx, role, added_at FROM folder_access WHERE drive_id = ? AND path = ? ORDER BY added_at DESC").all(driveId, path);
   return NextResponse.json({ access: rows });
 }
 
@@ -42,8 +50,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const wallet = body.data.wallet_address.toLowerCase();
   try {
     db.prepare(
-      "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by) VALUES (?, ?, ?, ?, 'owner')"
-    ).run(id, driveId, body.data.path, wallet);
+      "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by, role) VALUES (?, ?, ?, ?, 'owner', ?)"
+    ).run(id, driveId, body.data.path, wallet, body.data.role);
   } catch (e) {
     if (/UNIQUE/i.test((e as Error).message)) {
       return NextResponse.json({ error: "wallet already has access at this path" }, { status: 409 });
@@ -67,5 +75,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     }
   }
 
-  return NextResponse.json({ id, wallet_address: wallet, path: body.data.path, cap: capBase64 });
+  return NextResponse.json({ id, wallet_address: wallet, path: body.data.path, role: body.data.role, cap: capBase64 });
 }
