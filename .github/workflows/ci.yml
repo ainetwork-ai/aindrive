@@ -1,0 +1,92 @@
+name: CI
+
+# Hermetic gate for every PR + main push. The two packages (web/, cli/) are
+# independent (no root package.json), so each is checked in its own job.
+# Scenario tests (web `test:e2e`) need a live :3737 server + a connected CLI
+# agent, so they are NOT run here — only the hermetic checks gate merges.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR/branch cancels the previous in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: web — typecheck · test · build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # `npm install` not `npm ci`: the committed lockfile was generated on
+      # macOS and omits linux-only optional dep nodes (@emnapi/runtime|core),
+      # which `npm ci` strict-mode rejects on the linux runner. install
+      # resolves the host's optional deps from the lock without failing on
+      # the platform delta. (Regenerating a cross-platform lock would need a
+      # linux host we don't have.)
+      - run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests (hermetic — lib/)
+        run: npm test
+      - name: Production build
+        run: npm run build
+        env:
+          # Build must not see a dev-bypass / http config (boot-checks only
+          # run at server start, not build, but keep CI honest about prod).
+          NODE_ENV: production
+          AINDRIVE_SESSION_SECRET: ci-placeholder-session-secret-32bytes-long
+          AINDRIVE_PUBLIC_URL: https://ci.example.com
+          AINDRIVE_PAYOUT_WALLET: "0x1111111111111111111111111111111111111111"
+
+  cli:
+    name: cli — build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      # npm install (not ci) — same cross-platform optional-dep reason as web.
+      - run: npm install --no-audit --no-fund
+      - name: Build (esbuild bundle)
+        run: npm run build
+      - name: Smoke — bundle runs + --version
+        run: node dist/aindrive.mjs --version
+
+  audit:
+    name: npm audit (high+critical)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+      # Fail only on high/critical — moderate/low from transitive deps would
+      # otherwise keep PRs red without a real security signal.
+      - name: audit web
+        working-directory: web
+        run: npm audit --audit-level=high
+      - name: audit cli
+        working-directory: cli
+        run: npm audit --audit-level=high
