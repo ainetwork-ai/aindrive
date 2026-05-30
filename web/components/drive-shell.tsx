@@ -11,6 +11,7 @@ import {
   Bot, MessageSquare, Menu,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
+import { apiFetch } from "@/lib/api-client";
 import { RowMenu } from "./row-menu";
 import { X402Badge } from "./x402-badges";
 
@@ -81,22 +82,19 @@ export function DriveShell({ driveId, driveName }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
-    const res = await fetch(`/api/drives/${driveId}/fs/list?path=${encodeURIComponent(path)}`);
-    if (!res.ok) { setErr((await res.json()).error || "failed to list"); setLoading(false); return; }
-    const { entries, role } = await res.json();
-    setEntries(entries); setRole(role); setLoading(false);
+    const res = await apiFetch<{ entries: DriveEntry[]; role: string }>(`/api/drives/${driveId}/fs/list?path=${encodeURIComponent(path)}`);
+    if (!res.ok) { setErr(res.error || "failed to list"); setLoading(false); return; }
+    setEntries(res.data.entries); setRole(res.data.role); setLoading(false);
   }, [driveId, path]);
 
   const loadDrives = useCallback(async () => {
-    const res = await fetch(`/api/drives`);
-    if (!res.ok) return;
-    const { drives } = await res.json();
-    setDrives(drives);
+    const res = await apiFetch<{ drives: DriveSummary[] }>(`/api/drives`);
+    if (res.ok) setDrives(res.data.drives);
   }, []);
 
   const loadShares = useCallback(async () => {
-    const res = await fetch(`/api/drives/${driveId}/shares`);
-    if (res.ok) setShares((await res.json()).shares);
+    const res = await apiFetch<{ shares: ShareSummary[] }>(`/api/drives/${driveId}/shares`);
+    if (res.ok) setShares(res.data.shares);
   }, [driveId]);
 
   useEffect(() => { load(); }, [load]);
@@ -125,11 +123,11 @@ export function DriveShell({ driveId, driveName }: Props) {
     const name = prompt("New folder name");
     if (!name) return;
     const target = path ? `${path}/${name}` : name;
-    const res = await fetch(`/api/drives/${driveId}/fs/mkdir`, {
+    const res = await apiFetch(`/api/drives/${driveId}/fs/mkdir`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: target }),
     });
-    if (!res.ok) alert((await res.json()).error); else load();
+    if (!res.ok) alert(res.error); else load();
   }
 
   async function onUpload(files: FileList | null) {
@@ -139,11 +137,11 @@ export function DriveShell({ driveId, driveName }: Props) {
       const arr = await file.arrayBuffer();
       const b64 = arrayBufferToBase64(arr);
       const target = path ? `${path}/${file.name}` : file.name;
-      const res = await fetch(`/api/drives/${driveId}/fs/write`, {
+      const res = await apiFetch(`/api/drives/${driveId}/fs/write`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ path: target, content: b64, encoding: "base64" }),
       });
-      if (!res.ok) toast.error(`${file.name}: ${(await res.json()).error}`);
+      if (!res.ok) toast.error(`${file.name}: ${res.error}`);
       else uploadedPaths.push(target);
     }
     load();
@@ -164,11 +162,11 @@ export function DriveShell({ driveId, driveName }: Props) {
   async function onDelete(e: DriveEntry) {
     if (!canEdit) return;
     if (!confirm(`Delete "${e.name}"?`)) return;
-    const res = await fetch(`/api/drives/${driveId}/fs/delete`, {
+    const res = await apiFetch(`/api/drives/${driveId}/fs/delete`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: e.path }),
     });
-    if (!res.ok) toast.error((await res.json()).error); else load();
+    if (!res.ok) toast.error(res.error); else load();
   }
 
   async function onRename(e: DriveEntry) {
@@ -176,11 +174,11 @@ export function DriveShell({ driveId, driveName }: Props) {
     const newName = prompt("New name", e.name);
     if (!newName || newName === e.name) return;
     const parts = e.path.split("/"); parts[parts.length - 1] = newName;
-    const res = await fetch(`/api/drives/${driveId}/fs/rename`, {
+    const res = await apiFetch(`/api/drives/${driveId}/fs/rename`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: e.path, to: parts.join("/") }),
     });
-    if (!res.ok) toast.error((await res.json()).error); else load();
+    if (!res.ok) toast.error(res.error); else load();
   }
 
   function onRowAction(entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") {

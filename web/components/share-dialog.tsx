@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import {
   X, Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, Lock, TrendingUp, ExternalLink,
 } from "lucide-react";
+import { apiFetch } from "@/lib/api-client";
 
 type Share = {
   id: string;
@@ -57,19 +58,18 @@ export function ShareDialog({
   const [payoutInput, setPayoutInput] = useState<string>("");
 
   async function load() {
-    const [sRes, aRes, rRes, dRes] = await Promise.all([
-      fetch(`/api/drives/${driveId}/shares`),
-      fetch(`/api/drives/${driveId}/access`),
-      fetch(`/api/drives/${driveId}/receipts`),
-      fetch(`/api/drives/${driveId}`),
+    const [s, a, r, d] = await Promise.all([
+      apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
+      apiFetch<{ access: Access[] }>(`/api/drives/${driveId}/access`),
+      apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
+      apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
     ]);
-    if (sRes.ok) setShares((await sRes.json()).shares);
-    if (aRes.ok) setAccess((await aRes.json()).access);
-    if (rRes.ok) setReceipts((await rRes.json()).receipts ?? []);
-    if (dRes.ok) {
-      const d = await dRes.json();
-      setPayoutWallet(d.payout_wallet ?? "");
-      setPayoutInput(d.payout_wallet ?? "");
+    if (s.ok) setShares(s.data.shares);
+    if (a.ok) setAccess(a.data.access);
+    if (r.ok) setReceipts(r.data.receipts ?? []);
+    if (d.ok) {
+      setPayoutWallet(d.data.payout_wallet ?? "");
+      setPayoutInput(d.data.payout_wallet ?? "");
     }
   }
   useEffect(() => { load(); }, [driveId]);
@@ -81,19 +81,18 @@ export function ShareDialog({
       return;
     }
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}`, {
+    const res = await apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ payout_wallet: v || null }),
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error || "Failed to save payout wallet");
+      toast.error(res.error || "Failed to save payout wallet");
       return;
     }
-    const { payout_wallet } = await res.json();
-    setPayoutWallet(payout_wallet ?? "");
-    toast.success(payout_wallet ? "Payout wallet saved" : "Payout wallet cleared");
+    setPayoutWallet(res.data.payout_wallet ?? "");
+    toast.success(res.data.payout_wallet ? "Payout wallet saved" : "Payout wallet cleared");
   }
 
   const totalEarned = receipts.reduce((sum, r) => sum + (r.amount_usdc ?? 0), 0);
@@ -111,7 +110,7 @@ export function ShareDialog({
       return;
     }
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/shares`, {
+    const res = await apiFetch<{ url: string }>(`/api/drives/${driveId}/shares`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -122,10 +121,10 @@ export function ShareDialog({
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error || "Failed to save");
+      toast.error(res.error || "Failed to save");
       return;
     }
-    const { url } = await res.json();
+    const { url } = res.data;
     const copied = await navigator.clipboard.writeText(url).then(() => true).catch(() => false);
     if (copied) toast.success("Paid share link copied to clipboard");
     else toast.success(`Paid share link created: ${url}`, { duration: 8000 });
@@ -135,17 +134,17 @@ export function ShareDialog({
 
   async function createFreeLink() {
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/shares`, {
+    const res = await apiFetch<{ url: string }>(`/api/drives/${driveId}/shares`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: defaultPath, role }),
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error || "Failed to create link");
+      toast.error(res.error || "Failed to create link");
       return;
     }
-    const { url } = await res.json();
+    const { url } = res.data;
     const copied = await navigator.clipboard.writeText(url).then(() => true).catch(() => false);
     if (copied) toast.success("Free share link copied");
     else toast.success(`Free share link created: ${url}`, { duration: 8000 });
@@ -155,14 +154,14 @@ export function ShareDialog({
   async function invite() {
     if (!email) return;
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/members`, {
+    const res = await apiFetch(`/api/drives/${driveId}/members`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email, role, path: defaultPath }),
     });
     setBusy(false);
     if (!res.ok) {
-      toast.error((await res.json()).error);
+      toast.error(res.error);
     } else {
       setEmail("");
       toast.success("Collaborator added");
@@ -175,20 +174,20 @@ export function ShareDialog({
       return;
     }
     setBusy(true);
-    const res = await fetch(`/api/drives/${driveId}/access`, {
+    const res = await apiFetch(`/api/drives/${driveId}/access`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ wallet_address: wallet, path: defaultPath, role: walletRole }),
     });
     setBusy(false);
-    if (!res.ok) toast.error((await res.json()).error);
+    if (!res.ok) toast.error(res.error);
     else { setWallet(""); load(); }
   }
 
   async function removeAccess(id: string) {
     if (!confirm("Remove this wallet's access?")) return;
-    const res = await fetch(`/api/drives/${driveId}/access/${id}`, { method: "DELETE" });
-    if (!res.ok) toast.error((await res.json()).error);
+    const res = await apiFetch(`/api/drives/${driveId}/access/${id}`, { method: "DELETE" });
+    if (!res.ok) toast.error(res.error);
     else load();
   }
 

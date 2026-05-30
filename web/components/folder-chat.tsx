@@ -4,6 +4,7 @@ import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2, ChevronDown, Chev
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
+import { apiFetch } from "@/lib/api-client";
 import { pathCovers } from "@/shared/domain/policy/path";
 import { CreateAgentModal, type EditableAgent } from "./create-agent-modal";
 
@@ -69,41 +70,31 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
   useEffect(() => {
     let cancel = false;
     (async () => {
-      try {
-        const r = await fetch(`/api/drives/${driveId}/agents`);
-        if (!r.ok) {
-          if (!cancel) setAgents([]);
-          return;
-        }
-        const data = await r.json();
-        if (cancel) return;
-        const list: AgentSummary[] = data.agents ?? [];
-        setAgents(list);
-        // Prefer one whose folder is an ancestor of (or equal to) currentFolder.
-        const preferred = pickAgentForFolder(list, currentFolder) ?? list[0] ?? null;
-        if (preferred) setAgentId(preferred.id);
-      } catch {
-        if (!cancel) setAgents([]);
+      const r = await apiFetch<{ agents?: AgentSummary[] }>(`/api/drives/${driveId}/agents`);
+      if (cancel) return;
+      if (!r.ok) {
+        setAgents([]);
+        return;
       }
+      const list: AgentSummary[] = r.data.agents ?? [];
+      setAgents(list);
+      // Prefer one whose folder is an ancestor of (or equal to) currentFolder.
+      const preferred = pickAgentForFolder(list, currentFolder) ?? list[0] ?? null;
+      if (preferred) setAgentId(preferred.id);
     })();
     return () => { cancel = true; };
   }, [driveId, currentFolder, reloadTick]);
 
   async function onDelete(target: AgentSummary) {
     if (!confirm(`Delete agent "${target.name}"? This removes the agent JSON from the drive.`)) return;
-    try {
-      const r = await fetch(`/api/drives/${driveId}/agents/${target.id}`, { method: "DELETE" });
-      if (!r.ok && r.status !== 204) {
-        const data = await r.json().catch(() => ({}));
-        toast.error(`Delete failed: ${data.error || r.status}`);
-        return;
-      }
-      toast.success("Agent deleted");
-      if (agentId === target.id) setAgentId(null);
-      setReloadTick((t) => t + 1);
-    } catch (e) {
-      toast.error(`Delete failed: ${(e as Error).message}`);
+    const r = await apiFetch(`/api/drives/${driveId}/agents/${target.id}`, { method: "DELETE" });
+    if (!r.ok) {
+      toast.error(`Delete failed: ${r.error}`);
+      return;
     }
+    toast.success("Agent deleted");
+    if (agentId === target.id) setAgentId(null);
+    setReloadTick((t) => t + 1);
   }
 
   function onEdit(target: AgentSummary) {
@@ -135,23 +126,26 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
     setInput("");
     setBusy(true);
     try {
-      const r = await fetch(`/api/drives/${driveId}/agents/${agentId}/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q }),
-      });
-      const data = await r.json();
+      const r = await apiFetch<{ answer: string; sources?: Source[]; policyName?: string }>(
+        `/api/drives/${driveId}/agents/${agentId}/ask`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q }),
+        },
+      );
       if (!r.ok) {
+        // Rate-limit responses carry retryAfterMs in the error body — surface
+        // a countdown instead of the generic error string.
+        const b = r.body as { error?: string; retryAfterMs?: number } | null;
         const err =
-          data.error === "rate_limited"
-            ? `Rate limited (retry in ${Math.ceil((data.retryAfterMs ?? 0) / 1000)}s)`
-            : data.error || `HTTP ${r.status}`;
+          b?.error === "rate_limited"
+            ? `Rate limited (retry in ${Math.ceil((b.retryAfterMs ?? 0) / 1000)}s)`
+            : r.error || `HTTP ${r.status}`;
         append({ role: "error", text: err });
         return;
       }
-      append({ role: "agent", text: data.answer, sources: data.sources ?? [], policyName: data.policyName });
-    } catch (e) {
-      append({ role: "error", text: (e as Error).message });
+      append({ role: "agent", text: r.data.answer, sources: r.data.sources ?? [], policyName: r.data.policyName });
     } finally {
       setBusy(false);
     }

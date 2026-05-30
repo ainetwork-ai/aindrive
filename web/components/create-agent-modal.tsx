@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { X, Bot, Sparkles, BookOpen, Cpu, Shield, Loader2, Copy } from "lucide-react";
+import { apiFetch } from "@/lib/api-client";
 
 /**
  * Create Agent modal — owner-only UI for registering a RAG agent
@@ -86,7 +87,7 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
       const url = isEdit
         ? `/api/drives/${driveId}/agents/${existing!.id}`
         : `/api/drives/${driveId}/agents`;
-      const r = await fetch(url, {
+      const r = await apiFetch<{ agent: CreatedAgent }>(url, {
         method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -104,12 +105,11 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
           access: { policies },
         }),
       });
-      const data = await r.json();
       if (!r.ok) {
-        toast.error(`Failed: ${data.error || r.status}`);
+        toast.error(`Failed: ${r.error}`);
         return;
       }
-      const a = data.agent as CreatedAgent;
+      const a = r.data.agent;
       onCreated?.(a);
       if (isEdit) {
         toast.success("Agent updated");
