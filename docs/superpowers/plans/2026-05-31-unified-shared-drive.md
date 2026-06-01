@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-05-31-unified-shared-drive-design.md`
 
+**Prerequisite (run once before Phase 1):** This worktree has no `node_modules`. Install deps first or every verification gate fails: `npm --prefix web install`. `siwe` (v3) and `viem` (v2) are already in `web/package.json` (used in Phase 4), so no new installs are needed mid-plan.
+
 **Verification per task:** `npm --prefix web run typecheck` + `npm --prefix web test` + (for build-affecting changes) `npm --prefix web run build`, all green before the commit step.
 
 ---
@@ -2237,9 +2239,11 @@ import {
 import {
   EarningsSection, SellSection, WalletAccessSection, EmailInviteSection, FreeLinkSection,
   MembersSection,
-  type Share, type Access, type Receipt, type Member,
+  type Share, type Receipt, type Member,
 } from "./share-dialog-sections";
 ```
+
+> **Cross-phase note (Phase 5 ran first):** Phase 5 Task 5.5 deleted `GET /api/drives/[driveId]/access` and stripped the `access`/`Access`/`setAccess` state + fetch from `share-dialog.tsx`. So this import line drops `type Access`, and `load()` below must NOT fetch `/access` — build on the Phase-5 post-state.
 
   Add state next to the other `useState` calls (after `web/components/share-dialog.tsx:30`, the `receipts` line):
 
@@ -2251,20 +2255,18 @@ import {
   });
 ```
 
-- [ ] **Step 4: Fetch members + current-user role in `load()`.** Replace the `load()` body (`web/components/share-dialog.tsx:34-48`) so it also pulls the member list and the caller's identity/role. The members list comes from `GET /api/drives/[driveId]/members`; the caller's email comes from `/api/auth/me` and their owner status from whether their email appears as an `owner` member or is the drive creator. To keep it grounded in existing endpoints, derive `isOwner` purely from the members list (the creator and co-owners both appear there with `role: "owner"`):
+- [ ] **Step 4: Fetch members + current-user role in `load()`.** Replace the `load()` body (the post-Phase-5 version — `/access` already removed there) so it also pulls the member list and the caller's identity/role. The members list comes from `GET /api/drives/[driveId]/members`; the caller's email comes from `GET /api/auth/me`. Derive `isOwner` purely from the members list (the creator and co-owners both appear there with `role: "owner"`). **Do not re-add the `/access` fetch Phase 5 deleted.**
 
 ```tsx
   async function load() {
-    const [s, a, r, d, mem, who] = await Promise.all([
+    const [s, r, d, mem, who] = await Promise.all([
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
-      apiFetch<{ access: Access[] }>(`/api/drives/${driveId}/access`),
       apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
       apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
       apiFetch<{ members: Member[] }>(`/api/drives/${driveId}/members`),
       apiFetch<{ user: { email: string } | null }>(`/api/auth/me`),
     ]);
     if (s.ok) setShares(s.data.shares);
-    if (a.ok) setAccess(a.data.access);
     if (r.ok) setReceipts(r.data.receipts ?? []);
     if (d.ok) {
       setPayoutWallet(d.data.payout_wallet ?? "");
@@ -2279,7 +2281,7 @@ import {
   }
 ```
 
-  Note for the implementer: confirm `/api/auth/me` exists and returns `{ user: { email } | null }`. If the real endpoint differs (e.g. it returns the user object at the top level), adapt the `apiFetch<...>` generic and the `who.data.user` access to match — grep `web/app/api/auth` first. If no such endpoint exists, add a thin `GET /api/auth/me` returning `{ user: await getUser() }` (using `getUser` from `@/lib/session`) in its own small route file and commit it as part of this step.
+  Note for the implementer: `GET /api/auth/me` already exists (`web/app/api/auth/me/route.ts`) and returns `{ user }` (the full session user, `null` when logged out), so `who.data.user.email` works as written — no new route needed.
 
 - [ ] **Step 5: Add the mutation handlers in `share-dialog.tsx`.** Insert after the `invite()` function (`web/components/share-dialog.tsx:143`):
 
@@ -2337,7 +2339,6 @@ import { atLeast } from "@/lib/access-core.js";
 
 - [ ] **Step 9: Commit.**
   Run: `git add web/components/share-dialog.tsx web/components/share-dialog-sections.tsx && git commit -m "feat(members): member list with role select + remove in share dialog"`
-  (If a new `web/app/api/auth/me/route.ts` was created in Step 4, include it in this commit.)
 
 ---
 
@@ -2347,7 +2348,6 @@ Files touched in Phase 6 (all absolute paths):
 - `/Users/comcom/Git/aindrive/.claude/worktrees/unified-shared-drive/web/app/api/drives/[driveId]/members/[memberId]/route.ts` (new)
 - `/Users/comcom/Git/aindrive/.claude/worktrees/unified-shared-drive/web/components/share-dialog.tsx` (modified)
 - `/Users/comcom/Git/aindrive/.claude/worktrees/unified-shared-drive/web/components/share-dialog-sections.tsx` (modified)
-- (possibly new) `/Users/comcom/Git/aindrive/.claude/worktrees/unified-shared-drive/web/app/api/auth/me/route.ts` — only if no current-user endpoint exists.
 
 ---
 
@@ -2452,12 +2452,12 @@ EOF
   ```ts
   const Body = z.object({
     path: zPath.default(""),
-    role: z.enum(["viewer", "editor", "owner"]),
+    role: z.enum(["viewer", "editor"]),
     expiresAt: z.string().datetime().optional(),
     price_usdc: z.number().positive().optional(),
   });
   ```
-  (Phase 1 already collapsed roles to `viewer|editor|owner` — `commenter` is gone from the enum.)
+  **Keep the role enum as `["viewer", "editor"]` (set by Phase 1 Task 1.2) — do NOT re-add `owner`.** A share link must never grant co-ownership; ownership is conferred only via the owner-gated member PATCH (Phase 6). The shares enum never offered `owner`, and the share-creation UI renders only Viewer/Editor.
 
 - [ ] **Step 4: Drop the hash + the column from the INSERT.** Replace lines 63-67:
   ```ts
@@ -2519,13 +2519,13 @@ EOF
 **Files:**
 - Delete: `web/lib/share-grant.ts`
 - Modify: `web/app/api/s/[token]/route.ts:10` (drop `addShareGrant` import), `:58-66` (drop the free-share `addShareGrant` branch — free shares now CONSUME via `POST /api/s/[token]/accept` after login)
-- Modify: `web/lib/dochub.js:68-83` (drop `readShareGrantsFromCookie`), `:100-138` (drop the share-token branch + the `aindrive_share` read in `onDocConnect`)
+- Verify-only: `web/lib/dochub.js` — **already fully cleaned by Phase 5 Task 5.4** (resolveRole rewritten to drive_members-only, `readShareGrantsFromCookie`/`readWalletFromCookie` deleted, `onDocConnect` simplified, `address` removed). This task does NOT re-edit dochub; it only confirms it.
 
-> Assumes Phase 5 already removed `readShareGrants`/`resolveRoleByShareGrants` from `web/lib/access.ts` and collapsed `resolveAccess` to user-only. This task removes the remaining producers/readers of the cookie. (Back-compat note: this is the post-window removal — links issued before Phase 2 that relied on the cookie now require login + CONSUME.)
+> Assumes Phase 5 already removed `readShareGrants`/`resolveRoleByShareGrants` from `web/lib/access.ts`, collapsed `resolveAccess` to user-only, AND cleaned `web/lib/dochub.js` (Task 5.4). This task removes the remaining cookie **producers**: `share-grant.ts` itself and the `addShareGrant` write in the share GET route. (Back-compat note: this is the post-window removal — links issued before Phase 2 that relied on the cookie now require login + CONSUME.)
 
 - [ ] **Step 1: Inventory every remaining reference to the cookie path.**
   Run: `grep -rn "share-grant\|addShareGrant\|readShareGrants\|aindrive_share\|resolveRoleByShareGrants\|readShareGrantsFromCookie" web --include="*.ts" --include="*.tsx" --include="*.js" | grep -v node_modules`
-  Expected (post-Phase-5): producers/readers limited to `web/lib/share-grant.ts`, `web/app/api/s/[token]/route.ts`, and `web/lib/dochub.js`. (If `web/lib/access.ts` still appears here, Phase 5 was not applied — stop and reconcile.)
+  Expected (post-Phase-5): references limited to `web/lib/share-grant.ts` and the `addShareGrant` import + free branch in `web/app/api/s/[token]/route.ts`. (`web/lib/dochub.js` must NOT appear — Phase 5 Task 5.4 already removed all cookie/wallet readers there. If it does appear, Phase 5 was not fully applied — stop and reconcile. If `web/lib/access.ts` appears, likewise stop.)
 
 - [ ] **Step 2: Delete the cookie helper module.**
   Run: `rm web/lib/share-grant.ts`
@@ -2553,70 +2553,21 @@ EOF
   }
   ```
 
-- [ ] **Step 4: Remove the cookie reader from dochub.** In `web/lib/dochub.js` delete the `readShareGrantsFromCookie` function (the block at lines 68-83, including its leading comment):
-  ```diff
-  -// Free-share grant tokens from the aindrive_share cookie. Mirrors
-  -// lib/share-grant.ts (readShareGrants), but reads from the raw WS cookie
-  -// header instead of next/headers (which is unavailable under raw node).
-  -async function readShareGrantsFromCookie(cookieHeader) {
-  -  const m = /aindrive_share=([^;]+)/.exec(cookieHeader || "");
-  -  if (!m) return [];
-  -  try {
-  -    const { payload } = await jwtVerify(m[1], enc.encode(getSessionSecret()));
-  -    return Array.isArray(payload.tokens) ? payload.tokens : [];
-  -  } catch { return []; }
-  -}
-  ```
+- [ ] **Step 4: Verify dochub is already cookie/wallet-free (no edit — cross-ref Phase 5 Task 5.4).** Phase 5 already rewrote `dochub.js` `resolveRole` to drive_members-only and deleted `readShareGrantsFromCookie`, `readWalletFromCookie`, the `address` peer field, and the `pickFreeShareRole` import. Confirm nothing leaked through:
+  Run: `grep -n "readShareGrantsFromCookie\|readWalletFromCookie\|aindrive_share\|pickFreeShareRole\|folder_access\|peer.address\|\baddress\b" web/lib/dochub.js`
+  Expected: no matches. (If any match, Phase 5 Task 5.4 was not fully applied — go back and finish it there; do NOT patch dochub in this task.)
 
-- [ ] **Step 5: Drop the share-token branch from dochub's `resolveRole`.** The WS `resolveRole` (lines ~84-130) mirrors the collapsed `resolveAccess`: session/member only (Phase 5 removed the wallet + cookie fallbacks from the HTTP side). Reduce it to the user-member path. Replace the function with:
-  ```js
-  // Mirrors lib/access.ts resolveAccess (collapsed in Phase 5): owner or
-  // drive_members only. drive_members is the single access source — free
-  // and paid shares both write rows there via the HTTP accept/settle flows.
-  function resolveRole(driveId, userId, path) {
-    const target = normalizePath(path);
-    const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId);
-    if (!drive) return "none";
-    if (userId && drive.owner_id === userId) return "owner";
-    const rows = userId
-      ? db
-          .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
-          .all(driveId, userId)
-      : [];
-    return bestMatchingRole(rows, target);
-  }
-  ```
-  (The `address`/`folder_access` and `shareTokens`/`pickFreeShareRole` branches are gone — `folder_access` was dropped in Phase 5 and `pickFreeShareRole` deleted in Phase 5.)
-
-- [ ] **Step 6: Update `onDocConnect` to stop reading wallet/share cookies.** In `web/lib/dochub.js`, the connect handler (lines ~131-138) currently `Promise.all`s three cookie reads. Reduce to the session read and drop the wallet read too (Phase 5 collapsed access to user-only):
-  ```js
-  const cookie = req.headers["cookie"];
-  const userId = await readUserFromCookie(cookie);
-  const role = resolveRole(driveId, userId, path);
-  if (ROLE_RANK[role] < ROLE_RANK.viewer) { ws.close(4401, "no access"); return; }
-
-  const docId = docIdFor(driveId, path);
-  const peer = { ws, role, userId, docId };
-  ```
-  (`address` is no longer resolved; if `readWalletFromCookie` becomes unreferenced after this, remove its definition + the `peer.address` field. Verify with the grep in Step 8.)
-
-- [ ] **Step 7: Confirm no `pickFreeShareRole` import dangles in dochub.** Phase 5 deleted `pickFreeShareRole` from `access-core.js`; dochub must not import it.
-  Run: `grep -n "pickFreeShareRole" web/lib/dochub.js`
-  Expected: no matches. (If present, remove it from the `import { ... } from "./access-core.js"` line — keep `ROLE_RANK`, `bestMatchingRole`, `normalizePath`.)
-
-- [ ] **Step 8: Verify the cookie path is fully gone.**
+- [ ] **Step 5: Verify the cookie path is fully gone.**
   Run: `grep -rn "share-grant\|addShareGrant\|readShareGrants\|aindrive_share\|resolveRoleByShareGrants\|readShareGrantsFromCookie" web --include="*.ts" --include="*.tsx" --include="*.js" | grep -v node_modules`
   Expected: no matches.
-  Run: `grep -rn "readWalletFromCookie\|getWallet\b" web/lib/dochub.js`
-  Expected: no matches (or, if some other dochub feature still needs the wallet, only that justified site).
 
-- [ ] **Step 9: Typecheck + build.**
+- [ ] **Step 6: Typecheck + build.**
   Run: `npm --prefix web run typecheck`
   Expected: PASS (no `Cannot find module '@/lib/share-grant'`).
   Run: `npm --prefix web run build`
   Expected: PASS.
 
-- [ ] **Step 10: Commit.**
+- [ ] **Step 7: Commit.**
   Run: `git add web/lib/share-grant.ts web/app/api/s/\[token\]/route.ts web/lib/dochub.js && git commit -m "$(cat <<'EOF'
 refactor(web): remove free-share grant cookie path
 
