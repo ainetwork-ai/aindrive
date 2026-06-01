@@ -146,8 +146,8 @@ resolveAccess(driveId, path, accountId):
 - `drives.owner_id` — "생성자/최종 권한" 의미로 유지, owner는 멤버십 role로도 부여 (D2).
 
 **제거**
-- `folder_access` (wallet-keyed 접근) — drive_members가 단일 출처로 대체. (마이그레이션: 기존 row를
-  account로 매핑 가능하면 drive_members로 이관, 아니면 receipt로만 보존.)
+- `folder_access` (wallet-keyed 접근) — drive_members가 단일 출처로 대체. **마이그레이션 없음**: 현재 데이터는
+  데모라 유실돼도 무방 → 테이블 drop, 기존 row 이관 안 함.
 
 ---
 
@@ -193,7 +193,6 @@ owned+member 반환) / `normalizePath`.
 | share 만료 후 클릭 | 만료 링크로 멤버 | S0/S3 expires_at 검사 | high |
 | WS 멤버가 doc 열기 | per-path role 미검증 | dochub 단일 출처 path별 resolveRole | medium |
 | 기존 `/s` 북마크 + 30d 쿠키 | 배포일 404/401 | /s 입구 유지, 쿠키 경로 유예 후 제거 | medium |
-| folder_access 마이그레이션 | 기존 유료구매자 접근 상실 | 매핑 가능 row는 drive_members로 이관 | medium |
 
 ---
 
@@ -212,7 +211,7 @@ owned+member 반환) / `normalizePath`.
 
 1. **ROLE_RANK commenter 제거** + `mergeRoleUpgradeOnly` 추출, members POST·s settle에 적용 (downgrade 선제거).
 2. **resolveAccess 단일 출처화** — wallet/cookie/free-share 분기 제거, drive_members + owner_id만.
-   dochub WS도 같이. (folder_access 조회 제거 + 마이그레이션.)
+   dochub WS도 같이. (folder_access 조회 제거 — 테이블 drop, 마이그레이션 없음.)
 3. **`/d` page grant-path 평가** + 초기 path 스코프 (sub-path 멤버 통과).
 4. **role-aware 드라이브 표면 신규 구축** — viewer/editor/owner 능력 차등, breadcrumb clamp.
 5. **`POST /api/s/[token]/accept` (CONSUME)** + share-gate ok-state redirect.
@@ -220,7 +219,7 @@ owned+member 반환) / `normalizePath`.
 7. **PaidContentView 삭제** (4·5 ship 후).
 8. **member remove/role-change 라우트 + UI**.
 9. **purchase 원장 재설계**: payment_receipts account-keyed, settle이 drive_members upsert + receipt.
-   folder_access 제거.
+   folder_access 테이블 drop (마이그레이션 없음).
 10. **account_wallets + SIWE link** (`POST /api/wallet/link`), 비회원 지갑결제 → account 생성·link.
 11. **정리**: shares password 제거(O1), owner 게이트 atLeast(D2), free-share 쿠키 경로 제거(back-compat 후).
 
