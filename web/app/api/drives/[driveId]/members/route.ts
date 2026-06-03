@@ -5,12 +5,13 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
+import { mergeRoleUpgradeOnly } from "@/lib/access-core";
 import { zPath } from "@/lib/zod-helpers";
 
 const Body = z.object({
   email: z.string().email(),
   path: zPath.default(""),
-  role: z.enum(["viewer", "commenter", "editor", "owner"]),
+  role: z.enum(["viewer", "editor", "owner"]),
 });
 
 export async function GET(_req: Request, { params }: { params: Promise<{ driveId: string }> }) {
@@ -42,10 +43,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     .get(body.data.email) as { id: string } | undefined;
   if (!invitee) return NextResponse.json({ error: "user not found — they must create an account first" }, { status: 404 });
   const id = nanoid(12);
+  // Upgrade-only upsert: re-inviting an existing member must never lower
+  // their role (mergeRoleUpgradeOnly, expressed inline in SQL). The CASE
+  // mirrors ROLE_RANK (none<viewer<editor<owner); on conflict we keep
+  // whichever of the existing role / the requested role ranks higher.
   db.prepare(`
     INSERT INTO drive_members (id, drive_id, user_id, path, role)
     VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role
+    ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role =
+      CASE
+        WHEN (CASE drive_members.role WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 WHEN 'viewer' THEN 1 ELSE 0 END)
+           > (CASE excluded.role       WHEN 'owner' THEN 3 WHEN 'editor' THEN 2 WHEN 'viewer' THEN 1 ELSE 0 END)
+        THEN drive_members.role
+        ELSE excluded.role
+      END
   `).run(id, driveId, invitee.id, body.data.path, body.data.role);
   return NextResponse.json({ ok: true });
 }

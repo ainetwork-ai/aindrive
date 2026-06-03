@@ -12,7 +12,7 @@ import { AgentError, callAgent } from "@/lib/rpc";
 
 const Body = z.object({
   path: zPath.default(""),
-  role: z.enum(["viewer", "commenter", "editor"]),
+  role: z.enum(["viewer", "editor"]),
   expiresAt: z.string().datetime().optional(),
   password: z.string().min(4).max(200).optional(),
   price_usdc: z.number().positive().optional(),
