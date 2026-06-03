@@ -37,6 +37,13 @@ export function ShareGate({ token }: { token: string }) {
   // visitor off to the real drive at the share's path (not root).
   async function accept(driveId: string, path: string) {
     const res = await fetch(`/api/s/${token}/accept`, { method: "POST" });
+    // Login-first: CONSUME requires auth. A logged-out visitor is bounced to
+    // /login with a next param so they return to this exact share; after
+    // login check() re-runs and accept() succeeds (free share).
+    if (res.status === 401) {
+      router.replace(`/login?next=/s/${token}`);
+      return;
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       toast.error(body.error || "could not open share");
@@ -51,12 +58,6 @@ export function ShareGate({ token }: { token: string }) {
   async function check() {
     setState("loading");
     const res = await fetch(`/api/s/${token}`);
-    // Login-first: an unauthenticated visitor is bounced to /login with a
-    // next param so they return to this exact share after signing in.
-    if (res.status === 401) {
-      router.replace(`/login?next=${encodeURIComponent(`/s/${token}`)}`);
-      return;
-    }
     const body = await res.json();
     setData(body);
     if (res.ok && "driveId" in body) {
