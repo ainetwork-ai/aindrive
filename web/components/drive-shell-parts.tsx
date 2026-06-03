@@ -98,7 +98,7 @@ export function DriveSidebar({
 
 export function DriveHeader({
   setSidebarOpen, crumbs, setPath, canEdit, onUpload, setShareOpen, path, role,
-  setAgentModalOpen, setChatOpen, chatOpen,
+  setAgentModalOpen, setChatOpen, chatOpen, isOwner,
 }: {
   setSidebarOpen: (v: boolean) => void;
   crumbs: Crumb[];
@@ -111,6 +111,7 @@ export function DriveHeader({
   setAgentModalOpen: (v: boolean) => void;
   setChatOpen: (fn: (v: boolean) => boolean) => void;
   chatOpen: boolean;
+  isOwner: boolean;
 }) {
   return (
     <header className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
@@ -176,13 +177,15 @@ export function DriveHeader({
           <Upload className="w-4 h-4" /> <span className="hidden sm:inline">Upload</span>
           <input type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
         </label>
-        <button
-          aria-label="Share"
-          onClick={() => setShareOpen({ path })}
-          className="flex items-center gap-2 rounded-full bg-drive-accent text-white px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-accentHover"
-        >
-          <Share2 className="w-4 h-4" /> <span className="hidden sm:inline">Share</span>
-        </button>
+        {isOwner && (
+          <button
+            aria-label="Share"
+            onClick={() => setShareOpen({ path })}
+            className="flex items-center gap-2 rounded-full bg-drive-accent text-white px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-accentHover"
+          >
+            <Share2 className="w-4 h-4" /> <span className="hidden sm:inline">Share</span>
+          </button>
+        )}
         {role === "owner" && (
           <button
             aria-label="Create Agent"
@@ -210,7 +213,7 @@ export function DriveHeader({
 }
 
 export function FileTable({
-  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction,
+  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner,
 }: {
   loading: boolean;
   err: string | null;
@@ -221,6 +224,7 @@ export function FileTable({
   setPath: (next: string) => void;
   canEdit: boolean;
   onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
+  isOwner: boolean;
 }) {
   if (loading) {
     return (
@@ -271,7 +275,7 @@ export function FileTable({
                 {e.isDir ? "—" : prettyBytes(e.size)}
               </td>
               <td className="py-3 sm:py-2 text-right whitespace-nowrap">
-                {canEdit && (
+                {isOwner && (
                   <RowMenu
                     hasPaidShare={!!paid}
                     onAction={(a) => onRowAction(e, a)}

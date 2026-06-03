@@ -224,6 +224,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
           setAgentModalOpen={setAgentModalOpen}
           setChatOpen={setChatOpen}
           chatOpen={chatOpen}
+          isOwner={isOwner}
         />
 
         <section className="flex-1 flex min-h-0">
@@ -238,6 +239,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
               setPath={setPath}
               canEdit={canEdit}
               onRowAction={onRowAction}
+              isOwner={isOwner}
             />
           </div>
           {selected && (
