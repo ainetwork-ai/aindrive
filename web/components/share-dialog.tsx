@@ -22,7 +22,7 @@ export function ShareDialog({
   const [access, setAccess] = useState<Access[]>([]);
   const [email, setEmail] = useState("");
   const [wallet, setWallet] = useState("");
-  const [walletRole, setWalletRole] = useState<"viewer" | "commenter" | "editor">("viewer");
+  const [walletRole, setWalletRole] = useState<"viewer" | "editor">("viewer");
   const [role, setRole] = useState<"viewer" | "editor">("viewer");
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");

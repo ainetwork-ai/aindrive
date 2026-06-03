@@ -19,7 +19,7 @@ export type Access = {
   id: string;
   wallet_address: string;
   path: string;
-  role: "viewer" | "commenter" | "editor";
+  role: "viewer" | "editor";
   added_by: "owner" | "payment";
   payment_tx: string | null;
   added_at: string;
@@ -196,8 +196,8 @@ export function WalletAccessSection({
 }: {
   wallet: string;
   setWallet: (v: string) => void;
-  walletRole: "viewer" | "commenter" | "editor";
-  setWalletRole: (v: "viewer" | "commenter" | "editor") => void;
+  walletRole: "viewer" | "editor";
+  setWalletRole: (v: "viewer" | "editor") => void;
   addWallet: () => void;
   busy: boolean;
   access: Access[];
@@ -217,11 +217,10 @@ export function WalletAccessSection({
         />
         <select
           value={walletRole}
-          onChange={(e) => setWalletRole(e.target.value as "viewer" | "commenter" | "editor")}
+          onChange={(e) => setWalletRole(e.target.value as "viewer" | "editor")}
           className="rounded-lg border border-drive-border px-2 text-sm"
         >
           <option value="viewer">Viewer</option>
-          <option value="commenter">Commenter</option>
           <option value="editor">Editor</option>
         </select>
         <button
