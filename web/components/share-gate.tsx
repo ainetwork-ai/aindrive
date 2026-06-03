@@ -1,12 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAccount, useWalletClient } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { wrapFetchWithPayment } from "x402-fetch";
 import { toast } from "sonner";
 import { Lock, Loader2 } from "lucide-react";
-import { DriveShell } from "./drive-shell";
-import { PaidContentView } from "./paid-content-view";
 
 type PaymentRequirements = {
   scheme: string;
@@ -30,17 +29,44 @@ export function ShareGate({ token }: { token: string }) {
   const [state, setState] = useState<State>("loading");
   const [data, setData] = useState<CheckResponse | null>(null);
   const [paying, setPaying] = useState(false);
+  const router = useRouter();
   const { isConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
+
+  // Consume the share into a persistent drive_members grant, then hand the
+  // visitor off to the real drive at the share's path (not root).
+  async function accept(driveId: string, path: string) {
+    const res = await fetch(`/api/s/${token}/accept`, { method: "POST" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      toast.error(body.error || "could not open share");
+      setState("error");
+      setData(body);
+      return;
+    }
+    const body = (await res.json()) as { driveId: string; path: string };
+    router.replace(`/d/${body.driveId}?path=${encodeURIComponent(body.path)}`);
+  }
 
   async function check() {
     setState("loading");
     const res = await fetch(`/api/s/${token}`);
+    // Login-first: an unauthenticated visitor is bounced to /login with a
+    // next param so they return to this exact share after signing in.
+    if (res.status === 401) {
+      router.replace(`/login?next=${encodeURIComponent(`/s/${token}`)}`);
+      return;
+    }
     const body = await res.json();
     setData(body);
-    if (res.ok) setState("ok");
-    else if (res.status === 402) setState("paywall");
-    else setState("error");
+    if (res.ok && "driveId" in body) {
+      // Free share (or already-covered paid share): consume + redirect.
+      await accept(body.driveId, body.path);
+    } else if (res.status === 402) {
+      setState("paywall");
+    } else {
+      setState("error");
+    }
   }
   useEffect(() => { check(); }, [token]);
 
@@ -65,9 +91,11 @@ export function ShareGate({ token }: { token: string }) {
       const res = await fetchWithPay(`/api/s/${token}`);
       const body = await res.json();
       if (res.ok) {
-        setData(body);
-        setState("ok");
+        const okBody = body as { driveId: string; path: string };
         toast.success("Payment settled. Permanent access granted.");
+        // Paid GET wrote the covering grant; CONSUME now upserts the
+        // drive_members row and redirects into the drive.
+        await accept(okBody.driveId, okBody.path);
       } else {
         toast.error(body.error || "payment failed");
       }
@@ -89,17 +117,12 @@ export function ShareGate({ token }: { token: string }) {
     const msg = data && "error" in data ? data.error : "share unavailable";
     return <main className="p-10 text-center">{msg}</main>;
   }
-  if (state === "ok" && data && "driveId" in data) {
-    // Buyers (paid via x402) and free-share guests don't have full drive access —
-    // they only have folder_access for the share's specific path. Render a scoped
-    // view rather than DriveShell (which would try to list drive root and 401).
+  if (state === "ok") {
+    // accept() has fired router.replace; render a spinner until navigation.
     return (
-      <PaidContentView
-        driveId={data.driveId}
-        driveName={data.driveName}
-        path={data.path}
-        txHash={data.txHash}
-      />
+      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center text-drive-muted">
+        <Loader2 className="w-5 h-5 animate-spin" />
+      </main>
     );
   }
   if (state === "paywall" && requirement) {
