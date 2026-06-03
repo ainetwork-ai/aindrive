@@ -12,7 +12,7 @@ import { normalizePath } from "@/lib/path";
 const Body = z.object({
   wallet_address: z.string().refine((v) => isAddress(v), "invalid address"),
   path: zPath.default(""),
-  role: z.enum(["viewer", "commenter", "editor"]).default("viewer"),
+  role: z.enum(["viewer", "editor"]).default("viewer"),
 });
 
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {

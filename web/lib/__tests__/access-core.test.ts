@@ -31,6 +31,12 @@ describe("ROLE_RANK", () => {
   it("has no commenter rung", () => {
     expect((ROLE_RANK as Record<string, number>).commenter).toBeUndefined();
   });
+  it("rank values match the SQL CASE literals in members/route.ts (update that CASE if this fails)", () => {
+    expect(ROLE_RANK.none).toBe(0);
+    expect(ROLE_RANK.viewer).toBe(1);
+    expect(ROLE_RANK.editor).toBe(2);
+    expect(ROLE_RANK.owner).toBe(3);
+  });
 });
 
 describe("mergeRoleUpgradeOnly", () => {

@@ -5,7 +5,6 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
-import { mergeRoleUpgradeOnly } from "@/lib/access-core";
 import { zPath } from "@/lib/zod-helpers";
 
 const Body = z.object({
