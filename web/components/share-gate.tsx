@@ -23,7 +23,7 @@ type CheckResponse =
   | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string }
   | { x402Version: number; accepts: PaymentRequirements[]; error: string };
 
-type State = "loading" | "ok" | "paywall" | "error";
+type State = "loading" | "paywall" | "error";
 
 export function ShareGate({ token }: { token: string }) {
   const [state, setState] = useState<State>("loading");
@@ -117,14 +117,6 @@ export function ShareGate({ token }: { token: string }) {
   if (state === "error") {
     const msg = data && "error" in data ? data.error : "share unavailable";
     return <main className="p-10 text-center">{msg}</main>;
-  }
-  if (state === "ok") {
-    // accept() has fired router.replace; render a spinner until navigation.
-    return (
-      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center text-drive-muted">
-        <Loader2 className="w-5 h-5 animate-spin" />
-      </main>
-    );
   }
   if (state === "paywall" && requirement) {
     const usdc = (Number(requirement.maxAmountRequired) / 1_000_000).toFixed(2);
