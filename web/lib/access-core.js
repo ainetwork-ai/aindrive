@@ -11,9 +11,8 @@ import { normalizePath, isAncestorOrSelf } from "./path.js";
 export const ROLE_RANK = Object.freeze({
   none: 0,
   viewer: 1,
-  commenter: 2,
-  editor: 3,
-  owner: 4,
+  editor: 2,
+  owner: 3,
 });
 
 /**
@@ -35,7 +34,7 @@ export function atLeast(level, required) {
  *
  * @param {Array<{path: string, role: string}>} rows
  * @param {string} targetPath  pre-normalized target
- * @returns {string} one of "none" | "viewer" | "commenter" | "editor" | "owner"
+ * @returns {string} one of "none" | "viewer" | "editor" | "owner"
  */
 export function bestMatchingRole(rows, targetPath) {
   let best = "none";
@@ -63,7 +62,7 @@ export function bestMatchingRole(rows, targetPath) {
  * @param {string} driveId
  * @param {string} targetPath  pre-normalized target
  * @param {Date} now
- * @returns {string} one of "none" | "viewer" | "commenter" | "editor" | "owner"
+ * @returns {string} one of "none" | "viewer" | "editor" | "owner"
  */
 export function pickFreeShareRole(shareRows, driveId, targetPath, now) {
   let best = "none";
@@ -75,6 +74,22 @@ export function pickFreeShareRole(shareRows, driveId, targetPath, now) {
     if ((ROLE_RANK[s.role] ?? 0) > (ROLE_RANK[best] ?? 0)) best = s.role;
   }
   return best;
+}
+
+/**
+ * Merge an incoming role into a current one WITHOUT ever downgrading.
+ *
+ * Used on the members upsert path: re-inviting / re-accepting a share for a
+ * user who already has access must only ever raise their role. Returns
+ * whichever of `current` / `incoming` has the higher ROLE_RANK; ties keep
+ * `incoming` (same rank, same role).
+ *
+ * @param {"none"|"viewer"|"editor"|"owner"} current   existing role (may be "none")
+ * @param {"viewer"|"editor"|"owner"} incoming          requested role (never "none")
+ * @returns {"viewer"|"editor"|"owner"} the higher-ranked role
+ */
+export function mergeRoleUpgradeOnly(current, incoming) {
+  return (ROLE_RANK[current] ?? 0) > (ROLE_RANK[incoming] ?? 0) ? current : incoming;
 }
 
 export { normalizePath, isAncestorOrSelf };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ROLE_RANK, atLeast, bestMatchingRole, pickFreeShareRole, type Role } from "../access-core.js";
+import { ROLE_RANK, atLeast, bestMatchingRole, pickFreeShareRole, mergeRoleUpgradeOnly, type Role } from "../access-core.js";
 import { type NormalizedPath } from "../path";
 
 type Row = { path: NormalizedPath; role: Role };
@@ -25,9 +25,29 @@ describe("ROLE_RANK", () => {
   it("orders roles strictly", () => {
     expect(ROLE_RANK.none).toBe(0);
     expect(ROLE_RANK.viewer).toBeGreaterThan(ROLE_RANK.none);
-    expect(ROLE_RANK.commenter).toBeGreaterThan(ROLE_RANK.viewer);
-    expect(ROLE_RANK.editor).toBeGreaterThan(ROLE_RANK.commenter);
+    expect(ROLE_RANK.editor).toBeGreaterThan(ROLE_RANK.viewer);
     expect(ROLE_RANK.owner).toBeGreaterThan(ROLE_RANK.editor);
+  });
+  it("has no commenter rung", () => {
+    expect((ROLE_RANK as Record<string, number>).commenter).toBeUndefined();
+  });
+});
+
+describe("mergeRoleUpgradeOnly", () => {
+  it("returns incoming when it outranks current", () => {
+    expect(mergeRoleUpgradeOnly("viewer", "editor")).toBe("editor");
+    expect(mergeRoleUpgradeOnly("none", "viewer")).toBe("viewer");
+    expect(mergeRoleUpgradeOnly("editor", "owner")).toBe("owner");
+  });
+  it("keeps current when incoming would downgrade", () => {
+    expect(mergeRoleUpgradeOnly("owner", "viewer")).toBe("owner");
+    expect(mergeRoleUpgradeOnly("editor", "viewer")).toBe("editor");
+  });
+  it("is a no-op when ranks are equal", () => {
+    expect(mergeRoleUpgradeOnly("editor", "editor")).toBe("editor");
+  });
+  it("treats current 'none' as the floor", () => {
+    expect(mergeRoleUpgradeOnly("none", "owner")).toBe("owner");
   });
 });
 
@@ -52,10 +72,10 @@ describe("bestMatchingRole", () => {
 
   it("returns the highest-rank role among matching ancestors", () => {
     const rows: Row[] = [
-      { path: n(""), role: "viewer" },             // drive-wide viewer
-      { path: n("docs"), role: "commenter" },      // covers target
-      { path: n("docs/q1"), role: "editor" },      // exact cover
-      { path: n("docs/q2"), role: "owner" },       // does NOT cover docs/q1
+      { path: n(""), role: "viewer" },          // drive-wide viewer
+      { path: n("docs"), role: "viewer" },       // covers target
+      { path: n("docs/q1"), role: "editor" },    // exact cover
+      { path: n("docs/q2"), role: "owner" },      // does NOT cover docs/q1
     ];
     expect(bestMatchingRole(rows, n("docs/q1"))).toBe("editor");
   });
@@ -119,7 +139,7 @@ describe("pickFreeShareRole", () => {
     const rows = [
       share({ path: n(""), role: "viewer" }),
       share({ path: n("docs"), role: "editor" }),
-      share({ path: n("docs"), role: "commenter" }),
+      share({ path: n("docs"), role: "viewer" }),
     ];
     expect(pickFreeShareRole(rows, "d1", n("docs/a.md"), NOW)).toBe("editor");
   });
