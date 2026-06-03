@@ -37,7 +37,13 @@ function LoginForm() {
         {loading ? "Signing in…" : "Sign in"}
       </button>
       <p className="mt-4 text-sm text-drive-muted text-center">
-        New here? <Link className="text-drive-accent hover:underline" href="/signup">Create an account</Link>
+        New here?{" "}
+        <Link
+          className="text-drive-accent hover:underline"
+          href={next ? `/signup?next=${encodeURIComponent(next)}` : "/signup"}
+        >
+          Create an account
+        </Link>
       </p>
     </form>
   );
