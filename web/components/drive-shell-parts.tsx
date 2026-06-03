@@ -275,10 +275,12 @@ export function FileTable({
                 {e.isDir ? "—" : prettyBytes(e.size)}
               </td>
               <td className="py-3 sm:py-2 text-right whitespace-nowrap">
-                {isOwner && (
+                {canEdit && (
                   <RowMenu
                     hasPaidShare={!!paid}
                     onAction={(a) => onRowAction(e, a)}
+                    canSell={isOwner}
+                    canManage={canEdit}
                   />
                 )}
               </td>

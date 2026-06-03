@@ -81,10 +81,9 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
   const isOwner = role === "owner";
 
   const loadDrives = useCallback(async () => {
-    if (!isOwner) return;
     const res = await apiFetch<{ drives: DriveSummary[] }>(`/api/drives`);
     if (res.ok) setDrives(res.data.drives);
-  }, [isOwner]);
+  }, []);
 
   const loadShares = useCallback(async () => {
     if (!isOwner) return;

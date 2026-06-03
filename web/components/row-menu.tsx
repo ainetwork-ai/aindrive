@@ -8,9 +8,14 @@ type Action = "sell" | "share" | "rename" | "delete";
 export function RowMenu({
   hasPaidShare,
   onAction,
+  canSell,
+  canManage,
 }: {
   hasPaidShare: boolean;
   onAction: (a: Action) => void;
+  // sell/share are owner-only (O2); rename/delete follow canEdit (editor or owner).
+  canSell: boolean;
+  canManage: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -53,29 +58,37 @@ export function RowMenu({
           className="absolute right-0 top-full mt-1 z-30 min-w-[180px] rounded-lg border border-drive-border bg-white shadow-drive py-1 text-sm"
           onClick={(e) => e.stopPropagation()}
         >
-          <MenuItem
-            icon={<DollarSign className="w-4 h-4" />}
-            label={hasPaidShare ? "Already selling" : "Sell…"}
-            disabled={hasPaidShare}
-            onClick={() => pick("sell")}
-          />
-          <MenuItem
-            icon={<Share2 className="w-4 h-4" />}
-            label="Share…"
-            onClick={() => pick("share")}
-          />
-          <div className="my-1 border-t border-drive-border" />
-          <MenuItem
-            icon={<Pencil className="w-4 h-4" />}
-            label="Rename"
-            onClick={() => pick("rename")}
-          />
-          <MenuItem
-            icon={<Trash2 className="w-4 h-4" />}
-            label="Delete"
-            danger
-            onClick={() => pick("delete")}
-          />
+          {canSell && (
+            <>
+              <MenuItem
+                icon={<DollarSign className="w-4 h-4" />}
+                label={hasPaidShare ? "Already selling" : "Sell…"}
+                disabled={hasPaidShare}
+                onClick={() => pick("sell")}
+              />
+              <MenuItem
+                icon={<Share2 className="w-4 h-4" />}
+                label="Share…"
+                onClick={() => pick("share")}
+              />
+            </>
+          )}
+          {canSell && canManage && <div className="my-1 border-t border-drive-border" />}
+          {canManage && (
+            <>
+              <MenuItem
+                icon={<Pencil className="w-4 h-4" />}
+                label="Rename"
+                onClick={() => pick("rename")}
+              />
+              <MenuItem
+                icon={<Trash2 className="w-4 h-4" />}
+                label="Delete"
+                danger
+                onClick={() => pick("delete")}
+              />
+            </>
+          )}
         </div>
       )}
     </div>
