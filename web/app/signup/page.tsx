@@ -1,10 +1,14 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
-export default function SignupPage() {
+function SignupForm() {
   const router = useRouter();
+  const search = useSearchParams();
+  const next = search.get("next");
+  // Open-redirect guard: only same-origin paths ("/x"), never "//evil.com".
+  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -22,10 +26,9 @@ export default function SignupPage() {
     });
     setLoading(false);
     if (!res.ok) { setErr((await res.json()).error || "signup failed"); return; }
-    router.push("/");
+    router.push(safeNext);
   }
   return (
-    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
       <form onSubmit={onSubmit} className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
         <h1 className="text-xl font-semibold">Create your aindrive</h1>
         <label className="block mt-5 text-sm">Name
@@ -42,9 +45,24 @@ export default function SignupPage() {
           {loading ? "Creating…" : "Create account"}
         </button>
         <p className="mt-4 text-sm text-drive-muted text-center">
-          Already have an account? <Link className="text-drive-accent hover:underline" href="/login">Sign in</Link>
+          Already have an account?{" "}
+          <Link
+            className="text-drive-accent hover:underline"
+            href={next ? `/login?next=${encodeURIComponent(next)}` : "/login"}
+          >
+            Sign in
+          </Link>
         </p>
       </form>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
+      <Suspense fallback={null}>
+        <SignupForm />
+      </Suspense>
     </main>
   );
 }
