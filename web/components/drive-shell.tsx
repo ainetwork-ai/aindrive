@@ -20,10 +20,16 @@ const ShareDialog = dynamic(() => import("./share-dialog").then((m) => m.ShareDi
 const CreateAgentModal = dynamic(() => import("./create-agent-modal").then((m) => m.CreateAgentModal), { ssr: false });
 const FolderChat = dynamic(() => import("./folder-chat").then((m) => m.FolderChat), { ssr: false });
 
-type Props = { driveId: string; driveName: string };
+type Props = {
+  driveId: string;
+  driveName: string;
+  initialPath?: string;
+  initialRole?: string;
+};
 
-export function DriveShell({ driveId, driveName }: Props) {
+export function DriveShell({ driveId, driveName, initialPath, initialRole }: Props) {
   const [path, setPathState] = useState(() => {
+    if (initialPath !== undefined) return initialPath;
     if (typeof window === "undefined") return "";
     const url = new URL(window.location.href);
     return url.searchParams.get("path") || "";
@@ -55,7 +61,7 @@ export function DriveShell({ driveId, driveName }: Props) {
   }, []);
   const [entries, setEntries] = useState<DriveEntry[]>([]);
   const [drives, setDrives] = useState<DriveSummary[]>([]);
-  const [role, setRole] = useState<string>("viewer");
+  const [role, setRole] = useState<string>(initialRole ?? "viewer");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<DriveEntry | null>(null);
@@ -72,15 +78,19 @@ export function DriveShell({ driveId, driveName }: Props) {
     setEntries(res.data.entries); setRole(res.data.role); setLoading(false);
   }, [driveId, path]);
 
+  const isOwner = role === "owner";
+
   const loadDrives = useCallback(async () => {
+    if (!isOwner) return;
     const res = await apiFetch<{ drives: DriveSummary[] }>(`/api/drives`);
     if (res.ok) setDrives(res.data.drives);
-  }, []);
+  }, [isOwner]);
 
   const loadShares = useCallback(async () => {
+    if (!isOwner) return;
     const res = await apiFetch<{ shares: ShareSummary[] }>(`/api/drives/${driveId}/shares`);
     if (res.ok) setShares(res.data.shares);
-  }, [driveId]);
+  }, [driveId, isOwner]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadDrives(); }, [loadDrives]);
@@ -96,13 +106,20 @@ export function DriveShell({ driveId, driveName }: Props) {
   }, [shares]);
 
   const canEdit = role === "editor" || role === "owner";
+  const rootPath = initialPath ?? "";
   const crumbs = useMemo(() => {
-    const parts = path.split("/").filter(Boolean);
-    const acc: { label: string; path: string }[] = [{ label: driveName, path: "" }];
-    let cur = "";
+    // Visual root is the member's grant (rootPath), not the drive root: a
+    // sub-path member must not be able to navigate above what they were
+    // granted. Only render segments at-or-below rootPath.
+    const rel = rootPath && path.startsWith(rootPath + "/")
+      ? path.slice(rootPath.length + 1)
+      : path === rootPath ? "" : path;
+    const parts = rel.split("/").filter(Boolean);
+    const acc: { label: string; path: string }[] = [{ label: driveName, path: rootPath }];
+    let cur = rootPath;
     for (const p of parts) { cur = cur ? `${cur}/${p}` : p; acc.push({ label: p, path: cur }); }
     return acc;
-  }, [path, driveName]);
+  }, [path, driveName, rootPath]);
 
   async function onNewFolder() {
     const name = prompt("New folder name");
