@@ -119,9 +119,26 @@ export const payment_receipts = sqliteTable(
     settled_at: text("settled_at")
       .notNull()
       .default(sql`(datetime('now'))`),
+    // NEW (Phase 4): the account this payment is attributed to. Nullable for
+    // legacy/anonymous receipts settled before the payer linked a wallet.
+    account_id: text("account_id"),
   },
   (t) => [
     index("idx_payment_receipts_wallet").on(t.wallet),
     index("idx_payment_receipts_drive_wallet").on(t.drive_id, t.wallet),
   ]
+);
+
+export const account_wallets = sqliteTable(
+  "account_wallets",
+  {
+    id: text("id").primaryKey(),
+    account_id: text("account_id").notNull(),
+    wallet_address: text("wallet_address").notNull().unique(),
+    linked_at: text("linked_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    verified_via: text("verified_via").notNull().default("siwe"),
+  },
+  (t) => [index("idx_account_wallets_account").on(t.account_id)]
 );

@@ -107,6 +107,15 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_folder_access_wallet ON folder_access(wallet_address);
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_wallet ON payment_receipts(wallet);
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_drive_wallet ON payment_receipts(drive_id, wallet);
+    CREATE TABLE IF NOT EXISTS account_wallets (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      wallet_address TEXT NOT NULL UNIQUE,
+      linked_at TEXT NOT NULL DEFAULT (datetime('now')),
+      verified_via TEXT NOT NULL DEFAULT 'siwe',
+      FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_wallets_account ON account_wallets(account_id);
   `);
   // Idempotent ALTERs (better-sqlite3 has no IF NOT EXISTS for ALTER)
   for (const stmt of [
@@ -117,11 +126,17 @@ function open() {
     "ALTER TABLE folder_access ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
     "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
+    "ALTER TABLE payment_receipts ADD COLUMN account_id TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;
     }
   }
+  // Index on payment_receipts(account_id) added after the ALTER that creates
+  // the column (CREATE INDEX IF NOT EXISTS is safe to run every startup).
+  handle.exec(`
+    CREATE INDEX IF NOT EXISTS idx_payment_receipts_account ON payment_receipts(account_id);
+  `);
   return handle;
 }
 

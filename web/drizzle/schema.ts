@@ -157,9 +157,35 @@ export const payment_receipts = sqliteTable(
     settled_at: text("settled_at")
       .notNull()
       .default(sql`(datetime('now'))`),
+    // NEW (Phase 4): the account this payment is attributed to. Nullable for
+    // legacy/anonymous receipts settled before the payer linked a wallet;
+    // POST /api/wallet/link backfills these on link.
+    account_id: text("account_id").references(() => users.id),
   },
   (t) => [
     index("idx_payment_receipts_wallet").on(t.wallet),
     index("idx_payment_receipts_drive_wallet").on(t.drive_id, t.wallet),
   ]
+);
+
+// ---------------------------------------------------------------------------
+// account_wallets — links an EVM wallet to a users row. One wallet maps to at
+// most one account (wallet_address UNIQUE); an account may link many wallets.
+// This is how a paid x402 payer (identified only by wallet) gets a durable
+// drive_members grant: settle resolves the wallet to an account through here.
+// ---------------------------------------------------------------------------
+export const account_wallets = sqliteTable(
+  "account_wallets",
+  {
+    id: text("id").primaryKey(),
+    account_id: text("account_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    wallet_address: text("wallet_address").notNull().unique(),
+    linked_at: text("linked_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    verified_via: text("verified_via").notNull().default("siwe"),
+  },
+  (t) => [index("idx_account_wallets_account").on(t.account_id)]
 );
