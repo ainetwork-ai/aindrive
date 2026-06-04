@@ -6,7 +6,7 @@ import { db } from "./db.js";
 import { jwtVerify } from "jose";
 import { trace } from "./trace.js";
 import { log } from "./logger.js";
-import { ROLE_RANK, bestMatchingRole, pickFreeShareRole, normalizePath } from "./access-core.js";
+import { ROLE_RANK, bestMatchingRole, normalizePath } from "./access-core.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -23,7 +23,7 @@ function getSessionSecret() {
 /**
  * DocHub: per-document broadcast hub for collaborative editing.
  *
- *   docId → Set<{ ws, role, userId, address }>
+ *   docId → Set<{ ws, role, userId }>
  *
  * Each WS subscribes to exactly one (driveId, path) pair. When any frame arrives
  * from a subscriber, it is forwarded to every OTHER subscriber on the same docId.
@@ -47,15 +47,6 @@ export function docIdFor(driveId, path) {
   return createHash("sha1").update(`${driveId}:${path}`).digest("base64url").slice(0, 22);
 }
 
-async function readWalletFromCookie(cookieHeader) {
-  const m = /aindrive_wallet=([^;]+)/.exec(cookieHeader || "");
-  if (!m) return null;
-  try {
-    const { payload } = await jwtVerify(m[1], enc.encode(getSessionSecret()));
-    return ((payload.addr) || null)?.toLowerCase() ?? null;
-  } catch { return null; }
-}
-
 async function readUserFromCookie(cookieHeader) {
   const m = /aindrive_session=([^;]+)/.exec(cookieHeader || "");
   if (!m) return null;
@@ -65,61 +56,21 @@ async function readUserFromCookie(cookieHeader) {
   } catch { return null; }
 }
 
-// Free-share grant tokens from the aindrive_share cookie. Mirrors
-// lib/share-grant.ts (readShareGrants), but reads from the raw WS cookie
-// header instead of next/headers (which is unavailable under raw node).
-async function readShareGrantsFromCookie(cookieHeader) {
-  const m = /aindrive_share=([^;]+)/.exec(cookieHeader || "");
-  if (!m) return [];
-  try {
-    const { payload } = await jwtVerify(m[1], enc.encode(getSessionSecret()));
-    return Array.isArray(payload.tokens) ? payload.tokens : [];
-  } catch { return []; }
-}
-
-// Mirrors lib/access.ts resolveAccess: session/member, then wallet allowlist,
-// then free-share grant cookie. Kept here (not imported) because access.ts
-// depends on next/headers, which is unavailable under raw `node server.js`.
-function resolveRole(driveId, userId, address, shareTokens, path) {
+// Mirrors lib/access.ts resolveRoleByUser: drive owner, else best-matching
+// drive_members row. Kept here (not imported) because access.ts depends on
+// next/headers, which is unavailable under raw `node server.js`. drive_members
+// is the single access source — paid (settle) and free (accept) shares both
+// write rows here, so the WS hub needs no wallet/share-cookie branch.
+function resolveRole(driveId, userId, path) {
+  if (!userId) return "none";
   const target = normalizePath(path);
   const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId);
   if (!drive) return "none";
-  if (userId && drive.owner_id === userId) return "owner";
-  const rows = [];
-  if (userId) {
-    rows.push(
-      ...db
-        .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
-        .all(driveId, userId),
-    );
-  }
-  if (address) {
-    rows.push(
-      ...db
-        .prepare("SELECT path, role FROM folder_access WHERE drive_id = ? AND wallet_address = ?")
-        .all(driveId, address),
-    );
-  }
-  let best = bestMatchingRole(rows, target);
-
-  // Free-share grant: a link-only collaborator carries the share token in the
-  // aindrive_share cookie. Look the tokens up and let pickFreeShareRole apply
-  // the free-only / not-expired / ancestor rules (same as the HTTP path). This
-  // is what lets free-share viewers actually join the live editing session.
-  if (shareTokens && shareTokens.length) {
-    const shareRows = shareTokens
-      .map((token) =>
-        db
-          .prepare(
-            "SELECT drive_id, path, role, price_usdc, expires_at FROM shares WHERE token = ?",
-          )
-          .get(token),
-      )
-      .filter(Boolean);
-    const shareRole = pickFreeShareRole(shareRows, driveId, target, new Date());
-    if ((ROLE_RANK[shareRole] ?? 0) > (ROLE_RANK[best] ?? 0)) best = shareRole;
-  }
-  return best;
+  if (drive.owner_id === userId) return "owner";
+  const rows = db
+    .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
+    .all(driveId, userId);
+  return bestMatchingRole(rows, target);
 }
 
 export async function onDocConnect(ws, req, query) {
@@ -128,25 +79,21 @@ export async function onDocConnect(ws, req, query) {
   if (!driveId) { ws.close(4400, "drive required"); return; }
 
   const cookie = req.headers["cookie"];
-  const [userId, address, shareTokens] = await Promise.all([
-    readUserFromCookie(cookie),
-    readWalletFromCookie(cookie),
-    readShareGrantsFromCookie(cookie),
-  ]);
-  const role = resolveRole(driveId, userId, address, shareTokens, path);
+  const userId = await readUserFromCookie(cookie);
+  const role = resolveRole(driveId, userId, path);
   if (ROLE_RANK[role] < ROLE_RANK.viewer) { ws.close(4401, "no access"); return; }
 
   const docId = docIdFor(driveId, path);
-  const peer = { ws, role, userId, address, docId };
+  const peer = { ws, role, userId, docId };
   let bucket = hubs.get(docId);
   if (!bucket) { bucket = new Set(); hubs.set(docId, bucket); }
   bucket.add(peer);
 
-  log.info({ docId, role, user: userId || address || "anon", peers: bucket.size }, "[doc] sub");
+  log.info({ docId, role, user: userId || "anon", peers: bucket.size }, "[doc] sub");
   try {
     ws.send(JSON.stringify({ t: "sub-ok", role, peers: bucket.size }));
   } catch {}
-  try { trace("server", "ws-doc-sub", { docId, extra: { role, peers: bucket.size, userId, address } }); } catch {}
+  try { trace("server", "ws-doc-sub", { docId, extra: { role, peers: bucket.size, userId } }); } catch {}
 
   ws.on("message", (data) => {
     let frame;
