@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { SiweMessage } from "siwe";
 import { nanoid } from "nanoid";
+import bcrypt from "bcryptjs";
 import { db } from "./db";
 import { env } from "./env";
 import { cookieOptions } from "./cookie-config";
@@ -125,4 +126,39 @@ export function linkWalletToAccount(accountId: string, wallet: string, verifiedV
     .prepare("UPDATE payment_receipts SET account_id = ? WHERE wallet = ? AND account_id IS NULL")
     .run(accountId, addr);
   return res.changes;
+}
+
+/**
+ * Resolve the account that a paid-share payer should be credited to:
+ *   1. an account already linked to this wallet (account_wallets), else
+ *   2. a freshly created wallet-only placeholder account + link.
+ *
+ * Wallet-only accounts have no real email/password: we mint a deterministic
+ * `<wallet>@wallet.aindrive.local` email (satisfies the UNIQUE NOT NULL email
+ * column without colliding with human signups) and an unusable random-input
+ * bcrypt hash for password_hash (NOT NULL). The user can later claim the
+ * account by linking the same wallet through POST /api/wallet/link while
+ * logged in to their real account — that path throws on the wallet UNIQUE,
+ * so claiming is a future-phase concern; here we only need a stable id.
+ *
+ * @returns the account id (never null)
+ */
+export function resolveAccountForWallet(wallet: string): string {
+  const addr = wallet.toLowerCase();
+  const linked = db
+    .prepare("SELECT account_id FROM account_wallets WHERE wallet_address = ?")
+    .get(addr) as { account_id: string } | undefined;
+  if (linked) return linked.account_id;
+
+  const id = "w_" + nanoid(10);
+  const email = `${addr}@wallet.aindrive.local`;
+  // Random input → resulting hash can never be reproduced by a login attempt.
+  const placeholderHash = bcrypt.hashSync(nanoid(24), 10);
+  db.prepare(
+    "INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)"
+  ).run(id, email, `wallet:${addr.slice(0, 10)}`, placeholderHash);
+  db.prepare(
+    "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via) VALUES (?, ?, ?, ?)"
+  ).run(nanoid(12), id, addr, "payment");
+  return id;
 }

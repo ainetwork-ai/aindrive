@@ -8,6 +8,7 @@ process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-walletlink-
 
 const { db } = await import("../db.js");
 const { linkWalletToAccount, WalletAlreadyLinkedError } = await import("../wallet.js");
+const { resolveAccountForWallet } = await import("../wallet.js");
 
 const WALLET = "0xABCdef0000000000000000000000000000000001";
 
@@ -37,5 +38,33 @@ describe("linkWalletToAccount", () => {
 
   it("throws WalletAlreadyLinkedError when the wallet is taken by another account", () => {
     expect(() => linkWalletToAccount("u2", WALLET, "siwe")).toThrow(WalletAlreadyLinkedError);
+  });
+});
+
+describe("resolveAccountForWallet", () => {
+  it("returns the account already linked to the wallet", () => {
+    // u1 ↔ WALLET linked in the earlier suite.
+    const id = resolveAccountForWallet(WALLET);
+    expect(id).toBe("u1");
+  });
+
+  it("creates a placeholder account + link for an unknown wallet", () => {
+    const fresh = "0xfeedfeedfeedfeedfeedfeedfeedfeedfeedfeed";
+    const id = resolveAccountForWallet(fresh);
+    expect(id).toMatch(/^w_/); // placeholder id scheme
+    const u = db.prepare("SELECT email, name, password_hash FROM users WHERE id = ?").get(id) as { email: string; name: string; password_hash: string };
+    expect(u.email).toBe(`${fresh.toLowerCase()}@wallet.aindrive.local`);
+    expect(u.password_hash.length).toBeGreaterThan(0);
+    const link = db.prepare("SELECT account_id FROM account_wallets WHERE wallet_address = ?").get(fresh.toLowerCase()) as { account_id: string };
+    expect(link.account_id).toBe(id);
+  });
+
+  it("is idempotent for the same unknown wallet (no duplicate account)", () => {
+    const fresh = "0x0101010101010101010101010101010101010101";
+    const a = resolveAccountForWallet(fresh);
+    const b = resolveAccountForWallet(fresh);
+    expect(a).toBe(b);
+    const count = db.prepare("SELECT count(*) c FROM account_wallets WHERE wallet_address = ?").get(fresh.toLowerCase()) as { c: number };
+    expect(count.c).toBe(1);
   });
 });
