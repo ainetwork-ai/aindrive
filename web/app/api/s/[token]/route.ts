@@ -8,7 +8,6 @@ import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
 import { resolveRoleByUser, atLeast, type Role } from "@/lib/access";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
-import { addShareGrant } from "@/lib/share-grant";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
@@ -56,11 +55,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   const user = await getUser();
   if (user && user.id === share.owner_id) return NextResponse.json(okBody);
 
-  // Free share — keep the share-grant cookie for back-compat (Phase 7
-  // removes this). The CONSUME flow (POST /accept) writes the real
-  // drive_members grant; this cookie is kept during the transition window.
+  // Free share: return okBody; the CONSUME flow (POST /accept) writes the
+  // real drive_members grant. No cookie needed — login-first accept is the
+  // canonical path.
   if (!share.price_usdc) {
-    await addShareGrant(token);
     return NextResponse.json(okBody);
   }
 
