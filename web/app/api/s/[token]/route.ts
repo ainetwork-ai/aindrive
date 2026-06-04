@@ -4,9 +4,10 @@ import { useFacilitator } from "x402/verify";
 import { safeBase64Decode } from "x402/shared";
 import { PaymentPayloadSchema, type PaymentRequirements } from "x402/types";
 import { db } from "@/lib/db";
-import { getWallet, setWalletCookie } from "@/lib/wallet";
+import { getWallet, setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
-import { resolveRoleByWallet, atLeast, ROLE_RANK, type Role } from "@/lib/access";
+import { resolveRoleByWallet, resolveRoleByUser, atLeast, ROLE_RANK, type Role } from "@/lib/access";
+import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { addShareGrant } from "@/lib/share-grant";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
@@ -258,10 +259,28 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       console.warn(`[paid-grant] role NOT downgraded for ${payerWallet} on ${share.drive_id}/${share.path}: kept ${existing?.role} (would-be ${share.role})`);
     }
   }
+  // Resolve the account this payment credits: a logged-in user wins; else the
+  // wallet's linked account; else a freshly minted wallet-only account. This
+  // is the Phase 4 pivot — paid access now lives in drive_members keyed by an
+  // account, not only in folder_access keyed by a wallet (folder_access write
+  // above is kept until Phase 5).
+  const settleAccountId = user?.id ?? resolveAccountForWallet(payerWallet);
+
+  // UPGRADE-ONLY grant: never downgrade a member who already holds a higher
+  // role at this path (e.g. an owner-added editor paying through a viewer
+  // share). mergeRoleUpgradeOnly returns the higher of current/incoming.
+  const currentRole = resolveRoleByUser(share.drive_id, settleAccountId, share.path);
+  const mergedRole = mergeRoleUpgradeOnly(currentRole, share.role);
+  db.prepare(
+    `INSERT INTO drive_members (id, drive_id, user_id, path, role)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role`
+  ).run(nanoid(12), share.drive_id, settleAccountId, share.path, mergedRole);
+
   try {
     db.prepare(
-      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, X402_NETWORK, share.id);
+      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, X402_NETWORK, share.id, settleAccountId);
   } catch (e) {
     if (!/UNIQUE/i.test((e as Error).message)) throw e;
     // Same on-chain tx already recorded. Log so observability shows
