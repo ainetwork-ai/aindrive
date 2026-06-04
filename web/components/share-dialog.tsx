@@ -3,9 +3,11 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { X, Lock } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
+import { atLeast } from "@/lib/access-core.js";
 import {
   EarningsSection, SellSection, EmailInviteSection, FreeLinkSection,
-  type Share, type Receipt,
+  MembersSection,
+  type Share, type Receipt, type Member,
 } from "./share-dialog-sections";
 
 type FocusSection = "sell" | "share" | undefined;
@@ -27,18 +29,31 @@ export function ShareDialog({
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [payoutWallet, setPayoutWallet] = useState<string>("");
   const [payoutInput, setPayoutInput] = useState<string>("");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [me, setMe] = useState<{ email: string; role: "viewer" | "editor" | "owner" | "none" }>({
+    email: "",
+    role: "none",
+  });
 
   async function load() {
-    const [s, r, d] = await Promise.all([
+    const [s, r, d, mem, who] = await Promise.all([
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
       apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
       apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
+      apiFetch<{ members: Member[] }>(`/api/drives/${driveId}/members`),
+      apiFetch<{ user: { email: string } | null }>(`/api/auth/me`),
     ]);
     if (s.ok) setShares(s.data.shares);
     if (r.ok) setReceipts(r.data.receipts ?? []);
     if (d.ok) {
       setPayoutWallet(d.data.payout_wallet ?? "");
       setPayoutInput(d.data.payout_wallet ?? "");
+    }
+    if (mem.ok) setMembers(mem.data.members);
+    if (who.ok && who.data.user) {
+      const email = who.data.user.email;
+      const myRow = mem.ok ? mem.data.members.find((m) => m.email === email && m.path === "") : undefined;
+      setMe({ email, role: myRow?.role ?? "none" });
     }
   }
   useEffect(() => { load(); }, [driveId]);
@@ -137,6 +152,27 @@ export function ShareDialog({
     }
   }
 
+  async function changeMemberRole(id: string, newRole: "viewer" | "editor" | "owner") {
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}/members/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: newRole }),
+    });
+    setBusy(false);
+    if (!res.ok) toast.error(res.error || "Failed to change role");
+    else { toast.success("Role updated"); load(); }
+  }
+
+  async function removeMember(id: string) {
+    if (!confirm("Remove this member?")) return;
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}/members/${id}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) toast.error(res.error || "Failed to remove member");
+    else { toast.success("Member removed"); load(); }
+  }
+
   function copyLink(token: string) {
     const url = `${window.location.origin}/s/${token}`;
     navigator.clipboard.writeText(url);
@@ -173,6 +209,15 @@ export function ShareDialog({
             busy={busy}
             setEditingSell={setEditingSell}
             copyLink={copyLink}
+          />
+
+          <MembersSection
+            members={members}
+            isOwner={atLeast(me.role, "owner")}
+            currentUserEmail={me.email}
+            changeMemberRole={changeMemberRole}
+            removeMember={removeMember}
+            busy={busy}
           />
 
           <EmailInviteSection

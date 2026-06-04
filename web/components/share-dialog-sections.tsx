@@ -4,7 +4,7 @@
 // handlers as props. Extracting markup only — behavior is unchanged because
 // state ownership is unchanged.
 import {
-  Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, TrendingUp, ExternalLink,
+  Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, TrendingUp, ExternalLink, Users,
 } from "lucide-react";
 
 export type Share = {
@@ -33,6 +33,14 @@ export type Receipt = {
   network: string;
   share_id: string | null;
   settled_at: string;
+};
+
+export type Member = {
+  id: string;
+  path: string;
+  role: "viewer" | "editor" | "owner";
+  email: string;
+  name: string;
 };
 
 export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]; totalEarned: number }) {
@@ -265,6 +273,65 @@ export function WalletAccessSection({
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+export function MembersSection({
+  members, isOwner, currentUserEmail, changeMemberRole, removeMember, busy,
+}: {
+  members: Member[];
+  isOwner: boolean;
+  currentUserEmail: string;
+  changeMemberRole: (id: string, role: "viewer" | "editor" | "owner") => void;
+  removeMember: (id: string) => void;
+  busy: boolean;
+}) {
+  if (members.length === 0) return null;
+  return (
+    <section>
+      <div className="flex items-center gap-2 text-sm font-medium mb-2">
+        <Users className="w-4 h-4" /> Members
+      </div>
+      <ul className="space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
+        {members.map((m) => (
+          <li
+            key={m.id}
+            className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
+          >
+            <span className="truncate flex-1">{m.name || m.email}</span>
+            <span className="text-drive-muted truncate w-16 shrink-0">{m.path || "/"}</span>
+            {isOwner ? (
+              <select
+                value={m.role}
+                disabled={busy}
+                onChange={(e) =>
+                  changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")
+                }
+                className="rounded-lg border border-drive-border px-1.5 py-0.5 text-[11px] disabled:opacity-50"
+              >
+                <option value="viewer">Viewer</option>
+                <option value="editor">Editor</option>
+                <option value="owner">Owner</option>
+              </select>
+            ) : (
+              <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-700">
+                {m.role}
+              </span>
+            )}
+            {isOwner && m.email !== currentUserEmail && (
+              <button
+                onClick={() => removeMember(m.id)}
+                disabled={busy}
+                className="p-1 rounded hover:bg-drive-hover disabled:opacity-50"
+                title="Remove member"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
