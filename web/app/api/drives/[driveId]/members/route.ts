@@ -36,7 +36,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const drive = getDrive(driveId);
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
-  if (drive.owner_id !== user.id) return NextResponse.json({ error: "only owner can invite" }, { status: 403 });
+  // Co-owners (owner role via drive_members) may also invite — not just the creator.
+  if (!atLeast(resolveRole(driveId, user.id, ""), "owner")) return NextResponse.json({ error: "only owner can invite" }, { status: 403 });
   const invitee = db
     .prepare("SELECT id FROM users WHERE lower(email) = lower(?)")
     .get(body.data.email) as { id: string } | undefined;
