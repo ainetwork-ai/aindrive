@@ -7,7 +7,13 @@ import { setCookie } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 
 const Body = z.object({
-  email: z.string().email(),
+  // Reject the reserved wallet-placeholder domain (resolveAccountForWallet
+  // mints <wallet>@wallet.aindrive.local) so an attacker can't pre-register a
+  // victim wallet's account through human signup.
+  email: z.string().email().refine(
+    (v) => !v.toLowerCase().endsWith("@wallet.aindrive.local"),
+    "reserved address",
+  ),
   name: z.string().min(1).max(80),
   password: z.string().min(8).max(200),
 });

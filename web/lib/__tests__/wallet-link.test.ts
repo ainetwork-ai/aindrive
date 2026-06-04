@@ -39,6 +39,14 @@ describe("linkWalletToAccount", () => {
   it("throws WalletAlreadyLinkedError when the wallet is taken by another account", () => {
     expect(() => linkWalletToAccount("u2", WALLET, "siwe")).toThrow(WalletAlreadyLinkedError);
   });
+
+  it("is idempotent re-linking the same wallet to the same account (no duplicate, no throw)", () => {
+    expect(() => linkWalletToAccount("u1", WALLET, "siwe")).not.toThrow();
+    linkWalletToAccount("u1", WALLET, "siwe");
+    const count = db.prepare("SELECT count(*) c FROM account_wallets WHERE wallet_address = ?")
+      .get(WALLET.toLowerCase()) as { c: number };
+    expect(count.c).toBe(1);
+  });
 });
 
 describe("resolveAccountForWallet", () => {

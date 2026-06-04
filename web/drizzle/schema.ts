@@ -160,6 +160,11 @@ export const payment_receipts = sqliteTable(
     // NEW (Phase 4): the account this payment is attributed to. Nullable for
     // legacy/anonymous receipts settled before the payer linked a wallet;
     // POST /api/wallet/link backfills these on link.
+    //
+    // No onDelete (unlike sibling FKs) by intent: this is an append-only audit
+    // ledger, so receipts must survive account deletion. The runtime ALTER in
+    // db.js adds the column with NO FK at all — this .references() is for
+    // Drizzle typing/introspection only, not an enforced runtime constraint.
     account_id: text("account_id").references(() => users.id),
   },
   (t) => [

@@ -264,18 +264,30 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // is the Phase 4 pivot — paid access now lives in drive_members keyed by an
   // account, not only in folder_access keyed by a wallet (folder_access write
   // above is kept until Phase 5).
-  const settleAccountId = user?.id ?? resolveAccountForWallet(payerWallet);
-
-  // UPGRADE-ONLY grant: never downgrade a member who already holds a higher
-  // role at this path (e.g. an owner-added editor paying through a viewer
-  // share). mergeRoleUpgradeOnly returns the higher of current/incoming.
-  const currentRole = resolveRoleByUser(share.drive_id, settleAccountId, share.path);
-  const mergedRole = mergeRoleUpgradeOnly(currentRole, share.role);
-  db.prepare(
-    `INSERT INTO drive_members (id, drive_id, user_id, path, role)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role`
-  ).run(nanoid(12), share.drive_id, settleAccountId, share.path, mergedRole);
+  //
+  // Crash-safe: the on-chain settle above is irreversible, so a throw here must
+  // never surface as a 500 + partial state. We log and fall through so the
+  // handler always returns 200 with the txHash; the receipt write below still
+  // runs (account_id may stay null — the column is nullable).
+  let settleAccountId: string | null = null;
+  try {
+    settleAccountId = user?.id ?? resolveAccountForWallet(payerWallet);
+    // UPGRADE-ONLY grant: never downgrade a member who already holds a higher
+    // role at this path (e.g. an owner-added editor paying through a viewer
+    // share). mergeRoleUpgradeOnly returns the higher of current/incoming.
+    // Safe read-then-merge-then-write: better-sqlite3 is synchronous and
+    // single-process, so nothing interleaves between the resolveRoleByUser
+    // read and the INSERT. Revisit if this moves to multi-process/pooled access.
+    const currentRole = resolveRoleByUser(share.drive_id, settleAccountId, share.path);
+    const mergedRole = mergeRoleUpgradeOnly(currentRole, share.role);
+    db.prepare(
+      `INSERT INTO drive_members (id, drive_id, user_id, path, role)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role`
+    ).run(nanoid(12), share.drive_id, settleAccountId, share.path, mergedRole);
+  } catch (e) {
+    console.error(`[paid-grant] post-settle drive_members write failed — tx=${txHash} payer=${payerWallet}`, e);
+  }
 
   try {
     db.prepare(
