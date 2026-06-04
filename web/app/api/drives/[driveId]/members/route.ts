@@ -25,7 +25,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
     WHERE m.drive_id = ?
     ORDER BY m.created_at DESC
   `).all(driveId);
-  return NextResponse.json({ members });
+  return NextResponse.json({ members, myRole: role });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {

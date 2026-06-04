@@ -40,7 +40,7 @@ export function ShareDialog({
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
       apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
       apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
-      apiFetch<{ members: Member[] }>(`/api/drives/${driveId}/members`),
+      apiFetch<{ members: Member[]; myRole: "viewer" | "editor" | "owner" }>(`/api/drives/${driveId}/members`),
       apiFetch<{ user: { email: string } | null }>(`/api/auth/me`),
     ]);
     if (s.ok) setShares(s.data.shares);
@@ -51,9 +51,7 @@ export function ShareDialog({
     }
     if (mem.ok) setMembers(mem.data.members);
     if (who.ok && who.data.user) {
-      const email = who.data.user.email;
-      const myRow = mem.ok ? mem.data.members.find((m) => m.email === email && m.path === "") : undefined;
-      setMe({ email, role: myRow?.role ?? "none" });
+      setMe({ email: who.data.user.email, role: mem.ok ? mem.data.myRole : "none" });
     }
   }
   useEffect(() => { load(); }, [driveId]);
