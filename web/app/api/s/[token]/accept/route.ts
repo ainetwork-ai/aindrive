@@ -39,11 +39,14 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
   }
 
   // Paid share: CONSUME does not settle payment. The caller must already
-  // hold a covering grant (written by the paid GET flow). Without one,
-  // bounce them back to pay via GET /api/s/[token].
+  // hold a grant covering THIS share's role (written by the paid GET flow,
+  // or owner-granted). Compare against share.role, NOT a hard-coded "viewer"
+  // floor: otherwise a cheaper/free share at the same path (e.g. a free
+  // viewer link) would let a member upgrade to a paid higher tier (editor)
+  // for free. Without a covering grant, bounce them to pay via GET.
   if (share.price_usdc) {
     const role = resolveRoleByUser(share.drive_id, user.id, share.path);
-    if (!atLeast(role, "viewer")) {
+    if (!atLeast(role, share.role)) {
       return NextResponse.json({ error: "payment required" }, { status: 402 });
     }
   }
