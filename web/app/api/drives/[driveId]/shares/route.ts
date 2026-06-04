@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
@@ -14,7 +13,6 @@ const Body = z.object({
   path: zPath.default(""),
   role: z.enum(["viewer", "editor"]),
   expiresAt: z.string().datetime().optional(),
-  password: z.string().min(4).max(200).optional(),
   price_usdc: z.number().positive().optional(),
 });
 
@@ -60,11 +58,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
 
   const id = nanoid(12);
   const token = nanoid(24);
-  const passwordHash = body.data.password ? await bcrypt.hash(body.data.password, 10) : null;
   db.prepare(`
-    INSERT INTO shares (id, drive_id, path, role, token, password_hash, expires_at, created_by, price_usdc, payment_chain)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, driveId, body.data.path, body.data.role, token, passwordHash, body.data.expiresAt ?? null, user.id, body.data.price_usdc ?? null, body.data.price_usdc ? "base-sepolia" : null);
+    INSERT INTO shares (id, drive_id, path, role, token, expires_at, created_by, price_usdc, payment_chain)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, driveId, body.data.path, body.data.role, token, body.data.expiresAt ?? null, user.id, body.data.price_usdc ?? null, body.data.price_usdc ? "base-sepolia" : null);
   return NextResponse.json({
     id,
     token,

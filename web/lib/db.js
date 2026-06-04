@@ -57,7 +57,6 @@ function open() {
       path TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL,
       token TEXT UNIQUE NOT NULL,
-      password_hash TEXT,
       expires_at TEXT,
       created_by TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),

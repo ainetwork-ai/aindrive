@@ -88,7 +88,6 @@ export const shares = sqliteTable(
     path: text("path").notNull().default(""),
     role: text("role").notNull(),
     token: text("token").notNull().unique(),
-    password_hash: text("password_hash"),
     expires_at: text("expires_at"),
     created_by: text("created_by"),
     created_at: text("created_at")
