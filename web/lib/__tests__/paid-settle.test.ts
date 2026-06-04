@@ -101,7 +101,7 @@ describe("paid share settle → drive_members", () => {
     expect(placeholder).toBeUndefined();
   });
 
-  it("upgrade-only: a lower-tier paid share does NOT downgrade an existing higher role", async () => {
+  it("already-entitled member: a covering grant short-circuits the paywall (no re-charge, no downgrade)", async () => {
     cookieJar.clear();
     // A logged-in account that already holds editor at docs (seeded directly).
     db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)")
@@ -110,21 +110,24 @@ describe("paid share settle → drive_members", () => {
       .run("dm_up", "d1", "upmember", "docs", "editor");
     cookieJar.set("aindrive_session", await sign("upmember"));
 
-    // Pay the VIEWER-tier share as this account, via a fresh payer wallet.
-    // The settle merge must keep editor (upgrade-only).
-    const viewerReq = new Request("http://localhost/api/s/tok2", {
-      headers: { "X-PAYMENT": devPaymentHeader(UPGRADE_PAYER) },
-    });
-    expect((await GET(viewerReq, { params: Promise.resolve({ token: "tok2" }) })).status).toBe(200);
+    // Re-open the VIEWER-tier paid share. The existing editor grant covers
+    // share.role (viewer), so the GET returns early WITHOUT a paywall — the
+    // member is never asked to pay again. No X-PAYMENT header is sent.
+    const viewerReq = new Request("http://localhost/api/s/tok2");
+    const res = await GET(viewerReq, { params: Promise.resolve({ token: "tok2" }) });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.role).toBe("editor"); // returns existing role, not the share's viewer
 
+    // The grant is untouched (still editor) — no downgrade.
     const member = db.prepare(
       "SELECT role FROM drive_members WHERE drive_id = ? AND user_id = ? AND path = ?"
     ).get("d1", "upmember", "docs") as { role: string };
-    expect(member.role).toBe("editor"); // NOT downgraded to viewer
+    expect(member.role).toBe("editor");
 
-    // The viewer-share settle still records a receipt, attributed to the account.
+    // No payment ran, so no receipt was written for this fresh payer wallet.
     const receipt = db.prepare("SELECT account_id FROM payment_receipts WHERE share_id = ? AND wallet = ?")
-      .get("sh2", UPGRADE_PAYER.toLowerCase()) as { account_id: string };
-    expect(receipt.account_id).toBe("upmember");
+      .get("sh2", UPGRADE_PAYER.toLowerCase());
+    expect(receipt).toBeUndefined();
   });
 });

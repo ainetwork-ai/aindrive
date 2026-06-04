@@ -64,6 +64,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     return NextResponse.json(okBody);
   }
 
+  // Already-entitled member: a covering drive_members grant (from a prior
+  // payment that settled, or an owner invite) means there's nothing to pay
+  // for. Compare against share.role (not a viewer floor) so a cheaper/free
+  // grant at this path can't satisfy a higher-tier paid share — mirrors the
+  // CONSUME accept gate.
+  if (user) {
+    const role = resolveRoleByUser(share.drive_id, user.id, share.path);
+    if (atLeast(role, share.role)) return NextResponse.json({ ...okBody, role });
+  }
+
   // Build x402 payment requirements.
   // Payout priority: the drive's own payout_wallet (set by its owner) wins;
   // fall back to the global env wallet (single-tenant deployments), then the
