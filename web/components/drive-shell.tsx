@@ -110,6 +110,9 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
     // Visual root is the member's grant (rootPath), not the drive root: a
     // sub-path member must not be able to navigate above what they were
     // granted. Only render segments at-or-below rootPath.
+    // If `path` is somehow not under `rootPath` (e.g. a stale popstate URL),
+    // the breadcrumb chain is only cosmetically off — the server enforces
+    // access on every API call, so no unauthorized data is exposed.
     const rel = rootPath && path.startsWith(rootPath + "/")
       ? path.slice(rootPath.length + 1)
       : path === rootPath ? "" : path;
@@ -254,7 +257,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
             <FolderChat
               driveId={driveId}
               currentFolder={path}
-              isOwner={role === "owner"}
+              isOwner={isOwner}
               onClose={() => setChatOpen(false)}
             />
           )}

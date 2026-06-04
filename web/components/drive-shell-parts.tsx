@@ -186,7 +186,7 @@ export function DriveHeader({
             <Share2 className="w-4 h-4" /> <span className="hidden sm:inline">Share</span>
           </button>
         )}
-        {role === "owner" && (
+        {isOwner && (
           <button
             aria-label="Create Agent"
             onClick={() => setAgentModalOpen(true)}
