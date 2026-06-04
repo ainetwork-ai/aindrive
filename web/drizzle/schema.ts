@@ -101,42 +101,9 @@ export const shares = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
-// folder_access
-// ---------------------------------------------------------------------------
-export const folder_access = sqliteTable(
-  "folder_access",
-  {
-    id: text("id").primaryKey(),
-    drive_id: text("drive_id")
-      .notNull()
-      .references(() => drives.id, { onDelete: "cascade" }),
-    path: text("path").notNull().default(""),
-    wallet_address: text("wallet_address").notNull(),
-    added_by: text("added_by").notNull(),
-    // Legacy: most-recent payment tx_hash for paid grants. New code writes
-    // receipts to payment_receipts (below) instead. Kept for backward-compat
-    // lookups on rows that pre-date the Phase 4 backfill.
-    payment_tx: text("payment_tx"),
-    added_at: text("added_at")
-      .notNull()
-      .default(sql`(datetime('now'))`),
-    role: text("role").notNull().default("viewer"),
-  },
-  (t) => [
-    uniqueIndex("folder_access_drive_path_wallet_unique").on(
-      t.drive_id,
-      t.path,
-      t.wallet_address
-    ),
-    index("idx_folder_access_lookup").on(t.drive_id, t.path, t.wallet_address),
-    index("idx_folder_access_wallet").on(t.wallet_address),
-  ]
-);
-
-// ---------------------------------------------------------------------------
 // payment_receipts — append-only ledger of every settled x402 payment.
-// folder_access tells you WHO has access; payment_receipts tells you HOW
-// they got there. tx_hash UNIQUE doubles as replay defense.
+// drive_members tells you WHO has access; payment_receipts tells you HOW a
+// paid grant was settled. tx_hash UNIQUE doubles as replay defense.
 // ---------------------------------------------------------------------------
 export const payment_receipts = sqliteTable(
   "payment_receipts",

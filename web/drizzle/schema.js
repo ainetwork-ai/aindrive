@@ -80,31 +80,6 @@ export const shares = sqliteTable(
   (t) => [index("idx_shares_drive").on(t.drive_id)]
 );
 
-export const folder_access = sqliteTable(
-  "folder_access",
-  {
-    id: text("id").primaryKey(),
-    drive_id: text("drive_id").notNull(),
-    path: text("path").notNull().default(""),
-    wallet_address: text("wallet_address").notNull(),
-    added_by: text("added_by").notNull(),
-    payment_tx: text("payment_tx"),
-    added_at: text("added_at")
-      .notNull()
-      .default(sql`(datetime('now'))`),
-    role: text("role").notNull().default("viewer"),
-  },
-  (t) => [
-    uniqueIndex("folder_access_drive_path_wallet_unique").on(
-      t.drive_id,
-      t.path,
-      t.wallet_address
-    ),
-    index("idx_folder_access_lookup").on(t.drive_id, t.path, t.wallet_address),
-    index("idx_folder_access_wallet").on(t.wallet_address),
-  ]
-);
-
 export const payment_receipts = sqliteTable(
   "payment_receipts",
   {

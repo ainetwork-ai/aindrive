@@ -63,17 +63,6 @@ function open() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
     );
-    CREATE TABLE IF NOT EXISTS folder_access (
-      id TEXT PRIMARY KEY,
-      drive_id TEXT NOT NULL,
-      path TEXT NOT NULL DEFAULT '',
-      wallet_address TEXT NOT NULL,
-      added_by TEXT NOT NULL CHECK (added_by IN ('owner', 'payment')),
-      payment_tx TEXT,
-      added_at TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(drive_id, path, wallet_address),
-      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
-    );
     CREATE TABLE IF NOT EXISTS cli_link_requests (
       link_id TEXT PRIMARY KEY,
       device_secret_hash TEXT NOT NULL,
@@ -102,9 +91,6 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_drive_members_user ON drive_members(user_id);
     CREATE INDEX IF NOT EXISTS idx_drive_members_drive ON drive_members(drive_id);
     CREATE INDEX IF NOT EXISTS idx_shares_drive ON shares(drive_id);
-    CREATE INDEX IF NOT EXISTS idx_folder_access_lookup
-      ON folder_access(drive_id, path, wallet_address);
-    CREATE INDEX IF NOT EXISTS idx_folder_access_wallet ON folder_access(wallet_address);
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_wallet ON payment_receipts(wallet);
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_drive_wallet ON payment_receipts(drive_id, wallet);
     CREATE TABLE IF NOT EXISTS account_wallets (
@@ -123,7 +109,6 @@ function open() {
     "ALTER TABLE shares ADD COLUMN payment_chain TEXT",
     "ALTER TABLE drives ADD COLUMN namespace_pubkey BLOB",
     "ALTER TABLE drives ADD COLUMN namespace_secret BLOB",
-    "ALTER TABLE folder_access ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'",
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
     "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
     "ALTER TABLE payment_receipts ADD COLUMN account_id TEXT",

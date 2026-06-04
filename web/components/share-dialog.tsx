@@ -4,8 +4,8 @@ import { toast } from "sonner";
 import { X, Lock } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import {
-  EarningsSection, SellSection, WalletAccessSection, EmailInviteSection, FreeLinkSection,
-  type Share, type Access, type Receipt,
+  EarningsSection, SellSection, EmailInviteSection, FreeLinkSection,
+  type Share, type Receipt,
 } from "./share-dialog-sections";
 
 type FocusSection = "sell" | "share" | undefined;
@@ -19,10 +19,7 @@ export function ShareDialog({
   focusSection?: FocusSection;
 }) {
   const [shares, setShares] = useState<Share[]>([]);
-  const [access, setAccess] = useState<Access[]>([]);
   const [email, setEmail] = useState("");
-  const [wallet, setWallet] = useState("");
-  const [walletRole, setWalletRole] = useState<"viewer" | "editor">("viewer");
   const [role, setRole] = useState<"viewer" | "editor">("viewer");
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");
@@ -32,14 +29,12 @@ export function ShareDialog({
   const [payoutInput, setPayoutInput] = useState<string>("");
 
   async function load() {
-    const [s, a, r, d] = await Promise.all([
+    const [s, r, d] = await Promise.all([
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
-      apiFetch<{ access: Access[] }>(`/api/drives/${driveId}/access`),
       apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
       apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
     ]);
     if (s.ok) setShares(s.data.shares);
-    if (a.ok) setAccess(a.data.access);
     if (r.ok) setReceipts(r.data.receipts ?? []);
     if (d.ok) {
       setPayoutWallet(d.data.payout_wallet ?? "");
@@ -142,29 +137,6 @@ export function ShareDialog({
     }
   }
 
-  async function addWallet() {
-    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
-      toast.error("Wallet must be 0x + 40 hex chars");
-      return;
-    }
-    setBusy(true);
-    const res = await apiFetch(`/api/drives/${driveId}/access`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ wallet_address: wallet, path: defaultPath, role: walletRole }),
-    });
-    setBusy(false);
-    if (!res.ok) toast.error(res.error);
-    else { setWallet(""); load(); }
-  }
-
-  async function removeAccess(id: string) {
-    if (!confirm("Remove this wallet's access?")) return;
-    const res = await apiFetch(`/api/drives/${driveId}/access/${id}`, { method: "DELETE" });
-    if (!res.ok) toast.error(res.error);
-    else load();
-  }
-
   function copyLink(token: string) {
     const url = `${window.location.origin}/s/${token}`;
     navigator.clipboard.writeText(url);
@@ -201,17 +173,6 @@ export function ShareDialog({
             busy={busy}
             setEditingSell={setEditingSell}
             copyLink={copyLink}
-          />
-
-          <WalletAccessSection
-            wallet={wallet}
-            setWallet={setWallet}
-            walletRole={walletRole}
-            setWalletRole={setWalletRole}
-            addWallet={addWallet}
-            busy={busy}
-            access={access}
-            removeAccess={removeAccess}
           />
 
           <EmailInviteSection

@@ -221,10 +221,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   }
 
   // Resolve the account this payment credits: a logged-in user wins; else the
-  // wallet's linked account; else a freshly minted wallet-only account. This
-  // is the Phase 4 pivot — paid access now lives in drive_members keyed by an
-  // account, not only in folder_access keyed by a wallet (folder_access write
-  // above is kept until Phase 5).
+  // wallet's linked account; else a freshly minted wallet-only account.
   //
   // Crash-safe: the on-chain settle above is irreversible, so a throw here must
   // never surface as a 500 + partial state. We log and fall through so the
