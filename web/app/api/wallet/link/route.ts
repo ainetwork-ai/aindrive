@@ -5,6 +5,12 @@ import { SiweMessage } from "siwe";
 import { consumeNonce, linkWalletToAccount, WalletAlreadyLinkedError } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { env } from "@/lib/env";
+
+// The SIWE message must be signed FOR this origin. Binding verify() to our
+// canonical host means a signature obtained on another site (phishing) is
+// rejected even though the single-use server nonce already blocks replay.
+const EXPECTED_DOMAIN = new URL(env.publicUrl).host;
 
 const Body = z.object({
   address: z.string().refine((v) => isAddress(v), "invalid address"),
@@ -43,7 +49,9 @@ export async function POST(req: Request) {
     if (siweMsg.address.toLowerCase() !== address.toLowerCase()) {
       return NextResponse.json({ error: "address mismatch" }, { status: 400 });
     }
-    const result = await siweMsg.verify({ signature });
+    // Pass domain + nonce so siwe enforces origin- and nonce-binding itself
+    // (defense in depth on top of the manual checks above).
+    const result = await siweMsg.verify({ signature, domain: EXPECTED_DOMAIN, nonce });
     ok = result.success;
   } catch {
     ok = false;
