@@ -1,6 +1,8 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { SiweMessage } from "siwe";
+import { nanoid } from "nanoid";
+import { db } from "./db";
 import { env } from "./env";
 import { cookieOptions } from "./cookie-config";
 
@@ -87,4 +89,40 @@ export function challengeMessage(nonce: string, address: string): string {
     nonce,
   });
   return msg.prepareMessage();
+}
+
+/** Thrown when a wallet is already linked to a DIFFERENT account. */
+export class WalletAlreadyLinkedError extends Error {
+  constructor() {
+    super("wallet already linked to another account");
+    this.name = "WalletAlreadyLinkedError";
+  }
+}
+
+/**
+ * Link `wallet` to `accountId` and reclaim any unattributed payment_receipts
+ * for that wallet (account_id IS NULL) by stamping them with `accountId`.
+ *
+ * The link row is the bridge that lets a paid x402 settle (which only knows a
+ * wallet) resolve a durable account. wallet_address is stored lowercased and
+ * is UNIQUE — re-linking the SAME wallet to the SAME account is a no-op (we
+ * still reclaim receipts); linking to a DIFFERENT account throws.
+ *
+ * @returns number of receipts reclaimed
+ */
+export function linkWalletToAccount(accountId: string, wallet: string, verifiedVia: string): number {
+  const addr = wallet.toLowerCase();
+  const existing = db
+    .prepare("SELECT account_id FROM account_wallets WHERE wallet_address = ?")
+    .get(addr) as { account_id: string } | undefined;
+  if (existing && existing.account_id !== accountId) throw new WalletAlreadyLinkedError();
+  if (!existing) {
+    db.prepare(
+      "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via) VALUES (?, ?, ?, ?)"
+    ).run(nanoid(12), accountId, addr, verifiedVia);
+  }
+  const res = db
+    .prepare("UPDATE payment_receipts SET account_id = ? WHERE wallet = ? AND account_id IS NULL")
+    .run(accountId, addr);
+  return res.changes;
 }
