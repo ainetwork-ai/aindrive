@@ -4,9 +4,9 @@ import { useFacilitator } from "x402/verify";
 import { safeBase64Decode } from "x402/shared";
 import { PaymentPayloadSchema, type PaymentRequirements } from "x402/types";
 import { db } from "@/lib/db";
-import { getWallet, setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
+import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
-import { resolveRoleByWallet, resolveRoleByUser, atLeast, ROLE_RANK, type Role } from "@/lib/access";
+import { resolveRoleByUser, atLeast, type Role } from "@/lib/access";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { addShareGrant } from "@/lib/share-grant";
 import { getDriveNamespace } from "@/lib/drives";
@@ -56,21 +56,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   const user = await getUser();
   if (user && user.id === share.owner_id) return NextResponse.json(okBody);
 
-  // Free share — grant the visitor a signed share-grant cookie so that
-  // their subsequent fs/* calls resolve through resolveRoleByShareGrants.
-  // Without this the visitor gets 200 here but 401 on the very next
-  // fs/list, because resolveAccess keys on wallet/session, neither of
-  // which a link-only visitor has.
+  // Free share — keep the share-grant cookie for back-compat (Phase 7
+  // removes this). The CONSUME flow (POST /accept) writes the real
+  // drive_members grant; this cookie is kept during the transition window.
   if (!share.price_usdc) {
     await addShareGrant(token);
     return NextResponse.json(okBody);
-  }
-
-  // Paid share — check existing wallet allowlist with prefix matching
-  const wallet = await getWallet();
-  if (wallet) {
-    const role = resolveRoleByWallet(share.drive_id, wallet, share.path);
-    if (atLeast(role, "viewer")) return NextResponse.json({ ...okBody, role });
   }
 
   // Build x402 payment requirements.
@@ -229,36 +220,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     txHash = settleRes.transaction;
   }
 
-  // Persist permanent access (folder_access = grant) AND the receipt
-  // (payment_receipts = audit ledger). Decoupled so that re-paying the
-  // same share never silently overwrites an older receipt: the second
-  // receipt is rejected by tx_hash UNIQUE (replay defense) while
-  // folder_access stays consistent.
-  //
-  // Role-downgrade guard: a wallet already holding a HIGHER role at this
-  // path (e.g. owner-added editor) MUST NOT be downgraded just because
-  // they later pay through a viewer-tier share. We rank the new share's
-  // role against the current row and only UPDATE if it's an upgrade.
-  try {
-    db.prepare(
-      "INSERT INTO folder_access (id, drive_id, path, wallet_address, added_by, payment_tx, role) VALUES (?, ?, ?, ?, 'payment', ?, ?)"
-    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.role);
-  } catch (e) {
-    if (!/UNIQUE/i.test((e as Error).message)) throw e;
-    const existing = db.prepare(
-      "SELECT role FROM folder_access WHERE drive_id = ? AND path = ? AND wallet_address = ?"
-    ).get(share.drive_id, share.path, payerWallet) as { role: string } | undefined;
-    const existingRank = ROLE_RANK[(existing?.role ?? "none") as Role | "none"] ?? 0;
-    const newRank = ROLE_RANK[share.role] ?? 0;
-    if (newRank > existingRank) {
-      db.prepare(
-        "UPDATE folder_access SET role = ? WHERE drive_id = ? AND path = ? AND wallet_address = ?"
-      ).run(share.role, share.drive_id, share.path, payerWallet);
-      console.warn(`[paid-grant] role upgraded for ${payerWallet} on ${share.drive_id}/${share.path}: ${existing?.role} -> ${share.role}`);
-    } else {
-      console.warn(`[paid-grant] role NOT downgraded for ${payerWallet} on ${share.drive_id}/${share.path}: kept ${existing?.role} (would-be ${share.role})`);
-    }
-  }
   // Resolve the account this payment credits: a logged-in user wins; else the
   // wallet's linked account; else a freshly minted wallet-only account. This
   // is the Phase 4 pivot — paid access now lives in drive_members keyed by an

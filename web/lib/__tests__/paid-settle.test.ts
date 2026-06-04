@@ -72,12 +72,6 @@ describe("paid share settle → drive_members", () => {
     const receipt = db.prepare("SELECT account_id FROM payment_receipts WHERE wallet = ?")
       .get(PAYER.toLowerCase()) as { account_id: string };
     expect(receipt.account_id).toBe(link.account_id);
-
-    // Legacy folder_access row still written (removed in Phase 5).
-    const fa = db.prepare(
-      "SELECT role FROM folder_access WHERE drive_id = ? AND path = ? AND wallet_address = ?"
-    ).get("d1", "docs", PAYER.toLowerCase()) as { role: string };
-    expect(fa.role).toBe("editor");
   });
 
   it("attributes the grant + receipt to the logged-in session account, not a placeholder", async () => {
@@ -116,9 +110,8 @@ describe("paid share settle → drive_members", () => {
       .run("dm_up", "d1", "upmember", "docs", "editor");
     cookieJar.set("aindrive_session", await sign("upmember"));
 
-    // Pay the VIEWER-tier share as this account, via a fresh payer wallet that
-    // has no folder_access allowlist row (so the settle tail runs, not the
-    // wallet-allowlist early return). The settle merge must keep editor.
+    // Pay the VIEWER-tier share as this account, via a fresh payer wallet.
+    // The settle merge must keep editor (upgrade-only).
     const viewerReq = new Request("http://localhost/api/s/tok2", {
       headers: { "X-PAYMENT": devPaymentHeader(UPGRADE_PAYER) },
     });
