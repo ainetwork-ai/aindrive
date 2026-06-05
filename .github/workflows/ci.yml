@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
       # `npm install` not `npm ci`: the committed lockfile was generated on
@@ -40,6 +40,15 @@ jobs:
       # the platform delta. (Regenerating a cross-platform lock would need a
       # linux host we don't have.)
       - run: npm install --no-audit --no-fund
+      - name: Install cli deps (needed for in-process vitest worker dynamic imports)
+        run: npm --prefix ../cli install --no-audit --no-fund
+      - name: Smoke — better-sqlite3 ABI (both packages must load the same native addon)
+        run: |
+          node -e "require('better-sqlite3'); console.log('web bsqlite3 ok')"
+          node --input-type=module <<'EOF'
+          await import('../cli/src/willow-store.js');
+          console.log('cli willow-store ok');
+          EOF
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests (hermetic — lib/)
@@ -64,11 +73,13 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: cli/package-lock.json
       # npm install (not ci) — same cross-platform optional-dep reason as web.
       - run: npm install --no-audit --no-fund
+      - name: Smoke — cli better-sqlite3 prebuild available
+        run: node -e "require('better-sqlite3'); console.log('cli bsqlite3 ok')"
       - name: Build (esbuild bundle)
         run: npm run build
       - name: Smoke — bundle runs + --version
@@ -81,7 +92,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
       # Fail only on high/critical — moderate/low from transitive deps would
       # otherwise keep PRs red without a real security signal.
       - name: audit web
