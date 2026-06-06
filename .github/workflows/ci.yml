@@ -64,7 +64,7 @@ jobs:
           AINDRIVE_PAYOUT_WALLET: "0x1111111111111111111111111111111111111111"
 
   cli:
-    name: cli — build
+    name: cli — build · test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -84,6 +84,8 @@ jobs:
         run: npm run build
       - name: Smoke — bundle runs + --version
         run: node dist/aindrive.mjs --version
+      - name: Unit tests
+        run: npm test
 
   audit:
     name: npm audit (high+critical)
