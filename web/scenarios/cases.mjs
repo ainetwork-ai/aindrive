@@ -12,10 +12,10 @@ import { WebSocket } from "ws";
 import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import * as syncProtocol from "y-protocols/sync";
+import { SAMPLE, CLI_SRC } from "./paths.mjs";
 
 const BASE = process.env.AINDRIVE_BASE || "http://localhost:3737";
 const WS_BASE = process.env.AINDRIVE_WS_BASE || "ws://localhost:3737";
-const SAMPLE = "/mnt/newdata/git/aindrive/sample";
 
 // ──────────────────────── helpers ────────────────────────
 
@@ -492,7 +492,7 @@ add(36, "RPC list round trip", async () => {
 
 add(37, "unknown rpc method rejected", async () => {
   // Cannot easily inject from web; instead verify the agent allowlist directly
-  const { handleRpc } = await import("/mnt/newdata/git/aindrive/cli/src/rpc.js");
+  const { handleRpc } = await import(`${CLI_SRC}/rpc.js`);
   let ok = false;
   try { await handleRpc({ method: "evil-method" }, SAMPLE); }
   catch (e) { ok = /unknown method/i.test(e.message); }
@@ -511,7 +511,7 @@ add(38, "agent rejects forged sig (covered by infra)", async () => {
 });
 
 add(39, "path traversal blocked", async () => {
-  const { handleRpc } = await import("/mnt/newdata/git/aindrive/cli/src/rpc.js");
+  const { handleRpc } = await import(`${CLI_SRC}/rpc.js`);
   let ok = false;
   try { await handleRpc({ method: "list", path: "../../etc" }, SAMPLE); }
   catch (e) { ok = /escapes/i.test(e.message); }
@@ -574,7 +574,7 @@ add(45, "stat folder via list", async () => {
 });
 
 add(46, "stat non-existent via direct rpc", async () => {
-  const { handleRpc } = await import("/mnt/newdata/git/aindrive/cli/src/rpc.js");
+  const { handleRpc } = await import(`${CLI_SRC}/rpc.js`);
   const r = await handleRpc({ method: "stat", path: "nope" }, SAMPLE);
   eq(r.entry, null);
 });
@@ -654,7 +654,7 @@ add(54, "delete file", async () => {
 });
 
 add(55, "delete root denied", async () => {
-  const { handleRpc } = await import("/mnt/newdata/git/aindrive/cli/src/rpc.js");
+  const { handleRpc } = await import(`${CLI_SRC}/rpc.js`);
   let ok = false;
   try { await handleRpc({ method: "delete", path: "" }, SAMPLE); }
   catch (e) { ok = /cannot delete root/i.test(e.message); }
@@ -972,7 +972,7 @@ add(87, "Willow Store has yjs entries", async () => {
 });
 
 add(88, "snapshot compaction reduces row count", async () => {
-  const { appendUpdate, maybeCompact } = await import("/mnt/newdata/git/aindrive/cli/src/willow-store.js");
+  const { appendUpdate, maybeCompact } = await import(`${CLI_SRC}/willow-store.js`);
   const docId = "scen-compact-" + Date.now();
   for (let i = 0; i < 55; i++) appendUpdate(SAMPLE, docId, Buffer.from(`update-${i}`));
   await maybeCompact(SAMPLE, docId);
@@ -1036,7 +1036,7 @@ add(92, "multi-device sync replicates entry A → B", async () => {
   dbA.prepare("INSERT INTO yjs_entries (doc_id, seq, payload, digest, created_at, kind) VALUES (?,?,?,?,?, 'update')").run(docId, 1, payload, digest, Date.now());
   dbA.close();
   function startAgent(root) {
-    writeFileSync(join(root, "boot.mjs"), `import {readFileSync} from "node:fs"; import {runAgent} from "/mnt/newdata/git/aindrive/cli/src/agent.js"; const d=JSON.parse(readFileSync("${root}/.aindrive/config.json","utf8")); runAgent({root:"${root}",drive:d,server:d.serverUrl});`);
+    writeFileSync(join(root, "boot.mjs"), `import {readFileSync} from "node:fs"; import {runAgent} from "${CLI_SRC}/agent.js"; const d=JSON.parse(readFileSync("${root}/.aindrive/config.json","utf8")); runAgent({root:"${root}",drive:d,server:d.serverUrl});`);
     return spawn("node", [join(root, "boot.mjs")], { stdio: ["ignore", "ignore", "ignore"], detached: true });
   }
   const pa = startAgent(ROOT_A);
@@ -1052,7 +1052,7 @@ add(92, "multi-device sync replicates entry A → B", async () => {
 }, { timeout: 60_000 });
 
 add(93, "duplicate digest application is idempotent", async () => {
-  const { appendUpdate, listEntries } = await import("/mnt/newdata/git/aindrive/cli/src/willow-store.js");
+  const { appendUpdate, listEntries } = await import(`${CLI_SRC}/willow-store.js`);
   const docId = "scen93-" + Date.now();
   appendUpdate(SAMPLE, docId, Buffer.from("aaa"));
   // Calling appendUpdate again with same payload creates ANOTHER entry (it's an
