@@ -1,0 +1,4 @@
+# The root .gitignore excludes sample/ globally (for the developer's local
+# sample folder). Un-ignore the committed fixture directory here.
+!sample/
+!sample/**
