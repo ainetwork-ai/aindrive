@@ -446,10 +446,13 @@ export function registerCollabCases(add, state, helpers) {
     A.type(" + initial-edit");
     await sleep(300);
     // Restart sample agent in-place
-    const lines = execSync("ps -eo pid,cmd | grep 'node start-agent.mjs' | grep -v grep || true").toString().trim().split("\n").filter(Boolean);
+    const lines = execSync("ps -eo pid,command | grep 'node start-agent.mjs' | grep -v grep || true").toString().trim().split("\n").filter(Boolean);
     for (const l of lines) { const pid = parseInt(l.trim().split(/\s+/)[0], 10); try { process.kill(pid, "SIGKILL"); } catch {} }
     await sleep(1500);
-    spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] }).unref();
+    const restartedAgent = spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] });
+    restartedAgent.unref();
+    // Track the respawned suite agent so afterEach sweep + harness teardown spare/kill it.
+    if (restartedAgent.pid) process.env.SUITE_AGENT_PID = String(restartedAgent.pid);
     // Wait for agent to come back online
     let online = false;
     for (let i = 0; i < 12; i++) {

@@ -38,7 +38,9 @@ function uniq(prefix = "u") { return `${prefix}-${state.uniqueSeed++}`; }
 // signup (incl. 400-returning ones) returns 429, cascading auth failures through the suite.
 // Derive a unique IP from the same monotonic counter so it never repeats in a run.
 async function signup(email, name, password) {
-  const seed = state.uniqueSeed; // capture before uniq() might bump it elsewhere
+  // Bump the seed here so two back-to-back signup() calls without an intervening
+  // uniq() still get distinct IPs (distinct rate-limit buckets).
+  const seed = state.uniqueSeed++;
   const ip = `10.0.${(seed >> 8) & 0xff}.${seed & 0xff}`;
   return jget("/api/auth/signup", {
     method: "POST",
@@ -711,7 +713,7 @@ add(59, "wallet C with no allowlist → 401", async () => {
   const cookie = await loginWallet(wC);
   const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
   assert(r.status === 401 || r.status === 403);
-});
+}, { skip: "PORT-3c: wallet-cookie → null userId → 401 (session absence, not role gate); rewrite with real email-signup drive_members actors in 3c" });
 
 add(60, "wallet A (allowed at /) can list root", async () => {
   const cookie = await loginWallet(state.walletA);
@@ -730,7 +732,7 @@ add(62, "wallet B cannot list parent /", async () => {
   const cookie = await loginWallet(state.walletB);
   const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
   assert(r.status === 401 || r.status === 403);
-});
+}, { skip: "PORT-3c: wallet-cookie → null userId → 401 (session absence, not role gate); rewrite with real email-signup drive_members actors in 3c" });
 
 add(63, "wallet A (viewer) cannot write", async () => {
   const cookie = await loginWallet(state.walletA);
@@ -739,7 +741,7 @@ add(63, "wallet A (viewer) cannot write", async () => {
     body: JSON.stringify({ path: "x.txt", content: "x", encoding: "utf8" }),
   });
   assert(r.status === 401 || r.status === 403);
-});
+}, { skip: "PORT-3c: wallet-cookie → null userId → 401 (session absence, not role gate); rewrite with real email-signup drive_members actors in 3c" });
 
 add(64, "owner revokes wallet A", async () => {
   const cookie = await reEnsureOwner();

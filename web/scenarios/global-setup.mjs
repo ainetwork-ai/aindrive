@@ -18,7 +18,7 @@
  */
 
 import net from "node:net";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -262,6 +262,35 @@ export async function teardown() {
     console.log(`[harness] ${name} done.`);
   }
 
+  // Sweep any lingering `start-agent.mjs` processes. The suite agent is spawned
+  // by ensureDrive() (cases.mjs) in the vitest WORKER process, so its PID never
+  // reaches this main-process teardown via env (workers are forked, env doesn't
+  // propagate back). A ps-based sweep is the only reliable cross-process signal.
+  // SIGTERM → wait up to 5 s → SIGKILL. Killing the already-dead harness agent
+  // again is harmless.
+  function listAgentPids() {
+    try {
+      return execSync("ps -eo pid,command | grep 'start-agent.mjs' | grep -v grep || true")
+        .toString().trim().split("\n").filter(Boolean)
+        .map((l) => parseInt(l.trim().split(/\s+/)[0], 10))
+        .filter((pid) => Number.isFinite(pid) && pid > 0);
+    } catch { return []; }
+  }
+
+  async function sweepSuiteAgents() {
+    let pids = listAgentPids();
+    if (pids.length === 0) return;
+    console.log(`[harness] sweeping ${pids.length} lingering start-agent.mjs proc(s): ${pids.join(", ")}`);
+    for (const pid of pids) { try { process.kill(pid, "SIGTERM"); } catch {} }
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && listAgentPids().length > 0) {
+      await sleep(200);
+    }
+    for (const pid of listAgentPids()) { try { process.kill(pid, "SIGKILL"); } catch {} }
+    console.log("[harness] suite agent sweep done.");
+  }
+
   await killProc("agent",  agentProc);
+  await sweepSuiteAgents();
   await killProc("server", serverProc);
 }
