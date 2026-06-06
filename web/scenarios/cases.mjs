@@ -29,6 +29,9 @@ const state = {
   driveSecret: null,
   walletA: privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"),
   walletB: privateKeyToAccount("0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"),
+  // Phase 5: stash for #162→#163 replay case
+  lastSettleTxHash: null,
+  lastSettleToken: null,
 };
 
 function uniq(prefix = "u") { return `${prefix}-${state.uniqueSeed++}`; }
@@ -148,6 +151,53 @@ async function inviteMember(driveId, email, path, role, ownerCookie) {
   });
   if (r.status !== 200) throw new Error(`inviteMember ${email} failed: ${JSON.stringify(r.body)}`);
 }
+
+// ── Phase 5 money-path helpers ──────────────────────────────────────────────
+
+// Actor helper: sign up a fresh email user, return { email, cookie }.
+// Used by money-path cases that need a real users row (not wallet-only).
+// Unique x-forwarded-for per call → own rate-limit bucket (limit: 5/5min per IP).
+async function signupAndLogin(prefix = "mp") {
+  const seed = state.uniqueSeed; // captured before uniq() bumps it
+  const email = uniq(prefix) + "@example.com";
+  const r = await jget("/api/auth/signup", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": `10.0.${(seed >> 8) & 0xff}.${seed & 0xff}`,
+    },
+    body: JSON.stringify({ email, name: "MP User", password: "scenpass1234" }),
+  });
+  if (r.status !== 200) throw new Error("signupAndLogin failed: " + JSON.stringify(r.body));
+  const cookie = r.headers.get("set-cookie")?.split(";")[0];
+  if (!cookie) throw new Error("signupAndLogin: no cookie");
+  return { email, cookie };
+}
+
+// Creates a paid share (price_usdc > 0) on the current ensured drive.
+// Returns the share token.
+async function makePaidShare({ path = "", role = "viewer", price_usdc = 0.01 } = {}) {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+  const r = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ path, role, price_usdc }),
+  });
+  if (r.status !== 200) throw new Error("makePaidShare failed: " + JSON.stringify(r.body));
+  return r.body.token;
+}
+
+// Builds a minimal X-PAYMENT header value accepted by AINDRIVE_DEV_BYPASS_X402=1.
+// Mirrors the format used by collab-cases.mjs #109.
+function buildXPayment(from = "0xdemodemodemodemodemodemodemodemodemo0000") {
+  return Buffer.from(JSON.stringify({
+    x402Version: 1, scheme: "exact", network: "base-sepolia",
+    payload: { authorization: { from } },
+  })).toString("base64");
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 
 // Helper: create a paid share + DEV_BYPASS settle → returns body.cap.
 // Requires AINDRIVE_DEV_BYPASS_X402=1 in server env (harness sets this).
@@ -1245,6 +1295,201 @@ add(100, "yjs blob over 16 MB limit rejected", async () => {
   });
   // Either zod rejects, or agent rejects, or write succeeds with truncation — accept any 4xx/5xx
   assert(r.status >= 400);
+});
+
+// ──────────────────────── Phase 5: Money-path coverage ────────────────────────
+
+// #161 — Free CONSUME accept → drive_members row.
+// A logged-in user accepts a FREE share via POST /api/s/[token]/accept.
+// Asserts the drive_members row is written via dbHandle() (REAL DB state).
+add(161, "free CONSUME accept → drive_members row written", async () => {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+
+  // Owner creates a free viewer share
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ path: "", role: "viewer" }),
+  });
+  eq(sr.status, 200, "share create status");
+  const token = sr.body.token;
+
+  // Sign up a fresh user who will CONSUME the share
+  const { cookie: memberCookie } = await signupAndLogin("c161");
+
+  // POST /api/s/[token]/accept as the new user
+  const ar = await jget(`/api/s/${token}/accept`, {
+    method: "POST",
+    headers: { cookie: memberCookie },
+  });
+  eq(ar.status, 200, "accept status: " + JSON.stringify(ar.body));
+  eq(ar.body.driveId, state.driveId, "driveId in accept response");
+
+  // Assert the drive_members row was written (query the newest member row on this drive)
+  const handle = await dbHandle();
+  const row = handle.prepare(
+    "SELECT role FROM drive_members WHERE drive_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(state.driveId);
+  handle.close();
+  assert(row, "drive_members row not found after free CONSUME");
+  eq(row.role, "viewer", "drive_members.role should be viewer");
+});
+
+// #162 — Paid DEV_BYPASS settle → payment_receipts row + drive_members grant.
+// GET /api/s/[token] with X-PAYMENT (DEV_BYPASS) writes payment_receipts and drive_members.
+// Asserts REAL DB state via dbHandle(). Stashes tx_hash for #163 replay case.
+add(162, "paid DEV_BYPASS settle → payment_receipts row + drive_members grant", async () => {
+  await ensureDrive();
+  const token = await makePaidShare({ path: "", role: "viewer", price_usdc: 0.02 });
+
+  const payer = "0xc162c162c162c162c162c162c162c162c162c162";
+  const xPayment = buildXPayment(payer);
+
+  const r = await jget(`/api/s/${token}`, {
+    headers: { "X-PAYMENT": xPayment },
+  });
+  eq(r.status, 200, "settle response: " + JSON.stringify(r.body));
+  assert(
+    typeof r.body.txHash === "string" && r.body.txHash.startsWith("0xdev_bypass_"),
+    "txHash should start with 0xdev_bypass_, got: " + r.body.txHash
+  );
+
+  const handle = await dbHandle();
+
+  // Assert payment_receipts row was written with correct fields
+  const receipt = handle.prepare(
+    "SELECT * FROM payment_receipts WHERE tx_hash = ?"
+  ).get(r.body.txHash);
+  assert(receipt, "payment_receipts row not found for tx_hash=" + r.body.txHash);
+  eq(receipt.drive_id, state.driveId, "receipt.drive_id");
+  eq(receipt.wallet, payer.toLowerCase(), "receipt.wallet (lowercased by route)");
+  assert(Math.abs(receipt.amount_usdc - 0.02) < 0.001, `receipt.amount_usdc: expected ~0.02, got ${receipt.amount_usdc}`);
+
+  // Assert drive_members row was written for the wallet-resolved account
+  const member = handle.prepare(
+    "SELECT role FROM drive_members WHERE drive_id = ? AND role = 'viewer' ORDER BY created_at DESC LIMIT 1"
+  ).get(state.driveId);
+  assert(member, "drive_members row not found after paid settle");
+  eq(member.role, "viewer", "drive_members.role after paid settle");
+
+  handle.close();
+
+  // Stash tx_hash for replay case #163
+  state.lastSettleTxHash = r.body.txHash;
+  state.lastSettleToken = token;
+});
+
+// #163 — Replay same tx_hash → no duplicate receipt (idempotent settle).
+// The tx_hash UNIQUE constraint in payment_receipts is the replay defense.
+// DEV_BYPASS generates a fresh nanoid tx_hash each call, so a true HTTP replay
+// is impossible over HTTP without controlling nanoid. Instead we assert:
+// - The first settle row count is exactly 1 (no prior collision).
+// - A direct DB INSERT of the same tx_hash raises UNIQUE and is rejected.
+// This is the correct black-box contract: if the UNIQUE catch were removed,
+// a second call with the same tx_hash would bubble a 500, not return 200.
+add(163, "replay same tx_hash → no duplicate receipt (UNIQUE guard)", async () => {
+  // Ensure we have a tx_hash from #162; fall back to creating one if running in isolation.
+  if (!state.lastSettleTxHash) {
+    await ensureDrive();
+    state.lastSettleToken = await makePaidShare({ path: "", role: "viewer", price_usdc: 0.01 });
+    const r0 = await jget(`/api/s/${state.lastSettleToken}`, {
+      headers: { "X-PAYMENT": buildXPayment("0xc163replay0000000000000000000000000000aa") },
+    });
+    eq(r0.status, 200, "fallback settle: " + JSON.stringify(r0.body));
+    state.lastSettleTxHash = r0.body.txHash;
+  }
+
+  const handle = await dbHandle();
+
+  // Assert the first settle wrote exactly 1 row for this tx_hash
+  const before = handle.prepare(
+    "SELECT COUNT(*) as n FROM payment_receipts WHERE tx_hash = ?"
+  ).get(state.lastSettleTxHash);
+  eq(before.n, 1, "expected exactly 1 receipt row for tx_hash before replay attempt");
+
+  handle.close();
+
+  // Confirm the UNIQUE constraint actually rejects a duplicate INSERT.
+  // We use a writable database handle opened directly (not the readonly dbHandle()).
+  const { join: pathJoin } = await import("node:path");
+  const { homedir: hd } = await import("node:os");
+  const dir = process.env.AINDRIVE_DATA_DIR || pathJoin(hd(), ".aindrive");
+  const writable = new Database(pathJoin(dir, "data.sqlite"));
+  let uniqueViolation = false;
+  try {
+    writable.prepare(
+      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("replay-test-id", state.driveId, "", "0xtest", state.lastSettleTxHash, 0.01, "base-sepolia", null, null);
+  } catch (e) {
+    if (/UNIQUE/i.test(e.message)) uniqueViolation = true;
+    else throw e;
+  } finally {
+    writable.close();
+  }
+  assert(uniqueViolation, "expected UNIQUE constraint violation on duplicate tx_hash INSERT — replay guard is broken");
+
+  // Count is still 1 after the rejected INSERT
+  const handle2 = await dbHandle();
+  const after = handle2.prepare(
+    "SELECT COUNT(*) as n FROM payment_receipts WHERE tx_hash = ?"
+  ).get(state.lastSettleTxHash);
+  handle2.close();
+  eq(after.n, 1, "receipt count must stay 1 — no duplicate written");
+});
+
+// #164 — mergeRoleUpgradeOnly: editor accepting a viewer share keeps editor.
+// Owner invites a fresh user as editor, then that user accepts a free viewer
+// share. drive_members must still show editor (upgrade-only, never downgrades).
+add(164, "mergeRoleUpgradeOnly: editor accepting a viewer share keeps editor", async () => {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+
+  // Sign up a fresh user who will be invited as editor
+  const { email: memberEmail, cookie: memberCookie } = await signupAndLogin("c164");
+
+  // Owner invites them as editor (canonical signature: driveId, email, path, role, ownerCookie)
+  await inviteMember(state.driveId, memberEmail, "", "editor", cookie);
+
+  // Verify the editor grant is in place before the share accept
+  const handle1 = await dbHandle();
+  const beforeRow = handle1.prepare(
+    `SELECT m.role FROM drive_members m
+     JOIN users u ON u.id = m.user_id
+     WHERE m.drive_id = ? AND lower(u.email) = lower(?)
+     LIMIT 1`
+  ).get(state.driveId, memberEmail);
+  handle1.close();
+  assert(beforeRow, "editor member row not found before share accept");
+  eq(beforeRow.role, "editor", "role before accept should be editor");
+
+  // Owner creates a free VIEWER share
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ path: "", role: "viewer" }),
+  });
+  eq(sr.status, 200, "viewer share create status");
+  const token = sr.body.token;
+
+  // The editor user accepts the viewer share
+  const ar = await jget(`/api/s/${token}/accept`, {
+    method: "POST",
+    headers: { cookie: memberCookie },
+  });
+  eq(ar.status, 200, "accept status: " + JSON.stringify(ar.body));
+
+  // drive_members must still show editor — mergeRoleUpgradeOnly never downgrades
+  const handle2 = await dbHandle();
+  const afterRow = handle2.prepare(
+    `SELECT m.role FROM drive_members m
+     JOIN users u ON u.id = m.user_id
+     WHERE m.drive_id = ? AND lower(u.email) = lower(?)
+     LIMIT 1`
+  ).get(state.driveId, memberEmail);
+  handle2.close();
+  assert(afterRow, "member row missing after accept");
+  eq(afterRow.role, "editor", "editor role must NOT be downgraded to viewer by share accept");
 });
 
 // Append the 20 deeper collaborative-editing scenarios.
