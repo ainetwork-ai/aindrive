@@ -5,11 +5,15 @@
  * NOTE: vitest is the new primary test path. Use `npm test` (vitest run) for
  * parallelization, watch mode, snapshots, and JUnit XML output.
  * This file is kept for lightweight CI scripts that don't have vitest installed.
+ *
+ * @deprecated Use `npm --prefix web test` (vitest) instead. This file is kept
+ * only for lightweight scripts; it will be removed once vitest is the sole runner.
  */
+import { SCENARIOS_DOC } from "./paths.mjs";
 import { cases } from "./cases.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 
-const PATH = "/mnt/newdata/git/aindrive/docs/TEST_SCENARIOS.md";
+const PATH = SCENARIOS_DOC;
 const FILTER = process.env.SCENARIO || null;
 
 let pass = 0, fail = 0, skipped = 0;
