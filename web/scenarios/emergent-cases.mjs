@@ -16,10 +16,10 @@ import { WebSocket } from "ws";
 import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import * as syncProtocol from "y-protocols/sync";
+import { SAMPLE, CLI_SRC, DIAGNOSE } from "./paths.mjs";
 
 const BASE = process.env.AINDRIVE_BASE || "http://localhost:3737";
 const WS_BASE = process.env.AINDRIVE_WS_BASE || "ws://localhost:3737";
-const SAMPLE = "/mnt/newdata/git/aindrive/sample";
 
 function bytesToB64(arr) { let s = ""; for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]); return Buffer.from(s, "binary").toString("base64"); }
 function b64ToBytes(b64) { return new Uint8Array(Buffer.from(b64, "base64")); }
@@ -60,7 +60,7 @@ function runDiagnose(events) {
   const tmp = `/tmp/diag-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.jsonl`;
   writeFileSync(tmp, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
   let out = "";
-  try { out = execSync(`node /mnt/newdata/git/aindrive/tools/diagnose.mjs ${tmp}`, { encoding: "utf8" }); }
+  try { out = execSync(`node ${DIAGNOSE} ${tmp}`, { encoding: "utf8" }); }
   catch (e) { out = (e.stdout || "") + (e.stderr || ""); }
   finally { try { unlinkSync(tmp); } catch {} }
   return out;
@@ -196,7 +196,7 @@ export function registerEmergentCases(add, state, helpers) {
   // ──── Self-write isolation (146–150) ────
 
   t(146, "self-write suppression returns true immediately after write", async () => {
-    const { isSelfWrite } = await import("/mnt/newdata/git/aindrive/cli/src/rpc.js");
+    const { isSelfWrite } = await import(`${CLI_SRC}/rpc.js`);
     // Trigger a write via API
     const cookie = state.ownerCookie;
     const path = "emerg-146-" + Date.now() + ".txt";
