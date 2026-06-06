@@ -131,3 +131,24 @@ Cases #56/#57/#58 deleted (no equivalent capability in the new model).
 - Genuine product design gap tracked separately: **#109** (1 case)
 
 **This baseline is the Phase 7 merge-gate target.**
+
+### FINAL state (after Phase 3c + Phase 5)
+
+**Result: 151 passed / 1 skipped / 0 failed.**
+
+- Phase 3c re-architected all 14 deferred access/cap cases to REAL actors: email-signup users invited via `POST /api/drives/[driveId]/members` (or CONSUME via `/api/s/[token]/accept`), not wallet-only cookies. Denial cases (#62/#63) assert a **specific 403** for an authenticated insufficient-role user (no `401||403` false-greens) — a privilege-escalation regression turns them red. Cap cases (#76–#80) obtain the Meadowcap cap from the DEV_BYPASS paid GET (`body.cap`) → `/api/cap/verify`. Cases #56–#58 deleted (wallet-allowlist capability gone, no equivalent).
+- Phase 5 added money-path coverage #161–#164: free CONSUME → `drive_members` row; paid settle → `payment_receipts` row; `tx_hash UNIQUE` replay guard (white-box, since DEV_BYPASS mints a fresh tx_hash per call — documented limitation); `mergeRoleUpgradeOnly` (editor not downgraded by a viewer share). All assert real DB state via `dbHandle()`.
+- **Only remaining skip: #109** — genuine product gap (dochub WS hub reads only `aindrive_session`, not the `aindrive_wallet` cookie; a paid-share WS visitor can't auth). Tracked for a future product decision, NOT a test defect.
+
+### Phase 4 — de-flake status & fast-subset decision
+
+De-flake **substance is achieved** and was built into the harness during Phases 2–3, not as a separate pass:
+- Readiness via `pollUntil` on `/api/readyz` then `/api/healthz` (no fixed boot sleeps).
+- Per-run isolation: fresh tmp `AINDRIVE_DATA_DIR` + tmp `AINDRIVE_SAMPLE_DIR` copy per run.
+- Process-group teardown (SIGTERM→SIGKILL) + an `afterEach` `ps` sweep covering per-case agents → **no orphan processes** after any run.
+- Signup rate-limit isolation: unique `x-forwarded-for` per signup (no shared `anon` bucket).
+- Empirically stable: the full suite ran **green across ~10 independent re-runs** by separate review agents, with clean teardown each time.
+
+**Fast-subset (`AINDRIVE_E2E_FAST`) — DEFERRED (YAGNI), per Open Item O1.** Measured full-suite wall-clock ≈ **4 min** locally (est. 5–8 min on ubuntu CI). That is an acceptable PR-gate cost, so the CI `e2e` job runs the FULL suite on every PR + push (see `.github/workflows/ci.yml`). A fast-subset-on-PR + nightly-full split is a documented follow-on to revisit only if CI time becomes a pain or the suite grows materially. The state object is shared+serial (`fileParallelism:false`) by design; per-run isolation removes cross-run contamination, and the proven stability makes intra-run order-coupling a non-issue in practice.
+
+**Net status: built, green (151/1/0), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**
