@@ -110,6 +110,31 @@ class Peer {
   close() { try { this.ws?.close(); } catch {} this.doc.destroy(); }
 }
 
+// Module-local counter for per-call unique x-forwarded-for IPs.
+// Mirrors signupUser in cases.mjs: auth-signup rate-limit is 5/5min per client IP.
+let __traceSignupSeq = 0;
+async function signupUser(prefix = "u") {
+  const n = __traceSignupSeq++;
+  const email = prefix + "-" + Date.now() + "-" + n + "@example.com";
+  const r = await jget("/api/auth/signup", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": `10.1.${(n >> 8) & 0xff}.${n & 0xff}`,
+    },
+    body: JSON.stringify({ email, name: prefix, password: "scenpass1234" }),
+  });
+  if (r.status !== 200) throw new Error("signupUser failed: " + JSON.stringify(r.body));
+  return { cookie: r.headers.get("set-cookie")?.split(";")[0], email };
+}
+async function inviteMember(driveId, email, path, role, ownerCookie) {
+  const r = await jget(`/api/drives/${driveId}/members`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ email, path, role }),
+  });
+  if (r.status !== 200) throw new Error(`inviteMember failed: ${JSON.stringify(r.body)}`);
+}
+
 export function registerTraceCases(add, state, helpers) {
   const setup = async () => {
     if (!state.ownerCookie && helpers?.ensureOwner) state.ownerCookie = await helpers.ensureOwner();
@@ -330,17 +355,28 @@ export function registerTraceCases(add, state, helpers) {
     A.close(); B.close();
   });
 
-  t(138, "wallet allowlist subscribe: ws-doc-sub trace shows correct address", async () => {
+  t(138, "member ws-doc-sub trace shows event and src=server", async () => {
     const cookie = state.ownerCookie;
     const path = "trace-138-" + Date.now() + ".txt";
-    await jget(`/api/drives/${state.driveId}/fs/write`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ path, content: "", encoding: "utf8" }) });
-    // Add a wallet to allowlist
-    const wallet = "0x" + "deadbeef".repeat(5);
-    await jget(`/api/drives/${state.driveId}/access`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ wallet_address: wallet, path: "" }) });
-    // Verify the trace API at least works (full wallet WS sub requires SIWE; we just confirm endpoint shape)
-    const r = await jget(`/api/dev/trace/dump?docId=${docIdFor(state.driveId, path)}&limit=10`);
-    eq(r.status, 200);
-    assert(Array.isArray(r.body.events));
+    await jget(`/api/drives/${state.driveId}/fs/write`, {
+      method: "POST", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ path, content: "", encoding: "utf8" }),
+    });
+    const docId = docIdFor(state.driveId, path);
+    // Invite a real viewer so the WS sub is accepted and a ws-doc-sub trace fires
+    const { cookie: viewerCookie, email } = await signupUser("t138viewer");
+    await inviteMember(state.driveId, email, "", "viewer", cookie);
+    const since = Date.now();
+    // Connect viewer peer — should get sub-ok and produce ws-doc-sub trace
+    const peer = new Peer("V", viewerCookie, state.driveId, path);
+    await peer.connect();
+    await sleep(300);
+    const events = await fetchTraces({ docId, since });
+    // Verify the trace endpoint works and ws-doc-sub event was recorded
+    const subEv = events.find((e) => e.event === "ws-doc-sub" && e.src === "server");
+    assert(subEv, "expected ws-doc-sub in trace ring, got events=" + JSON.stringify(events.map((e) => e.event)));
+    assert(Array.isArray(events), "events must be array");
+    peer.close();
   });
 
   t(139, "free share read flow leaves no trace ERROR", async () => {

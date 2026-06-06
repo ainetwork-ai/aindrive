@@ -118,6 +118,61 @@ async function reEnsureOwner() {
   return state.ownerCookie;
 }
 
+// Creates a fresh email/password user and returns { cookie, email }.
+// Used by access cases (F cluster) that need a real drive_members row.
+// Each call sends a unique x-forwarded-for so it lands in its own
+// auth-signup rate-limit bucket (route limit is 5 per 5 min per client IP).
+async function signupUser(prefix = "u") {
+  const seed = state.uniqueSeed; // captured before uniq() bumps it
+  const email = uniq(prefix) + "@example.com";
+  const r = await jget("/api/auth/signup", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": `10.0.${(seed >> 8) & 0xff}.${seed & 0xff}`,
+    },
+    body: JSON.stringify({ email, name: prefix, password: "scenpass1234" }),
+  });
+  if (r.status !== 200) throw new Error("signupUser failed: " + JSON.stringify(r.body));
+  const cookie = r.headers.get("set-cookie")?.split(";")[0];
+  return { cookie, email };
+}
+
+// Invites `email` to `driveId` at `path` with `role` using owner's cookie.
+// Prerequisite: the invitee must already have an account (signupUser).
+async function inviteMember(driveId, email, path, role, ownerCookie) {
+  const r = await jget(`/api/drives/${driveId}/members`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ email, path, role }),
+  });
+  if (r.status !== 200) throw new Error(`inviteMember ${email} failed: ${JSON.stringify(r.body)}`);
+}
+
+// Helper: create a paid share + DEV_BYPASS settle → returns body.cap.
+// Requires AINDRIVE_DEV_BYPASS_X402=1 in server env (harness sets this).
+// The owner cookie creates the share, but the settling GET sends NO cookie:
+// route.ts:56 short-circuits for the share owner (returns okBody WITHOUT a cap),
+// so the cap only gets issued for an anonymous (non-owner) payer.
+// path defaults to "" (drive root) because the shares route requires non-empty
+// paths to already exist as files; root path bypasses the existence check.
+async function getPaidCap(driveId, path = "", ownerCookie) {
+  const shareRes = await jget(`/api/drives/${driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path, role: "viewer", price_usdc: 0.01 }),
+  });
+  if (shareRes.status !== 200) throw new Error("share create failed: " + JSON.stringify(shareRes.body));
+  const bypassPayload = Buffer.from(JSON.stringify({
+    payload: { authorization: { from: "0x" + "de".repeat(20) } },
+  })).toString("base64");
+  const r = await jget(`/api/s/${shareRes.body.token}`, {
+    headers: { "X-PAYMENT": bypassPayload },  // no cookie → not the owner → DEV_BYPASS settle issues cap
+  });
+  if (r.status !== 200) throw new Error("paid GET failed: " + JSON.stringify(r.body));
+  if (!r.body.cap) throw new Error("no cap in body: " + JSON.stringify(r.body));
+  return r.body.cap;
+}
+
 // Reserved drive that always belongs to the human user — never paired by tests.
 const RESERVED_DRIVE_ID = "vodRHqr_R9j1";
 
@@ -673,97 +728,111 @@ add(55, "delete root denied", async () => {
   assert(ok);
 });
 
-// ──────────────────────── F. Folder access / wallet allowlist ────────────────────────
+// ──────────────────────── F. Drive membership / role gating ────────────────────────
+// Cases 56–58 DELETED (Phase 3c): tested POST /api/drives/[driveId]/access which was
+// removed in PR #6. Role-gating intent carried forward in cases 59–65 (rewritten below).
 
-// ── Cases 56–58 skipped: POST /api/drives/[driveId]/access route deleted in PR #6.
-// Rewrite via /members in Phase 3c. ──────────────────────────────────────────────
-add(56, "owner adds wallet to /", async () => {
+add(59, "uninvited user cannot list drive root → 401/403", async () => {
   await ensureDrive();
-  const cookie = await reEnsureOwner();
-  const r = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletA.address, path: "" }),
+  const { cookie: strangerCookie } = await signupUser("c59stranger");
+  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, {
+    headers: { cookie: strangerCookie },
   });
-  eq(r.status, 200);
-  assert(r.body.wallet_address.toLowerCase() === state.walletA.address.toLowerCase());
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
+  assert(r.status === 401 || r.status === 403, "got " + r.status);
+});
 
-add(57, "duplicate wallet at same path → 409", async () => {
-  const cookie = await reEnsureOwner();
-  const r = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletA.address, path: "" }),
-  });
-  eq(r.status, 409);
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
-
-add(58, "owner adds wallet B to subpath", async () => {
-  const cookie = await reEnsureOwner();
-  const r = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletB.address, path: "docs" }),
-  });
-  eq(r.status, 200);
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
-
-add(59, "wallet C with no allowlist → 401", async () => {
+add(60, "viewer invited at / can list root → role=viewer", async () => {
   await ensureDrive();
-  // Use a third wallet with no entry
-  const wC = privateKeyToAccount("0x" + randomBytes(32).toString("hex"));
-  const cookie = await loginWallet(wC);
-  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
-  assert(r.status === 401 || r.status === 403);
-}, { skip: "PORT-3c: wallet-cookie → null userId → 401 (session absence, not role gate); rewrite with real email-signup drive_members actors in 3c" });
+  const ownerCookie = await reEnsureOwner();
+  const { cookie: viewerCookie, email } = await signupUser("c60viewer");
+  await inviteMember(state.driveId, email, "", "viewer", ownerCookie);
+  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, {
+    headers: { cookie: viewerCookie },
+  });
+  eq(r.status, 200, "viewer at root should list");
+  assert(r.body.role === "viewer", "expected role=viewer, got " + r.body.role);
+});
 
-add(60, "wallet A (allowed at /) can list root", async () => {
-  const cookie = await loginWallet(state.walletA);
-  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
-  eq(r.status, 200);
-  assert(r.body.role === "viewer");
-}, { skip: "PORT-3c: depends on case #56 /access grant which is deleted; rewrite with /members invite" });
+add(61, "viewer invited at docs can list docs", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const { cookie: viewerCookie, email } = await signupUser("c61viewer");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  // Ensure docs dir exists (sample fixture provides it, but guard anyway)
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "docs" }),
+  });
+  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=docs`, {
+    headers: { cookie: viewerCookie },
+  });
+  eq(r.status, 200, "viewer at docs should list docs");
+});
 
-add(61, "wallet B (allowed at docs) can list docs", async () => {
-  const cookie = await loginWallet(state.walletB);
-  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=docs`, { headers: { cookie } });
-  eq(r.status, 200);
-}, { skip: "PORT-3c: depends on case #58 /access grant which is deleted; rewrite with /members invite" });
+add(62, "viewer invited only at docs cannot list root → 403", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const { cookie: viewerCookie, email } = await signupUser("c62docsonly");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, {
+    headers: { cookie: viewerCookie },
+  });
+  // This MUST be 403 because the user IS authenticated (session exists) but
+  // has no grant covering "" — bestMatchingRole returns "none" → atLeast fails.
+  eq(r.status, 403, "docs-only viewer must not access root; got " + r.status);
+});
 
-add(62, "wallet B cannot list parent /", async () => {
-  const cookie = await loginWallet(state.walletB);
-  const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
-  assert(r.status === 401 || r.status === 403);
-}, { skip: "PORT-3c: wallet-cookie → null userId → 401 (session absence, not role gate); rewrite with real email-signup drive_members actors in 3c" });
-
-add(63, "wallet A (viewer) cannot write", async () => {
-  const cookie = await loginWallet(state.walletA);
+add(63, "root viewer cannot write → 403", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const { cookie: viewerCookie, email } = await signupUser("c63viewer");
+  await inviteMember(state.driveId, email, "", "viewer", ownerCookie);
   const r = await jget(`/api/drives/${state.driveId}/fs/write`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
+    method: "POST", headers: { "content-type": "application/json", cookie: viewerCookie },
     body: JSON.stringify({ path: "x.txt", content: "x", encoding: "utf8" }),
   });
-  assert(r.status === 401 || r.status === 403);
-}, { skip: "PORT-3c: wallet-cookie → null userId → 401 (session absence, not role gate); rewrite with real email-signup drive_members actors in 3c" });
+  // Authenticated viewer; drive_members row exists at "" with role=viewer.
+  // requireDriveRole(min:"editor") → role < editor → 403 (not 401).
+  eq(r.status, 403, "viewer write must be 403; got " + r.status);
+});
 
-add(64, "owner revokes wallet A", async () => {
-  const cookie = await reEnsureOwner();
-  const list = await jget(`/api/drives/${state.driveId}/access`, { headers: { cookie } });
-  const row = list.body.access.find((a) => a.wallet_address.toLowerCase() === state.walletA.address.toLowerCase() && a.path === "");
-  const r = await jget(`/api/drives/${state.driveId}/access/${row.id}`, { method: "DELETE", headers: { cookie } });
-  eq(r.status, 200);
-  // Wallet A list now denied
-  const wCookie = await loginWallet(state.walletA);
-  const r2 = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: wCookie } });
-  assert(r2.status === 401 || r2.status === 403);
-}, { skip: "PORT-3c: GET+DELETE /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
-
-add(65, "access add returns Meadowcap cap", async () => {
-  const cookie = await reEnsureOwner();
-  // Re-add walletA at a fresh path to inspect cap
-  const r = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletA.address, path: "cap-test-" + Date.now() }),
+add(64, "owner revokes member — revoked user loses access", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const { cookie: viewerCookie, email } = await signupUser("c64revoke");
+  await inviteMember(state.driveId, email, "", "viewer", ownerCookie);
+  // Confirm access before revoke
+  const before = await jget(`/api/drives/${state.driveId}/fs/list?path=`, {
+    headers: { cookie: viewerCookie },
   });
-  assert(typeof r.body.cap === "string" && r.body.cap.length > 50, "cap returned");
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; cap now from paid-accept GET body.cap" });
+  eq(before.status, 200, "should have access before revoke");
+  // Find the member row to delete
+  const mList = await jget(`/api/drives/${state.driveId}/members`, {
+    headers: { cookie: ownerCookie },
+  });
+  eq(mList.status, 200);
+  const row = mList.body.members.find((m) => m.email.toLowerCase() === email.toLowerCase());
+  assert(row, "member row not found in /members list");
+  const del = await jget(`/api/drives/${state.driveId}/members/${row.id}`, {
+    method: "DELETE", headers: { cookie: ownerCookie },
+  });
+  eq(del.status, 200, "delete member should return 200");
+  // Access must now be denied
+  const after = await jget(`/api/drives/${state.driveId}/fs/list?path=`, {
+    headers: { cookie: viewerCookie },
+  });
+  assert(after.status === 401 || after.status === 403, "revoked user must be denied; got " + after.status);
+});
+
+add(65, "paid-accept GET (DEV_BYPASS) returns Meadowcap cap", async () => {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+  // Uses root path "" — shares route requires non-empty paths to exist as files;
+  // root path bypasses that check and still issues a cap via DEV_BYPASS settle.
+  const cap = await getPaidCap(state.driveId, "", cookie);
+  assert(typeof cap === "string" && cap.length > 50,
+    "expected cap string, got: " + JSON.stringify(cap));
+});
 
 // ──────────────────────── G. Shares + paid access ────────────────────────
 
@@ -797,59 +866,69 @@ add(67, "paid share without wallet → 402", async () => {
 
 // ──────────────────────── H. Meadowcap ────────────────────────
 
-add(76, "verify a freshly-issued cap", async () => {
+add(76, "verify a freshly-issued cap (from paid-accept DEV_BYPASS)", async () => {
+  await ensureDrive();
   const cookie = await reEnsureOwner();
-  const fresh = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletB.address, path: "h76-" + Date.now() }),
+  const cap = await getPaidCap(state.driveId, "", cookie);
+  const v = await jget("/api/cap/verify", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cap }),
   });
-  const cap = fresh.body.cap;
-  const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap }) });
   eq(v.status, 200);
-  assert(v.body.valid === true);
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
+  assert(v.body.valid === true, "expected valid=true, got: " + JSON.stringify(v.body));
+});
 
 add(77, "garbled cap → 400 or invalid", async () => {
   const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: "this-is-not-a-cap" }) });
   assert(v.status === 400 || v.body.valid === false);
 });
 
-add(78, "cap pathPrefix matches issuance", async () => {
+add(78, "cap pathPrefix matches issuance path", async () => {
+  await ensureDrive();
   const cookie = await reEnsureOwner();
-  const path = "h78-" + Date.now();
-  const fresh = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletB.address, path }),
+  // Root path "" bypasses the drive path-existence check; the cap's pathPrefix
+  // is set to share.path, so it must equal "".
+  const cap = await getPaidCap(state.driveId, "", cookie);
+  const v = await jget("/api/cap/verify", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cap }),
   });
-  const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: fresh.body.cap }) });
-  eq(v.body.pathPrefix, path);
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
+  eq(v.body.pathPrefix, "", "pathPrefix mismatch: " + JSON.stringify(v.body));
+});
 
 add(79, "cap timeEnd ≈ now + 30 days", async () => {
+  await ensureDrive();
   const cookie = await reEnsureOwner();
-  const fresh = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletB.address, path: "h79-" + Date.now() }),
+  const cap = await getPaidCap(state.driveId, "", cookie);
+  const v = await jget("/api/cap/verify", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cap }),
   });
-  const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: fresh.body.cap }) });
   const ms = Number(v.body.timeEnd) - Date.now();
-  assert(ms > 25 * 24 * 60 * 60 * 1000 && ms < 35 * 24 * 60 * 60 * 1000, "timeEnd within range, got " + ms);
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
+  assert(
+    ms > 25 * 24 * 60 * 60 * 1000 && ms < 35 * 24 * 60 * 60 * 1000,
+    "timeEnd out of 30d window, got ms=" + ms
+  );
+});
 
-add(80, "two issuances → different receiver pubkeys", async () => {
+add(80, "two paid-accept issuances → different receiver pubkeys", async () => {
+  await ensureDrive();
   const cookie = await reEnsureOwner();
-  const r1 = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletB.address, path: "h80a-" + Date.now() }),
+  // Two separate share tokens for root path; each settle generates a fresh
+  // ephemeral keypair so receiverPub must differ between issuances.
+  const cap1 = await getPaidCap(state.driveId, "", cookie);
+  const cap2 = await getPaidCap(state.driveId, "", cookie);
+  const v1 = await jget("/api/cap/verify", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cap: cap1 }),
   });
-  const r2 = await jget(`/api/drives/${state.driveId}/access`, {
-    method: "POST", headers: { "content-type": "application/json", cookie },
-    body: JSON.stringify({ wallet_address: state.walletB.address, path: "h80b-" + Date.now() }),
+  const v2 = await jget("/api/cap/verify", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cap: cap2 }),
   });
-  const v1 = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: r1.body.cap }) });
-  const v2 = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: r2.body.cap }) });
-  assert(v1.body.receiverPub !== v2.body.receiverPub);
-}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
+  assert(v1.body.receiverPub !== v2.body.receiverPub,
+    "expected different receiverPub per issuance, got v1=" + v1.body.receiverPub + " v2=" + v2.body.receiverPub);
+});
 
 // ──────────────────────── I. Real-time editing (Y.js) ────────────────────────
 
@@ -1008,17 +1087,23 @@ add(89, "awareness state propagates", async () => {
   A.close();
 });
 
-add(90, "viewer-role cannot push sync (server drops)", async () => {
-  // Wallet B has access only to "docs" — try to subscribe at root → should be rejected
-  const cookieB = await loginWallet(state.walletB);
-  const ws = new WebSocket(`${WS_BASE}/api/agent/doc?drive=${state.driveId}&path=`, { headers: { cookie: cookieB } });
+add(90, "docs-only viewer cannot subscribe to root doc (server closes WS)", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  // A user invited only at "docs" must not get a sub-ok for path=""
+  const { cookie: docsViewerCookie, email } = await signupUser("c90docsonly");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  const ws = new WebSocket(
+    `${WS_BASE}/api/agent/doc?drive=${state.driveId}&path=`,
+    { headers: { cookie: docsViewerCookie } }
+  );
   let closed = false;
   await new Promise((res) => {
     ws.on("close", () => { closed = true; res(); });
-    ws.on("open", () => { /* might open then close */ });
+    ws.on("open", () => { /* server may accept TCP then close on auth */ });
     setTimeout(res, 2500);
   });
-  assert(closed, "expected unauthorized sub to be closed");
+  assert(closed, "expected unauthorized WS sub to be closed by server");
 });
 
 // ──────────────────────── J. Multi-device + edge cases ────────────────────────
