@@ -4,13 +4,18 @@ import { cases } from "./cases.mjs";
 
 // After each case, sweep for any orphaned per-case agent processes: case #92
 // (boot.mjs), case #96 (start-agent.mjs), and collab #118 (start-agent.mjs).
-// The globalSetup global agent has its own PID captured in global-setup.mjs
-// and is not affected by this sweep.
+// Skip the harness global agent (HARNESS_AGENT_PID) — it is managed by
+// global-setup.mjs teardown, not by per-case cleanup.
 afterEach(async () => {
+  // global-setup.mjs publishes the harness agent PID so we don't kill it here.
+  const harnessAgentPid = process.env.HARNESS_AGENT_PID
+    ? parseInt(process.env.HARNESS_AGENT_PID, 10)
+    : null;
+
   for (const pattern of ["start-agent.mjs", "boot.mjs"]) {
     try {
       const lines = execSync(
-        `ps -eo pid,cmd | grep '${pattern}' | grep -v grep || true`,
+        `ps -eo pid,command | grep '${pattern}' | grep -v grep || true`,
       )
         .toString()
         .trim()
@@ -18,9 +23,10 @@ afterEach(async () => {
         .filter(Boolean);
       for (const line of lines) {
         const pid = parseInt(line.trim().split(/\s+/)[0], 10);
-        if (Number.isFinite(pid) && pid > 0) {
-          try { process.kill(pid, "SIGKILL"); } catch {}
-        }
+        if (!Number.isFinite(pid) || pid <= 0) continue;
+        // Don't kill the harness global agent — it lives across all test cases.
+        if (harnessAgentPid && pid === harnessAgentPid) continue;
+        try { process.kill(pid, "SIGKILL"); } catch {}
       }
     } catch {}
   }

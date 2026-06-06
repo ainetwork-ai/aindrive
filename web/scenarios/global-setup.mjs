@@ -210,6 +210,8 @@ export async function setup() {
     },
   );
   agentProc = { handle: agentHandle, pid: agentHandle.pid };
+  // Publish the harness agent PID so all.test.mjs afterEach sweep can skip it.
+  process.env.HARNESS_AGENT_PID = String(agentHandle.pid);
   agentHandle.stdout.on("data", (d) => process.stdout.write(`[agent] ${d}`));
   agentHandle.stderr.on("data", (d) => process.stderr.write(`[agent] ${d}`));
   agentHandle.on("exit", (code, sig) => {
