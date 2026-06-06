@@ -8,8 +8,13 @@ import { cases } from "./cases.mjs";
 // global-setup.mjs teardown, not by per-case cleanup.
 afterEach(async () => {
   // global-setup.mjs publishes the harness agent PID so we don't kill it here.
+  // ensureDrive() in cases.mjs publishes the suite (test-drive) agent PID.
+  // Only sweep agents spawned within individual cases (#92 boot.mjs, #96/#118 start-agent.mjs).
   const harnessAgentPid = process.env.HARNESS_AGENT_PID
     ? parseInt(process.env.HARNESS_AGENT_PID, 10)
+    : null;
+  const suiteAgentPid = process.env.SUITE_AGENT_PID
+    ? parseInt(process.env.SUITE_AGENT_PID, 10)
     : null;
 
   for (const pattern of ["start-agent.mjs", "boot.mjs"]) {
@@ -26,6 +31,8 @@ afterEach(async () => {
         if (!Number.isFinite(pid) || pid <= 0) continue;
         // Don't kill the harness global agent — it lives across all test cases.
         if (harnessAgentPid && pid === harnessAgentPid) continue;
+        // Don't kill the suite agent (spawned by ensureDrive()) — it lives across cases too.
+        if (suiteAgentPid && pid === suiteAgentPid) continue;
         try { process.kill(pid, "SIGKILL"); } catch {}
       }
     } catch {}

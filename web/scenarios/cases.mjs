@@ -33,6 +33,20 @@ const state = {
 
 function uniq(prefix = "u") { return `${prefix}-${state.uniqueSeed++}`; }
 
+// Each signup must land in its own rate-limit bucket (auth-signup: 5 per 5 min per client IP).
+// Without x-forwarded-for the server buckets all test requests under "anon" and the 6th
+// signup (incl. 400-returning ones) returns 429, cascading auth failures through the suite.
+// Derive a unique IP from the same monotonic counter so it never repeats in a run.
+async function signup(email, name, password) {
+  const seed = state.uniqueSeed; // capture before uniq() might bump it elsewhere
+  const ip = `10.0.${(seed >> 8) & 0xff}.${seed & 0xff}`;
+  return jget("/api/auth/signup", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": ip },
+    body: JSON.stringify({ email, name, password }),
+  });
+}
+
 async function jget(path, opts = {}) {
   const res = await fetch(BASE + path, opts);
   const text = await res.text();
@@ -79,11 +93,7 @@ async function loginWallet(wallet) {
 async function ensureOwner() {
   if (state.ownerCookie) return state.ownerCookie;
   state.ownerEmail = uniq("scen") + "@example.com";
-  const r = await jget("/api/auth/signup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: state.ownerEmail, name: "Scen Owner", password: state.ownerPassword }),
-  });
+  const r = await signup(state.ownerEmail, "Scen Owner", state.ownerPassword);
   if (r.status !== 200) throw new Error("owner signup failed: " + JSON.stringify(r.body));
   state.ownerCookie = r.headers.get("set-cookie")?.split(";")[0];
   return state.ownerCookie;
@@ -120,8 +130,10 @@ async function ensureDrive() {
       const r = await jget("/api/drives", { headers: { cookie } });
       const d = r.body.drives.find((d) => d.id === state.driveId);
       if (!d?.online) {
-        // restart agent for our driveId
-        spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] }).unref();
+        // restart agent for our driveId; update SUITE_AGENT_PID so afterEach sweep spares it.
+        const restartedAgent = spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] });
+        restartedAgent.unref();
+        if (restartedAgent.pid) process.env.SUITE_AGENT_PID = String(restartedAgent.pid);
         for (let i = 0; i < 10; i++) {
           await sleep(1000);
           const r2 = await jget("/api/drives", { headers: { cookie } });
@@ -150,15 +162,17 @@ async function ensureDrive() {
   );
   // Kill any prior agent for sample, start new
   try {
-    const lines = execSync("ps -eo pid,cmd | grep start-agent.mjs | grep -v grep || true").toString().trim().split("\n").filter(Boolean);
+    const lines = execSync("ps -eo pid,command | grep start-agent.mjs | grep -v grep || true").toString().trim().split("\n").filter(Boolean);
     for (const l of lines) {
       const pid = parseInt(l.trim().split(/\s+/)[0], 10);
       if (pid) { try { process.kill(pid, "SIGKILL"); } catch {} }
     }
   } catch {}
   await sleep(500);
-  const log = `/tmp/scen-agent-${state.driveId}.log`;
-  spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] }).unref();
+  const agentProc = spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] });
+  agentProc.unref();
+  // Publish the suite agent PID so all.test.mjs afterEach sweep doesn't kill it.
+  if (agentProc.pid) process.env.SUITE_AGENT_PID = String(agentProc.pid);
   await sleep(3500);
   return state.driveId;
 }
@@ -178,36 +192,32 @@ function add(id, name, run, opts = {}) { cases.push({ id, name, run, ...opts });
 
 add(1, "signup with valid creds → 200 + cookie", async () => {
   const email = uniq("a1") + "@example.com";
-  const r = await jget("/api/auth/signup", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, name: "U", password: "validpass1" }),
-  });
+  const r = await signup(email, "U", "validpass1");
   eq(r.status, 200, "status");
   assert(r.headers.get("set-cookie")?.includes("aindrive_session"), "cookie set");
 });
 
 add(2, "signup duplicate email → 409", async () => {
   const email = uniq("a2") + "@example.com";
-  await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, name: "U", password: "validpass1" }) });
-  const r = await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, name: "U", password: "validpass1" }) });
+  await signup(email, "U", "validpass1");
+  const r = await signup(email, "U", "validpass1");
   eq(r.status, 409);
 });
 
 add(3, "signup short password → 400", async () => {
   const email = uniq("a3") + "@example.com";
-  const r = await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, name: "U", password: "short" }) });
+  const r = await signup(email, "U", "short");
   eq(r.status, 400);
 });
 
 add(4, "signup malformed email → 400", async () => {
-  const r = await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "not-an-email", name: "U", password: "validpass1" }) });
+  const r = await signup("not-an-email", "U", "validpass1");
   eq(r.status, 400);
 });
 
 add(5, "login valid → 200 + cookie", async () => {
   const email = uniq("a5") + "@example.com";
-  await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, name: "U", password: "validpass1" }) });
+  await signup(email, "U", "validpass1");
   const r = await jget("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "validpass1" }) });
   eq(r.status, 200);
   assert(r.headers.get("set-cookie")?.includes("aindrive_session"));
@@ -215,7 +225,7 @@ add(5, "login valid → 200 + cookie", async () => {
 
 add(6, "login wrong password → 401", async () => {
   const email = uniq("a6") + "@example.com";
-  await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, name: "U", password: "validpass1" }) });
+  await signup(email, "U", "validpass1");
   const r = await jget("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password: "wrongpass1" }) });
   eq(r.status, 401);
 });
@@ -415,7 +425,7 @@ add(30, "GET /d/[id] for unauthorized wallet shows 'no access'", async () => {
   await ensureDrive();
   // Create a fresh user without access
   const stranger = uniq("a30") + "@example.com";
-  const sr = await jget("/api/auth/signup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: stranger, name: "S", password: "stranger1" }) });
+  const sr = await signup(stranger, "S", "stranger1");
   const sCookie = sr.headers.get("set-cookie")?.split(";")[0];
   const r = await fetch(`${BASE}/d/${state.driveId}`, { headers: { cookie: sCookie } });
   const text = await r.text();
@@ -663,6 +673,8 @@ add(55, "delete root denied", async () => {
 
 // ──────────────────────── F. Folder access / wallet allowlist ────────────────────────
 
+// ── Cases 56–58 skipped: POST /api/drives/[driveId]/access route deleted in PR #6.
+// Rewrite via /members in Phase 3c. ──────────────────────────────────────────────
 add(56, "owner adds wallet to /", async () => {
   await ensureDrive();
   const cookie = await reEnsureOwner();
@@ -672,7 +684,7 @@ add(56, "owner adds wallet to /", async () => {
   });
   eq(r.status, 200);
   assert(r.body.wallet_address.toLowerCase() === state.walletA.address.toLowerCase());
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
 
 add(57, "duplicate wallet at same path → 409", async () => {
   const cookie = await reEnsureOwner();
@@ -681,7 +693,7 @@ add(57, "duplicate wallet at same path → 409", async () => {
     body: JSON.stringify({ wallet_address: state.walletA.address, path: "" }),
   });
   eq(r.status, 409);
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
 
 add(58, "owner adds wallet B to subpath", async () => {
   const cookie = await reEnsureOwner();
@@ -690,7 +702,7 @@ add(58, "owner adds wallet B to subpath", async () => {
     body: JSON.stringify({ wallet_address: state.walletB.address, path: "docs" }),
   });
   eq(r.status, 200);
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
 
 add(59, "wallet C with no allowlist → 401", async () => {
   await ensureDrive();
@@ -706,13 +718,13 @@ add(60, "wallet A (allowed at /) can list root", async () => {
   const r = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
   eq(r.status, 200);
   assert(r.body.role === "viewer");
-});
+}, { skip: "PORT-3c: depends on case #56 /access grant which is deleted; rewrite with /members invite" });
 
 add(61, "wallet B (allowed at docs) can list docs", async () => {
   const cookie = await loginWallet(state.walletB);
   const r = await jget(`/api/drives/${state.driveId}/fs/list?path=docs`, { headers: { cookie } });
   eq(r.status, 200);
-});
+}, { skip: "PORT-3c: depends on case #58 /access grant which is deleted; rewrite with /members invite" });
 
 add(62, "wallet B cannot list parent /", async () => {
   const cookie = await loginWallet(state.walletB);
@@ -739,7 +751,7 @@ add(64, "owner revokes wallet A", async () => {
   const wCookie = await loginWallet(state.walletA);
   const r2 = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: wCookie } });
   assert(r2.status === 401 || r2.status === 403);
-});
+}, { skip: "PORT-3c: GET+DELETE /api/drives/[driveId]/access deleted in PR#6; rewrite via /members" });
 
 add(65, "access add returns Meadowcap cap", async () => {
   const cookie = await reEnsureOwner();
@@ -749,7 +761,7 @@ add(65, "access add returns Meadowcap cap", async () => {
     body: JSON.stringify({ wallet_address: state.walletA.address, path: "cap-test-" + Date.now() }),
   });
   assert(typeof r.body.cap === "string" && r.body.cap.length > 50, "cap returned");
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; cap now from paid-accept GET body.cap" });
 
 // ──────────────────────── G. Shares + paid access ────────────────────────
 
@@ -793,7 +805,7 @@ add(76, "verify a freshly-issued cap", async () => {
   const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap }) });
   eq(v.status, 200);
   assert(v.body.valid === true);
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
 
 add(77, "garbled cap → 400 or invalid", async () => {
   const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: "this-is-not-a-cap" }) });
@@ -809,7 +821,7 @@ add(78, "cap pathPrefix matches issuance", async () => {
   });
   const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: fresh.body.cap }) });
   eq(v.body.pathPrefix, path);
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
 
 add(79, "cap timeEnd ≈ now + 30 days", async () => {
   const cookie = await reEnsureOwner();
@@ -820,7 +832,7 @@ add(79, "cap timeEnd ≈ now + 30 days", async () => {
   const v = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: fresh.body.cap }) });
   const ms = Number(v.body.timeEnd) - Date.now();
   assert(ms > 25 * 24 * 60 * 60 * 1000 && ms < 35 * 24 * 60 * 60 * 1000, "timeEnd within range, got " + ms);
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
 
 add(80, "two issuances → different receiver pubkeys", async () => {
   const cookie = await reEnsureOwner();
@@ -835,7 +847,7 @@ add(80, "two issuances → different receiver pubkeys", async () => {
   const v1 = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: r1.body.cap }) });
   const v2 = await jget("/api/cap/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cap: r2.body.cap }) });
   assert(v1.body.receiverPub !== v2.body.receiverPub);
-});
+}, { skip: "PORT-3c: POST /api/drives/[driveId]/access deleted; rewrite cap source to paid-accept GET body.cap" });
 
 // ──────────────────────── I. Real-time editing (Y.js) ────────────────────────
 
@@ -1075,13 +1087,16 @@ add(94, "agent disconnect path cleans up", async () => {
 add(96, "agent reconnect after WS drop", async () => {
   await ensureDrive();
   // Restart sample agent in-place by killing its node process and respawning.
-  const lines = execSync("ps -eo pid,cmd | grep 'node start-agent.mjs' | grep -v grep || true").toString().trim().split("\n").filter(Boolean);
+  const lines = execSync("ps -eo pid,command | grep 'node start-agent.mjs' | grep -v grep || true").toString().trim().split("\n").filter(Boolean);
   for (const l of lines) {
     const pid = parseInt(l.trim().split(/\s+/)[0], 10);
     try { process.kill(pid, "SIGKILL"); } catch {}
   }
   await sleep(2000);
-  spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] }).unref();
+  const respawnedAgent = spawn("node", ["start-agent.mjs"], { cwd: SAMPLE, detached: true, stdio: ["ignore", "ignore", "ignore"] });
+  respawnedAgent.unref();
+  // Update SUITE_AGENT_PID so afterEach sweep doesn't kill the newly-spawned agent.
+  if (respawnedAgent.pid) process.env.SUITE_AGENT_PID = String(respawnedAgent.pid);
   // Wait for reconnect (poll online flag)
   const cookie = await reEnsureOwner();
   let online = false;
