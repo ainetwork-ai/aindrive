@@ -6,9 +6,12 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// fixtures/sample/ → fixtures/ → web/scenarios/ → web/ → repo root
+// fixtures/sample/ → fixtures/ → web/scenarios/ → web/ → repo root.
+// Prefer the env-injected absolute repo root (Phase 2 harness sets this when it
+// copies the fixture to a tmp dir outside the repo); fall back to the relative
+// walk for the in-repo fixture running standalone.
 const _here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(_here, "../../../..");
+const repoRoot = process.env.AINDRIVE_REPO_ROOT || resolve(_here, "../../../..");
 const agentPath = resolve(repoRoot, "cli/src/agent.js");
 
 const { runAgent } = await import(agentPath);
