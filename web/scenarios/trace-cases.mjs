@@ -15,10 +15,10 @@ import { WebSocket } from "ws";
 import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import * as syncProtocol from "y-protocols/sync";
+import { SAMPLE, DIAGNOSE } from "./paths.mjs";
 
 const BASE = process.env.AINDRIVE_BASE || "http://localhost:3737";
 const WS_BASE = process.env.AINDRIVE_WS_BASE || "ws://localhost:3737";
-const SAMPLE = "/mnt/newdata/git/aindrive/sample";
 
 function bytesToB64(arr) { let s = ""; for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]); return Buffer.from(s, "binary").toString("base64"); }
 function b64ToBytes(b64) { return new Uint8Array(Buffer.from(b64, "base64")); }
@@ -59,7 +59,7 @@ function runDiagnose(events) {
   writeFileSync(tmp, lines);
   let out = "";
   try {
-    out = execSync(`node /mnt/newdata/git/aindrive/tools/diagnose.mjs ${tmp}`, { encoding: "utf8" });
+    out = execSync(`node ${DIAGNOSE} ${tmp}`, { encoding: "utf8" });
   } catch (e) {
     out = (e.stdout || "") + (e.stderr || "");
   } finally {
