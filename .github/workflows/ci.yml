@@ -1,9 +1,13 @@
 name: CI
 
-# Hermetic gate for every PR + main push. The two packages (web/, cli/) are
-# independent (no root package.json), so each is checked in its own job.
-# Scenario tests (web `test:e2e`) need a live :3737 server + a connected CLI
-# agent, so they are NOT run here — only the hermetic checks gate merges.
+# CI for every PR + main push. The two packages (web/, cli/) are independent
+# (no root package.json), so each is checked in its own job.
+#
+# e2e: runs the full scenario suite on every PR + push (server + agent + tmp DB,
+#   ~4-8 min). Not yet a required status check — promote to required after a
+#   documented green streak on the 3b baseline.
+#   TODO(Phase 4): split fast-subset on PR + nightly full once AINDRIVE_E2E_FAST
+#   subset tagging is implemented.
 
 on:
   push:
@@ -103,3 +107,57 @@ jobs:
       - name: audit cli
         working-directory: cli
         run: npm audit --audit-level=high
+
+  e2e:
+    name: e2e — full suite (PR gate)
+    runs-on: ubuntu-latest
+    # Not yet a required status check. Promote to required after a documented
+    # green streak on the 3b baseline (Settings → Branches → main → required
+    # status checks → add "e2e — full suite (PR gate)").
+    # TODO(Phase 4): replace with e2e-pr (fast subset on PR) + e2e-nightly
+    # (full on schedule) once AINDRIVE_E2E_FAST subset tagging is implemented.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          # Both lockfiles listed so cache invalidates on either change.
+          cache-dependency-path: |
+            web/package-lock.json
+            cli/package-lock.json
+
+      # Install both packages. cli/node_modules is needed because:
+      #   (a) the vitest worker dynamically imports cli/src/willow-store.js +
+      #       cli/src/rpc.js in-process (cases.mjs), and
+      #   (b) global-setup.mjs spawns the cli agent via fixtures/sample/start-agent.mjs.
+      - name: Install web deps
+        run: npm install --no-audit --no-fund
+        working-directory: web
+      - name: Install cli deps
+        run: npm install --no-audit --no-fund
+        working-directory: cli
+
+      # Fail fast if a native addon prebuild is missing before the suite starts.
+      # Two-step: web bsqlite3 + cli willow-store (cross-ABI smoke from Phase 0).
+      - name: Smoke — better-sqlite3 (web)
+        run: node -e "require('better-sqlite3'); console.log('web bsqlite3 ok')"
+        working-directory: web
+      - name: Smoke — better-sqlite3 (cli)
+        run: node -e "require('better-sqlite3'); console.log('cli bsqlite3 ok')"
+        working-directory: cli
+      - name: Smoke — willow-store importable (cross-ABI)
+        run: |
+          node --input-type=module -e "
+            await import('./cli/src/willow-store.js');
+            console.log('cli willow-store ok');
+          "
+
+      # Full e2e suite. globalSetup (web/scenarios/global-setup.mjs) boots
+      # node server.js in dev mode on a free port with a per-run tmp AINDRIVE_DATA_DIR
+      # and AINDRIVE_DEV_BYPASS_X402=1 — fully self-contained, no secrets needed.
+      # linux ps -eo pid,command is valid (same format used in all.test.mjs afterEach).
+      - name: e2e — full suite
+        run: npm run test:e2e
+        working-directory: web
+        timeout-minutes: 15
