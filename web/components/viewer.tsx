@@ -11,6 +11,13 @@ import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
 import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
 import { ViewerHeader } from "./viewer-parts";
+import { loader } from "@monaco-editor/react";
+
+// Monaco self-host: load the editor runtime from our own origin (/monaco/vs)
+// instead of @monaco-editor/loader's default jsdelivr CDN, which the app CSP
+// (script-src 'self', see middleware.ts) blocks. Assets are copied from
+// node_modules/monaco-editor/min/vs by scripts/copy-monaco.mjs (predev/prebuild).
+loader.config({ paths: { vs: "/monaco/vs" } });
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
   ssr: false,

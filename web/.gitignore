@@ -1,1 +1,4 @@
 .env*.local
+
+# Build artifact: Monaco editor runtime self-hosted into public/ (scripts/copy-monaco.mjs)
+public/monaco

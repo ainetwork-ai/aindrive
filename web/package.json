@@ -5,6 +5,9 @@
   "description": "aindrive web — Next.js UI + WS server that brokers between browsers and locally-running aindrive CLI agents.",
   "type": "module",
   "scripts": {
+    "copy-monaco": "node scripts/copy-monaco.mjs",
+    "predev": "node scripts/copy-monaco.mjs",
+    "prebuild": "node scripts/copy-monaco.mjs",
     "dev": "node server.js",
     "build": "next build",
     "start": "NODE_ENV=production node server.js",
