@@ -14,7 +14,7 @@ import {
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import pkg from "../../package.json" assert { type: "json" };
+import pkg from "../../package.json" with { type: "json" };
 import { createClient } from "./client.js";
 import { TOOLS } from "./tools.js";
 import { listResources, readResource, makeResourceTemplates } from "./resources.js";
