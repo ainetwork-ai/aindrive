@@ -28,6 +28,11 @@ surprises. Read this once, then follow the rules.
 of where you run them from. Always pass `-f web/docker-compose.yml` or `cd web`
 first.
 
+> ⚠ `-f web/docker-compose.yml` is a path **relative to the repo root**. Run it
+> from any other directory (e.g. `cli/`) and it resolves to `cli/web/...` →
+> `no such file or directory`. When unsure, use the absolute path:
+> `-f /mnt/newdata/git/aindrive/web/docker-compose.yml`.
+
 ---
 
 ## Golden rules
@@ -117,8 +122,13 @@ flock /tmp/aindrive-build.lock \
 # 3. confirm container is fresh
 sudo docker compose -f web/docker-compose.yml ps
 
-# 4. confirm site is up (resolve via the prod-reachable IP)
-curl -sI --max-time 8 https://aindrive.ainetwork.ai/ | head -3
+# 4. confirm the NEW container is actually serving. /api/healthz returns
+#    {ok, uptime, dbOk, agentsConnected} uncached — a low uptime proves the
+#    fresh container is live (a plain `/` 200 can be served by a stale one).
+curl -s --max-time 8 https://aindrive.ainetwork.ai/api/healthz; echo
+#    -> {"ok":true,"uptime":7.4,"agentsConnected":3,"dbOk":true}
+curl -s -o /dev/null -w 'readyz: %{http_code}\n' --max-time 8 \
+  https://aindrive.ainetwork.ai/api/readyz
 
 # 5. tail logs for ~10s if something looks off
 sudo docker compose -f web/docker-compose.yml logs --tail 30 web
@@ -126,6 +136,10 @@ sudo docker compose -f web/docker-compose.yml logs --tail 30 web
 
 If step 4 returns 5xx and step 5 shows fresh stack traces, that's your problem
 to fix — don't trigger another build hoping it'll go away.
+
+If the container is **not running at all** after `up -d` (it starts then exits),
+the prime suspect is the production boot guard — see "Environment / secrets"
+below. `logs` prints `[aindrive] BOOT FAILED — ...` naming the exact bad var.
 
 ---
 
@@ -172,6 +186,42 @@ on the previous commit until someone runs `docker compose ... up -d --build`.
 
 ---
 
+## Environment / secrets (`.env`)
+
+`docker-compose.yml` loads `web/.env` (`required: false` — the container starts
+without it, but **production must have it**). `.env` is gitignored and lives
+**only on the host** at `web/.env`; the committed template is `web/.env.example`.
+Back the live file up — it holds values that are expensive or impossible to
+re-create.
+
+A production boot guard (`web/lib/boot-checks.js`, run once at startup) refuses
+to start the server and `process.exit(1)`s when any of these are wrong. So a
+misconfigured `.env` shows up as a container that exits right after `up -d` —
+check `logs` for `[aindrive] BOOT FAILED`.
+
+| Variable | Enforced in prod | Why it bites |
+|----------|------------------|--------------|
+| `AINDRIVE_DEV_BYPASS_X402` | must **not** be `1` | `1` makes every paid (x402) share free — revenue bypass |
+| `AINDRIVE_SESSION_SECRET` | set, ≥ 32 chars | missing/short = boot fails; rotating it logs everyone out. `openssl rand -hex 32` |
+| `AINDRIVE_PUBLIC_URL` | must start `https://` | Secure cookies can't be set over plain HTTP |
+| `AINDRIVE_PAYOUT_WALLET` | set, not all-zeros (unless bypass on) | wrong/zero address = buyers' USDC goes nowhere |
+
+Not an env var, but the other irreplaceable secret: **`namespace_secret`** is a
+per-drive key stored as a BLOB in the SQLite DB on the `/data` volume (see
+`web/lib/drives.ts`). Lose `/data` and every existing share/capability becomes
+unverifiable. Rebuilds keep `/data`; `down -v` **destroys** it (see Quick
+reference). Full launch checklist: `docs/PRODUCTION_TODO.md`.
+
+After editing `.env`, recreate the container so it re-reads the file (no rebuild
+needed):
+
+```bash
+flock /tmp/aindrive-build.lock \
+  sudo docker compose -f web/docker-compose.yml up -d   # picks up new .env
+```
+
+---
+
 ## Database migrations
 
 The repo uses idempotent `ALTER TABLE` statements in `web/lib/db.js` plus
@@ -205,6 +255,24 @@ flock /tmp/aindrive-build.lock \
 
 Tell your teammates in chat **before** running `git reset --hard` on the
 deploy machine. Their pending unpushed work on this checkout will be lost.
+
+### Faster rollback — tag images by git sha
+
+`git reset --hard` + a full rebuild takes minutes, painful while prod is down.
+If you snapshot the running image under its sha **before** each deploy, you can
+roll back with no rebuild:
+
+```bash
+# before deploying: tag the current good image with its sha
+sudo docker tag aindrive-web:latest aindrive-web:$(git rev-parse --short HEAD)
+
+# a deploy broke prod: point :latest back at a known-good sha, no build
+sudo docker tag aindrive-web:<good-sha> aindrive-web:latest
+sudo docker compose -f web/docker-compose.yml up -d   # seconds, not minutes
+```
+
+List snapshots: `sudo docker images aindrive-web`. Prune old ones with
+`sudo docker rmi aindrive-web:<sha>` when disk fills.
 
 ---
 

@@ -27,6 +27,30 @@ publish하려면 두 가지가 모두 필요:
 - `npm whoami` → `dev_ainetwork` (또는 owner 권한 있는 계정)
 - 모바일 authenticator (OTP)
 
+### `npm login`이 안 될 때 (원격/서버에서 자주)
+
+`npm login`이 브라우저 로그인 URL만 띄우고 `npm error Exit handler never
+called!`로 죽는 경우가 있다 — 헤드리스/원격 박스에서 웹 인증 콜백이 안 돌아오는
+npm 버그다. 우회 두 가지:
+
+1. **터미널 직접 입력 (권장)** — 브라우저 없이 username/password/OTP를 터미널
+   에서 받는다:
+   ```bash
+   npm login --auth-type=legacy
+   npm whoami                 # dev_ainetwork 나오면 성공
+   ```
+2. **automation token (OTP 자체를 없앰, CI·반복 배포용)** — npm 웹 UI →
+   Access Tokens → Granular/Automation 토큰 발급 후 `~/.npmrc`에:
+   ```
+   //registry.npmjs.org/:_authToken=npm_xxxxxxxxxxxx
+   ```
+   automation 토큰은 publish 시 OTP를 요구하지 않는다. **절대 repo에 커밋 금지**
+   (`~/.npmrc`에만 둔다).
+
+> 비대화형(스크립트/에이전트 등 non-TTY)에서 `npm publish`는 OTP 프롬프트를 못
+> 띄우고 `EOTP`로 즉시 실패한다. 이때는 `--otp=<코드>`를 인라인으로 넘기거나
+> (2번) automation 토큰을 쓴다.
+
 ---
 
 ## 2. 사전 체크 (한 번만)
@@ -147,6 +171,22 @@ npm install                # lock을 다시 산출
 git add cli/package-lock.json
 git rebase --continue
 ```
+
+### 5-6. `package.json` 버전이 registry보다 앞서는데 태그가 없음
+
+증상: `npm view aindrive version`은 `0.2.1`인데 로컬 `cli/package.json`은
+`0.2.2`, 그리고 `git tag -l v0.2.2`가 비어 있음. 누군가 `npm version` 대신
+`package.json`을 손으로 고쳐 commit하고(§4 위반) 아직 publish는 안 한 상태다.
+
+복구 — **bump 금지.** 이미 박힌 버전이 곧 다음 publish 버전이다:
+```bash
+git pull --rebase origin main
+npm run build && node dist/aindrive.mjs --version    # 0.2.2 확인
+npm publish --access public --otp=<코드>              # 0.2.2 그대로 publish
+git tag -a v0.2.2 -m "aindrive 0.2.2 (cli npm release)"   # 누락 태그 보강
+git push --follow-tags origin main
+```
+여기서 `npm version patch`를 돌리면 0.2.3으로 튀어 0.2.2를 건너뛴다 — 금지.
 
 ---
 
