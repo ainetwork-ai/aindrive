@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import type { DriveEntry } from "@/lib/protocol";
+import type { ShowcaseItem } from "@/lib/showcase";
 import { apiFetch } from "@/lib/api-client";
 import {
-  DriveSidebar, DriveHeader, FileTable,
+  DriveSidebar, DriveHeader, FileTable, ShowcaseSection,
   type DriveSummary, type ShareSummary,
 } from "./drive-shell-parts";
 
@@ -69,6 +70,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   const [selected, setSelected] = useState<DriveEntry | null>(null);
   const [shareOpen, setShareOpen] = useState<{ path: string; focus?: "sell" } | null>(null);
   const [shares, setShares] = useState<ShareSummary[]>([]);
+  const [showcase, setShowcase] = useState<ShowcaseItem[]>([]);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -105,9 +107,19 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     if (res.ok) setShares(res.data.shares);
   }, [driveId, isOwner]);
 
+  // Upsell surface for non-owners; the owner skips it (their own listings are
+  // all "covered" server-side anyway). !ok (403/404) is an expected outcome
+  // for accounts the endpoint's relationship gate rejects — silently empty.
+  const loadShowcase = useCallback(async () => {
+    if (isOwner) return;
+    const res = await apiFetch<{ items: ShowcaseItem[] }>(`/api/drives/${driveId}/showcase`);
+    setShowcase(res.ok ? res.data.items : []);
+  }, [driveId, isOwner]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadDrives(); }, [loadDrives]);
   useEffect(() => { loadShares(); }, [loadShares]);
+  useEffect(() => { loadShowcase(); }, [loadShowcase]);
 
   // Map: path → paid share (most recent), for badge rendering and ⋮ menu state
   const paidByPath = useMemo(() => {
@@ -272,6 +284,9 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
               onRowAction={onRowAction}
               isOwner={isOwner}
             />
+            {/* Entry views only (root/grant landing + synthetic root) — the
+                showcase is a discovery surface, not deep-navigation chrome. */}
+            {(path === rootPath || isSyntheticRoot) && <ShowcaseSection items={showcase} />}
           </div>
           {selected && (
             <Viewer

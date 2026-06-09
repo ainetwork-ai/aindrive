@@ -7,9 +7,10 @@ import Link from "next/link";
 import clsx from "clsx";
 import {
   ChevronRight, Folder, FileText, FileCode, FileImage, File as FileIcon,
-  FolderPlus, Upload, Share2, Loader2, HardDrive, Bot, MessageSquare, Menu,
+  FolderPlus, Upload, Share2, Loader2, HardDrive, Bot, MessageSquare, Menu, Lock,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
+import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu } from "./row-menu";
 import { X402Badge } from "./x402-badges";
 
@@ -289,6 +290,40 @@ export function FileTable({
         })}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * "For sale" upsell list under the file table on entry views: the drive's
+ * listed paid shares the viewer doesn't cover yet. Clicking a row sends the
+ * whole page to the existing share-gate (/s/<token>), which handles payment
+ * and lands the buyer back in the drive.
+ */
+export function ShowcaseSection({ items }: { items: ShowcaseItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="mt-8">
+      <div className="px-1 text-xs uppercase tracking-wide text-drive-muted">For sale</div>
+      <ul className="mt-1 text-sm">
+        {items.map((it) => (
+          <li key={it.shareId} className="border-b border-drive-border/70">
+            <button
+              onClick={() => { window.location.href = "/s/" + it.token; }}
+              className="w-full flex items-center gap-3 py-3 sm:py-2 px-1 hover:bg-drive-hover cursor-pointer text-left"
+            >
+              <Lock className="w-5 h-5 text-drive-muted shrink-0" />
+              <span className="flex-1 min-w-0 truncate">{it.leafName}</span>
+              {/* Not X402Badge: it hardcodes "$…USDC", but showcase prices are in
+                  the drive's policy currency. NULL currency = legacy share —
+                  settle falls back to USDC, so label it the same. */}
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg bg-drive-selected text-xs font-semibold tabular-nums shrink-0">
+                {it.price.toFixed(2)} {it.currency ?? "USDC"}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
