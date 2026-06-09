@@ -18,6 +18,7 @@ export type DriveRow = {
   namespace_pubkey: Buffer | null;
   namespace_secret: Buffer | null;
   payout_wallet: string | null;
+  allowed_tokens: string | null;
 };
 
 /** Update the payout wallet for a drive. Pass null to clear it. */
@@ -25,6 +26,15 @@ export function setDrivePayoutWallet(driveId: string, payoutWallet: string | nul
   drizzleDb
     .update(drives)
     .set({ payout_wallet: payoutWallet })
+    .where(eq(drives.id, driveId))
+    .run();
+}
+
+/** Update the payment-token policy (JSON of PaymentToken[]). Pass null to reset to default. */
+export function setDriveAllowedTokens(driveId: string, allowedTokensJson: string | null) {
+  drizzleDb
+    .update(drives)
+    .set({ allowed_tokens: allowedTokensJson })
     .where(eq(drives.id, driveId))
     .run();
 }

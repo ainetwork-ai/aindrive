@@ -25,21 +25,26 @@ function isPaymentToken(t: unknown): t is PaymentToken {
   );
 }
 
+// Strict counterpart of resolveDriveTokens for *writes*: returns null on
+// garbage instead of falling back, so the drive PATCH route can 400 a bad
+// policy rather than silently storing one that reads back as the default.
+export function parseTokenPolicy(json: string): PaymentToken[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every(isPaymentToken)) return null;
+  return parsed;
+}
+
 // drives.allowed_tokens (JSON TEXT) → token policy. NULL / empty array /
 // unparsable / malformed entries all fall back to DEFAULT_TOKENS so a bad
 // policy row can never brick payments (preserves pre-policy behaviour).
 export function resolveDriveTokens(allowedTokensJson: string | null): PaymentToken[] {
   if (!allowedTokensJson) return DEFAULT_TOKENS;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(allowedTokensJson);
-  } catch {
-    return DEFAULT_TOKENS;
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every(isPaymentToken)) {
-    return DEFAULT_TOKENS;
-  }
-  return parsed;
+  return parseTokenPolicy(allowedTokensJson) ?? DEFAULT_TOKENS;
 }
 
 // [rev2-B] 금액 스케일링은 절대 float 곱셈 금지: 18 decimals에서 price 0.01만 돼도

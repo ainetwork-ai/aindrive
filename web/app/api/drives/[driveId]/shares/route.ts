@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
-import { getDrive, type DriveRow } from "@/lib/drives";
+import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
 import { env } from "@/lib/env";
@@ -54,10 +54,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // Defaults to the policy's first token when the caller doesn't pick one.
   let currency: string | null = null;
   if (body.data.price_usdc) {
-    // getDrive selects all columns; allowed_tokens just isn't on DriveRow yet.
-    const tokens = resolveDriveTokens(
-      (drive as DriveRow & { allowed_tokens: string | null }).allowed_tokens,
-    );
+    const tokens = resolveDriveTokens(drive.allowed_tokens);
     currency = body.data.currency ?? tokens[0].symbol;
     if (!tokens.some((t) => t.symbol === currency)) {
       return NextResponse.json({ error: "currency not allowed by drive policy" }, { status: 400 });

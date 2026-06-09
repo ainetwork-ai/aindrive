@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { X, Lock } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { atLeast } from "@/lib/access-core.js";
+// Pure presets/parsers — safe in a client component.
+import { TOKEN_PRESETS, DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import {
   EarningsSection, SellSection, EmailInviteSection, FreeLinkSection,
   MembersSection,
@@ -26,6 +28,16 @@ export function ShareDialog({
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");
   const [price, setPrice] = useState("");
+  const [currency, setCurrency] = useState(DEFAULT_TOKENS[0].symbol);
+  const [listed, setListed] = useState(false);
+  // Drive token policy (currency select options). Non-owners can't read the
+  // drive GET (403) and keep the default — the server re-validates anyway.
+  const [driveTokens, setDriveTokens] = useState<PaymentToken[]>(DEFAULT_TOKENS);
+  // Token-policy editor (owner-only UI): preset checkboxes + FANCO asset input
+  const [tokenSel, setTokenSel] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(Object.keys(TOKEN_PRESETS).map((k) => [k, k === "USDC"])),
+  );
+  const [fancoAsset, setFancoAsset] = useState("");
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [payoutWallet, setPayoutWallet] = useState<string>("");
   const [payoutInput, setPayoutInput] = useState<string>("");
@@ -39,7 +51,7 @@ export function ShareDialog({
     const [s, r, d, mem, who] = await Promise.all([
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
       apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
-      apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`),
+      apiFetch<{ payout_wallet: string | null; allowed_tokens: string | null }>(`/api/drives/${driveId}`),
       apiFetch<{ members: Member[]; myRole: "viewer" | "editor" | "owner" }>(`/api/drives/${driveId}/members`),
       apiFetch<{ user: { email: string } | null }>(`/api/auth/me`),
     ]);
@@ -48,6 +60,15 @@ export function ShareDialog({
     if (d.ok) {
       setPayoutWallet(d.data.payout_wallet ?? "");
       setPayoutInput(d.data.payout_wallet ?? "");
+      const tokens = resolveDriveTokens(d.data.allowed_tokens ?? null);
+      setDriveTokens(tokens);
+      // Keep the user's pick if still allowed; otherwise snap to the policy's first token
+      setCurrency((cur) => (tokens.some((t) => t.symbol === cur) ? cur : tokens[0].symbol));
+      setTokenSel(Object.fromEntries(
+        Object.keys(TOKEN_PRESETS).map((k) => [k, tokens.some((t) => t.symbol === k)]),
+      ));
+      const fanco = tokens.find((t) => t.symbol === "FANCO");
+      if (fanco?.asset) setFancoAsset(fanco.asset);
     }
     if (mem.ok) setMembers(mem.data.members);
     if (who.ok && who.data.user) {
@@ -77,6 +98,40 @@ export function ShareDialog({
     toast.success(res.data.payout_wallet ? "Payout wallet saved" : "Payout wallet cleared");
   }
 
+  // Same owner test MembersSection uses; gates the List checkbox and the
+  // token-policy editor (mirrors the API: listed=403, PATCH=403 for non-owners).
+  const isOwner = atLeast(me.role, "owner");
+
+  // Owner saves the drive's payment-token policy (preset checkboxes → PaymentToken[]).
+  async function saveTokenPolicy() {
+    const selected = Object.keys(TOKEN_PRESETS).filter((k) => tokenSel[k]);
+    if (selected.length === 0) {
+      toast.error("Select at least one payment token");
+      return;
+    }
+    const fanco = fancoAsset.trim();
+    if (tokenSel.FANCO && !/^0x[a-fA-F0-9]{40}$/.test(fanco)) {
+      toast.error("FANCO needs an asset address (0x + 40 hex chars)");
+      return;
+    }
+    const policy = selected.map((k) =>
+      k === "FANCO" ? { ...TOKEN_PRESETS.FANCO, asset: fanco } : TOKEN_PRESETS[k],
+    );
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ allowed_tokens: JSON.stringify(policy) }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error || "Failed to save payment tokens");
+      return;
+    }
+    toast.success("Payment tokens saved");
+    load();
+  }
+
   const totalEarned = receipts.reduce((sum, r) => sum + (r.amount_usdc ?? 0), 0);
 
   // Existing paid share for this exact path (most recent first)
@@ -88,7 +143,7 @@ export function ShareDialog({
   async function saveSell() {
     const num = Number(price);
     if (!num || num < 0.01 || num > 9999.99) {
-      toast.error("Price must be between 0.01 and 9999.99 USDC");
+      toast.error(`Price must be between 0.01 and 9999.99 ${currency}`);
       return;
     }
     setBusy(true);
@@ -99,6 +154,9 @@ export function ShareDialog({
         path: defaultPath,
         role: "viewer",
         price_usdc: Math.round(num * 100) / 100,
+        currency,
+        // Checkbox renders for owners only; the API 403s listed:true otherwise
+        listed: isOwner && listed,
       }),
     });
     setBusy(false);
@@ -111,6 +169,7 @@ export function ShareDialog({
     if (copied) toast.success("Paid share link copied to clipboard");
     else toast.success(`Paid share link created: ${url}`, { duration: 8000 });
     setPrice("");
+    setListed(false);
     load();
   }
 
@@ -203,6 +262,19 @@ export function ShareDialog({
             savePayoutWallet={savePayoutWallet}
             price={price}
             setPrice={setPrice}
+            currency={currency}
+            setCurrency={setCurrency}
+            currencyOptions={driveTokens.map((t) => t.symbol)}
+            listed={listed}
+            setListed={setListed}
+            isOwner={isOwner}
+            tokenEditor={{
+              sel: tokenSel,
+              toggle: (sym) => setTokenSel((s) => ({ ...s, [sym]: !s[sym] })),
+              fancoAsset,
+              setFancoAsset,
+              save: saveTokenPolicy,
+            }}
             saveSell={saveSell}
             busy={busy}
             setEditingSell={setEditingSell}
@@ -211,7 +283,7 @@ export function ShareDialog({
 
           <MembersSection
             members={members}
-            isOwner={atLeast(me.role, "owner")}
+            isOwner={isOwner}
             currentUserEmail={me.email}
             changeMemberRole={changeMemberRole}
             removeMember={removeMember}

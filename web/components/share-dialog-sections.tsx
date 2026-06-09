@@ -14,6 +14,8 @@ export type Share = {
   role: string;
   expires_at: string | null;
   price_usdc: number | null;
+  currency: string | null; // token symbol within the drive policy; null = legacy USDC
+  listed: number; // SQLite 0/1 — shown on the drive's showcase
 };
 export type Access = {
   id: string;
@@ -87,9 +89,20 @@ export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]
   );
 }
 
+// Token-policy mini-editor state + handlers, grouped to keep SellSection's
+// prop list readable. `sel` is keyed by preset symbol (USDC/FANCO/…).
+export type TokenEditorProps = {
+  sel: Record<string, boolean>;
+  toggle: (symbol: string) => void;
+  fancoAsset: string;
+  setFancoAsset: (v: string) => void;
+  save: () => void;
+};
+
 export function SellSection({
   defaultPath, focusSection, sellOn, paidShare, payoutWallet, payoutInput,
-  setPayoutInput, savePayoutWallet, price, setPrice, saveSell, busy,
+  setPayoutInput, savePayoutWallet, price, setPrice, currency, setCurrency,
+  currencyOptions, listed, setListed, isOwner, tokenEditor, saveSell, busy,
   setEditingSell, copyLink,
 }: {
   defaultPath: string;
@@ -102,6 +115,13 @@ export function SellSection({
   savePayoutWallet: () => void;
   price: string;
   setPrice: (v: string) => void;
+  currency: string;
+  setCurrency: (v: string) => void;
+  currencyOptions: string[];
+  listed: boolean;
+  setListed: (v: boolean) => void;
+  isOwner: boolean;
+  tokenEditor: TokenEditorProps;
   saveSell: () => void;
   busy: boolean;
   setEditingSell: (v: boolean) => void;
@@ -119,7 +139,7 @@ export function SellSection({
       {/* Active state: existing paid share (read-only) */}
       {paidShare && sellOn && (
         <div className="rounded-xl border border-drive-border p-3 space-y-2 bg-drive-sidebar/40">
-          <Row label="Price" value={`$${paidShare.price_usdc?.toFixed(2)} USDC`} />
+          <Row label="Price" value={priceLabel(paidShare.price_usdc, paidShare.currency)} />
           <div className="flex items-center gap-2">
             <span className="text-xs text-drive-muted w-16 shrink-0">Link</span>
             <code className="flex-1 text-xs truncate font-mono">/s/{paidShare.token}</code>
@@ -170,22 +190,46 @@ export function SellSection({
       {!paidShare && sellOn && (
         <div className="rounded-xl border border-drive-border p-3 space-y-3">
           <div>
-            <label className="text-xs text-drive-muted block mb-1">Price (USDC)</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0.01"
-              max="9999.99"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder="0.50"
-              className="w-full rounded-lg border border-drive-border px-3 py-2 text-sm"
-              autoFocus
-            />
+            <label className="text-xs text-drive-muted block mb-1">Price</label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                max="9999.99"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="0.50"
+                className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm"
+                autoFocus
+              />
+              <select
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+                className="rounded-lg border border-drive-border px-2 text-sm"
+                aria-label="Currency"
+              >
+                {currencyOptions.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
             <p className="text-xs text-drive-muted mt-1">
               Buyers pay once for permanent access.
             </p>
           </div>
+          {/* [rev2-D] Listing is owner-only (API 403s listed:true otherwise) */}
+          {isOwner && (
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={listed}
+                onChange={(e) => setListed(e.target.checked)}
+              />
+              List in drive
+              <span className="text-drive-muted">— members without access see it for sale</span>
+            </label>
+          )}
           <button
             disabled={busy || !price}
             onClick={saveSell}
@@ -195,7 +239,53 @@ export function SellSection({
           </button>
         </div>
       )}
+
+      {/* Drive-wide payment-token policy (spec D3): which currencies shares
+          may be priced in. Owner-only, like the PATCH behind it. */}
+      {isOwner && sellOn && (
+        <PaymentTokensEditor editor={tokenEditor} busy={busy} />
+      )}
     </section>
+  );
+}
+
+function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
+  return (
+    <div className="rounded-xl border border-drive-border p-3 space-y-2 mt-3">
+      <label className="text-xs text-drive-muted block">Payment tokens (drive policy)</label>
+      <div className="flex items-center gap-4">
+        {Object.keys(editor.sel).map((sym) => (
+          <label key={sym} className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={editor.sel[sym]}
+              onChange={() => editor.toggle(sym)}
+            />
+            {sym}
+          </label>
+        ))}
+        <button
+          disabled={busy}
+          onClick={editor.save}
+          className="ml-auto rounded-lg bg-drive-accent text-white px-3 py-1.5 text-sm hover:bg-drive-accentHover disabled:opacity-50"
+        >
+          Save
+        </button>
+      </div>
+      {editor.sel.FANCO && (
+        <div>
+          <input
+            value={editor.fancoAsset}
+            onChange={(e) => editor.setFancoAsset(e.target.value.trim())}
+            placeholder="0x… (FANCO contract address on Base)"
+            className="w-full rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
+          />
+          <p className="text-xs text-drive-muted mt-1">
+            FANCO on-chain settlement arrives with Phase 2b; address needed for the 402 policy.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -419,6 +509,13 @@ export function FreeLinkSection({
       )}
     </section>
   );
+}
+
+// "$5.00 USDC" / "5.00 FANCO" — $ prefix only for the dollar-pegged default.
+// null currency = legacy pre-policy share (USDC).
+function priceLabel(price: number | null, currency: string | null): string {
+  const sym = currency ?? "USDC";
+  return `${sym === "USDC" ? "$" : ""}${price?.toFixed(2)} ${sym}`;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
