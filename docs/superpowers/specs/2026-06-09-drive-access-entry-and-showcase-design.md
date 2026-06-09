@@ -125,6 +125,7 @@ settle은 이미 `drive_members`에 `user_id`로 멤버십 행을 INSERT. 로그
 - `web/lib/access-core.js`(+`.d.ts`) — `computeEntry` 순수 함수
 - `web/lib/access.ts` — `entryView` DB 래퍼
 - `web/app/d/[driveId]/page.tsx` — 진입점 안착 + `?path` hard-deny
+- `web/lib/__tests__/access-core.test.ts` — `computeEntry` 단위 케이스 9개
 - `web/scenarios/cases.mjs` — P1 회귀 케이스 #165/#166
 
 구현 중 정제: 설계 초안의 `web/app/page.tsx`(홈)·`web/lib/drives.ts` 수정은 **불필요**로 판명 —
