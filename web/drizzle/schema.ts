@@ -2,6 +2,7 @@ import {
   sqliteTable,
   text,
   real,
+  integer,
   blob,
   uniqueIndex,
   index,
@@ -43,6 +44,9 @@ export const drives = sqliteTable("drives", {
   // EVM wallet that receives x402 payments for this drive's paid shares.
   // Null = fall back to the AINDRIVE_PAYOUT_WALLET env (single-tenant default).
   payout_wallet: text("payout_wallet"),
+  // JSON array of PaymentToken (web/lib/payment-tokens.ts). NULL/empty/invalid
+  // = DEFAULT_TOKENS via resolveDriveTokens.
+  allowed_tokens: text("allowed_tokens"),
 });
 
 // ---------------------------------------------------------------------------
@@ -94,7 +98,11 @@ export const shares = sqliteTable(
       .notNull()
       .default(sql`(datetime('now'))`),
     price_usdc: real("price_usdc"),
-    payment_chain: text("payment_chain"),
+    // Token symbol resolved against drives.allowed_tokens (renamed from
+    // payment_chain; NULL = legacy share → USDC base-sepolia fallback).
+    currency: text("currency"),
+    // 1 = shown in the drive's "For sale" showcase to partial members.
+    listed: integer("listed").notNull().default(0),
   },
   (t) => [index("idx_shares_drive").on(t.drive_id)]
 );

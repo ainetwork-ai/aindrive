@@ -1,6 +1,6 @@
 # Test Scenarios — RED/GREEN Inventory
 
-Last updated: 2026-06-10 (post-final additions #165–#167 — drive-access-entry Phase 1/1b)
+Last updated: 2026-06-10 (post-final additions #168–#175 — showcase + payment-token policy Phase 2a)
 
 ## Baseline before Phase 3 fixes
 
@@ -143,6 +143,21 @@ Cases #56/#57/#58 deleted (no equivalent capability in the new model).
 > un-granted parent `assets` list → 403, granted `docs` list → 200, granted file
 > `assets/logo.txt` read → 200 (synthetic-root server-side preconditions).
 > Suite now **154 passed / 1 skipped / 0 failed**.
+>
+> Phase 2a — showcase + payment-token policy (2026-06-10): **#168–#175** (8 cases).
+> #168 listed leaf visible to a partial member, with NO ancestor/full-path/token
+> leak in the DTO + the listed path's `fs/list` still 403 (showcase is fs-independent).
+> #169 unlisted paid share absent. #170 non-member showcase GET → 403 (member upsell,
+> not a public storefront). #171 USDC policy 402 (`accepts[0].network`=base-sepolia,
+> asset=USDC preset, `currency.symbol`=USDC). **#172** policy *discriminator*: a
+> non-USDC FANCO policy (base, 18-dec, dummy asset) drives the 402 to those exact
+> values + `maxAmountRequired === "1000000000000000000"` (exact 1·10^18 digit string,
+> no exponent) — direct proof the policy flows, not a hardcoded constant. #173 listed
+> is owner-only (path editor: listed:true → 403, unlisted → 200). #174 settle-gated:
+> no `drive_members` row until the DEV_BYPASS paid GET settles (real DB state via
+> `dbHandle()`, joined through `account_wallets`). #175 WS denied for a listed-but-unpaid
+> path (partial member → dochub `close(4401)`; listed/price never open the realtime hub).
+> Suite now **162 passed / 1 skipped / 0 failed**.
 
 - Phase 3c re-architected all 14 deferred access/cap cases to REAL actors: email-signup users invited via `POST /api/drives/[driveId]/members` (or CONSUME via `/api/s/[token]/accept`), not wallet-only cookies. Denial cases (#62/#63) assert a **specific 403** for an authenticated insufficient-role user (no `401||403` false-greens) — a privilege-escalation regression turns them red. Cap cases (#76–#80) obtain the Meadowcap cap from the DEV_BYPASS paid GET (`body.cap`) → `/api/cap/verify`. Cases #56–#58 deleted (wallet-allowlist capability gone, no equivalent).
 - Phase 5 added money-path coverage #161–#164: free CONSUME → `drive_members` row; paid settle → `payment_receipts` row; `tx_hash UNIQUE` replay guard (white-box, since DEV_BYPASS mints a fresh tx_hash per call — documented limitation); `mergeRoleUpgradeOnly` (editor not downgraded by a viewer share). All assert real DB state via `dbHandle()`.
@@ -159,4 +174,4 @@ De-flake **substance is achieved** and was built into the harness during Phases 
 
 **Fast-subset (`AINDRIVE_E2E_FAST`) — DEFERRED (YAGNI), per Open Item O1.** Measured full-suite wall-clock ≈ **4 min** locally (est. 5–8 min on ubuntu CI). That is an acceptable PR-gate cost, so the CI `e2e` job runs the FULL suite on every PR + push (see `.github/workflows/ci.yml`). A fast-subset-on-PR + nightly-full split is a documented follow-on to revisit only if CI time becomes a pain or the suite grows materially. The state object is shared+serial (`fileParallelism:false`) by design; per-run isolation removes cross-run contamination, and the proven stability makes intra-run order-coupling a non-issue in practice.
 
-**Net status: built, green (151/1/0 at completion — now 154/1/0, see Post-final note), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**
+**Net status: built, green (151/1/0 at completion — now 162/1/0, see Post-final note), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**
