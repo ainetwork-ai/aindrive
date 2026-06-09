@@ -1,6 +1,8 @@
-# Showcase + Payment-Token Policy (Phase 2a) Implementation Plan
+# Showcase + Payment-Token Policy (Phase 2a) Implementation Plan — rev2
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
+>
+> rev2: ultracode 4-lens 검증 confirmed 15건(고유 8) 반영 — 마이그레이션 boot-crash(A), 18-decimals BigInt 수학(B), share-gate 표시(C), listed owner 게이트(D), 만료 필터(E), Task1 게이트 정합(F), fallback 의미론(G), #171 판별력(H).
 >
 > 사전 조사(코드 맵 + x402/mint.club 웹 조사) 결론 반영: mint.club 토큰은 plain ERC-20(EIP-3009 ✗)이라 **현 x402 v1 스택으로는 실 온체인 FANCO 결제 불가**. 최신 x402 스펙의 Permit2 경로(CDP facilitator)로는 가능하나 v2 마이그레이션+1회 approve UX가 필요 → **Phase 2b로 분리**(비목표 참조). 이 plan(2a)은 정책 배관·진열·UI 전부를 **DEV_BYPASS로 e2e 검증 가능한 범위**로 완성한다.
 
@@ -37,7 +39,17 @@ export const TOKEN_PRESETS: Record<string, PaymentToken> = {
   FANCO: { symbol: "FANCO", chain: "base", asset: "", name: null, version: null, decimals: 18 },
 };
 export const DEFAULT_TOKENS: PaymentToken[] = [TOKEN_PRESETS.USDC];
+
+// [rev2-B] 금액 스케일링은 절대 float 곱셈 금지: 18 decimals에서 price 0.01만 돼도
+// Number.MAX_SAFE_INTEGER 초과(정밀도 손실), 1000 이상이면 "1e+21" 지수표기가 되어
+// x402의 digit-string 검증/BigInt() 소비자가 throw. BigInt 십진 문자열 스케일링으로.
+export function toAtomicAmount(price: number, decimals: number): string {
+  // price는 소수 2자리까지만 허용(shares 입력 검증과 동일) — 그 이상은 반올림.
+  const cents = Math.round(price * 100); // safe: price < 1e13
+  return (BigInt(cents) * 10n ** BigInt(decimals - 2)).toString();
+}
 ```
+(`decimals >= 2` 전제 — 프리셋이 6/18뿐. 단위 테스트에 1.1/1000/0.01@18 → 정확한 digit string, "e+" 부재 단언 포함.)
 > FANCO `asset`은 빈 문자열로 시작 — mint.club 페이지가 CSR이라 컨트랙트 주소를 조사에서 못 박았다. **온체인 결제는 2b**이므로 지금은 자리만; owner가 설정 UI에서 주소를 입력할 수 있게 한다(아래 Task 5). DEV_BYPASS 검증엔 영향 없음.
 
 ---
@@ -47,27 +59,39 @@ export const DEFAULT_TOKENS: PaymentToken[] = [TOKEN_PRESETS.USDC];
 **Files:** `web/drizzle/schema.ts`, `web/drizzle/schema.js`, `web/lib/db.js`, (신규) `web/lib/payment-tokens.ts`
 
 - [ ] schema.ts/.js: `drives.allowed_tokens: text("allowed_tokens")`, `shares.listed: integer("listed").notNull().default(0)`, `shares.payment_chain` → `currency`로 컬럼명 변경(두 스키마 파일 모두).
-- [ ] db.js idempotent 블록: `ALTER TABLE drives ADD COLUMN allowed_tokens TEXT`, `ALTER TABLE shares ADD COLUMN listed INTEGER NOT NULL DEFAULT 0` (기존 try/catch duplicate-column 패턴), **rename**은 별도 try/catch: `ALTER TABLE shares RENAME COLUMN payment_chain TO currency` — catch에서 "no such column"(이미 rename됨)만 무시. CREATE TABLE IF NOT EXISTS의 shares 정의도 `currency`로 갱신(신규 DB).
-- [ ] `web/lib/payment-tokens.ts` 위 내용 + `resolveDriveTokens(allowedTokensJson: string|null): PaymentToken[]`(파싱 실패/NULL → DEFAULT_TOKENS) 헬퍼.
-- [ ] 단위 테스트 `web/lib/__tests__/payment-tokens.test.ts`: resolveDriveTokens(null/garbage/valid JSON) 3케이스.
-- [ ] 게이트: typecheck 0, `vitest run lib/` GREEN. 커밋 `feat(db): allowed_tokens + listed + payment_chain→currency rename`.
+- [ ] **[rev2-A] db.js 마이그레이션 — 순서·충돌 주의**:
+  1. 기존 idempotent ADD 루프에서 **`"ALTER TABLE shares ADD COLUMN payment_chain TEXT"` 라인(:108)을 삭제**한다 — 안 지우면 새 DB에서 CREATE가 만든 `currency` 옆에 `payment_chain`이 또 생기고 rename이 "duplicate column: currency"로 throw → **모든 새 DB 첫 부팅 크래시**.
+  2. rename try/catch를 ADD 루프 **앞**에: `ALTER TABLE shares RENAME COLUMN payment_chain TO currency` — catch는 `no such column`(이미 rename/새 DB)과 `duplicate column`(half-state 방어) 둘 다 무시.
+  3. ADD 루프에 `ALTER TABLE shares ADD COLUMN currency TEXT` 추가(payment_chain ALTER 이전의 아주 오래된 DB 커버), `ALTER TABLE drives ADD COLUMN allowed_tokens TEXT`, `ALTER TABLE shares ADD COLUMN listed INTEGER NOT NULL DEFAULT 0`.
+  4. CREATE TABLE IF NOT EXISTS의 shares 정의도 `currency`로.
+- [ ] **[rev2-F] raw-SQL 컬럼명 동기 갱신을 이 Task에 포함**(안 하면 이 커밋의 트리에서 settle 라우트가 깨져 게이트 불성립): `web/app/api/s/[token]/route.ts`의 ShareRow 필드·SELECT(:28·:35) `payment_chain`→`currency`; `web/app/api/drives/[driveId]/shares/route.ts`의 SELECT(:26)·INSERT(:62-64) 동일 갱신(INSERT 값은 아직 `price_usdc ? "base-sepolia" : null` 그대로 — 의미 변경은 Task 2). ~~accept/route.ts~~(payment_chain 미참조 — 대상 아님).
+- [ ] `web/lib/payment-tokens.ts` 위 내용(+`toAtomicAmount`) + `resolveDriveTokens(allowedTokensJson: string|null): PaymentToken[]`(파싱 실패/NULL → DEFAULT_TOKENS) 헬퍼.
+- [ ] 단위 테스트 `web/lib/__tests__/payment-tokens.test.ts`: resolveDriveTokens(null/garbage/valid) 3 + toAtomicAmount(1.1@18, 1000@18, 0.01@18, 5@6) 4케이스 — 정확한 digit string·지수표기 부재.
+- [ ] 게이트: typecheck 0, `vitest run lib/` GREEN(paid-settle 포함 — F 덕에 이 트리에서 성립). 커밋 `feat(db): allowed_tokens + listed + payment_chain→currency rename`.
 
 ## Task 2: settle 정책화 (후방호환 fallback)
 
-**Files:** `web/app/api/s/[token]/route.ts`, `web/app/api/s/[token]/accept/route.ts`(SELECT 컬럼명), `web/app/api/drives/[driveId]/shares/route.ts`
+**Files:** `web/app/api/s/[token]/route.ts`, `web/app/api/drives/[driveId]/shares/route.ts`, `web/components/share-gate.tsx`
 
-- [ ] shares/route.ts: Body에 `currency: z.string().optional()`, `listed: z.boolean().optional()` 추가. INSERT를 `currency`(요청값 또는 price 있으면 드라이브 토큰[0].symbol) + `listed`(boolean→0/1)로. **검증**: `price_usdc` 제공 시 `currency`가 `resolveDriveTokens(drive.allowed_tokens)`의 symbol 중 하나여야(400 아니면). GET 응답에 `listed`, `currency` 포함.
-- [ ] s/[token]/route.ts: `X402_NETWORK`/`USDC_BASE_SEPOLIA` 상수 제거 → `const tok = findToken(resolveDriveTokens(drive.allowed_tokens), share.currency) ?? TOKEN_PRESETS.USDC;` 기반으로 `microAmount = Math.round(share.price_usdc * 10**tok.decimals)`, `network: tok.chain`, `asset: tok.asset`, `extra: tok.name ? { name: tok.name, version: tok.version } : undefined`, receipt `network: tok.chain`. drive row SELECT에 `allowed_tokens` 추가. (share.currency NULL 레거시 → fallback이 USDC 프리셋이므로 동작 동일.)
-- [ ] 402 응답 바디의 requirements에 표시용 `extra` 옆 정보가 부족하면 — share-gate가 심볼/소수점을 알도록 requirements에 표준 외 필드를 추가하지 말고, **402 바디 최상위에 `currency: {symbol, decimals}`를 병기**(x402 스키마 밖 — 클라 표시용; x402-fetch는 accepts만 읽으므로 충돌 없음).
-- [ ] 게이트: typecheck 0 + 기존 `lib/__tests__/paid-settle.test.ts` GREEN(레거시 fallback 검증 겸함). 커밋 `feat(payments): drive token policy drives x402 requirements`.
+- [ ] shares/route.ts: Body에 `currency: z.string().optional()`, `listed: z.boolean().optional()` 추가. INSERT를 `currency`(요청값 또는 price 있으면 드라이브 토큰[0].symbol) + `listed`(boolean→0/1)로. **검증**: `price_usdc` 제공 시 `currency`가 `resolveDriveTokens(drive.allowed_tokens)`의 symbol 중 하나여야(아니면 400). **[rev2-D] `listed === true`는 owner 전용**: `if (body.data.listed && !atLeast(resolveRole(driveId, user.id, ""), "owner")) → 403` (spec D1 "소유자가 등록" — path-editor가 드라이브 진열대에 임의 가격을 올리는 것 차단; unlisted share 생성은 기존대로 editor 가능). GET 응답에 `listed`, `currency` 포함.
+- [ ] s/[token]/route.ts: `X402_NETWORK`/`USDC_BASE_SEPOLIA` 상수 제거. **[rev2-G] fallback은 레거시(NULL)에만**:
+  ```ts
+  const tokens = resolveDriveTokens(drive.allowed_tokens);
+  const tok = share.currency == null ? TOKEN_PRESETS.USDC : findToken(tokens, share.currency);
+  if (!tok) return NextResponse.json({ error: "share currency no longer allowed by drive policy" }, { status: 410 });
+  ```
+  (무조건 `?? USDC`는 정책에서 제거된 통화를 **다른 단위의 USDC로 재과금**하는 경로 — 금지.) `maxAmountRequired: toAtomicAmount(share.price_usdc, tok.decimals)` **[rev2-B]**, `network: tok.chain`, `asset: tok.asset`, `extra: tok.name ? { name: tok.name, version: tok.version } : undefined`, receipt `network: tok.chain`. drive SELECT에 `allowed_tokens` 추가.
+- [ ] 402 바디 최상위에 `currency: { symbol: tok.symbol, decimals: tok.decimals }` 병기(x402 스키마 밖 — 클라 표시용; x402-fetch는 accepts만 읽음).
+- [ ] **[rev2-C] share-gate.tsx 표시 갱신**(결제 동의 화면 — 금액 오표기는 소비자 보호 문제): 402 분기 응답 타입에 `currency?: {symbol, decimals}` 추가, 표시 금액 = `Number(maxAmountRequired) / 10**(currency?.decimals ?? 6)`, 라벨/버튼의 `USDC` → `currency?.symbol ?? "USDC"`(비-USD 심볼엔 `$` 접두 제거). 필드 부재(레거시) → USDC/6 fallback.
+- [ ] 게이트: typecheck 0 + 기존 `lib/__tests__/paid-settle.test.ts` GREEN(레거시 NULL fallback 검증 겸함). 커밋 `feat(payments): drive token policy drives x402 requirements`.
 
 ## Task 3: showcase 엔드포인트 (leaf-DTO, access-gated)
 
 **Files:** (신규) `web/app/api/drives/[driveId]/showcase/route.ts`, (신규) `web/lib/showcase.ts`(commerce 층 — D6 모듈 경계)
 
-- [ ] `web/lib/showcase.ts`: `listShowcase(driveId, userId): ShowcaseItem[]` — `shares WHERE drive_id=? AND listed=1 AND price_usdc IS NOT NULL` 조회 후, **caller가 이미 cover하는 path 제외**(`resolveRoleByUser(driveId, userId, share.path) === "none"`인 것만 잔류), DTO 매핑 `{shareId: id, token, leafName: lastSegment(path) || drive-root-label, role, price: price_usdc, currency}`. **path 전체는 DTO에 절대 미포함**(보안 C1 — 조상 디렉토리명 유출 방지). root("") share의 leafName은 `"(drive)"`.
+- [ ] `web/lib/showcase.ts`: `listShowcase(driveId, userId): ShowcaseItem[]` — `shares WHERE drive_id=? AND listed=1 AND price_usdc IS NOT NULL` 조회 후, **[rev2-E] 만료 제외**(JS-side: `!s.expires_at || new Date(s.expires_at) >= new Date()` — expires_at은 ISO 'T'/'Z' 포맷이라 `datetime('now')`와의 SQL 문자열 비교는 경계에서 불안전), **caller가 이미 cover하는 path 제외**(`resolveRoleByUser(driveId, userId, share.path) === "none"`인 것만 잔류), DTO 매핑 `{shareId: id, token, leafName: lastSegment(path) || drive-root-label, role, price: price_usdc, currency}`. **path 전체는 DTO에 절대 미포함**(보안 C1 — 조상 디렉토리명 유출 방지). root("") share의 leafName은 `"(drive)"`.
 - [ ] route.ts: `getUser()` 401 게이트 + **드라이브 관계 게이트**: owner이거나 `drive_members`에 행이 1개라도 있는 사용자만(완전 무관자는 404/403 — 공개 도착경로는 비목표라 부분-멤버 업셀만). `{items: listShowcase(...)}` 반환.
-- [ ] 단위 테스트(`web/lib/__tests__/showcase.test.ts`): tmp DB로 — listed=0 미노출 / cover된 share 제외 / leafName만 노출(전체 path 부재) / root share 라벨. 4케이스.
+- [ ] 단위 테스트(`web/lib/__tests__/showcase.test.ts`): tmp DB로 — listed=0 미노출 / cover된 share 제외 / leafName만 노출(전체 path 부재) / root share 라벨 / **만료 share 제외[rev2-E]**. 5케이스.
 - [ ] 게이트 후 커밋 `feat(showcase): access-gated leaf-DTO endpoint`.
 
 ## Task 4: DriveShell "For sale" 섹션 (진열 표시 + 클릭→share-gate)
@@ -83,7 +107,7 @@ export const DEFAULT_TOKENS: PaymentToken[] = [TOKEN_PRESETS.USDC];
 
 **Files:** `web/components/share-dialog.tsx`, `web/components/share-dialog-sections.tsx`, `web/app/api/drives/[driveId]/route.ts`(또는 기존 드라이브 PATCH 라우트 — **구현 전 존재 확인**, 없으면 신규 PATCH: owner 전용, `{allowed_tokens}` 갱신)
 
-- [ ] sell 섹션(`share-dialog-sections.tsx:111~`): 가격 입력 옆 **통화 select**(드라이브 allowed_tokens의 symbol들; GET /api/drives/[driveId] 또는 showcase용으로 내려준 정책에서 — 구현 시 기존 데이터 흐름 확인) + **☑ List in drive (진열)** 체크박스. 생성 POST에 `currency`, `listed` 전달.
+- [ ] sell 섹션(`share-dialog-sections.tsx:111~`): 가격 입력 옆 **통화 select**(드라이브 allowed_tokens의 symbol들; GET /api/drives/[driveId] 또는 showcase용으로 내려준 정책에서 — 구현 시 기존 데이터 흐름 확인) + **☑ List in drive (진열)** 체크박스 — **[rev2-D] 체크박스는 owner에게만 렌더**(API 게이트와 일관). 생성 POST에 `currency`, `listed` 전달.
 - [ ] owner 전용 "Payment tokens" 소UI(sell 섹션 하단): 프리셋 토글(USDC/FANCO 체크박스) + FANCO 선택 시 asset 주소 입력 필드(빈 값이면 저장 거부 — 2b 전까지 DEV 용도임을 헬퍼 텍스트로). PATCH로 저장.
 - [ ] 기존 paid share 표시 Row(`:122`)의 `USDC` 하드코딩 → share.currency 표기.
 - [ ] 게이트: typecheck 0. 커밋 `feat(ui): listed checkbox + currency select + token policy editor`.
@@ -96,9 +120,11 @@ export const DEFAULT_TOKENS: PaymentToken[] = [TOKEN_PRESETS.USDC];
 - [ ] #169 사적 비노출: listed=0 유료 share는 showcase에 안 나옴.
 - [ ] #170 무관자 차단: 멤버십 0인 로그인 사용자의 showcase GET → 403/404.
 - [ ] #171 정책 402: allowed_tokens=[USDC프리셋]인 드라이브의 paid share GET(결제 전, DEV_BYPASS여도 X-PAYMENT 없는 첫 GET은 402) → 402 바디 `accepts[0].network/asset`이 정책값 + 최상위 `currency.symbol` 단언. *(DEV_BYPASS는 X-PAYMENT 제출 시 facilitator만 스킵 — 402 발급 자체는 정상 동작함을 코드 조사로 확인)*
+- [ ] **[rev2-H] #171b 정책 판별 402**: USDC 프리셋은 레거시 상수와 동일값이라 정책 작동을 증명 못함 → allowed_tokens=[USDC, FANCO(dummy asset `0x00…01`)]로 설정, `currency:"FANCO"` share(가격 1) 생성 → 402 바디 `accepts[0].network === "base"`, `asset === dummy`, `maxAmountRequired === "1" + "0"×18`(지수표기 부재), `currency.symbol === "FANCO"` 단언 — 하드코딩이 아닌 정책이 흐른다는 직접 증거.
+- [ ] **[rev2-D] #171c listed 권한**: path-editor(docs editor)가 `listed:true` share POST → 403; `listed` 없이 → 200.
 - [ ] #172 settle 불변: listed share가 보여도 settle 전 `drive_members` 행 없음(dbHandle), settle 후 생성 — 기존 #161 패턴 재사용.
 - [ ] #173 WS 거부: 비구매 멤버가 listed path docId로 WS subscribe → 4401 (기존 collab 케이스의 WS 헬퍼 재사용; 없으면 #109 부근 패턴 확인).
-- [ ] 풀 suite 단독 GREEN(160/1 기대) + TEST_SCENARIOS.md Post-final 갱신. 커밋 `test(scenarios): #168-#173 showcase + token policy`.
+- [ ] 풀 suite 단독 GREEN(162/1 기대 — #168~#173 + #171b/#171c는 별도 add ID #174/#175로 등록해 8케이스) + TEST_SCENARIOS.md Post-final 갱신. 커밋 `test(scenarios): #168-#175 showcase + token policy`.
 
 ## Task 7: 실브라우저 검증
 
