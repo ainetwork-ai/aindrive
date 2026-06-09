@@ -12,6 +12,11 @@ export declare function bestMatchingRole(
   targetPath: NormalizedPath
 ): RoleOrNone;
 
+export declare function computeEntry(
+  rows: { path: NormalizedPath; role: Role }[],
+  isOwner: boolean
+): { kind: "root" | "single" | "multi" | "none"; path?: NormalizedPath; allPaths?: NormalizedPath[] };
+
 export declare function mergeRoleUpgradeOnly(
   current: RoleOrNone,
   incoming: Role

@@ -119,5 +119,15 @@ describe("computeEntry", () => {
     expect(r.path).toBe("z");
     expect(r.allPaths).toEqual(["z", "a/b/c"]);
   });
+  it("dedups identical paths → single", () => {
+    expect(computeEntry([{ path: n("docs"), role: "viewer" }, { path: n("docs"), role: "viewer" }], false))
+      .toEqual({ kind: "single", path: "docs" });
+  });
+  it("collapses a three-way ancestor chain to the shallowest grant", () => {
+    expect(computeEntry(
+      [{ path: n("a"), role: "viewer" }, { path: n("a/b"), role: "viewer" }, { path: n("a/b/c"), role: "editor" }],
+      false,
+    )).toEqual({ kind: "single", path: "a" });
+  });
 });
 
