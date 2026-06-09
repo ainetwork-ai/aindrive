@@ -198,4 +198,8 @@ type Props = {
 - review fix #3: crumbs grant-단일-세그먼트 + Task 5-3.
 - review fix #4: entryView/entryItems를 모든 비-owner 허용 렌더에 전달 + Task 5-5.
 - 불변식: hard-deny 분기 그대로(±0줄), 서버 재게이트 불변, entryItems=본인 grant 메타만.
-- 성능: stat N회는 multi grant 수(통상 2~5) × RPC 1왕복 — RSC 1렌더당. 수용 가능; 캐싱은 YAGNI.
+- 성능: stat N회는 multi grant 수(통상 2~5) × RPC 1왕복 — RSC 1렌더당, `timeoutMs:3000`(half-open socket이 25s 기본값으로 렌더를 잡는 것 방지 — 품질리뷰 반영). 캐싱은 YAGNI.
+
+## Follow-up (1b 범위 밖, 추적)
+
+- **파일 grant의 editor 역할이 UI에서 막힘**: 합성 root의 role 리셋(viewer)은 옳지만, 파일 grant는 "들어가서 role을 회복"할 폴더가 없어 Viewer가 영구 read-only가 된다(서버는 쓰기를 허용함에도). 수정 방향: `computeEntry`가 이미 가진 멤버 row의 role을 entryItems에 per-grant로 실어 Viewer의 canEdit에 연결. 파일 단위 editor 공유가 실사용에 등장하면 착수.

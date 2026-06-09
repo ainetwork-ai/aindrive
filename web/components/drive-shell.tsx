@@ -81,7 +81,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     // viewer: a grant-level role picked up inside a path must not leak edit
     // affordances back onto the synthetic listing (its rows are grant roots —
     // a stale editor role would even expose a working Delete on them).
-    if (entryItems && path === "") {
+    if (isSyntheticRoot && entryItems) {
       setEntries(entryItems);
       setRole("viewer");
       setLoading(false);
@@ -90,7 +90,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     const res = await apiFetch<{ entries: DriveEntry[]; role: string }>(`/api/drives/${driveId}/fs/list?path=${encodeURIComponent(path)}`);
     if (!res.ok) { setErr(res.error || "failed to list"); setLoading(false); return; }
     setEntries(res.data.entries); setRole(res.data.role); setLoading(false);
-  }, [driveId, path, entryItems]);
+  }, [driveId, path, entryItems, isSyntheticRoot]);
 
   const isOwner = role === "owner";
 

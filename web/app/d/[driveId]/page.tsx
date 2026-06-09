@@ -13,7 +13,9 @@ import { DriveShell } from "@/components/drive-shell";
 async function loadEntryItems(driveId: string, driveSecret: string, paths: string[]): Promise<DriveEntry[]> {
   return Promise.all(paths.map(async (p) => {
     try {
-      const r = await callAgent(driveId, driveSecret, { method: "stat", path: p });
+      // Short timeout: a half-open agent socket would otherwise hold the RSC
+      // render for the 25s default — these rows are cosmetic and have a fallback.
+      const r = await callAgent(driveId, driveSecret, { method: "stat", path: p }, { timeoutMs: 3000 });
       if (r && r.method === "stat" && r.entry) return { ...r.entry, name: p, path: p };
     } catch {}
     const looksFile = /\.[A-Za-z0-9]+$/.test(p);
