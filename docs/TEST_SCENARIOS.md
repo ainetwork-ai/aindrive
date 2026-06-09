@@ -1,6 +1,6 @@
 # Test Scenarios — RED/GREEN Inventory
 
-Last updated: 2026-06-06 (post-PR-#6 reconciliation, Phase 3a + 3b + 3c)
+Last updated: 2026-06-10 (post-final addition #165/#166 — drive-access-entry Phase 1)
 
 ## Baseline before Phase 3 fixes
 
@@ -156,4 +156,4 @@ De-flake **substance is achieved** and was built into the harness during Phases 
 
 **Fast-subset (`AINDRIVE_E2E_FAST`) — DEFERRED (YAGNI), per Open Item O1.** Measured full-suite wall-clock ≈ **4 min** locally (est. 5–8 min on ubuntu CI). That is an acceptable PR-gate cost, so the CI `e2e` job runs the FULL suite on every PR + push (see `.github/workflows/ci.yml`). A fast-subset-on-PR + nightly-full split is a documented follow-on to revisit only if CI time becomes a pain or the suite grows materially. The state object is shared+serial (`fileParallelism:false`) by design; per-run isolation removes cross-run contamination, and the proven stability makes intra-run order-coupling a non-issue in practice.
 
-**Net status: built, green (151/1/0), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**
+**Net status: built, green (151/1/0 at completion — now 153/1/0, see Post-final note), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**

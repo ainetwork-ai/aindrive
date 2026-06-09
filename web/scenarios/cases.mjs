@@ -888,7 +888,7 @@ add(65, "paid-accept GET (DEV_BYPASS) returns Meadowcap cap", async () => {
 // P0 regression (drive-access-entry): a member granted only at a sub-path must be
 // able to reach that sub-path but NOT the drive root. The drive page lands such a
 // viewer at their granted path; this locks the OBSERVABLE permission at the HTTP
-// level (the RSC entry-landing is verified separately by a real-browser check).
+// level (the RSC entry-landing itself: one-time real-browser check, plan Task 5).
 add(165, "path-scoped viewer reaches granted sub-path, not root", async () => {
   await ensureDrive();
   const ownerCookie = await reEnsureOwner();
