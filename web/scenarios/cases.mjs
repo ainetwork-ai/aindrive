@@ -969,6 +969,231 @@ add(167, "multi-grant viewer: dir + file grants, root stays denied", async () =>
   eq(file.status, 200, "granted file must be readable; got " + file.status);
 });
 
+// ──────────────────────── G2. Showcase + payment-token policy (Phase 2a) ────────────────────────
+// The showcase is an access-gated upsell surface: a member who doesn't cover a
+// listed paid path discovers it as a 🔒 leafName+price item (NO full path, NO
+// token in the DTO — security C1). The 402 from /api/s/<token> is built from the
+// drive's allowed_tokens policy (#172 proves the policy flows, not a constant).
+// Invariant: drive_members alone decides access — listed/price/currency never do.
+
+add(168, "showcase: listed leaf visible, no ancestor/path/token leak, no fs access", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  // Owner lists a paid share deep at premium/inner (mkdir premium first).
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "premium/inner" }),
+  });
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "premium/inner", role: "viewer", price_usdc: 5, listed: true }),
+  });
+  eq(sr.status, 200, "listed share create: " + JSON.stringify(sr.body));
+  // A partial member granted at an UNRELATED path (docs) — related to the drive
+  // (passes the showcase relationship gate) but does NOT cover premium/inner.
+  const { cookie: memberCookie, email } = await signupUser("c168member");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  const sc = await jget(`/api/drives/${state.driveId}/showcase`, {
+    headers: { cookie: memberCookie },
+  });
+  eq(sc.status, 200, "member showcase GET: " + JSON.stringify(sc.body));
+  const item = sc.body.items.find((i) => i.leafName === "inner");
+  assert(item, "listed inner item must be in showcase: " + JSON.stringify(sc.body.items));
+  eq(item.price, 5, "showcase item price");
+  // DTO carries leaf only — no ancestor dir name, no full path, no share token.
+  const blob = JSON.stringify(sc.body);
+  assert(!blob.includes("premium/inner"), "full path must NOT leak in showcase DTO: " + blob);
+  assert(!blob.includes("premium"), "ancestor dir name must NOT leak in showcase DTO: " + blob);
+  assert(!("token" in item), "showcase item must NOT carry a token field: " + JSON.stringify(item));
+  // Showcase is fs-independent: the member still has no access to the path.
+  const fs = await jget(`/api/drives/${state.driveId}/fs/list?path=premium/inner`, {
+    headers: { cookie: memberCookie },
+  });
+  eq(fs.status, 403, "member must not list the listed-but-unpaid path; got " + fs.status);
+});
+
+add(169, "showcase: unlisted paid share is not shown", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "private169" }),
+  });
+  // Paid but listed omitted (defaults to unlisted) → must not surface.
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "private169", role: "viewer", price_usdc: 3 }),
+  });
+  eq(sr.status, 200, "unlisted paid share create: " + JSON.stringify(sr.body));
+  const { cookie: memberCookie, email } = await signupUser("c169member");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  const sc = await jget(`/api/drives/${state.driveId}/showcase`, {
+    headers: { cookie: memberCookie },
+  });
+  eq(sc.status, 200, "member showcase GET: " + JSON.stringify(sc.body));
+  assert(
+    !sc.body.items.some((i) => i.leafName === "private169"),
+    "unlisted paid share must NOT appear in showcase: " + JSON.stringify(sc.body.items)
+  );
+});
+
+add(170, "showcase: stranger with no membership → 403", async () => {
+  await ensureDrive();
+  // Logged-in user with zero drive_members rows on this drive — the showcase is
+  // a member upsell, not a public storefront → uniform 403.
+  const { cookie: strangerCookie } = await signupUser("c170stranger");
+  const sc = await jget(`/api/drives/${state.driveId}/showcase`, {
+    headers: { cookie: strangerCookie },
+  });
+  eq(sc.status, 403, "stranger showcase GET must be 403; got " + sc.status);
+});
+
+add(171, "policy 402 (USDC): accepts reflects USDC preset + currency.symbol", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  // Default policy (allowed_tokens NULL) = [USDC preset]. Listed paid USDC share.
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer", price_usdc: 2, currency: "USDC", listed: true }),
+  });
+  eq(sr.status, 200, "USDC listed share create: " + JSON.stringify(sr.body));
+  // First GET with no X-PAYMENT → 402 regardless of DEV_BYPASS (bypass only
+  // skips the facilitator once a payment header is presented).
+  const r = await jget(`/api/s/${sr.body.token}`);
+  eq(r.status, 402, "no-payment GET must be 402: " + JSON.stringify(r.body));
+  eq(r.body.accepts[0].network, "base-sepolia", "USDC network");
+  eq(r.body.accepts[0].asset, "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "USDC asset");
+  eq(r.body.currency.symbol, "USDC", "top-level currency.symbol");
+});
+
+// [rev2-H] The USDC preset is byte-identical to the legacy hardcoded constants,
+// so #171 alone can't prove the policy (not a constant) drives the 402. This
+// case sets a NON-USDC currency (FANCO, base, 18-dec, a dummy asset) and asserts
+// the 402 reflects THOSE policy values + the exact 10^18 atomic-amount digit
+// string (no "e+" exponent) — direct evidence the policy flows end to end.
+add(172, "policy discriminator 402 (FANCO): non-USDC values + exact 10^18 amount", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const FANCO_ASSET = "0x0000000000000000000000000000000000000001";
+  // Owner widens the drive policy to allow FANCO with a dummy asset address.
+  const policy = JSON.stringify([
+    { symbol: "USDC", chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", name: "USDC", version: "2", decimals: 6 },
+    { symbol: "FANCO", chain: "base", asset: FANCO_ASSET, name: null, version: null, decimals: 18 },
+  ]);
+  const patch = await jget(`/api/drives/${state.driveId}`, {
+    method: "PATCH", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ allowed_tokens: policy }),
+  });
+  eq(patch.status, 200, "allowed_tokens PATCH: " + JSON.stringify(patch.body));
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer", price_usdc: 1, currency: "FANCO", listed: true }),
+  });
+  eq(sr.status, 200, "FANCO listed share create: " + JSON.stringify(sr.body));
+  const r = await jget(`/api/s/${sr.body.token}`);
+  eq(r.status, 402, "no-payment GET must be 402: " + JSON.stringify(r.body));
+  eq(r.body.accepts[0].network, "base", "FANCO network from policy");
+  eq(r.body.accepts[0].asset, FANCO_ASSET, "FANCO asset from policy");
+  // 1 FANCO at 18 decimals = exactly 1 followed by 18 zeros, as a digit string.
+  eq(r.body.accepts[0].maxAmountRequired, "1000000000000000000", "exact 1*10^18 atomic amount");
+  assert(!r.body.accepts[0].maxAmountRequired.includes("e"), "amount must be a digit string, no exponent");
+  eq(r.body.currency.symbol, "FANCO", "top-level currency.symbol from policy");
+});
+
+// [rev2-D] Listing on the drive's storefront is owner-only: a path-scoped editor
+// can still mint unlisted shares (their own grant), but must not put priced items
+// on the drive showcase.
+add(173, "listed is owner-only: path editor 403 on listed:true, 200 on unlisted", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "docs" }),
+  });
+  const { cookie: editorCookie, email } = await signupUser("c173editor");
+  await inviteMember(state.driveId, email, "docs", "editor", ownerCookie);
+  // listed:true by a non-owner editor → 403.
+  const listed = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: editorCookie },
+    body: JSON.stringify({ path: "docs", role: "viewer", price_usdc: 1, listed: true }),
+  });
+  eq(listed.status, 403, "path editor must not list a share; got " + listed.status);
+  // Same editor, unlisted → 200 (unchanged editor-at-path capability).
+  const unlisted = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: editorCookie },
+    body: JSON.stringify({ path: "docs", role: "viewer", price_usdc: 1 }),
+  });
+  eq(unlisted.status, 200, "path editor unlisted share must be 200: " + JSON.stringify(unlisted.body));
+});
+
+// Settle-gated membership: a listed paid share is discoverable in the showcase,
+// but it grants NO drive_members row until a payment settles. Asserts real DB
+// state via dbHandle() before/after the DEV_BYPASS paid GET (mirrors #162).
+add(174, "settle-gated: showcase visible, no drive_members until DEV_BYPASS settle", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer", price_usdc: 0.03, currency: "USDC", listed: true }),
+  });
+  eq(sr.status, 200, "listed share create: " + JSON.stringify(sr.body));
+  const token = sr.body.token;
+  // A fresh buyer with a unique payer wallet → no prior drive_members row.
+  // The settle resolves the wallet to an account via account_wallets, then
+  // grants drive_members on that account — so the membership join goes through
+  // account_wallets.wallet_address (users has no wallet column).
+  const payer = "0xc174c174c174c174c174c174c174c174c174c174";
+  const memberSql =
+    `SELECT m.role FROM drive_members m
+     JOIN account_wallets aw ON aw.account_id = m.user_id
+     WHERE m.drive_id = ? AND aw.wallet_address = lower(?)
+     ORDER BY m.created_at DESC LIMIT 1`;
+  const handle1 = await dbHandle();
+  const before = handle1.prepare(memberSql).get(state.driveId, payer);
+  handle1.close();
+  assert(!before, "buyer must have NO drive_members row before settle");
+  // DEV_BYPASS paid GET (no cookie → not the owner → settle issues the grant).
+  const pay = await jget(`/api/s/${token}`, { headers: { "X-PAYMENT": buildXPayment(payer) } });
+  eq(pay.status, 200, "paid settle GET: " + JSON.stringify(pay.body));
+  const handle2 = await dbHandle();
+  const after = handle2.prepare(memberSql).get(state.driveId, payer);
+  handle2.close();
+  assert(after, "drive_members row must exist after settle");
+  eq(after.role, "viewer", "settled grant role");
+});
+
+// WS gate is access-only: a partial member who doesn't cover a listed paid path
+// is closed (4401) when subscribing to that path's doc — listed/price never open
+// the realtime hub. Mirrors #90's raw-WS denial pattern.
+add(175, "WS denied for listed-but-unpaid path (partial member → 4401 close)", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "premium/inner" }),
+  });
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "premium/inner", role: "viewer", price_usdc: 5, listed: true }),
+  });
+  eq(sr.status, 200, "listed share create: " + JSON.stringify(sr.body));
+  // Member granted only at docs (real aindrive_session cookie) — covers neither
+  // premium nor premium/inner → dochub resolveRole = none → close(4401).
+  const { cookie: memberCookie, email } = await signupUser("c175member");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  const ws = new WebSocket(
+    `${WS_BASE}/api/agent/doc?drive=${state.driveId}&path=${encodeURIComponent("premium/inner")}`,
+    { headers: { cookie: memberCookie } }
+  );
+  let closeCode = null;
+  await new Promise((res) => {
+    ws.on("close", (code) => { closeCode = code; res(); });
+    ws.on("error", () => res());
+    setTimeout(res, 3000);
+  });
+  eq(closeCode, 4401, "unauthorized WS sub must close with 4401; got " + closeCode);
+});
+
 // ──────────────────────── G. Shares + paid access ────────────────────────
 
 add(66, "owner creates free share", async () => {
