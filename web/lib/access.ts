@@ -1,7 +1,7 @@
 import { eq, and } from "drizzle-orm";
 import { drizzleDb } from "./db";
 import { drives, drive_members } from "../drizzle/schema";
-import { ROLE_RANK, atLeast, bestMatchingRole, normalizePath, type Role, type RoleOrNone } from "./access-core.js";
+import { ROLE_RANK, atLeast, bestMatchingRole, computeEntry, normalizePath, type Role, type RoleOrNone } from "./access-core.js";
 import { type NormalizedPath } from "./path";
 
 export type { Role, RoleOrNone };
@@ -25,6 +25,31 @@ export function resolveRoleByUser(driveId: string, userId: string, targetPath: s
     .where(and(eq(drive_members.drive_id, driveId), eq(drive_members.user_id, userId)))
     .all() as { path: NormalizedPath; role: Role }[];
   return bestMatchingRole(members, target);
+}
+
+/**
+ * Compute a user's entry point into a drive (pure logic in computeEntry).
+ * Returns {kind:"root"|"single"|"multi"|"none", path?, allPaths?}. Used by the
+ * drive page to land path-scoped members on an accessible path instead of
+ * rejecting them at root. Reads only drive_members + ownership (access layer).
+ */
+export function entryView(driveId: string, userId: string) {
+  const drive = drizzleDb
+    .select({ owner_id: drives.owner_id })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .get();
+  if (!drive) return { kind: "none" as const };
+  const isOwner = drive.owner_id === userId;
+  // Same DB invariant as resolveRoleByUser: drive_members.path is persisted
+  // through zPath, so every row is already a canonical NormalizedPath — the
+  // branded-type assertion (required by computeEntry's signature) is safe.
+  const rows = drizzleDb
+    .select({ path: drive_members.path, role: drive_members.role })
+    .from(drive_members)
+    .where(and(eq(drive_members.drive_id, driveId), eq(drive_members.user_id, userId)))
+    .all() as { path: NormalizedPath; role: Role }[];
+  return computeEntry(rows, isOwner);
 }
 
 /**
