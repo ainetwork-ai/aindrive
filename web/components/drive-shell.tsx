@@ -25,9 +25,11 @@ type Props = {
   driveName: string;
   initialPath?: string;
   initialRole?: string;
+  /** Multi-grant member's accessible entries; "" renders these instead of fs/list (synthetic root). */
+  entryItems?: DriveEntry[];
 };
 
-export function DriveShell({ driveId, driveName, initialPath, initialRole }: Props) {
+export function DriveShell({ driveId, driveName, initialPath, initialRole, entryItems }: Props) {
   const [path, setPathState] = useState(() => {
     if (initialPath !== undefined) return initialPath;
     if (typeof window === "undefined") return "";
@@ -71,12 +73,24 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
   const [chatOpen, setChatOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  const isSyntheticRoot = !!entryItems && path === "";
   const load = useCallback(async () => {
     setLoading(true); setErr(null);
+    // Synthetic root (multi-grant member at ""): server-side root fs/list would
+    // 403 — render the member's own grant entries instead. Role resets to
+    // viewer: a grant-level role picked up inside a path must not leak edit
+    // affordances back onto the synthetic listing (its rows are grant roots —
+    // a stale editor role would even expose a working Delete on them).
+    if (entryItems && path === "") {
+      setEntries(entryItems);
+      setRole("viewer");
+      setLoading(false);
+      return;
+    }
     const res = await apiFetch<{ entries: DriveEntry[]; role: string }>(`/api/drives/${driveId}/fs/list?path=${encodeURIComponent(path)}`);
     if (!res.ok) { setErr(res.error || "failed to list"); setLoading(false); return; }
     setEntries(res.data.entries); setRole(res.data.role); setLoading(false);
-  }, [driveId, path]);
+  }, [driveId, path, entryItems]);
 
   const isOwner = role === "owner";
 
@@ -104,9 +118,24 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
     return m;
   }, [shares]);
 
-  const canEdit = role === "editor" || role === "owner";
+  const canEdit = !isSyntheticRoot && (role === "editor" || role === "owner");
   const rootPath = initialPath ?? "";
   const crumbs = useMemo(() => {
+    if (entryItems) {
+      // Synthetic mode: never emit clickable segments between "" and the grant
+      // (the member has no access there — they'd be guaranteed 403 dead-ends).
+      // Chain: driveName("") → whole grant as one crumb → segments below it.
+      const acc: { label: string; path: string }[] = [{ label: driveName, path: "" }];
+      if (path === "") return acc;
+      const grant = entryItems.map((e) => e.path).find((g) => path === g || path.startsWith(g + "/"));
+      if (!grant) { acc.push({ label: path, path }); return acc; }
+      acc.push({ label: grant, path: grant });
+      let cur = grant;
+      for (const p of path.slice(grant.length).split("/").filter(Boolean)) {
+        cur = `${cur}/${p}`; acc.push({ label: p, path: cur });
+      }
+      return acc;
+    }
     // Visual root is the member's grant (rootPath), not the drive root: a
     // sub-path member must not be able to navigate above what they were
     // granted. Only render segments at-or-below rootPath.
@@ -121,7 +150,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole }: Pro
     let cur = rootPath;
     for (const p of parts) { cur = cur ? `${cur}/${p}` : p; acc.push({ label: p, path: cur }); }
     return acc;
-  }, [path, driveName, rootPath]);
+  }, [path, driveName, rootPath, entryItems]);
 
   async function onNewFolder() {
     const name = prompt("New folder name");
