@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ROLE_RANK, atLeast, bestMatchingRole, mergeRoleUpgradeOnly, type Role } from "../access-core.js";
+import { ROLE_RANK, atLeast, bestMatchingRole, mergeRoleUpgradeOnly, computeEntry, type Role } from "../access-core.js";
 import { type NormalizedPath } from "../path";
 
 type Row = { path: NormalizedPath; role: Role };
@@ -87,6 +87,47 @@ describe("bestMatchingRole", () => {
   it("rejects similar-but-not-ancestor (path prefix without slash boundary)", () => {
     const rows: Row[] = [{ path: n("docs"), role: "editor" }];
     expect(bestMatchingRole(rows, n("document"))).toBe("none");
+  });
+});
+
+describe("computeEntry", () => {
+  it("owner → root", () => {
+    expect(computeEntry([], true)).toEqual({ kind: "root", path: "" });
+  });
+  it("no membership → none", () => {
+    expect(computeEntry([], false)).toEqual({ kind: "none" });
+  });
+  it("root membership → root", () => {
+    expect(computeEntry([{ path: n(""), role: "viewer" }], false)).toEqual({ kind: "root", path: "" });
+  });
+  it("single path member → single", () => {
+    expect(computeEntry([{ path: n("docs/specs"), role: "viewer" }], false))
+      .toEqual({ kind: "single", path: "docs/specs" });
+  });
+  it("collapses ancestor: docs covers docs/a → entry is docs", () => {
+    expect(computeEntry([{ path: n("docs"), role: "viewer" }, { path: n("docs/a"), role: "editor" }], false))
+      .toEqual({ kind: "single", path: "docs" });
+  });
+  it("two unrelated paths → multi, deterministic shallowest-then-alpha", () => {
+    const r = computeEntry([{ path: n("photos"), role: "viewer" }, { path: n("docs"), role: "viewer" }], false);
+    expect(r.kind).toBe("multi");
+    expect(r.path).toBe("docs"); // same depth → alpha
+    expect(r.allPaths).toEqual(["docs", "photos"]);
+  });
+  it("depth breaks ties before alpha: a/b/c vs z → z wins (shallower)", () => {
+    const r = computeEntry([{ path: n("a/b/c"), role: "viewer" }, { path: n("z"), role: "viewer" }], false);
+    expect(r.path).toBe("z");
+    expect(r.allPaths).toEqual(["z", "a/b/c"]);
+  });
+  it("dedups identical paths → single", () => {
+    expect(computeEntry([{ path: n("docs"), role: "viewer" }, { path: n("docs"), role: "viewer" }], false))
+      .toEqual({ kind: "single", path: "docs" });
+  });
+  it("collapses a three-way ancestor chain to the shallowest grant", () => {
+    expect(computeEntry(
+      [{ path: n("a"), role: "viewer" }, { path: n("a/b"), role: "viewer" }, { path: n("a/b/c"), role: "editor" }],
+      false,
+    )).toEqual({ kind: "single", path: "a" });
   });
 });
 

@@ -47,6 +47,39 @@ export function bestMatchingRole(rows, targetPath) {
 }
 
 /**
+ * Decide a user's entry point into a drive from their membership rows.
+ *
+ * Pure: same inputs → same output (deterministic), so it is unit-testable and
+ * reusable by both the HTTP page (access.ts) and the WS handler (dochub.js).
+ * Only consumes drive_members rows + an isOwner flag — knows nothing about
+ * commerce (listed/price). Entry selection: collapse ancestor-covered paths,
+ * then pick shallowest (fewest "/"), ties broken alphabetically.
+ *
+ * @param {Array<{path: string, role: string}>} rows  drive_members for (drive,user), path pre-normalized
+ * @param {boolean} isOwner  true if user owns the drive
+ * @returns {{kind:"root"|"single"|"multi"|"none", path?: string, allPaths?: string[]}}
+ */
+export function computeEntry(rows, isOwner) {
+  if (isOwner) return { kind: "root", path: "" };
+  if (!rows || rows.length === 0) return { kind: "none" };
+  if (rows.some((r) => r.path === "")) return { kind: "root", path: "" };
+
+  // Collapse paths covered by a shallower grant (ancestor wins as entry).
+  const paths = rows.map((r) => r.path);
+  const roots = paths.filter(
+    (p) => !paths.some((q) => q !== p && isAncestorOrSelf(q, p))
+  );
+  // Dedup (two rows same path) + deterministic order: depth asc, then lexicographic.
+  const uniq = [...new Set(roots)].sort((a, b) => {
+    const da = a === "" ? 0 : a.split("/").length;
+    const db = b === "" ? 0 : b.split("/").length;
+    return da !== db ? da - db : a < b ? -1 : a > b ? 1 : 0;
+  });
+  if (uniq.length === 1) return { kind: "single", path: uniq[0] };
+  return { kind: "multi", path: uniq[0], allPaths: uniq };
+}
+
+/**
  * Merge an incoming role into a current one WITHOUT ever downgrading.
  *
  * Used on the members upsert path: re-inviting / re-accepting a share for a

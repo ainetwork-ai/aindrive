@@ -1,6 +1,6 @@
 # Test Scenarios — RED/GREEN Inventory
 
-Last updated: 2026-06-06 (post-PR-#6 reconciliation, Phase 3a + 3b + 3c)
+Last updated: 2026-06-10 (post-final addition #165/#166 — drive-access-entry Phase 1)
 
 ## Baseline before Phase 3 fixes
 
@@ -136,6 +136,11 @@ Cases #56/#57/#58 deleted (no equivalent capability in the new model).
 
 **Result: 151 passed / 1 skipped / 0 failed.**
 
+> Post-final addition (drive-access-entry Phase 1, 2026-06-10): **#165/#166** — path-scoped
+> viewer reaches granted sub-path (200) but not root (403); un-granted sibling explicit
+> `?path` → 403 (oracle guard). New IDs — deleted IDs (#56–#58) stay retired.
+> Suite now **153 passed / 1 skipped / 0 failed**.
+
 - Phase 3c re-architected all 14 deferred access/cap cases to REAL actors: email-signup users invited via `POST /api/drives/[driveId]/members` (or CONSUME via `/api/s/[token]/accept`), not wallet-only cookies. Denial cases (#62/#63) assert a **specific 403** for an authenticated insufficient-role user (no `401||403` false-greens) — a privilege-escalation regression turns them red. Cap cases (#76–#80) obtain the Meadowcap cap from the DEV_BYPASS paid GET (`body.cap`) → `/api/cap/verify`. Cases #56–#58 deleted (wallet-allowlist capability gone, no equivalent).
 - Phase 5 added money-path coverage #161–#164: free CONSUME → `drive_members` row; paid settle → `payment_receipts` row; `tx_hash UNIQUE` replay guard (white-box, since DEV_BYPASS mints a fresh tx_hash per call — documented limitation); `mergeRoleUpgradeOnly` (editor not downgraded by a viewer share). All assert real DB state via `dbHandle()`.
 - **Only remaining skip: #109** — genuine product gap (dochub WS hub reads only `aindrive_session`, not the `aindrive_wallet` cookie; a paid-share WS visitor can't auth). Tracked for a future product decision, NOT a test defect.
@@ -151,4 +156,4 @@ De-flake **substance is achieved** and was built into the harness during Phases 
 
 **Fast-subset (`AINDRIVE_E2E_FAST`) — DEFERRED (YAGNI), per Open Item O1.** Measured full-suite wall-clock ≈ **4 min** locally (est. 5–8 min on ubuntu CI). That is an acceptable PR-gate cost, so the CI `e2e` job runs the FULL suite on every PR + push (see `.github/workflows/ci.yml`). A fast-subset-on-PR + nightly-full split is a documented follow-on to revisit only if CI time becomes a pain or the suite grows materially. The state object is shared+serial (`fileParallelism:false`) by design; per-run isolation removes cross-run contamination, and the proven stability makes intra-run order-coupling a non-issue in practice.
 
-**Net status: built, green (151/1/0), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**
+**Net status: built, green (151/1/0 at completion — now 153/1/0, see Post-final note), CI-wired, stable. Sub-project 1 (the e2e test net) is complete.**
