@@ -136,6 +136,11 @@ Cases #56/#57/#58 deleted (no equivalent capability in the new model).
 
 **Result: 151 passed / 1 skipped / 0 failed.**
 
+> Post-final addition (drive-access-entry Phase 1, 2026-06-10): **#165/#166** — path-scoped
+> viewer reaches granted sub-path (200) but not root (403); un-granted sibling explicit
+> `?path` → 403 (oracle guard). New IDs — deleted IDs (#56–#58) stay retired.
+> Suite now **153 passed / 1 skipped / 0 failed**.
+
 - Phase 3c re-architected all 14 deferred access/cap cases to REAL actors: email-signup users invited via `POST /api/drives/[driveId]/members` (or CONSUME via `/api/s/[token]/accept`), not wallet-only cookies. Denial cases (#62/#63) assert a **specific 403** for an authenticated insufficient-role user (no `401||403` false-greens) — a privilege-escalation regression turns them red. Cap cases (#76–#80) obtain the Meadowcap cap from the DEV_BYPASS paid GET (`body.cap`) → `/api/cap/verify`. Cases #56–#58 deleted (wallet-allowlist capability gone, no equivalent).
 - Phase 5 added money-path coverage #161–#164: free CONSUME → `drive_members` row; paid settle → `payment_receipts` row; `tx_hash UNIQUE` replay guard (white-box, since DEV_BYPASS mints a fresh tx_hash per call — documented limitation); `mergeRoleUpgradeOnly` (editor not downgraded by a viewer share). All assert real DB state via `dbHandle()`.
 - **Only remaining skip: #109** — genuine product gap (dochub WS hub reads only `aindrive_session`, not the `aindrive_wallet` cookie; a paid-share WS visitor can't auth). Tracked for a future product decision, NOT a test defect.

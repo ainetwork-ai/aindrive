@@ -779,9 +779,9 @@ add(55, "delete root denied", async () => {
 });
 
 // ──────────────────────── F. Drive membership / role gating ────────────────────────
-// Cases 56–58 once tested POST /api/drives/[driveId]/access (removed in PR #6).
-// 56–57 reused below for the path-scoped-entry P0 regression; 58 stays free.
-// Role-gating intent carried forward in cases 59–65 (rewritten below).
+// Cases 56–58 DELETED (Phase 3c): tested POST /api/drives/[driveId]/access which was
+// removed in PR #6. Role-gating intent carried forward in cases 59–65 (rewritten below).
+// Deleted IDs stay retired — new cases take fresh IDs (#165+).
 
 add(59, "uninvited user cannot list drive root → 401/403", async () => {
   await ensureDrive();
@@ -889,10 +889,10 @@ add(65, "paid-accept GET (DEV_BYPASS) returns Meadowcap cap", async () => {
 // able to reach that sub-path but NOT the drive root. The drive page lands such a
 // viewer at their granted path; this locks the OBSERVABLE permission at the HTTP
 // level (the RSC entry-landing is verified separately by a real-browser check).
-add(56, "path-scoped viewer reaches granted sub-path, not root", async () => {
+add(165, "path-scoped viewer reaches granted sub-path, not root", async () => {
   await ensureDrive();
   const ownerCookie = await reEnsureOwner();
-  const { cookie: viewerCookie, email } = await signupUser("c56pathviewer");
+  const { cookie: viewerCookie, email } = await signupUser("c165pathviewer");
   await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
   // Ensure docs dir exists (sample fixture provides it, but guard anyway).
   await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
@@ -911,10 +911,10 @@ add(56, "path-scoped viewer reaches granted sub-path, not root", async () => {
   eq(docs.status, 200, "path-scoped viewer must list granted docs; got " + docs.status);
 });
 
-add(57, "path-scoped viewer denied on an un-granted sibling → 403", async () => {
+add(166, "path-scoped viewer denied on an un-granted sibling → 403", async () => {
   await ensureDrive();
   const ownerCookie = await reEnsureOwner();
-  const { cookie: viewerCookie, email } = await signupUser("c57pathviewer");
+  const { cookie: viewerCookie, email } = await signupUser("c166pathviewer");
   await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
   // Explicitly request a sibling the viewer was NOT granted. Authenticated, but
   // no grant covers "secret" → bestMatchingRole = none → atLeast fails → 403.
