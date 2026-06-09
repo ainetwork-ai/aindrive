@@ -11,9 +11,8 @@ import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
+import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount } from "@/lib/payment-tokens";
 
-const X402_NETWORK = "base-sepolia" as const;
-const USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const FACILITATOR_URL = (process.env.AINDRIVE_X402_FACILITATOR ||
   "https://x402.org/facilitator") as `${string}://${string}`;
 const DEV_BYPASS = process.env.AINDRIVE_DEV_BYPASS_X402 === "1";
@@ -33,10 +32,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
 
   const share = db.prepare(`
     SELECT s.id, s.drive_id, s.path, s.role, s.expires_at, s.price_usdc, s.currency,
-           d.name AS drive_name, d.owner_id, d.payout_wallet
+           d.name AS drive_name, d.owner_id, d.payout_wallet, d.allowed_tokens
     FROM shares s JOIN drives d ON d.id = s.drive_id
     WHERE s.token = ?
-  `).get(token) as (ShareRow & { drive_name: string; owner_id: string; payout_wallet: string | null }) | undefined;
+  `).get(token) as (ShareRow & { drive_name: string; owner_id: string; payout_wallet: string | null; allowed_tokens: string | null }) | undefined;
 
   if (!share) return NextResponse.json({ error: "share not found" }, { status: 404 });
   if (share.expires_at && new Date(share.expires_at) < new Date()) {
@@ -72,6 +71,23 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     if (atLeast(role, share.role)) return NextResponse.json({ ...okBody, role });
   }
 
+  // Resolve the share's payment token against the drive's policy.
+  // [rev2-G] Legacy shares (currency NULL, pre-policy) fall back to the USDC
+  // preset — byte-identical to the old hardcoded constants. A non-NULL
+  // currency must still be allowed by the drive's policy; an unconditional
+  // USDC fallback here would re-quote a removed currency's price in a
+  // different unit, so a policy miss is a hard 410 instead.
+  const tokens = resolveDriveTokens(share.allowed_tokens);
+  const tok = share.currency == null
+    ? TOKEN_PRESETS.USDC
+    : tokens.find((t) => t.symbol === share.currency);
+  if (!tok) {
+    return NextResponse.json(
+      { error: "share currency no longer allowed by drive policy" },
+      { status: 410 }
+    );
+  }
+
   // Build x402 payment requirements.
   // Payout priority: the drive's own payout_wallet (set by its owner) wins;
   // fall back to the global env wallet (single-tenant deployments), then the
@@ -80,31 +96,33 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     share.payout_wallet ||
     process.env.AINDRIVE_PAYOUT_WALLET ||
     "0x0000000000000000000000000000000000000000";
-  const microAmount = Math.round(share.price_usdc * 1_000_000).toString();
   const requirements: PaymentRequirements = {
     scheme: "exact",
-    network: X402_NETWORK,
-    maxAmountRequired: microAmount,
+    // Preset chains are x402 network ids; the type is a literal union the
+    // policy's plain string can't narrow to.
+    network: tok.chain as PaymentRequirements["network"],
+    maxAmountRequired: toAtomicAmount(share.price_usdc, tok.decimals),
     resource: req.url as `${string}://${string}`,
     description: `aindrive: access to share ${token}`,
     mimeType: "application/json",
     payTo,
     maxTimeoutSeconds: 300,
-    asset: USDC_BASE_SEPOLIA,
+    asset: tok.asset,
     // ERC-3009 EIP-712 domain for the asset above. Required by the x402
     // exact-evm scheme so the client can sign transferWithAuthorization;
     // facilitator rejects the request as `invalid_exact_evm_missing_eip712_domain`
-    // when this is absent.
-    extra: {
-      name: "USDC",
-      version: "2",
-    },
+    // when this is absent. Tokens without a domain (name null, e.g. FANCO
+    // pending the Phase 2b Permit2 path) omit it.
+    extra: tok.name ? { name: tok.name, version: tok.version } : undefined,
   };
+  // Display-only companion to `accepts`: share-gate reads symbol/decimals to
+  // render the amount; x402-fetch only consumes `accepts`.
+  const payCurrency = { symbol: tok.symbol, decimals: tok.decimals };
 
   const xPayment = req.headers.get("X-PAYMENT");
   if (!xPayment) {
     return NextResponse.json(
-      { x402Version: 1, accepts: [requirements], error: "X-PAYMENT header is required" },
+      { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "X-PAYMENT header is required" },
       { status: 402 }
     );
   }
@@ -118,7 +136,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     payload = DEV_BYPASS ? raw : PaymentPayloadSchema.parse(raw);
   } catch {
     return NextResponse.json(
-      { x402Version: 1, accepts: [requirements], error: "invalid X-PAYMENT header" },
+      { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "invalid X-PAYMENT header" },
       { status: 402 }
     );
   }
@@ -177,20 +195,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       if (r.ok) { verifyRes = r.value; break; }
       if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
         return NextResponse.json(
-          { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+          { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
           { status: 402 },
         );
       }
     }
     if (!verifyRes) {
       return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
         { status: 402 },
       );
     }
     if (!verifyRes.isValid) {
       return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], error: verifyRes.invalidReason || "verification failed" },
+        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: verifyRes.invalidReason || "verification failed" },
         { status: 402 }
       );
     }
@@ -205,20 +223,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       if (r.ok) { settleRes = r.value; break; }
       if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
         return NextResponse.json(
-          { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+          { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
           { status: 402 },
         );
       }
     }
     if (!settleRes) {
       return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], error: "facilitator unavailable, please retry" },
+        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
         { status: 402 },
       );
     }
     if (!settleRes.success) {
       return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], error: sanitizeSettleError(settleRes.errorReason || "settlement failed") },
+        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: sanitizeSettleError(settleRes.errorReason || "settlement failed") },
         { status: 402 }
       );
     }
@@ -258,7 +276,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   try {
     db.prepare(
       "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, X402_NETWORK, share.id, settleAccountId);
+    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, tok.chain, share.id, settleAccountId);
   } catch (e) {
     if (!/UNIQUE/i.test((e as Error).message)) throw e;
     // Same on-chain tx already recorded. Log so observability shows
@@ -273,7 +291,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     wallet: payerWallet,
     txHash,
     amountUsdc: share.price_usdc,
-    network: X402_NETWORK,
+    network: tok.chain,
   });
 
   let capBase64: string | null = null;

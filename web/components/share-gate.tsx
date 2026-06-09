@@ -21,7 +21,14 @@ type PaymentRequirements = {
 
 type CheckResponse =
   | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string }
-  | { x402Version: number; accepts: PaymentRequirements[]; error: string };
+  | {
+      x402Version: number;
+      accepts: PaymentRequirements[];
+      // Display-only token info from the drive's policy; absent on legacy
+      // servers → USDC/6 fallback below.
+      currency?: { symbol: string; decimals: number };
+      error: string;
+    };
 
 type State = "loading" | "paywall" | "error";
 
@@ -82,7 +89,7 @@ export function ShareGate({ token }: { token: string }) {
     setPaying(true);
     try {
       // wrapFetchWithPayment expects a Signer; viem WalletClient from wagmi is compatible at runtime.
-      // maxValue is in atomic units (USDC = 6 decimals). Allow up to the required amount.
+      // maxValue is in the payment token's atomic units. Allow up to the required amount.
       const max = BigInt(requirement.maxAmountRequired);
       const fetchWithPay = wrapFetchWithPayment(
         globalThis.fetch,
@@ -119,7 +126,11 @@ export function ShareGate({ token }: { token: string }) {
     return <main className="p-10 text-center">{msg}</main>;
   }
   if (state === "paywall" && requirement) {
-    const usdc = (Number(requirement.maxAmountRequired) / 1_000_000).toFixed(2);
+    const currency = data && "accepts" in data ? data.currency : undefined;
+    const symbol = currency?.symbol ?? "USDC";
+    const amount = (Number(requirement.maxAmountRequired) / 10 ** (currency?.decimals ?? 6)).toFixed(2);
+    // `$` prefix only makes sense for the dollar-pegged USDC.
+    const amountLabel = symbol === "USDC" ? `$${amount} USDC` : `${amount} ${symbol}`;
     return (
       <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-4">
         <div className="max-w-md w-full bg-white border border-drive-border rounded-2xl shadow-drive p-6">
@@ -128,7 +139,7 @@ export function ShareGate({ token }: { token: string }) {
           <p className="mt-1 text-sm text-drive-muted">{requirement.description}</p>
 
           <div className="mt-5 rounded-xl border border-drive-border p-4 text-sm space-y-1">
-            <Row label="Amount" value={`$${usdc} USDC`} />
+            <Row label="Amount" value={amountLabel} />
             <Row label="Network" value={requirement.network} />
             <Row label="Recipient" value={requirement.payTo} mono truncate />
           </div>
@@ -142,7 +153,7 @@ export function ShareGate({ token }: { token: string }) {
             disabled={!isConnected || paying}
             className="mt-4 w-full rounded-lg bg-drive-accent text-white py-2.5 hover:bg-drive-accentHover disabled:opacity-50"
           >
-            {paying ? "Signing & settling…" : isConnected ? `Pay $${usdc} USDC` : "Connect wallet to pay"}
+            {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
           </button>
 
           <p className="mt-3 text-xs text-drive-muted text-center">

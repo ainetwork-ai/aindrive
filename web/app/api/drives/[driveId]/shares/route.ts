@@ -3,8 +3,9 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
-import { getDrive } from "@/lib/drives";
+import { getDrive, type DriveRow } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
+import { resolveDriveTokens } from "@/lib/payment-tokens";
 import { env } from "@/lib/env";
 import { zPath } from "@/lib/zod-helpers";
 import { AgentError, callAgent } from "@/lib/rpc";
@@ -14,6 +15,8 @@ const Body = z.object({
   role: z.enum(["viewer", "editor"]),
   expiresAt: z.string().datetime().optional(),
   price_usdc: z.number().positive().optional(),
+  currency: z.string().optional(),
+  listed: z.boolean().optional(),
 });
 
 export async function GET(_req: Request, { params }: { params: Promise<{ driveId: string }> }) {
@@ -23,7 +26,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
   const role = resolveRole(driveId, user.id, "");
   if (!atLeast(role, "editor")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const shares = db.prepare(`
-    SELECT id, path, role, token, expires_at, created_at, price_usdc, currency
+    SELECT id, path, role, token, expires_at, created_at, price_usdc, currency, listed
     FROM shares WHERE drive_id = ? ORDER BY created_at DESC
   `).all(driveId);
   return NextResponse.json({ shares });
@@ -39,6 +42,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
   const role = resolveRole(driveId, user.id, body.data.path);
   if (!atLeast(role, "editor")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+
+  // [rev2-D] Listing on the drive's showcase is owner-only: a path-scoped
+  // editor must not be able to put arbitrary priced items on the drive's
+  // storefront. Unlisted share creation stays editor-at-path as before.
+  if (body.data.listed && !atLeast(resolveRole(driveId, user.id, ""), "owner")) {
+    return NextResponse.json({ error: "only the owner can list a share" }, { status: 403 });
+  }
+
+  // Paid share: currency must be one the drive's token policy allows.
+  // Defaults to the policy's first token when the caller doesn't pick one.
+  let currency: string | null = null;
+  if (body.data.price_usdc) {
+    // getDrive selects all columns; allowed_tokens just isn't on DriveRow yet.
+    const tokens = resolveDriveTokens(
+      (drive as DriveRow & { allowed_tokens: string | null }).allowed_tokens,
+    );
+    currency = body.data.currency ?? tokens[0].symbol;
+    if (!tokens.some((t) => t.symbol === currency)) {
+      return NextResponse.json({ error: "currency not allowed by drive policy" }, { status: 400 });
+    }
+  }
 
   // Verify the share path actually exists in the drive before issuing a
   // token. Empty path ("") = drive root, no check needed; anything else
@@ -59,9 +83,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const id = nanoid(12);
   const token = nanoid(24);
   db.prepare(`
-    INSERT INTO shares (id, drive_id, path, role, token, expires_at, created_by, price_usdc, currency)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, driveId, body.data.path, body.data.role, token, body.data.expiresAt ?? null, user.id, body.data.price_usdc ?? null, body.data.price_usdc ? "base-sepolia" : null);
+    INSERT INTO shares (id, drive_id, path, role, token, expires_at, created_by, price_usdc, currency, listed)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, driveId, body.data.path, body.data.role, token, body.data.expiresAt ?? null, user.id, body.data.price_usdc ?? null, currency, body.data.listed ? 1 : 0);
   return NextResponse.json({
     id,
     token,
