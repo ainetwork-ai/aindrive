@@ -7,7 +7,6 @@ import { resolveRoleByUser } from "./access";
 
 export type ShowcaseItem = {
   shareId: string;
-  token: string;
   /** Last path segment only — the full share path is never exposed here:
    *  ancestor directory names would leak structure the caller has no access
    *  to (security C1). Root ("") shares are labelled "(drive)". */
@@ -21,15 +20,18 @@ type ListedShareRow = {
   id: string;
   path: string;
   role: string;
-  token: string;
   expires_at: string | null;
   price_usdc: number;
   currency: string | null;
 };
 
 export function listShowcase(driveId: string, userId: string): ShowcaseItem[] {
+  // token (URL slug) is deliberately NOT selected: it must not be bulk-handed
+  // to drive members. Buyers reach the share via the per-shareId redirect route
+  // (app/api/drives/[driveId]/showcase/[shareId]), which resolves the token
+  // server-side behind the same membership gate.
   const rows = db.prepare(`
-    SELECT id, path, role, token, expires_at, price_usdc, currency
+    SELECT id, path, role, expires_at, price_usdc, currency
     FROM shares
     WHERE drive_id = ? AND listed = 1 AND price_usdc IS NOT NULL
   `).all(driveId) as ListedShareRow[];
@@ -42,7 +44,6 @@ export function listShowcase(driveId: string, userId: string): ShowcaseItem[] {
     .filter((s) => resolveRoleByUser(driveId, userId, s.path) === "none")
     .map((s) => ({
       shareId: s.id,
-      token: s.token,
       leafName: s.path.split("/").pop() || "(drive)",
       role: s.role,
       price: s.price_usdc,

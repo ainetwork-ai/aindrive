@@ -295,11 +295,12 @@ export function FileTable({
 
 /**
  * "For sale" upsell list under the file table on entry views: the drive's
- * listed paid shares the viewer doesn't cover yet. Clicking a row sends the
- * whole page to the existing share-gate (/s/<token>), which handles payment
- * and lands the buyer back in the drive.
+ * listed paid shares the viewer doesn't cover yet. The list DTO no longer
+ * carries the share token; clicking a row hits the per-shareId redirect route,
+ * which resolves the token server-side and 302s to the share-gate (/s/<token>)
+ * — that handles payment and lands the buyer back in the drive.
  */
-export function ShowcaseSection({ items }: { items: ShowcaseItem[] }) {
+export function ShowcaseSection({ driveId, items }: { driveId: string; items: ShowcaseItem[] }) {
   if (items.length === 0) return null;
   return (
     <section className="mt-8">
@@ -308,7 +309,7 @@ export function ShowcaseSection({ items }: { items: ShowcaseItem[] }) {
         {items.map((it) => (
           <li key={it.shareId} className="border-b border-drive-border/70">
             <button
-              onClick={() => { window.location.href = "/s/" + it.token; }}
+              onClick={() => { window.location.href = `/api/drives/${driveId}/showcase/${it.shareId}`; }}
               className="w-full flex items-center gap-3 py-3 sm:py-2 px-1 hover:bg-drive-hover cursor-pointer text-left"
             >
               <Lock className="w-5 h-5 text-drive-muted shrink-0" />

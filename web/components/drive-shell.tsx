@@ -286,7 +286,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}
-            {(path === rootPath || isSyntheticRoot) && <ShowcaseSection items={showcase} />}
+            {(path === rootPath || isSyntheticRoot) && <ShowcaseSection driveId={driveId} items={showcase} />}
           </div>
           {selected && (
             <Viewer

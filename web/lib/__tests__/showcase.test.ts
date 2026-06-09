@@ -38,19 +38,19 @@ describe("listShowcase — leaf-DTO showcase of listed paid shares", () => {
 
   it("does not expose paid shares with listed=0", () => {
     const items = listShowcase("d1", "member1");
-    expect(items.some((i) => i.token === "tok_unlisted")).toBe(false);
+    expect(items.some((i) => i.shareId === "sh_unlisted")).toBe(false);
   });
 
   it("excludes shares whose path the caller already covers", () => {
     const items = listShowcase("d1", "member1");
-    expect(items.some((i) => i.token === "tok_covered")).toBe(false);
+    expect(items.some((i) => i.shareId === "sh_covered")).toBe(false);
     // sanity: an uncovered listed share IS present
-    expect(items.some((i) => i.token === "tok_nested")).toBe(true);
+    expect(items.some((i) => i.shareId === "sh_nested")).toBe(true);
   });
 
   it("exposes only the leaf name — the full path never appears in the JSON", () => {
     const items = listShowcase("d1", "member1");
-    const nested = items.find((i) => i.token === "tok_nested")!;
+    const nested = items.find((i) => i.shareId === "sh_nested")!;
     expect(nested.leafName).toBe("inner");
     expect(nested.price).toBe(5);
     expect(nested.currency).toBe("USDC");
@@ -62,12 +62,22 @@ describe("listShowcase — leaf-DTO showcase of listed paid shares", () => {
 
   it('labels a root ("") share as "(drive)"', () => {
     const items = listShowcase("d1", "member1");
-    const root = items.find((i) => i.token === "tok_root")!;
+    const root = items.find((i) => i.shareId === "sh_root")!;
     expect(root.leafName).toBe("(drive)");
   });
 
   it("excludes expired listed shares [rev2-E]", () => {
     const items = listShowcase("d1", "member1");
-    expect(items.some((i) => i.token === "tok_expired")).toBe(false);
+    expect(items.some((i) => i.shareId === "sh_expired")).toBe(false);
+  });
+
+  it("never leaks the share token (URL slug) in the DTO [spec D1]", () => {
+    const items = listShowcase("d1", "member1");
+    expect(items.length).toBeGreaterThan(0);
+    expect(items[0]).not.toHaveProperty("token");
+    // No seeded token value appears anywhere in the serialized result.
+    const json = JSON.stringify(items);
+    expect(json).not.toContain("tok_nested");
+    expect(json).not.toContain("tok_root");
   });
 });
