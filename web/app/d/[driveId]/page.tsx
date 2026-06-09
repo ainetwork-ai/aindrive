@@ -14,7 +14,7 @@ export default async function DrivePage({
   const { driveId } = await params;
   const sp = await searchParams;
   const rawPath = Array.isArray(sp.path) ? sp.path[0] : sp.path;
-  const pathProvided = rawPath !== undefined && rawPath !== null;
+  const pathProvided = rawPath !== undefined;
 
   const user = await getUser();
   if (!user) redirect(`/login?next=/d/${driveId}`);
