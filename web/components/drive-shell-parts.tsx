@@ -269,7 +269,7 @@ export function FileTable({
                 </div>
               </td>
               <td className="py-3 sm:py-2 hidden sm:table-cell text-drive-muted">
-                {new Date(e.mtimeMs).toLocaleString()}
+                {e.mtimeMs ? new Date(e.mtimeMs).toLocaleString() : "—"}
               </td>
               <td className="py-3 sm:py-2 hidden md:table-cell text-right text-drive-muted">
                 {e.isDir ? "—" : prettyBytes(e.size)}
