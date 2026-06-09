@@ -924,6 +924,51 @@ add(166, "path-scoped viewer denied on an un-granted sibling → 403", async () 
   eq(r.status, 403, "un-granted sibling must be denied; got " + r.status);
 });
 
+// P0 regression (drive-access-entry Phase 1b): a multi-grant member (dir grant +
+// FILE grant → computeEntry kind "multi") lands on the synthetic root. This locks
+// the server-side truths that render relies on: each grant is reachable at its
+// exact path (file grant → fs/read, not its parent dir), root stays denied.
+add(167, "multi-grant viewer: dir + file grants, root stays denied", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  // Owner fixtures: docs + assets dirs (idempotent guard, like #165) + a file in assets.
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "docs" }),
+  });
+  await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "assets" }),
+  });
+  await jget(`/api/drives/${state.driveId}/fs/write`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "assets/logo.txt", content: "logo", encoding: "utf8" }),
+  });
+  const { cookie: viewerCookie, email } = await signupUser("c167multigrant");
+  await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
+  await inviteMember(state.driveId, email, "assets/logo.txt", "viewer", ownerCookie);
+  // Root: neither grant covers "" → bestMatchingRole("") = none → 403.
+  const root = await jget(`/api/drives/${state.driveId}/fs/list?path=`, {
+    headers: { cookie: viewerCookie },
+  });
+  eq(root.status, 403, "multi-grant viewer must not list root; got " + root.status);
+  // Dir grant is reachable.
+  const docs = await jget(`/api/drives/${state.driveId}/fs/list?path=docs`, {
+    headers: { cookie: viewerCookie },
+  });
+  eq(docs.status, 200, "multi-grant viewer must list granted docs; got " + docs.status);
+  // The grant is the FILE, not its parent dir → listing assets stays denied.
+  const assets = await jget(`/api/drives/${state.driveId}/fs/list?path=assets`, {
+    headers: { cookie: viewerCookie },
+  });
+  eq(assets.status, 403, "file grant must not open parent dir; got " + assets.status);
+  // The exact granted file is readable (ancestor-or-self match on its own path).
+  const file = await jget(`/api/drives/${state.driveId}/fs/read?path=assets/logo.txt&encoding=utf8`, {
+    headers: { cookie: viewerCookie },
+  });
+  eq(file.status, 200, "granted file must be readable; got " + file.status);
+});
+
 // ──────────────────────── G. Shares + paid access ────────────────────────
 
 add(66, "owner creates free share", async () => {
