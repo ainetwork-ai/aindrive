@@ -23,3 +23,6 @@ test-results/
 !docs/**/*.png
 .worktrees/
 .gstack/
+
+# brainstorming visual companion (local only)
+.superpowers/

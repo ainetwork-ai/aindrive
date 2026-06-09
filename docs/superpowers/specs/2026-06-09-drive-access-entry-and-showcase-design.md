@@ -120,12 +120,15 @@ settle은 이미 `drive_members`에 `user_id`로 멤버십 행을 INSERT. 로그
 
 브라우저 렌더 의존(🔒 배지)은 HTTP e2e로 안 잡힘(Monaco 교훈) → 실브라우저 확인을 plan에 포함.
 
-## 영향 파일 (Phase 1 기준)
+## 영향 파일 (Phase 1 — 구현 확정본)
 
-- `web/lib/access.ts` / `access-core.js` — `entryView` 신규(순수 권한)
+- `web/lib/access-core.js`(+`.d.ts`) — `computeEntry` 순수 함수
+- `web/lib/access.ts` — `entryView` DB 래퍼
 - `web/app/d/[driveId]/page.tsx` — 진입점 안착 + `?path` hard-deny
-- `web/app/page.tsx` + `web/components/drive-shell*.tsx` — 진입점 링크, (다중 시) 합성 root
-- `web/lib/drives.ts` — 홈 목록이 진입점 계산에 필요한 멤버 정보 제공
-- `web/scenarios/cases.mjs` — P1 테스트
+- `web/scenarios/cases.mjs` — P1 회귀 케이스 #165/#166
+
+구현 중 정제: 설계 초안의 `web/app/page.tsx`(홈)·`web/lib/drives.ts` 수정은 **불필요**로 판명 —
+`drive-shell.tsx`가 이미 `initialPath`를 grant-scoped root로 쓰므로, 홈 링크가 `/d/<id>`(path 없음)로
+가도 드라이브 페이지가 entryView로 안착시킨다. 합성 root(다중 진입점)는 Phase 1b로 분리(plan 참조).
 
 (Phase 2 영향 파일은 Phase 2 plan에서.)
