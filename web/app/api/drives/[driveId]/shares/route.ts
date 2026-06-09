@@ -23,7 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
   const role = resolveRole(driveId, user.id, "");
   if (!atLeast(role, "editor")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const shares = db.prepare(`
-    SELECT id, path, role, token, expires_at, created_at, price_usdc, payment_chain
+    SELECT id, path, role, token, expires_at, created_at, price_usdc, currency
     FROM shares WHERE drive_id = ? ORDER BY created_at DESC
   `).all(driveId);
   return NextResponse.json({ shares });
@@ -59,7 +59,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const id = nanoid(12);
   const token = nanoid(24);
   db.prepare(`
-    INSERT INTO shares (id, drive_id, path, role, token, expires_at, created_by, price_usdc, payment_chain)
+    INSERT INTO shares (id, drive_id, path, role, token, expires_at, created_by, price_usdc, currency)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, driveId, body.data.path, body.data.role, token, body.data.expiresAt ?? null, user.id, body.data.price_usdc ?? null, body.data.price_usdc ? "base-sepolia" : null);
   return NextResponse.json({

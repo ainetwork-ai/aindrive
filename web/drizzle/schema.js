@@ -4,6 +4,7 @@ import {
   sqliteTable,
   text,
   real,
+  integer,
   blob,
   uniqueIndex,
   index,
@@ -35,6 +36,7 @@ export const drives = sqliteTable("drives", {
   namespace_pubkey: blob("namespace_pubkey"),
   namespace_secret: blob("namespace_secret"),
   payout_wallet: text("payout_wallet"),
+  allowed_tokens: text("allowed_tokens"),
 });
 
 export const drive_members = sqliteTable(
@@ -74,7 +76,8 @@ export const shares = sqliteTable(
       .notNull()
       .default(sql`(datetime('now'))`),
     price_usdc: real("price_usdc"),
-    payment_chain: text("payment_chain"),
+    currency: text("currency"),
+    listed: integer("listed").notNull().default(0),
   },
   (t) => [index("idx_shares_drive").on(t.drive_id)]
 );

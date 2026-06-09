@@ -60,6 +60,7 @@ function open() {
       expires_at TEXT,
       created_by TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      currency TEXT,
       FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS cli_link_requests (
@@ -102,10 +103,23 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_account_wallets_account ON account_wallets(account_id);
   `);
+  // payment_chain → currency rename. Must run BEFORE the ADD loop: on a fresh
+  // DB the CREATE above already made `currency`, so adding payment_chain first
+  // would make this rename throw "duplicate column" on every first boot.
+  // Ignore "no such column" (fresh DB / already renamed) and "duplicate
+  // column" (half-state where both somehow exist).
+  try {
+    handle.exec("ALTER TABLE shares RENAME COLUMN payment_chain TO currency");
+  } catch (e) {
+    if (!/no such column|duplicate column/i.test(e.message)) throw e;
+  }
   // Idempotent ALTERs (better-sqlite3 has no IF NOT EXISTS for ALTER)
   for (const stmt of [
     "ALTER TABLE shares ADD COLUMN price_usdc REAL",
-    "ALTER TABLE shares ADD COLUMN payment_chain TEXT",
+    // covers pre-payment_chain DBs that the rename above skipped
+    "ALTER TABLE shares ADD COLUMN currency TEXT",
+    "ALTER TABLE shares ADD COLUMN listed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE drives ADD COLUMN allowed_tokens TEXT",
     "ALTER TABLE drives ADD COLUMN namespace_pubkey BLOB",
     "ALTER TABLE drives ADD COLUMN namespace_secret BLOB",
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",

@@ -25,14 +25,14 @@ type ShareRow = {
   role: Role;
   expires_at: string | null;
   price_usdc: number | null;
-  payment_chain: string | null;
+  currency: string | null;
 };
 
 export async function GET(req: Request, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
 
   const share = db.prepare(`
-    SELECT s.id, s.drive_id, s.path, s.role, s.expires_at, s.price_usdc, s.payment_chain,
+    SELECT s.id, s.drive_id, s.path, s.role, s.expires_at, s.price_usdc, s.currency,
            d.name AS drive_name, d.owner_id, d.payout_wallet
     FROM shares s JOIN drives d ON d.id = s.drive_id
     WHERE s.token = ?
