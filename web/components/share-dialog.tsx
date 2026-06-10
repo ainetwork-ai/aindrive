@@ -34,11 +34,12 @@ export function ShareDialog({
   // Drive token policy (currency select options). Non-owners can't read the
   // drive GET (403) and keep the default — the server re-validates anyway.
   const [driveTokens, setDriveTokens] = useState<PaymentToken[]>(DEFAULT_TOKENS);
-  // Token-policy editor (owner-only UI): preset checkboxes + FANCO asset input
+  // Token-policy editor (owner-only UI): preset checkboxes + custom tokens added
+  // by contract-address lookup. The saved policy = selected presets ∪ custom.
   const [tokenSel, setTokenSel] = useState<Record<string, boolean>>(
     () => Object.fromEntries(Object.keys(TOKEN_PRESETS).map((k) => [k, k === "USDC"])),
   );
-  const [fancoAsset, setFancoAsset] = useState("");
+  const [customTokens, setCustomTokens] = useState<PaymentToken[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [payoutWallet, setPayoutWallet] = useState<string>("");
   const [payoutInput, setPayoutInput] = useState<string>("");
@@ -65,11 +66,19 @@ export function ShareDialog({
       setDriveTokens(tokens);
       // Keep the user's pick if still allowed; otherwise snap to the policy's first token
       setCurrency((cur) => (tokens.some((t) => t.symbol === cur) ? cur : tokens[0].symbol));
+      // A token is a "fixed preset" only if it matches the preset's symbol AND
+      // its built-in asset (USDC). Everything else — including FANCO, which
+      // carries an owner-supplied address — is a custom token.
+      const isFixedPreset = (t: PaymentToken) => {
+        const p = TOKEN_PRESETS[t.symbol];
+        return p && p.asset && p.asset.toLowerCase() === t.asset.toLowerCase();
+      };
       setTokenSel(Object.fromEntries(
-        Object.keys(TOKEN_PRESETS).map((k) => [k, tokens.some((t) => t.symbol === k)]),
+        Object.entries(TOKEN_PRESETS)
+          .filter(([, p]) => !!p.asset) // only presets with a built-in address are checkbox presets
+          .map(([k]) => [k, tokens.some((t) => t.symbol === k && isFixedPreset(t))]),
       ));
-      const fanco = tokens.find((t) => t.symbol === "FANCO");
-      if (fanco?.asset) setFancoAsset(fanco.asset);
+      setCustomTokens(tokens.filter((t) => !isFixedPreset(t)));
     }
     if (mem.ok) setMembers(mem.data.members);
     if (who.ok && who.data.user) {
@@ -103,21 +112,20 @@ export function ShareDialog({
   // token-policy editor (mirrors the API: listed=403, PATCH=403 for non-owners).
   const isOwner = atLeast(me.role, "owner");
 
-  // Owner saves the drive's payment-token policy (preset checkboxes → PaymentToken[]).
+  // Owner saves the drive's payment-token policy: selected fixed presets (USDC)
+  // ∪ custom tokens added by contract-address lookup. Dedupe by symbol so a
+  // custom token can't collide with a preset.
   async function saveTokenPolicy() {
-    const selected = Object.keys(TOKEN_PRESETS).filter((k) => tokenSel[k]);
-    if (selected.length === 0) {
-      toast.error("Select at least one payment token");
+    const presetTokens = Object.entries(TOKEN_PRESETS)
+      .filter(([k, p]) => tokenSel[k] && p.asset)
+      .map(([, p]) => p);
+    const bySymbol = new Map<string, PaymentToken>();
+    for (const t of [...presetTokens, ...customTokens]) bySymbol.set(t.symbol, t);
+    const policy = [...bySymbol.values()];
+    if (policy.length === 0) {
+      toast.error("Select or add at least one payment token");
       return;
     }
-    const fanco = fancoAsset.trim();
-    if (tokenSel.FANCO && !/^0x[a-fA-F0-9]{40}$/.test(fanco)) {
-      toast.error("FANCO needs an asset address (0x + 40 hex chars)");
-      return;
-    }
-    const policy = selected.map((k) =>
-      k === "FANCO" ? { ...TOKEN_PRESETS.FANCO, asset: fanco } : TOKEN_PRESETS[k],
-    );
     setBusy(true);
     const res = await apiFetch(`/api/drives/${driveId}`, {
       method: "PATCH",
@@ -276,8 +284,12 @@ export function ShareDialog({
           tokenEditor={{
             sel: tokenSel,
             toggle: (sym) => setTokenSel((s) => ({ ...s, [sym]: !s[sym] })),
-            fancoAsset,
-            setFancoAsset,
+            customTokens,
+            addCustom: (t) =>
+              setCustomTokens((list) =>
+                list.some((x) => x.symbol === t.symbol) ? list : [...list, t],
+              ),
+            removeCustom: (sym) => setCustomTokens((list) => list.filter((x) => x.symbol !== sym)),
             save: saveTokenPolicy,
           }}
           saveSell={saveSell}
