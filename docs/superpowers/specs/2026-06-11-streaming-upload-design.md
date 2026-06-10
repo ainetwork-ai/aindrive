@@ -74,4 +74,7 @@
   대칭인 별도 작업.
 - 재개(resumable) 업로드 — 현 세대는 실패 시 재전송. tmp+rename 구조라
   세션 재개를 얹을 자리는 이미 있다.
+- 고아 `.part` 스크러버 — cleanup은 best-effort라(전송 중 에이전트가
+  끊기면 delete RPC도 실패) 에이전트 시작 시 오래된 `.aindrive/uploads/*.part`
+  정리가 필요(다음 CLI 릴리스 후보).
 - 병렬 멀티파일/청크 파이프라이닝 — 순차로 시작, 병목이면 후속.

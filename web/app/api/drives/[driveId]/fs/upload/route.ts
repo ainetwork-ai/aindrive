@@ -81,12 +81,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   }
 
   const tmp = `.aindrive/uploads/${nanoid(12)}.part`;
-  // Best-effort cleanup so an aborted upload doesn't leak a .part file. The
-  // temp lives under .aindrive (hidden from listings), so a missed cleanup is
-  // invisible junk, not user-facing state.
+  // Cleanup is best-effort (an offline agent can't delete its own temp) but
+  // runs on EVERY non-renamed exit — including client aborts, where the body
+  // stream may end with done:true instead of throwing. The temp lives under
+  // .aindrive (hidden from listings), so a missed cleanup is invisible junk,
+  // not user-facing state. A startup scrubber for stale .part files is a
+  // noted follow-up.
   const cleanup = () =>
     callAgent(driveId, drive.drive_secret, { method: "delete", path: tmp }).catch(() => {});
 
+  let renamed = false;
   try {
     let chunkId = 0;
     let total = 0;
@@ -108,7 +112,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
         if (done) break;
         total += value.byteLength;
         if (total > MAX_UPLOAD_BYTES) {
-          await cleanup();
           return NextResponse.json(
             { error: "payload too large", limit: MAX_UPLOAD_BYTES },
             { status: 413, headers: { "X-Max-Bytes": String(MAX_UPLOAD_BYTES) } },
@@ -121,6 +124,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
         }
       }
     }
+
+    // A client abort may surface as a CLEAN end-of-stream (done:true) rather
+    // than a thrown error — renaming then would publish a silently truncated
+    // file at the target, which is exactly what the temp+rename design exists
+    // to prevent. Likewise reject bodies shorter than their declared length.
+    if (req.signal?.aborted) {
+      return NextResponse.json({ error: "client aborted upload" }, { status: 499 });
+    }
+    if (Number.isFinite(declared) && total !== declared) {
+      return NextResponse.json(
+        { error: `body ended early (${total} of ${declared} bytes)` },
+        { status: 400 },
+      );
+    }
+
     // Flush the tail. chunkId 0 with empty data still creates the file, so
     // zero-byte uploads work; for anything already chunked an empty tail is
     // skipped (nothing left to append).
@@ -129,12 +147,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     // Atomic publish: the target path either keeps its old content or gets
     // the complete new one — never a partial file.
     await callAgent(driveId, drive.drive_secret, { method: "rename", from: tmp, to: path });
+    renamed = true;
 
     if (creating) bumpOwnerUsage(ownerId, { files: 1 });
     return NextResponse.json({ ok: true, path, bytes: total });
   } catch (e) {
-    await cleanup();
     const err = e as AgentError;
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
+  } finally {
+    if (!renamed) await cleanup();
   }
 }

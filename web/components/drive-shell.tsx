@@ -413,6 +413,9 @@ function uploadFile(
       resolve({ ok: false, error });
     };
     xhr.onerror = () => resolve({ ok: false, error: "network error" });
+    // Without this, an aborted XHR settles nothing and the multi-file loop
+    // awaits forever (with its loading toast pinned).
+    xhr.onabort = () => resolve({ ok: false, error: "upload cancelled" });
     xhr.send(file);
   });
 }
