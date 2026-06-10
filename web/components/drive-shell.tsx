@@ -283,6 +283,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
               canEdit={canEdit}
               onRowAction={onRowAction}
               isOwner={isOwner}
+              onUpload={onUpload}
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}

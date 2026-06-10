@@ -6,13 +6,14 @@
 import Link from "next/link";
 import clsx from "clsx";
 import {
-  ChevronRight, Folder, FileText, FileCode, FileImage, File as FileIcon,
-  FolderPlus, Upload, Share2, Loader2, HardDrive, Bot, MessageSquare, Menu, Lock,
+  ChevronRight, FolderOpen, Upload, AlertTriangle,
+  FolderPlus, Share2, HardDrive, Bot, MessageSquare, Menu, Lock,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu } from "./row-menu";
-import { X402Badge } from "./x402-badges";
+import { fileIcon } from "./file-icons";
+import { Badge, EmptyState, Skeleton } from "@/components/ui";
 
 export type DriveSummary = { id: string; name: string; hostname: string | null; online: boolean };
 
@@ -214,7 +215,7 @@ export function DriveHeader({
 }
 
 export function FileTable({
-  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner,
+  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload,
 }: {
   loading: boolean;
   err: string | null;
@@ -226,56 +227,70 @@ export function FileTable({
   canEdit: boolean;
   onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
   isOwner: boolean;
+  onUpload: (files: FileList | null) => void;
 }) {
-  if (loading) {
+  if (loading) return <ListSkeleton />;
+  if (err) {
     return (
-      <div className="flex items-center justify-center text-drive-muted gap-2 py-20">
-        <Loader2 className="w-4 h-4 animate-spin" /> connecting to your agent…
-      </div>
+      <EmptyState
+        icon={<AlertTriangle className="text-amber-500" />}
+        title="Couldn’t load this folder"
+        description={err}
+      />
     );
   }
-  if (err) {
-    return <div className="text-center text-red-600 py-20">{err}</div>;
-  }
   if (entries.length === 0) {
-    return <div className="text-center text-drive-muted py-20">This folder is empty.</div>;
+    return (
+      <EmptyState
+        icon={<FolderOpen />}
+        title="This folder is empty"
+        description={canEdit ? "Drop files here or upload to get started." : "Nothing here yet."}
+        action={canEdit ? <UploadButton onUpload={onUpload} /> : undefined}
+      />
+    );
   }
   return (
-    <table className="w-full text-sm">
-      <thead className="text-drive-muted">
-        <tr className="border-b border-drive-border">
-          <th className="text-left font-medium py-2">Name</th>
-          <th className="text-left font-medium py-2 hidden sm:table-cell">Modified</th>
-          <th className="text-right font-medium py-2 hidden md:table-cell">Size</th>
-          <th></th>
+    <table className="w-full text-body border-separate border-spacing-0">
+      <thead className="text-label uppercase text-drive-muted">
+        <tr>
+          <th className="text-left font-medium px-3 pb-2">Name</th>
+          <th className="text-left font-medium px-3 pb-2 hidden sm:table-cell w-44">Modified</th>
+          <th className="text-right font-medium px-3 pb-2 hidden md:table-cell w-28">Size</th>
+          <th className="w-10" />
         </tr>
       </thead>
       <tbody>
         {entries.map((e) => {
           const paid = paidByPath.get(e.path);
+          const { Icon, className: tone } = fileIcon(e);
+          const isSelected = selected?.path === e.path;
           return (
             <tr
               key={e.path}
               className={clsx(
-                "border-b border-drive-border/70 hover:bg-drive-hover cursor-pointer",
-                selected?.path === e.path && "bg-drive-selected/60"
+                "group h-11 cursor-pointer transition-colors",
+                isSelected ? "bg-drive-selected/60" : "hover:bg-drive-hover",
               )}
               onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
             >
-              <td className="py-3 sm:py-2 align-middle">
+              <td className="px-3 first:rounded-l-lg align-middle">
                 <div className="flex items-center gap-3 min-w-0">
-                  <EntryIcon entry={e} />
+                  <Icon className={clsx("w-5 h-5 shrink-0", tone)} />
                   <span className="truncate">{e.name}</span>
-                  {paid && <X402Badge price={paid.price_usdc!} />}
+                  {paid && (
+                    <Badge tone="sale" className="shrink-0">
+                      ${paid.price_usdc!.toFixed(2)}
+                    </Badge>
+                  )}
                 </div>
               </td>
-              <td className="py-3 sm:py-2 hidden sm:table-cell text-drive-muted">
+              <td className="px-3 align-middle hidden sm:table-cell text-caption text-drive-muted whitespace-nowrap">
                 {e.mtimeMs ? new Date(e.mtimeMs).toLocaleString() : "—"}
               </td>
-              <td className="py-3 sm:py-2 hidden md:table-cell text-right text-drive-muted">
+              <td className="px-3 align-middle hidden md:table-cell text-right text-caption text-drive-muted tabular-nums">
                 {e.isDir ? "—" : prettyBytes(e.size)}
               </td>
-              <td className="py-3 sm:py-2 text-right whitespace-nowrap">
+              <td className="px-1 align-middle text-right whitespace-nowrap last:rounded-r-lg">
                 {canEdit && (
                   <RowMenu
                     hasPaidShare={!!paid}
@@ -290,6 +305,49 @@ export function FileTable({
         })}
       </tbody>
     </table>
+  );
+}
+
+/** Loading placeholder shaped like the list rows (icon + name + meta). */
+function ListSkeleton() {
+  return (
+    <div className="space-y-1" aria-hidden="true">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 h-11 px-3">
+          <Skeleton width={20} height={20} rounded="md" />
+          <Skeleton width={`${40 + ((i * 13) % 35)}%`} height={14} />
+          <span className="flex-1" />
+          <Skeleton width={120} height={12} className="hidden sm:block" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Upload trigger: a <label> wrapping a hidden file input (the file-picker DOM
+ * pattern the header uses). Styled as a tonal pill — Button renders a real
+ * <button>, which can't host a file-input label, so this mirrors the tonal look
+ * directly. Keyboard-reachable via the label's tabIndex + Enter/Space.
+ */
+function UploadButton({ onUpload }: { onUpload: (files: FileList | null) => void }) {
+  return (
+    <label
+      tabIndex={0}
+      className={clsx(
+        "inline-flex items-center justify-center gap-2 h-9 px-4 rounded-full cursor-pointer select-none",
+        "text-body font-medium bg-drive-selected text-drive-accent",
+        "hover:brightness-95 active:brightness-90 transition-colors",
+        "focus-visible:ring-2 focus-visible:ring-drive-accent/40",
+      )}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") (e.currentTarget.querySelector("input") as HTMLInputElement)?.click();
+      }}
+    >
+      <Upload className="w-4 h-4" />
+      Upload
+      <input type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
+    </label>
   );
 }
 
@@ -326,14 +384,6 @@ export function ShowcaseSection({ driveId, items }: { driveId: string; items: Sh
       </ul>
     </section>
   );
-}
-
-function EntryIcon({ entry }: { entry: DriveEntry }) {
-  if (entry.isDir) return <Folder className="w-5 h-5 text-drive-accent shrink-0" />;
-  if (entry.mime.startsWith("image/")) return <FileImage className="w-5 h-5 text-drive-muted shrink-0" />;
-  if (/\.(ts|tsx|js|jsx|py|rs|go|html|css|json)$/.test(entry.name)) return <FileCode className="w-5 h-5 text-drive-muted shrink-0" />;
-  if (entry.mime.startsWith("text/")) return <FileText className="w-5 h-5 text-drive-muted shrink-0" />;
-  return <FileIcon className="w-5 h-5 text-drive-muted shrink-0" />;
 }
 
 function prettyBytes(n: number) {
