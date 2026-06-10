@@ -12,6 +12,7 @@ import type { DriveEntry } from "@/lib/protocol";
 import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
 import { ViewerHeader } from "./viewer-parts";
 import { fileIconForName } from "./file-icons";
+import { RichTextEditor } from "./editors/rich-text-editor";
 import { loader } from "@monaco-editor/react";
 import clsx from "clsx";
 
@@ -53,7 +54,11 @@ export function Viewer({
     return () => mq.removeEventListener?.("change", sync);
   }, []);
 
-  const isText = entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext);
+  // Markdown opens the rich-text (WYSIWYG) editor — a SEPARATE Y.Doc root
+  // (getXmlFragment) from the Monaco/Y.Text path, so the two never collide. All
+  // other text/code stays on Monaco. (See editor-framework-design.md.)
+  const isRichText = entry.ext === "md" || entry.ext === "markdown" || entry.mime === "text/markdown";
+  const isText = !isRichText && (entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext));
   const isImage = entry.mime.startsWith("image/");
   const isPdf = entry.mime === "application/pdf";
   const isVideo = entry.mime.startsWith("video/");
@@ -224,9 +229,10 @@ export function Viewer({
     };
   }, [driveId, entry.path, isText, canEdit, debouncedAutosave]);
 
-  // Load binary preview (image / PDF)
+  // Load binary preview (image / PDF / media). Skip collab editors (text=Monaco,
+  // richtext=TipTap) — those read their bytes through their own provider, not as base64.
   useEffect(() => {
-    if (isText) return;
+    if (isText || isRichText) return;
     let cancelled = false;
     setLoading(true); setBinaryDataUrl(null);
     (async () => {
@@ -239,7 +245,7 @@ export function Viewer({
       setLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [driveId, entry.path, entry.mime, isText]);
+  }, [driveId, entry.path, entry.mime, isText, isRichText]);
 
   function onMonacoMount(editor: unknown, monaco: unknown) {
     if (!isText || !providerRef.current) return;
@@ -270,7 +276,8 @@ export function Viewer({
     <aside className="fixed inset-0 z-30 w-full sm:static sm:inset-auto sm:z-auto sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
       <ViewerHeader
         name={entry.name}
-        isText={isText}
+        collaborative={isText || isRichText}
+        showSave={isText}
         status={status}
         presence={presence}
         canEdit={canEdit}
@@ -279,6 +286,20 @@ export function Viewer({
         binaryDataUrl={binaryDataUrl}
         onClose={onClose}
       />
+      {isRichText ? (
+        // Rich-text manages its own loading + scroll; keep it outside the
+        // binary/text loading gate (neither viewer effect fires for .md).
+        <div className="flex-1 min-h-0">
+          <RichTextEditor
+            key={entry.path}
+            driveId={driveId}
+            entry={entry}
+            canEdit={canEdit && !touchOnly}
+            onStatus={setStatus}
+            onPresence={(p) => { setPresence(p); setPeers(Math.max(1, p.length)); }}
+          />
+        </div>
+      ) : (
       <div className="flex-1 min-h-0 overflow-auto">
         {loading ? (
           <div className="h-full flex items-center justify-center text-drive-muted">
@@ -311,6 +332,7 @@ export function Viewer({
           <UnsupportedPreview entry={entry} canDownload={!!binaryDataUrl} />
         )}
       </div>
+      )}
     </aside>
   );
 }

@@ -192,6 +192,11 @@ export class AindriveProvider {
     try { this.ws?.close(); } catch {}
   };
 
+  /** True once shutdown/destroy ran. Lets callers (e.g. a StrictMode-double-
+   *  mounted component holding the provider in a ref) detect a dead instance
+   *  and recreate it. Read-only; does not change lifecycle behavior. */
+  get isDestroyed() { return this.destroyed; }
+
   destroy() {
     this.shutdown();
     this.doc.off("update", this.onLocalUpdate);
