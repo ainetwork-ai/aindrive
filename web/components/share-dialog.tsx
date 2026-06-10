@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Lock } from "lucide-react";
+import { Lock, Users, ArrowRight } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { Modal, Button } from "@/components/ui";
 import { atLeast } from "@/lib/access-core.js";
@@ -260,6 +260,21 @@ export function ShareDialog({
       }
     >
       <div className="space-y-3">
+        {/* This modal is the quick per-folder share surface; the full member
+            roster, pending invites, link revocation, earnings and settings
+            live on the dedicated Manage page. */}
+        {isOwner && (
+          <a
+            href={`/d/${driveId}/manage`}
+            className="flex items-center justify-between gap-2 rounded-lg border border-drive-border bg-drive-sidebar px-3 py-2 text-body hover:bg-drive-hover"
+          >
+            <span className="flex items-center gap-2 text-drive-text">
+              <Users className="w-4 h-4 text-drive-muted" /> Manage all members &amp; settings
+            </span>
+            <ArrowRight className="w-4 h-4 text-drive-muted" />
+          </a>
+        )}
+
         {receipts.length > 0 && (
           <EarningsSection receipts={receipts} totalEarned={totalEarned} />
         )}

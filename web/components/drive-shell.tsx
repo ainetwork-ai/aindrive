@@ -309,6 +309,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
           setSidebarOpen={setSidebarOpen}
           crumbs={crumbs}
           setPath={setPath}
+          driveId={driveId}
           canEdit={canEdit}
           onUpload={onUpload}
           setShareOpen={setShareOpen}

@@ -46,6 +46,14 @@ export type Member = {
   name: string;
 };
 
+/** A pending (pre-account) invite — converts to a Member on signup. */
+export type PendingInvite = {
+  id: string;
+  email: string;
+  path: string;
+  role: "viewer" | "editor" | "owner";
+};
+
 /** Compact list row used by Earnings / Members / Free-links. */
 function ListRow({ children }: { children: ReactNode }) {
   return (
@@ -266,7 +274,7 @@ function SettleBadge({ token }: { token: Pick<PaymentToken, "name" | "version" |
   );
 }
 
-function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
+export function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
   // Fixed presets the owner can toggle (only those with a built-in address).
   const presetSymbols = Object.entries(TOKEN_PRESETS).filter(([, p]) => !!p.asset).map(([k]) => k);
   return (
