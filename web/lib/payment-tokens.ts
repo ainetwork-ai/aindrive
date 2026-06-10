@@ -7,10 +7,27 @@ export type PaymentToken = {
   name: string | null; version: string | null; decimals: number;
 };
 export const TOKEN_PRESETS: Record<string, PaymentToken> = {
+  // x402-settleable (EIP-3009 transferWithAuthorization + EIP-712 domain). name/
+  // version are the on-chain EIP-712 domain values — getting them wrong breaks
+  // signature verification, so they're hand-verified here. Add more major tokens
+  // only with confirmed name/version; otherwise owners add them via the custom
+  // token flow, which reads these from chain.
   USDC: { symbol: "USDC", chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", name: "USDC", version: "2", decimals: 6 },
+  // Not yet settleable on-chain: no EIP-3009 path (name/version null) — its
+  // settle needs the Permit2 route (x402 v2), tracked as Phase 2b. Owners must
+  // supply the asset address. Exercisable under DEV_BYPASS for the full UI/402
+  // plumbing, but real settlement is deferred.
   FANCO: { symbol: "FANCO", chain: "base", asset: "", name: null, version: null, decimals: 18 },
 };
 export const DEFAULT_TOKENS: PaymentToken[] = [TOKEN_PRESETS.USDC];
+
+// x402's "exact" scheme settles via EIP-3009 transferWithAuthorization, which
+// needs a complete EIP-712 domain (name + version). A token missing either has
+// no on-chain settle path yet (e.g. FANCO → Permit2/Phase 2b): the UI can list
+// it and exercise the 402 flow under DEV_BYPASS, but it can't take real money.
+export function isX402Settleable(t: Pick<PaymentToken, "name" | "version" | "asset">): boolean {
+  return !!(t.name && t.version && t.asset);
+}
 
 function isPaymentToken(t: unknown): t is PaymentToken {
   if (typeof t !== "object" || t === null) return false;
