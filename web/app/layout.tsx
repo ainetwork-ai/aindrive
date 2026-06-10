@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Instrument_Serif } from "next/font/google";
+import { Instrument_Serif, Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -8,6 +8,14 @@ const display = Instrument_Serif({
   weight: "400",
   style: ["normal", "italic"],
   variable: "--font-display",
+  display: "swap",
+});
+
+// sans face is self-hosted by next/font at build time (no remote @font-face /
+// CSP allowance needed). --font-sans is the head of tailwind fontFamily.sans.
+const sans = Inter({
+  subsets: ["latin"],
+  variable: "--font-sans",
   display: "swap",
 });
 
@@ -34,7 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // Toaster stays at the root: toast() is called app-wide and does not
   // depend on the wallet context.
   return (
-    <html lang="en" className={display.variable}>
+    <html lang="en" className={`${display.variable} ${sans.variable}`}>
       <body className="bg-drive-bg text-drive-text font-sans antialiased">
         {children}
         <Toaster position="bottom-right" richColors closeButton />

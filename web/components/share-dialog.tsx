@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { X, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
+import { Modal, Button } from "@/components/ui";
 import { atLeast } from "@/lib/access-core.js";
 // Pure presets/parsers — safe in a client component.
 import { TOKEN_PRESETS, DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
@@ -237,88 +238,79 @@ export function ShareDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg shadow-drive max-h-[90vh] flex flex-col">
-        <header className="flex items-center justify-between p-4 border-b border-drive-border shrink-0">
-          <h2 className="font-semibold truncate">Share &ldquo;{defaultPath || "/"}&rdquo;</h2>
-          <button onClick={onClose} className="p-1.5 rounded hover:bg-drive-hover" aria-label="Close">
-            <X className="w-4 h-4" />
-          </button>
-        </header>
-
-        <div className="p-4 space-y-5 overflow-y-auto scrollbar-thin">
-          {receipts.length > 0 && (
-            <EarningsSection receipts={receipts} totalEarned={totalEarned} />
-          )}
-
-          <SellSection
-            defaultPath={defaultPath}
-            focusSection={focusSection}
-            sellOn={sellOn}
-            paidShare={paidShare}
-            payoutWallet={payoutWallet}
-            payoutInput={payoutInput}
-            setPayoutInput={setPayoutInput}
-            savePayoutWallet={savePayoutWallet}
-            price={price}
-            setPrice={setPrice}
-            currency={currency}
-            setCurrency={setCurrency}
-            currencyOptions={driveTokens.map((t) => t.symbol)}
-            listed={listed}
-            setListed={setListed}
-            isOwner={isOwner}
-            tokenEditor={{
-              sel: tokenSel,
-              toggle: (sym) => setTokenSel((s) => ({ ...s, [sym]: !s[sym] })),
-              fancoAsset,
-              setFancoAsset,
-              save: saveTokenPolicy,
-            }}
-            saveSell={saveSell}
-            busy={busy}
-            setEditingSell={setEditingSell}
-            copyLink={copyLink}
-          />
-
-          <MembersSection
-            members={members}
-            isOwner={isOwner}
-            currentUserEmail={me.email}
-            changeMemberRole={changeMemberRole}
-            removeMember={removeMember}
-            busy={busy}
-          />
-
-          <EmailInviteSection
-            email={email}
-            setEmail={setEmail}
-            role={role}
-            setRole={setRole}
-            invite={invite}
-            busy={busy}
-          />
-
-          <FreeLinkSection
-            shares={shares}
-            createFreeLink={createFreeLink}
-            busy={busy}
-            copyLink={copyLink}
-          />
-        </div>
-
-        <footer className="flex items-center justify-between gap-2 p-3 border-t border-drive-border shrink-0">
+    <Modal
+      open
+      onClose={onClose}
+      title={<>Share &ldquo;{defaultPath || "/"}&rdquo;</>}
+      footer={
+        <div className="flex items-center justify-between gap-2 w-full">
           <div className="text-[11px] text-drive-muted flex items-center gap-1">
             <Lock className="w-3 h-3" /> Payments are final · no refunds
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg bg-drive-accent text-white px-4 py-1.5 text-sm hover:bg-drive-accentHover"
-          >
-            Done
-          </button>
-        </footer>
+          <Button onClick={onClose}>Done</Button>
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        {receipts.length > 0 && (
+          <EarningsSection receipts={receipts} totalEarned={totalEarned} />
+        )}
+
+        <SellSection
+          defaultPath={defaultPath}
+          focusSection={focusSection}
+          sellOn={sellOn}
+          paidShare={paidShare}
+          payoutWallet={payoutWallet}
+          payoutInput={payoutInput}
+          setPayoutInput={setPayoutInput}
+          savePayoutWallet={savePayoutWallet}
+          price={price}
+          setPrice={setPrice}
+          currency={currency}
+          setCurrency={setCurrency}
+          currencyOptions={driveTokens.map((t) => t.symbol)}
+          listed={listed}
+          setListed={setListed}
+          isOwner={isOwner}
+          tokenEditor={{
+            sel: tokenSel,
+            toggle: (sym) => setTokenSel((s) => ({ ...s, [sym]: !s[sym] })),
+            fancoAsset,
+            setFancoAsset,
+            save: saveTokenPolicy,
+          }}
+          saveSell={saveSell}
+          busy={busy}
+          setEditingSell={setEditingSell}
+          copyLink={copyLink}
+        />
+
+        <MembersSection
+          members={members}
+          isOwner={isOwner}
+          currentUserEmail={me.email}
+          changeMemberRole={changeMemberRole}
+          removeMember={removeMember}
+          busy={busy}
+        />
+
+        <EmailInviteSection
+          email={email}
+          setEmail={setEmail}
+          role={role}
+          setRole={setRole}
+          invite={invite}
+          busy={busy}
+        />
+
+        <FreeLinkSection
+          shares={shares}
+          createFreeLink={createFreeLink}
+          busy={busy}
+          copyLink={copyLink}
+        />
       </div>
-    </div>
+    </Modal>
   );
 }

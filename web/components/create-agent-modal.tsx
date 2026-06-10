@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
 import { toast } from "sonner";
-import { X, Bot } from "lucide-react";
+import { Bot } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
+import { Modal } from "@/components/ui";
 import { AgentForm, CreatedView, PROVIDERS, type ProviderId } from "./create-agent-modal-parts";
 
 /**
@@ -123,54 +124,49 @@ export function CreateAgentModal({ driveId, defaultFolder, onClose, onCreated, e
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-xl max-h-[90vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-4 border-b">
-          <div className="flex items-center gap-2">
-            <Bot className="w-5 h-5 text-blue-600" />
-            <h2 className="text-lg font-semibold">{isEdit ? "Edit Agent" : "Create Agent"}</h2>
-          </div>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {created ? (
-          <CreatedView
-            askUrl={created.askUrl}
-            cardUrl={created.cardUrl}
-            onClose={onClose}
-          />
-        ) : (
-          <AgentForm
-            isEdit={isEdit}
-            name={name}
-            setName={setName}
-            description={description}
-            setDescription={setDescription}
-            folder={folder}
-            setFolder={setFolder}
-            persona={persona}
-            setPersona={setPersona}
-            provider={provider}
-            onProviderChange={onProviderChange}
-            model={model}
-            setModel={setModel}
-            temperature={temperature}
-            setTemperature={setTemperature}
-            apiKey={apiKey}
-            setApiKey={setApiKey}
-            policiesAllowCap={policiesAllowCap}
-            setPoliciesAllowCap={setPoliciesAllowCap}
-            submit={submit}
-            submitting={submitting}
-            onClose={onClose}
-          />
-        )}
-      </div>
-    </div>
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      title={
+        <span className="flex items-center gap-2">
+          <Bot className="w-5 h-5 text-blue-600" />
+          {isEdit ? "Edit Agent" : "Create Agent"}
+        </span>
+      }
+    >
+      {created ? (
+        <CreatedView
+          askUrl={created.askUrl}
+          cardUrl={created.cardUrl}
+          onClose={onClose}
+        />
+      ) : (
+        <AgentForm
+          isEdit={isEdit}
+          name={name}
+          setName={setName}
+          description={description}
+          setDescription={setDescription}
+          folder={folder}
+          setFolder={setFolder}
+          persona={persona}
+          setPersona={setPersona}
+          provider={provider}
+          onProviderChange={onProviderChange}
+          model={model}
+          setModel={setModel}
+          temperature={temperature}
+          setTemperature={setTemperature}
+          apiKey={apiKey}
+          setApiKey={setApiKey}
+          policiesAllowCap={policiesAllowCap}
+          setPoliciesAllowCap={setPoliciesAllowCap}
+          submit={submit}
+          submitting={submitting}
+          onClose={onClose}
+        />
+      )}
+    </Modal>
   );
 }
