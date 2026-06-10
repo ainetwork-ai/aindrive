@@ -11,7 +11,9 @@ import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
 import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
 import { ViewerHeader } from "./viewer-parts";
+import { fileIconForName } from "./file-icons";
 import { loader } from "@monaco-editor/react";
+import clsx from "clsx";
 
 // Monaco self-host: load the editor runtime from our own origin (/monaco/vs)
 // instead of @monaco-editor/loader's default jsdelivr CDN, which the app CSP
@@ -54,6 +56,8 @@ export function Viewer({
   const isText = entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext);
   const isImage = entry.mime.startsWith("image/");
   const isPdf = entry.mime === "application/pdf";
+  const isVideo = entry.mime.startsWith("video/");
+  const isAudio = entry.mime.startsWith("audio/");
 
   const providerRef = useRef<AindriveProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
@@ -281,9 +285,15 @@ export function Viewer({
             <Loader2 className="w-4 h-4 animate-spin" />
           </div>
         ) : isImage && binaryDataUrl ? (
-          <img src={binaryDataUrl} alt={entry.name} className="w-full h-auto" />
+          <ImageViewer src={binaryDataUrl} name={entry.name} />
+        ) : isVideo && binaryDataUrl ? (
+          <div className="h-full flex items-center justify-center bg-black p-2">
+            <video src={binaryDataUrl} controls className="max-w-full max-h-full rounded-md" />
+          </div>
+        ) : isAudio && binaryDataUrl ? (
+          <AudioCard src={binaryDataUrl} name={entry.name} />
         ) : isPdf && binaryDataUrl ? (
-          <iframe src={binaryDataUrl} className="w-full h-full" />
+          <iframe src={binaryDataUrl} title={entry.name} className="w-full h-full" />
         ) : isText ? (
           <MonacoEditor
             height="100%"
@@ -298,11 +308,67 @@ export function Viewer({
             }}
           />
         ) : (
-          <div className="h-full flex items-center justify-center text-drive-muted text-sm p-6 text-center">
-            Preview not available for this file type.
-          </div>
+          <UnsupportedPreview entry={entry} canDownload={!!binaryDataUrl} />
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * Image preview with fit-to-width default and click-to-toggle 1:1 zoom. A
+ * checkerboard backdrop makes transparent PNGs legible. Cursor signals the
+ * zoom affordance.
+ */
+function ImageViewer({ src, name }: { src: string; name: string }) {
+  const [zoomed, setZoomed] = useState(false);
+  return (
+    <div
+      className={clsx(
+        "min-h-full flex items-center justify-center p-4",
+        zoomed ? "overflow-auto cursor-zoom-out" : "cursor-zoom-in",
+      )}
+      style={{
+        // Subtle checkerboard so transparent images read against white panel.
+        backgroundImage:
+          "linear-gradient(45deg,#f1f3f4 25%,transparent 25%),linear-gradient(-45deg,#f1f3f4 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#f1f3f4 75%),linear-gradient(-45deg,transparent 75%,#f1f3f4 75%)",
+        backgroundSize: "16px 16px",
+        backgroundPosition: "0 0,0 8px,8px -8px,-8px 0",
+      }}
+      onClick={() => setZoomed((v) => !v)}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={name}
+        className={clsx("rounded-md shadow-e1", zoomed ? "max-w-none" : "max-w-full h-auto")}
+      />
+    </div>
+  );
+}
+
+/** Audio player card — type icon + filename over a full-width <audio> control. */
+function AudioCard({ src, name }: { src: string; name: string }) {
+  const { Icon, className: tone } = fileIconForName(name);
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
+      <Icon className={clsx("w-16 h-16", tone)} />
+      <div className="text-body text-drive-text text-center max-w-xs truncate" title={name}>{name}</div>
+      <audio src={src} controls className="w-full max-w-sm" />
+    </div>
+  );
+}
+
+/** Fallback for types with no inline preview — type icon + download hint. */
+function UnsupportedPreview({ entry, canDownload }: { entry: DriveEntry; canDownload: boolean }) {
+  const { Icon, className: tone } = fileIconForName(entry.name);
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center">
+      <Icon className={clsx("w-16 h-16", tone)} />
+      <div className="text-body text-drive-text max-w-xs truncate" title={entry.name}>{entry.name}</div>
+      <p className="text-caption text-drive-muted">
+        {canDownload ? "No inline preview — use Download to open it locally." : "No preview available for this file type."}
+      </p>
+    </div>
   );
 }
