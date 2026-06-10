@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
+import { addInvite, listInvites } from "@/lib/invites.js";
 import { zPath } from "@/lib/zod-helpers";
 
 const Body = z.object({
@@ -25,7 +26,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
     WHERE m.drive_id = ?
     ORDER BY m.created_at DESC
   `).all(driveId);
-  return NextResponse.json({ members, myRole: role });
+  // Pending invites are an owner-only concern (they expose invited emails).
+  const pending = atLeast(role, "owner") ? listInvites(driveId) : [];
+  return NextResponse.json({ members, pending, myRole: role });
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
@@ -41,7 +44,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const invitee = db
     .prepare("SELECT id FROM users WHERE lower(email) = lower(?)")
     .get(body.data.email) as { id: string } | undefined;
-  if (!invitee) return NextResponse.json({ error: "user not found — they must create an account first" }, { status: 404 });
+  if (!invitee) {
+    // No account yet → record a pending invite that converts to a grant on
+    // signup, instead of dead-ending the owner with a 404.
+    addInvite(driveId, body.data.email, body.data.path, body.data.role, user.id);
+    return NextResponse.json({ ok: true, pending: true }, { status: 202 });
+  }
   const id = nanoid(12);
   // Upgrade-only upsert: re-inviting an existing member must never lower
   // their role (mergeRoleUpgradeOnly, expressed inline in SQL). The CASE

@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
-  Search, X, ArrowUp, ArrowDown, SearchX,
+  Search, X, ArrowUp, ArrowDown, SearchX, Settings,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { SortKey, SortState } from "@/lib/sort-entries";
@@ -128,11 +128,12 @@ export function DriveSidebar({
 
 export function DriveHeader({
   setSidebarOpen, crumbs, setPath, canEdit, onUpload, setShareOpen, path, role,
-  setAgentModalOpen, setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery,
+  setAgentModalOpen, setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery, driveId,
 }: {
   setSidebarOpen: (v: boolean) => void;
   crumbs: Crumb[];
   setPath: (next: string) => void;
+  driveId: string;
   canEdit: boolean;
   onUpload: (files: FileList | null) => void;
   setShareOpen: (v: { path: string; focus?: "sell" } | null) => void;
@@ -252,6 +253,16 @@ export function DriveHeader({
           >
             <Bot className="w-4 h-4" /> <span className="hidden sm:inline">Agent</span>
           </button>
+        )}
+        {isOwner && (
+          <Link
+            href={`/d/${driveId}/manage`}
+            aria-label="Manage members & settings"
+            title="Manage"
+            className="flex items-center gap-2 rounded-full border border-drive-border px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-hover"
+          >
+            <Settings className="w-4 h-4" /> <span className="hidden sm:inline">Manage</span>
+          </Link>
         )}
         <button
           aria-label="Folder chat"
