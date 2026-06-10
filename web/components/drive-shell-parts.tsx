@@ -13,7 +13,7 @@ import {
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu, rowMenuItems, type Action } from "./row-menu";
-import { fileIcon } from "./file-icons";
+import { fileIcon, fileIconForName } from "./file-icons";
 import { Badge, Card, EmptyState, IconButton, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
 
 // Shared grid track for FileGrid + its skeleton so the loading state matches.
@@ -685,26 +685,34 @@ export function ShowcaseSection({ driveId, items }: { driveId: string; items: Sh
   if (items.length === 0) return null;
   return (
     <section className="mt-8">
-      <div className="px-1 text-xs uppercase tracking-wide text-drive-muted">For sale</div>
-      <ul className="mt-1 text-sm">
-        {items.map((it) => (
-          <li key={it.shareId} className="border-b border-drive-border/70">
-            <button
+      <div className="flex items-center gap-2 px-1 mb-2 text-label uppercase text-drive-muted">
+        <Lock className="w-3.5 h-3.5" /> For sale
+      </div>
+      <div className={GRID_CLASS}>
+        {items.map((it) => {
+          // leafName is the ONLY path info the showcase DTO carries (security:
+          // never the full path). Guess the type icon from the leaf alone.
+          const { Icon, className } = fileIconForName(it.leafName);
+          return (
+            <Card
+              key={it.shareId}
+              interactive
               onClick={() => { window.location.href = `/api/drives/${driveId}/showcase/${it.shareId}`; }}
-              className="w-full flex items-center gap-3 py-3 sm:py-2 px-1 hover:bg-drive-hover cursor-pointer text-left"
+              className="group relative flex flex-col items-center gap-2 text-center"
             >
-              <Lock className="w-5 h-5 text-drive-muted shrink-0" />
-              <span className="flex-1 min-w-0 truncate">{it.leafName}</span>
-              {/* Not X402Badge: it hardcodes "$…USDC", but showcase prices are in
-                  the drive's policy currency. NULL currency = legacy share —
-                  settle falls back to USDC, so label it the same. */}
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg bg-drive-selected text-xs font-semibold tabular-nums shrink-0">
-                {it.price.toFixed(2)} {it.currency ?? "USDC"}
+              {/* Lock overlay marks it as paywalled until purchased. */}
+              <span className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-full bg-drive-bg/80 text-drive-muted">
+                <Lock className="w-3.5 h-3.5" />
               </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+              <Icon className={clsx("w-12 h-12 shrink-0", className)} />
+              <span className="w-full truncate text-body" title={it.leafName}>{it.leafName}</span>
+              {/* Policy currency, not hardcoded USDC. NULL = legacy → USDC. */}
+              <Badge tone="sale">{it.price.toFixed(2)} {it.currency ?? "USDC"}</Badge>
+              <span className="text-caption text-drive-accent opacity-0 group-hover:opacity-100 transition">Buy to unlock →</span>
+            </Card>
+          );
+        })}
+      </div>
     </section>
   );
 }
