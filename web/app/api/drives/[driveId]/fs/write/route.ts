@@ -6,7 +6,11 @@ import { getUserTier, TIER_FILE_LIMIT, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
-const MAX_WRITE_BYTES = parseInt(process.env.AINDRIVE_MAX_WRITE_BYTES ?? String(16 * 1024 * 1024), 10);
+// Default 100 MB so ordinary video/image uploads go through (16 MB rejected most
+// videos). This path base64-encodes the whole file into one JSON body, so it's
+// memory-bound — true large-file (GB) uploads want a streamed/chunked transfer
+// to the agent (follow-up). Override per deployment via AINDRIVE_MAX_WRITE_BYTES.
+const MAX_WRITE_BYTES = parseInt(process.env.AINDRIVE_MAX_WRITE_BYTES ?? String(100 * 1024 * 1024), 10);
 
 const Body = z.object({
   path: zRequiredPath,
