@@ -12,3 +12,5 @@ export { Select } from "./Select";
 export type { SelectProps } from "./Select";
 export { Toggle } from "./Toggle";
 export type { ToggleProps } from "./Toggle";
+export { Menu } from "./Menu";
+export type { MenuProps, MenuItem } from "./Menu";
