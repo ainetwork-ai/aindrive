@@ -1,24 +1,55 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAccount, useWalletClient } from "wagmi";
+import { useAccount, usePublicClient, useWalletClient } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { wrapFetchWithPayment } from "x402-fetch";
+import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { ExactEvmScheme, createPermit2ApprovalTx, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
 import { toast } from "sonner";
 import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
+import type { Account, Chain, Transport, WalletClient } from "viem";
 import { Button } from "@/components/ui";
 
+// v2 requirement as mirrored in the 402 body (the x402 client itself consumes
+// the PAYMENT-REQUIRED header; this body copy only drives the gate UI).
 type PaymentRequirements = {
   scheme: string;
-  network: string;
-  maxAmountRequired: string;
-  resource: string;
-  description: string;
+  network: string; // CAIP-2, e.g. "eip155:8453"
+  amount: string;  // atomic units
   payTo: string;
   asset: string;
   maxTimeoutSeconds: number;
-  mimeType: string;
+  extra?: { assetTransferMethod?: string; name?: string; version?: string };
 };
+
+// Human chain label for the CAIP-2 wire id shown on the paywall.
+const NETWORK_LABELS: Record<string, string> = {
+  "eip155:8453": "Base",
+  "eip155:84532": "Base Sepolia",
+};
+
+// wagmi WalletClient → the x402 ClientEvmSigner shape (address +
+// signTypedData). Mirrors @x402/paywall's browserAdapter, which is not
+// publicly exported from the SDK.
+type ConnectedWalletClient = WalletClient<Transport, Chain, Account>;
+function walletClientToSigner(wc: ConnectedWalletClient) {
+  return {
+    address: wc.account.address,
+    signTypedData: (message: {
+      domain: Record<string, unknown>;
+      types: Record<string, unknown>;
+      primaryType: string;
+      message: Record<string, unknown>;
+    }) =>
+      wc.signTypedData({
+        account: wc.account,
+        domain: message.domain,
+        types: message.types,
+        primaryType: message.primaryType,
+        message: message.message,
+      } as Parameters<ConnectedWalletClient["signTypedData"]>[0]),
+  };
+}
 
 type CheckResponse =
   | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string }
@@ -37,9 +68,14 @@ export function ShareGate({ token }: { token: string }) {
   const [state, setState] = useState<State>("loading");
   const [data, setData] = useState<CheckResponse | null>(null);
   const [paying, setPaying] = useState(false);
+  // Permit2 tokens need a one-time on-chain approval before the gasless pay
+  // signature can settle: null = unknown/checking, true = approve step shown.
+  const [approvalNeeded, setApprovalNeeded] = useState<boolean | null>(null);
+  const [approving, setApproving] = useState(false);
   const router = useRouter();
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
   const { data: walletClient } = useWalletClient();
+  const publicClient = usePublicClient();
 
   // Consume the share into a persistent drive_members grant, then hand the
   // visitor off to the real drive at the share's path (not root).
@@ -96,24 +132,79 @@ export function ShareGate({ token }: { token: string }) {
     if (!requirement) return "";
     const currency = data && "accepts" in data ? data.currency : undefined;
     const symbol = currency?.symbol ?? "USDC";
-    const amount = (Number(requirement.maxAmountRequired) / 10 ** (currency?.decimals ?? 6)).toFixed(2);
+    const amount = (Number(requirement.amount) / 10 ** (currency?.decimals ?? 6)).toFixed(2);
     return symbol === "USDC" ? `$${amount} USDC` : `${amount} ${symbol}`;
   }, [requirement, data]);
+
+  const tokenSymbol = (data && "accepts" in data ? data.currency?.symbol : undefined) ?? "USDC";
+  const isPermit2 = requirement?.extra?.assetTransferMethod === "permit2";
+
+  // Permit2 pre-check: read the payer's ERC-20 allowance to the Permit2
+  // contract before they sign, so the approve step shows up front instead of
+  // as a failed payment. The server's 412 stays as the authoritative fallback
+  // (e.g. when this probe fails or the allowance races to spent).
+  useEffect(() => {
+    if (!isPermit2) { setApprovalNeeded(false); return; }
+    if (!requirement || !address || !publicClient) { setApprovalNeeded(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const allowance = await publicClient.readContract(
+          getPermit2AllowanceReadParams({
+            tokenAddress: requirement.asset as `0x${string}`,
+            ownerAddress: address,
+          }),
+        );
+        if (!cancelled) setApprovalNeeded(allowance < BigInt(requirement.amount));
+      } catch {
+        if (!cancelled) setApprovalNeeded(null); // unknown — 412 fallback covers us
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isPermit2, requirement, address, publicClient]);
+
+  // One-time on-chain approval that lets the Permit2 contract move this token
+  // for the payer (the pay signature itself stays gasless).
+  async function approve() {
+    if (!walletClient || !publicClient || !requirement) { toast.error("Connect your wallet first"); return; }
+    setApproving(true);
+    try {
+      const tx = createPermit2ApprovalTx(requirement.asset as `0x${string}`);
+      const hash = await walletClient.sendTransaction({ to: tx.to, data: tx.data });
+      await publicClient.waitForTransactionReceipt({ hash });
+      setApprovalNeeded(false);
+      toast.success(`${tokenSymbol} approved — you can pay now.`);
+    } catch (e) {
+      toast.error((e as Error).message || "approval failed");
+    } finally {
+      setApproving(false);
+    }
+  }
 
   async function pay() {
     if (!walletClient) { toast.error("Connect your wallet first"); return; }
     if (!requirement) return;
     setPaying(true);
     try {
-      // wrapFetchWithPayment expects a Signer; viem WalletClient from wagmi is compatible at runtime.
-      // maxValue is in the payment token's atomic units. Allow up to the required amount.
-      const max = BigInt(requirement.maxAmountRequired);
-      const fetchWithPay = wrapFetchWithPayment(
-        globalThis.fetch,
-        walletClient as unknown as Parameters<typeof wrapFetchWithPayment>[1],
-        max,
+      const displayedMax = BigInt(requirement.amount);
+      const client = new x402Client();
+      client.register("eip155:*", new ExactEvmScheme(walletClientToSigner(walletClient)));
+      // Replaces v1's maxValue guard: never sign for more than the price this
+      // paywall displayed, even if the server re-quotes higher on the retry.
+      client.registerPolicy((_version, reqs) =>
+        reqs.filter((r) => {
+          try { return BigInt(r.amount) <= displayedMax; } catch { return false; }
+        }),
       );
+      const fetchWithPay = wrapFetchWithPayment(globalThis.fetch, client);
       const res = await fetchWithPay(`/api/s/${token}`);
+      // 412 = Permit2 allowance missing (raced past the pre-check): show the
+      // approve step instead of a dead "payment failed".
+      if (res.status === 412) {
+        setApprovalNeeded(true);
+        toast.error(`One-time ${tokenSymbol} approval needed before paying.`);
+        return;
+      }
       const body = await res.json();
       if (res.ok) {
         const okBody = body as { driveId: string; path: string };
@@ -217,7 +308,7 @@ export function ShareGate({ token }: { token: string }) {
         <div className="mt-6 rounded-xl border border-drive-border bg-drive-panel px-5 py-4 text-center">
           <div className="text-label uppercase text-drive-muted">Price</div>
           <div className="mt-1 text-display text-drive-text tabular-nums">{amountLabel}</div>
-          <div className="mt-1 text-caption text-drive-muted">on {requirement.network}</div>
+          <div className="mt-1 text-caption text-drive-muted">on {NETWORK_LABELS[requirement.network] ?? requirement.network}</div>
         </div>
 
         {/* Recipient — secondary, mono, truncated. */}
@@ -226,22 +317,42 @@ export function ShareGate({ token }: { token: string }) {
           <span className="font-mono text-drive-text truncate" title={payTo}>{payToShort}</span>
         </div>
 
-        {/* Wallet connect + pay — clear primary action hierarchy. */}
+        {/* Wallet connect + pay — clear primary action hierarchy. Permit2
+            tokens insert a one-time approve step before the pay signature. */}
         <div className="mt-6 flex flex-col items-stretch gap-3">
           <div className="flex justify-center">
             <ConnectButton showBalance={false} chainStatus="icon" />
           </div>
-          <Button
-            variant="filled"
-            size="md"
-            loading={paying}
-            disabled={!isConnected || paying}
-            icon={isConnected ? <Wallet className="w-4 h-4" /> : undefined}
-            onClick={pay}
-            className="w-full justify-center"
-          >
-            {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
-          </Button>
+          {isConnected && isPermit2 && approvalNeeded ? (
+            <>
+              <Button
+                variant="filled"
+                size="md"
+                loading={approving}
+                disabled={approving}
+                icon={<ShieldCheck className="w-4 h-4" />}
+                onClick={approve}
+                className="w-full justify-center"
+              >
+                {approving ? "Approving…" : `Approve ${tokenSymbol} (one-time)`}
+              </Button>
+              <p className="text-caption text-drive-muted text-center">
+                Step 1 of 2 — a one-time on-chain approval lets {tokenSymbol} be spent for this payment. You’ll pay right after.
+              </p>
+            </>
+          ) : (
+            <Button
+              variant="filled"
+              size="md"
+              loading={paying}
+              disabled={!isConnected || paying}
+              icon={isConnected ? <Wallet className="w-4 h-4" /> : undefined}
+              onClick={pay}
+              className="w-full justify-center"
+            >
+              {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
+            </Button>
+          )}
         </div>
 
         <p className="mt-4 flex items-center justify-center gap-1.5 text-caption text-drive-muted text-center">
