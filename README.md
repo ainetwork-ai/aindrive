@@ -199,43 +199,48 @@ server responds with **HTTP 402 Payment Required** following the
 
 ```
 HTTP/1.1 402 Payment Required
+PAYMENT-REQUIRED: <base64(JSON.stringify({
+  x402Version: 2,
+  resource: { url: "https://aindrive.ainetwork.ai/api/s/<token>",
+              description: "aindrive: access to share <token>",
+              mimeType: "application/json" },
+  accepts: [{
+    scheme: "exact",
+    network: "eip155:84532",
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    amount: "500000",
+    payTo: "0x...owner-payout",
+    maxTimeoutSeconds: 300,
+    extra: { assetTransferMethod: "eip3009", name: "USDC", version: "2" }
+  }],
+  error: "PAYMENT-SIGNATURE header is required"
+}))>
 Content-Type: application/json
 
-{
-  "x402Version": 1,
-  "accepts": [
-    {
-      "scheme": "exact",
-      "network": "base-sepolia",
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-      "maxAmountRequired": "500000",
-      "payTo": "0x...owner-payout",
-      "resource": "https://aindrive.ainetwork.ai/api/s/<token>",
-      "description": "aindrive: access to share <token>",
-      "maxTimeoutSeconds": 300,
-      "mimeType": "application/json"
-    }
-  ],
-  "error": "X-PAYMENT header is required"
-}
+{ ...same accepts mirrored as render data for the gate UI, plus
+  "currency": { "symbol": "USDC", "decimals": 6 } }
 ```
 
-The visitor (human via wallet popup, or AI agent automatically) signs an
-EIP-3009 USDC authorisation, base64-encodes the resulting payload, and
-**re-issues the same `GET /api/s/<token>` with an `X-PAYMENT` header**.
-Server hands the payload to the x402 facilitator (`AINDRIVE_X402_FACILITATOR`,
-default `https://x402.org/facilitator`) for `verify` + `settle`, then
-**inserts the payer wallet into folder_access** and issues a Meadowcap cap.
+The visitor (human via wallet popup, or AI agent automatically) signs the
+payment authorisation, base64-encodes the resulting payload, and
+**re-issues the same `GET /api/s/<token>` with a `PAYMENT-SIGNATURE` header**.
+Server hands the payload to the x402 facilitator for `verify` + `settle`, then
+**writes the payer's grant** and issues a Meadowcap cap.
 From that moment, the wallet has permanent access (until owner revokes).
 
-> **Spec note.** aindrive uses **[x402 protocol v1](https://x402.org)**
-> (`x402Version: 1` in every envelope). v1 communicates payment requirements
-> in the **JSON body** (`accepts: [PaymentRequirements]`), the client carries
-> the signed `PaymentPayload` in an `X-PAYMENT` header on retry, and on
-> success the server may set an `X-PAYMENT-RESPONSE` header with the
-> facilitator's settle receipt. (x402 v2 renames these to
-> `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`; aindrive
-> tracks v2 via the `x402` npm package and will move with it.)
+> **Spec note.** aindrive speaks **[x402 protocol v2](https://x402.org)**
+> (`@x402/*` SDK). Requirements travel in the **`PAYMENT-REQUIRED` response
+> header**, the signed `PaymentPayload` in the **`PAYMENT-SIGNATURE` request
+> header**; the 402 JSON body is aindrive's own UI render data. Two
+> asset-transfer methods are supported per token
+> (`extra.assetTransferMethod`): **`eip3009`** (USDC-style
+> `transferWithAuthorization`, fully gasless) and **`permit2`** (any ERC-20 —
+> the buyer approves the canonical Permit2 contract once on-chain, then pays
+> gaslessly; a missing approval surfaces as **HTTP 412**
+> `permit2_allowance_required` and the gate walks the buyer through the
+> approve step). Facilitator config: `AINDRIVE_X402_FACILITATOR` URL, or
+> `CDP_API_KEY_ID`/`CDP_API_KEY_SECRET` for Coinbase CDP (mainnet), else the
+> public `https://x402.org/facilitator` on testnet only.
 
 Payment is a **one-shot, lifetime grant** — no recurring billing, no per-file
 charges. The mental model is "buying a key", not "paying per door open".
@@ -287,74 +292,62 @@ Server checks, in order:
    `folder_access` for this `(drive_id, path, wallet_address)`? → return `200`.
 5. Otherwise → return `402` with the x402 payment requirements in the body.
 
-The `402` response follows the [x402 spec](https://x402.org): the
-requirements live in the JSON body under `accepts[]`, not in a header. Any
-x402-aware client (browser wallet, AI agent, autonomous script) can pay
-automatically:
+The `402` response follows the [x402 v2 spec](https://x402.org): the
+requirements travel base64-encoded in the **`PAYMENT-REQUIRED` response
+header** (the JSON body mirrors them as render data for aindrive's own gate
+UI). Any x402-aware client (browser wallet, AI agent, autonomous script) can
+pay automatically. See the annotated example in "x402 in 30 seconds" above —
+`network` is CAIP-2 (`eip155:8453` Base / `eip155:84532` Base Sepolia) and
+`extra.assetTransferMethod` tells the client how this token settles.
 
-```http
-HTTP/1.1 402 Payment Required
-Content-Type: application/json
+### Step 3 — visitor pays (PAYMENT-SIGNATURE header)
 
-{
-  "x402Version": 1,
-  "accepts": [{
-    "scheme": "exact",
-    "network": "base-sepolia",
-    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-    "maxAmountRequired": "500000",
-    "payTo": "0x...owner-payout",
-    "resource": "https://aindrive.ainetwork.ai/api/s/<token>",
-    "description": "aindrive: access to share <token>",
-    "maxTimeoutSeconds": 300,
-    "mimeType": "application/json"
-  }],
-  "error": "X-PAYMENT header is required"
-}
-```
-
-### Step 3 — visitor pays (X-PAYMENT header)
-
-The visitor signs an EIP-3009 `transferWithAuthorization` for `0.50 USDC`
-on Base to the owner's payout address — no separate broadcast needed; the
-facilitator submits and confirms it. The result is wrapped in a
-`PaymentPayload` and base64-encoded:
+For an **eip3009** token (USDC) the visitor signs a
+`transferWithAuthorization` for `0.50 USDC` to the owner's payout address —
+no broadcast needed; the facilitator submits and confirms it. For a
+**permit2** token (any other ERC-20, e.g. FANCO) the visitor signs a
+`PermitWitnessTransferFrom` against the canonical Permit2 contract instead —
+after a one-time on-chain `approve(Permit2)` (the gate shows this as an
+explicit "Approve once" step; a missing approval comes back as **412**).
+Either signature is wrapped in a `PaymentPayload` and base64-encoded:
 
 ```http
 GET /api/s/<token>
 Cookie: aindrive_wallet=<their-jwt>     ← optional; binds payer to a session
-X-PAYMENT: <base64(JSON.stringify({
-  x402Version: 1,
-  scheme: "exact",
-  network: "base-sepolia",
+PAYMENT-SIGNATURE: <base64(JSON.stringify({
+  x402Version: 2,
+  accepted: { ...the chosen requirement... },
   payload: {
-    authorization: { from, to, value, validAfter, validBefore, nonce },
+    authorization: { from, to, value, validAfter, validBefore, nonce },  // eip3009
+    // — or — permit2Authorization: { from, permitted, spender, nonce, deadline, witness },
     signature
   }
 }))>
 ```
 
 In `AINDRIVE_DEV_BYPASS_X402=1` mode the server accepts a minimally-shaped
-JSON for local demos; in prod it parses with the official `PaymentPayloadSchema`
-from `x402/types`.
+JSON for local demos; in prod the facilitator is the authority on payload
+validity (`verify` rejects anything malformed or unsigned).
 
 ### Step 4 — server verifies + grants
 
 Server-side flow (atomic, in `web/app/api/s/[token]/route.ts`):
 
 ```js
-// 1. Load share row + decode the X-PAYMENT envelope
+// 1. Load share row + decode the PAYMENT-SIGNATURE envelope
 const share = db.prepare("SELECT * FROM shares WHERE token = ?").get(token);
-const payload = PaymentPayloadSchema.parse(JSON.parse(safeBase64Decode(xPayment)));
+const payload = decodePaymentSignatureHeader(paymentSig);
 
-// 2. verify + settle via the x402 facilitator (AINDRIVE_X402_FACILITATOR,
-//    defaults to https://x402.org/facilitator)
-const facilitator = useFacilitator({ url: FACILITATOR_URL });
+// 2. verify + settle via the x402 facilitator (AINDRIVE_X402_FACILITATOR url,
+//    or CDP_API_KEY_ID/SECRET, or https://x402.org/facilitator on testnet).
+//    A permit2 payment whose payer never approved Permit2 fails verify with
+//    invalidReason "permit2_allowance_required" → returned as HTTP 412.
+const facilitator = new HTTPFacilitatorClient(facilitatorConfig);
 const v = await facilitator.verify(payload, requirements);
-if (!v.isValid) return 402;
+if (!v.isValid) return v.invalidReason === "permit2_allowance_required" ? 412 : 402;
 const s = await facilitator.settle(payload, requirements);
 if (!s.success) return 402;
-const payer = (s.payer || payload.payload.authorization.from).toLowerCase();
+const payer = (s.payer || payerFromPayload(payload)).toLowerCase();
 const txHash = s.transaction;
 
 // 3. INSERT the wallet into folder_access (UNIQUE constraint = idempotent)
