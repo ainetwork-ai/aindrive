@@ -714,7 +714,10 @@ function FileGrid({
                 />
               </div>
             )}
-            <GridVisual driveId={driveId} entry={e} Icon={Icon} tone={tone} />
+            {/* Keyed by path+mtime so replacing the file remounts the visual —
+                otherwise a failed thumbnail's `broken` state would stick to the
+                reused instance and pin the icon fallback forever. */}
+            <GridVisual key={`${e.path}-${e.mtimeMs}`} driveId={driveId} entry={e} Icon={Icon} tone={tone} />
             <span className="w-full text-center text-caption text-drive-text line-clamp-2 break-words" title={e.name}>
               {e.name}
             </span>
