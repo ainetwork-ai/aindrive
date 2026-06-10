@@ -290,6 +290,7 @@ export function ShareDialog({
           members={members}
           isOwner={isOwner}
           currentUserEmail={me.email}
+          currentPath={defaultPath}
           changeMemberRole={changeMemberRole}
           removeMember={removeMember}
           busy={busy}
@@ -302,6 +303,7 @@ export function ShareDialog({
           setRole={setRole}
           invite={invite}
           busy={busy}
+          currentPath={defaultPath}
         />
 
         <FreeLinkSection
