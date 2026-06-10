@@ -5,15 +5,16 @@
 // markup only — behavior is unchanged because state ownership is unchanged.
 import Link from "next/link";
 import clsx from "clsx";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Share2, HardDrive, Bot, MessageSquare, Menu, Lock,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
-import { RowMenu } from "./row-menu";
+import { RowMenu, rowMenuItems, type Action } from "./row-menu";
 import { fileIcon } from "./file-icons";
-import { Badge, Card, EmptyState, IconButton, Skeleton, Tooltip } from "@/components/ui";
+import { Badge, Card, EmptyState, IconButton, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
 
 // Shared grid track for FileGrid + its skeleton so the loading state matches.
 const GRID_CLASS = "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3";
@@ -249,6 +250,7 @@ function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode
 
 export function FileTable({
   loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload, viewMode,
+  onNewFolder, ctxMenu, setCtxMenu,
 }: {
   loading: boolean;
   err: string | null;
@@ -262,19 +264,56 @@ export function FileTable({
   isOwner: boolean;
   onUpload: (files: FileList | null) => void;
   viewMode: ViewMode;
+  onNewFolder: () => void;
+  ctxMenu: { entry: DriveEntry | null; x: number; y: number } | null;
+  setCtxMenu: (v: { entry: DriveEntry | null; x: number; y: number } | null) => void;
 }) {
-  if (loading) return viewMode === "grid" ? <GridSkeleton /> : <ListSkeleton />;
-  if (err) {
-    return (
+  // Hidden input backing the context-menu "Upload…" item (no label wrapper
+  // here — the menu item clicks it programmatically).
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+
+  // Open the positioned menu at the cursor. entry=null → empty-area menu.
+  const openCtx = (ev: React.MouseEvent, entry: DriveEntry | null) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    setCtxMenu({ entry, x: ev.clientX, y: ev.clientY });
+  };
+
+  // Items for whatever the menu targets: an entry's row actions, or the
+  // empty-area New folder / Upload (canEdit only). Same gates as RowMenu.
+  const ctxItems: MenuItem[] = !ctxMenu
+    ? []
+    : ctxMenu.entry
+      ? rowMenuItems({
+          hasPaidShare: !!paidByPath.get(ctxMenu.entry.path),
+          onAction: (a: Action) => onRowAction(ctxMenu.entry!, a),
+          canSell: isOwner,
+          canManage: canEdit,
+        })
+      : canEdit
+        ? [
+            { label: "New folder", icon: <FolderPlus className="w-4 h-4" />, onClick: onNewFolder },
+            { label: "Upload…", icon: <Upload className="w-4 h-4" />, onClick: () => uploadInputRef.current?.click() },
+          ]
+        : [];
+
+  const contextMenu = ctxMenu && ctxItems.length > 0 && (
+    <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxItems} onClose={() => setCtxMenu(null)} />
+  );
+
+  let body: React.ReactNode;
+  if (loading) {
+    body = viewMode === "grid" ? <GridSkeleton /> : <ListSkeleton />;
+  } else if (err) {
+    body = (
       <EmptyState
         icon={<AlertTriangle className="text-amber-500" />}
         title="Couldn’t load this folder"
         description={err}
       />
     );
-  }
-  if (entries.length === 0) {
-    return (
+  } else if (entries.length === 0) {
+    body = (
       <EmptyState
         icon={<FolderOpen />}
         title="This folder is empty"
@@ -282,9 +321,8 @@ export function FileTable({
         action={canEdit ? <UploadButton onUpload={onUpload} /> : undefined}
       />
     );
-  }
-  if (viewMode === "grid") {
-    return (
+  } else if (viewMode === "grid") {
+    body = (
       <FileGrid
         entries={entries}
         paidByPath={paidByPath}
@@ -294,65 +332,180 @@ export function FileTable({
         canEdit={canEdit}
         onRowAction={onRowAction}
         isOwner={isOwner}
+        onContextMenuEntry={openCtx}
       />
     );
-  }
-  return (
-    <table className="w-full text-body border-separate border-spacing-0">
-      <thead className="text-label uppercase text-drive-muted">
-        <tr>
-          <th className="text-left font-medium px-3 pb-2">Name</th>
-          <th className="text-left font-medium px-3 pb-2 hidden sm:table-cell w-44">Modified</th>
-          <th className="text-right font-medium px-3 pb-2 hidden md:table-cell w-28">Size</th>
-          <th className="w-10" />
-        </tr>
-      </thead>
-      <tbody>
-        {entries.map((e) => {
-          const paid = paidByPath.get(e.path);
-          const { Icon, className: tone } = fileIcon(e);
-          const isSelected = selected?.path === e.path;
-          return (
-            <tr
-              key={e.path}
-              className={clsx(
-                "group h-11 cursor-pointer transition-colors",
-                isSelected ? "bg-drive-selected/60" : "hover:bg-drive-hover",
-              )}
-              onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
-            >
-              <td className="px-3 first:rounded-l-lg align-middle">
-                <div className="flex items-center gap-3 min-w-0">
-                  <Icon className={clsx("w-5 h-5 shrink-0", tone)} />
-                  <span className="truncate">{e.name}</span>
-                  {paid && (
-                    <Badge tone="sale" className="shrink-0">
-                      ${paid.price_usdc!.toFixed(2)}
-                    </Badge>
-                  )}
-                </div>
-              </td>
-              <td className="px-3 align-middle hidden sm:table-cell text-caption text-drive-muted whitespace-nowrap">
-                {e.mtimeMs ? new Date(e.mtimeMs).toLocaleString() : "—"}
-              </td>
-              <td className="px-3 align-middle hidden md:table-cell text-right text-caption text-drive-muted tabular-nums">
-                {e.isDir ? "—" : prettyBytes(e.size)}
-              </td>
-              <td className="px-1 align-middle text-right whitespace-nowrap last:rounded-r-lg">
-                {canEdit && (
-                  <RowMenu
-                    hasPaidShare={!!paid}
-                    onAction={(a) => onRowAction(e, a)}
-                    canSell={isOwner}
-                    canManage={canEdit}
-                  />
+  } else {
+    body = (
+      <table className="w-full text-body border-separate border-spacing-0">
+        <thead className="text-label uppercase text-drive-muted">
+          <tr>
+            <th className="text-left font-medium px-3 pb-2">Name</th>
+            <th className="text-left font-medium px-3 pb-2 hidden sm:table-cell w-44">Modified</th>
+            <th className="text-right font-medium px-3 pb-2 hidden md:table-cell w-28">Size</th>
+            <th className="w-10" />
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((e) => {
+            const paid = paidByPath.get(e.path);
+            const { Icon, className: tone } = fileIcon(e);
+            const isSelected = selected?.path === e.path;
+            return (
+              <tr
+                key={e.path}
+                className={clsx(
+                  "group h-11 cursor-pointer transition-colors",
+                  isSelected ? "bg-drive-selected/60" : "hover:bg-drive-hover",
                 )}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
+                onContextMenu={(ev) => openCtx(ev, e)}
+              >
+                <td className="px-3 first:rounded-l-lg align-middle">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Icon className={clsx("w-5 h-5 shrink-0", tone)} />
+                    <span className="truncate">{e.name}</span>
+                    {paid && (
+                      <Badge tone="sale" className="shrink-0">
+                        ${paid.price_usdc!.toFixed(2)}
+                      </Badge>
+                    )}
+                  </div>
+                </td>
+                <td className="px-3 align-middle hidden sm:table-cell text-caption text-drive-muted whitespace-nowrap">
+                  {e.mtimeMs ? new Date(e.mtimeMs).toLocaleString() : "—"}
+                </td>
+                <td className="px-3 align-middle hidden md:table-cell text-right text-caption text-drive-muted tabular-nums">
+                  {e.isDir ? "—" : prettyBytes(e.size)}
+                </td>
+                <td className="px-1 align-middle text-right whitespace-nowrap last:rounded-r-lg">
+                  {canEdit && (
+                    <RowMenu
+                      hasPaidShare={!!paid}
+                      onAction={(a) => onRowAction(e, a)}
+                      canSell={isOwner}
+                      canManage={canEdit}
+                    />
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+  }
+
+  return (
+    // min-h-full so empty-area right-click works across the whole scroll area,
+    // not just the few rows. The empty-area handler fires when the event wasn't
+    // stopped by a row/card (entry handlers stopPropagation).
+    <div className="min-h-full" onContextMenu={(ev) => openCtx(ev, null)}>
+      {body}
+      {contextMenu}
+      <input ref={uploadInputRef} type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
+    </div>
+  );
+}
+
+/**
+ * Cursor-positioned popover for the right-click menu. Shares the Menu
+ * primitive's item visuals but is `fixed` to the viewport at (x, y) — the
+ * dropdown Menu aligns to a trigger, which a context menu has none of. Clamps
+ * to the viewport after mount, closes on outside-click / Esc / scroll, and
+ * supports arrow-key navigation (autofocuses the first item).
+ */
+function ContextMenu({
+  x, y, items, onClose,
+}: {
+  x: number;
+  y: number;
+  items: MenuItem[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [pos, setPos] = useState({ x, y });
+  const [active, setActive] = useState(() => items.findIndex((it) => !it.disabled));
+
+  // Clamp so the menu stays on-screen (flip left/up near the right/bottom edge).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const nx = x + width > window.innerWidth ? Math.max(4, x - width) : x;
+    const ny = y + height > window.innerHeight ? Math.max(4, y - height) : y;
+    setPos({ x: nx, y: ny });
+  }, [x, y]);
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    // Any scroll dismisses (the anchor point would drift otherwise).
+    document.addEventListener("mousedown", onDown, true);
+    window.addEventListener("scroll", onClose, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("scroll", onClose, true);
+    };
+  }, [onClose]);
+
+  // Track DOM focus to the highlighted item so SR + visuals follow keyboard nav.
+  useEffect(() => {
+    if (active >= 0) itemRefs.current[active]?.focus();
+  }, [active]);
+
+  const move = (dir: 1 | -1) => {
+    const n = items.length;
+    setActive((i) => {
+      for (let s = 1; s <= n; s++) {
+        const j = (i + dir * s + n * s) % n;
+        if (!items[j]?.disabled) return j;
+      }
+      return i;
+    });
+  };
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      tabIndex={-1}
+      style={{ left: pos.x, top: pos.y }}
+      className="fixed z-50 min-w-[12rem] py-1 bg-drive-panel rounded-md shadow-e2 border border-drive-border animate-[menu-in_120ms_ease-out] origin-top-left"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") { e.preventDefault(); onClose(); }
+        else if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+        else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (!items[active]?.disabled) { items[active].onClick(); onClose(); }
+        }
+      }}
+    >
+      {items.map((item, i) => (
+        <button
+          key={i}
+          ref={(el) => { itemRefs.current[i] = el; }}
+          type="button"
+          role="menuitem"
+          tabIndex={-1}
+          disabled={item.disabled}
+          onMouseEnter={() => !item.disabled && setActive(i)}
+          onClick={() => { if (!item.disabled) { item.onClick(); onClose(); } }}
+          className={clsx(
+            "flex w-full items-center gap-2.5 px-3 h-9 text-body text-left outline-none transition-colors",
+            "disabled:opacity-50 disabled:cursor-not-allowed",
+            item.danger ? "text-red-600" : "text-drive-text",
+            active === i && !item.disabled && (item.danger ? "bg-red-50" : "bg-drive-hover"),
+          )}
+        >
+          {item.icon && <span className="shrink-0 w-4 h-4 flex items-center justify-center">{item.icon}</span>}
+          <span className="truncate">{item.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -363,7 +516,7 @@ export function FileTable({
  * (RowMenu already does) so opening the menu doesn't navigate.
  */
 function FileGrid({
-  entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner,
+  entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onContextMenuEntry,
 }: {
   entries: DriveEntry[];
   paidByPath: Map<string, ShareSummary>;
@@ -373,6 +526,7 @@ function FileGrid({
   canEdit: boolean;
   onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
   isOwner: boolean;
+  onContextMenuEntry: (ev: React.MouseEvent, entry: DriveEntry) => void;
 }) {
   return (
     <div className={GRID_CLASS}>
@@ -391,6 +545,7 @@ function FileGrid({
               isSelected && "ring-2 ring-drive-accent/50 bg-drive-selected/40",
             )}
             onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
+            onContextMenu={(ev) => onContextMenuEntry(ev, e)}
           >
             {canEdit && (
               <div className="absolute top-1.5 right-1.5">

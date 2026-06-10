@@ -85,6 +85,8 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     setViewMode(v);
     localStorage.setItem("aindrive:view", v);
   }, []);
+  // Right-click context menu. entry=null → empty-area menu (New folder/Upload).
+  const [ctxMenu, setCtxMenu] = useState<{ entry: DriveEntry | null; x: number; y: number } | null>(null);
 
   const isSyntheticRoot = !!entryItems && path === "";
   const load = useCallback(async () => {
@@ -298,6 +300,9 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
               isOwner={isOwner}
               onUpload={onUpload}
               viewMode={viewMode}
+              onNewFolder={onNewFolder}
+              ctxMenu={ctxMenu}
+              setCtxMenu={setCtxMenu}
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}
