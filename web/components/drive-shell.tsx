@@ -8,7 +8,7 @@ import type { ShowcaseItem } from "@/lib/showcase";
 import { apiFetch } from "@/lib/api-client";
 import {
   DriveSidebar, DriveHeader, FileTable, ShowcaseSection,
-  type DriveSummary, type ShareSummary,
+  type DriveSummary, type ShareSummary, type ViewMode,
 } from "./drive-shell-parts";
 
 // These four are only rendered on user action (open a file, open chat, open
@@ -74,6 +74,19 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // List/grid preference. Starts "list" so SSR + first client render agree
+  // (no hydration mismatch); the persisted choice is read in an effect below.
+  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  useEffect(() => {
+    const saved = localStorage.getItem("aindrive:view");
+    if (saved === "list" || saved === "grid") setViewMode(saved);
+  }, []);
+  const changeViewMode = useCallback((v: ViewMode) => {
+    setViewMode(v);
+    localStorage.setItem("aindrive:view", v);
+  }, []);
+  // Right-click context menu. entry=null → empty-area menu (New folder/Upload).
+  const [ctxMenu, setCtxMenu] = useState<{ entry: DriveEntry | null; x: number; y: number } | null>(null);
 
   const isSyntheticRoot = !!entryItems && path === "";
   const load = useCallback(async () => {
@@ -248,6 +261,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         onNewFolder={onNewFolder}
+        onUpload={onUpload}
         canEdit={canEdit}
         drives={drives}
         driveId={driveId}
@@ -268,6 +282,8 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
           setChatOpen={setChatOpen}
           chatOpen={chatOpen}
           isOwner={isOwner}
+          viewMode={viewMode}
+          setViewMode={changeViewMode}
         />
 
         <section className="flex-1 flex min-h-0">
@@ -283,6 +299,11 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
               canEdit={canEdit}
               onRowAction={onRowAction}
               isOwner={isOwner}
+              onUpload={onUpload}
+              viewMode={viewMode}
+              onNewFolder={onNewFolder}
+              ctxMenu={ctxMenu}
+              setCtxMenu={setCtxMenu}
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}

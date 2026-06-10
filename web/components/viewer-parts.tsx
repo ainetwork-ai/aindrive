@@ -7,10 +7,13 @@ import { X, Save, Download, Wifi, WifiOff } from "lucide-react";
 type Presence = { id: number; name: string; color: string };
 
 export function ViewerHeader({
-  name, isText, status, presence, canEdit, saving, onSave, binaryDataUrl, onClose,
+  name, collaborative, showSave, status, presence, canEdit, saving, onSave, binaryDataUrl, onClose,
 }: {
   name: string;
-  isText: boolean;
+  /** Show collab chrome (status dot, presence avatars, view-only badge) — text + rich-text. */
+  collaborative: boolean;
+  /** Show the manual Save button — Monaco only (rich-text autosaves). */
+  showSave: boolean;
   status: "connecting" | "connected" | "offline";
   presence: Presence[];
   canEdit: boolean;
@@ -23,13 +26,13 @@ export function ViewerHeader({
     <header className="flex items-center justify-between gap-2 p-3 border-b border-drive-border">
       <div className="truncate font-medium flex items-center gap-2 min-w-0 flex-1">
         <span className="truncate">{name}</span>
-        {isText && (
+        {collaborative && (
           <span className={`text-xs flex items-center gap-1 shrink-0 ${status === "connected" ? "text-green-600" : status === "connecting" ? "text-amber-600" : "text-red-600"}`}>
             {status === "connected" ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             {status === "offline" ? "offline" : status === "connecting" ? "connecting" : ""}
           </span>
         )}
-        {isText && presence.length > 0 && (
+        {collaborative && presence.length > 0 && (
           <div className="flex -space-x-1.5 shrink-0 ml-1">
             {presence.slice(0, 6).map((p) => (
               <span
@@ -48,12 +51,12 @@ export function ViewerHeader({
             )}
           </div>
         )}
-        {isText && !canEdit && (
+        {collaborative && !canEdit && (
           <span className="text-[10px] uppercase tracking-wide text-drive-muted bg-drive-sidebar rounded px-1.5 py-0.5 shrink-0">view-only</span>
         )}
       </div>
       <div className="flex items-center gap-1">
-        {isText && canEdit && (
+        {showSave && canEdit && (
           <button onClick={onSave} disabled={saving} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
             <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save"}
           </button>

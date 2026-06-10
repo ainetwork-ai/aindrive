@@ -4,10 +4,18 @@
 // (create-agent-modal.tsx); these are pure render functions that receive data
 // and handlers as props. Extracting markup only — behavior is unchanged.
 import { toast } from "sonner";
-import { Sparkles, BookOpen, Cpu, Shield, Loader2, Copy } from "lucide-react";
+import { Sparkles, BookOpen, Cpu, Shield, Copy, CheckCircle2 } from "lucide-react";
+import { Input, Select, Button, IconButton, SectionCard } from "@/components/ui";
 
 const PERSONA_PLACEHOLDER =
   "e.g. You are the friendly product guide for Acme. Greet visitors warmly, explain product features in plain language, and surface release dates when asked.";
+
+// Shared multiline-control chrome (no Textarea primitive yet — matches Input's
+// token chrome so the form reads consistently).
+const TEXTAREA_CLASS =
+  "w-full rounded-md border border-drive-border bg-drive-panel px-3 py-2 text-body text-drive-text " +
+  "placeholder:text-drive-muted resize-y transition-colors duration-150 outline-none " +
+  "focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent";
 
 export const PROVIDERS = [
   { id: "flock", label: "Flock", defaultModel: "qwen3-30b-a3b-instruct-2507" },
@@ -46,163 +54,96 @@ export function AgentForm({
   onClose: () => void;
 }) {
   return (
-    <div className="p-4 space-y-4 text-sm">
-      {/* basic */}
-      <div className="space-y-2">
-        <label className="block">
-          <span className="text-gray-700">Name</span>
-          <input
-            className="mt-1 w-full border rounded px-2 py-1.5"
-            placeholder="OKR Bot"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={80}
-          />
-        </label>
-        <label className="block">
-          <span className="text-gray-700">Description</span>
-          <input
-            className="mt-1 w-full border rounded px-2 py-1.5"
-            placeholder="Q&A over Q1 OKR docs"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            maxLength={500}
-          />
-        </label>
-        <label className="block">
-          <span className="text-gray-700">Folder</span>
-          <input
-            className="mt-1 w-full border rounded px-2 py-1.5 font-mono"
-            placeholder="docs (empty = whole drive)"
-            value={folder}
-            onChange={(e) => setFolder(e.target.value)}
-          />
-        </label>
+    <div className="space-y-3">
+      {/* Identity */}
+      <div className="space-y-3 rounded-xl border border-drive-border bg-drive-panel p-4">
+        <Input label="Name" placeholder="OKR Bot" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        <Input label="Description" placeholder="Q&A over Q1 OKR docs" value={description} maxLength={500} onChange={(e) => setDescription(e.target.value)} />
+        <Input label="Folder" className="font-mono" placeholder="docs (empty = whole drive)" value={folder} onChange={(e) => setFolder(e.target.value)} />
       </div>
 
-      {/* persona */}
-      <Section icon={<Sparkles className="w-4 h-4 text-violet-600" />} title="Persona">
+      {/* Persona */}
+      <SectionCard icon={<Sparkles className="w-4 h-4" />} title="Persona" description="How the agent introduces itself and replies">
         <textarea
-          className="w-full border rounded px-2 py-1.5 text-sm resize-y"
+          className={TEXTAREA_CLASS}
           rows={4}
+          aria-label="Persona"
           placeholder={PERSONA_PLACEHOLDER}
           value={persona}
-          onChange={(e) => setPersona(e.target.value)}
           maxLength={1500}
+          onChange={(e) => setPersona(e.target.value)}
         />
-        <p className="text-xs text-gray-500 mt-1">
-          How the agent introduces itself and replies. Leave empty for a friendly default.
-        </p>
-      </Section>
+        <p className="mt-1.5 text-caption text-drive-muted">Leave empty for a friendly default.</p>
+      </SectionCard>
 
-      {/* context */}
-      <Section icon={<BookOpen className="w-4 h-4 text-emerald-600" />} title="Context">
-        <select className="border rounded px-2 py-1.5 w-full" disabled>
-          <option>Folder documents</option>
-        </select>
-        <p className="text-xs text-gray-500 mt-1">
-          The agent draws on the documents in this folder when answering. Best for small to mid-size knowledge bases.
+      {/* Context */}
+      <SectionCard icon={<BookOpen className="w-4 h-4" />} title="Context" description="What the agent draws on to answer">
+        <Select value="folder" disabled aria-label="Knowledge source">
+          <option value="folder">Folder documents</option>
+        </Select>
+        <p className="mt-1.5 text-caption text-drive-muted">
+          The agent draws on the documents in this folder. Best for small to mid-size knowledge bases.
         </p>
-      </Section>
+      </SectionCard>
 
-      {/* model */}
-      <Section icon={<Cpu className="w-4 h-4 text-amber-600" />} title="Model">
+      {/* Model */}
+      <SectionCard icon={<Cpu className="w-4 h-4" />} title="Model" description="Provider, model, and sampling">
         <div className="grid grid-cols-2 gap-2">
-          <label className="block">
-            <span className="text-gray-700">Provider</span>
-            <select
-              className="mt-1 border rounded px-2 py-1.5 w-full"
-              value={provider}
-              onChange={(e) => onProviderChange(e.target.value as ProviderId)}
-            >
-              {PROVIDERS.map((p) => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-gray-700">Model</span>
-            <input
-              className="mt-1 border rounded px-2 py-1.5 w-full font-mono text-xs"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-            />
-          </label>
+          <Select label="Provider" value={provider} onChange={(e) => onProviderChange(e.target.value as ProviderId)}>
+            {PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </Select>
+          <Input label="Model" className="font-mono text-caption" value={model} onChange={(e) => setModel(e.target.value)} />
         </div>
-        <label className="block">
-          <span className="text-gray-700">Temperature: {temperature.toFixed(2)}</span>
+        <label className="mt-3 block">
+          <span className="text-caption font-medium text-drive-text">Temperature: {temperature.toFixed(2)}</span>
           <input
             type="range"
             min={0}
             max={1}
             step={0.05}
-            className="mt-1 w-full"
+            className="mt-1.5 w-full accent-drive-accent"
             value={temperature}
             onChange={(e) => setTemperature(Number(e.target.value))}
           />
         </label>
-        <label className="block">
-          <span className="text-gray-700">API key</span>
-          <input
-            type="password"
-            className="mt-1 border rounded px-2 py-1.5 w-full font-mono text-xs"
-            placeholder={isEdit ? "leave empty to keep current key" : "leave empty to use platform default"}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Stored privately within this drive. Not shared with visitors.
-          </p>
-        </label>
-      </Section>
+        <Input
+          label="API key"
+          type="password"
+          className="mt-3 font-mono text-caption"
+          placeholder={isEdit ? "leave empty to keep current key" : "leave empty to use platform default"}
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          helper="Stored privately within this drive. Not shared with visitors."
+        />
+      </SectionCard>
 
-      {/* access */}
-      <Section icon={<Shield className="w-4 h-4 text-sky-600" />} title="Audience">
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked disabled />
-          <span>You (always)</span>
-        </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={policiesAllowCap}
-            onChange={(e) => setPoliciesAllowCap(e.target.checked)}
-          />
-          <span>Anyone you share this drive with</span>
-        </label>
-      </Section>
+      {/* Audience */}
+      <SectionCard icon={<Shield className="w-4 h-4" />} title="Audience" description="Who can ask this agent">
+        <div className="space-y-2">
+          <label className="flex items-center gap-2.5 text-body text-drive-text">
+            <input type="checkbox" checked disabled className="accent-drive-accent" />
+            You <span className="text-drive-muted">(always)</span>
+          </label>
+          <label className="flex items-center gap-2.5 text-body text-drive-text cursor-pointer">
+            <input
+              type="checkbox"
+              checked={policiesAllowCap}
+              onChange={(e) => setPoliciesAllowCap(e.target.checked)}
+              className="accent-drive-accent"
+            />
+            Anyone you share this drive with
+          </label>
+        </div>
+      </SectionCard>
 
-      <div className="flex justify-end gap-2 pt-2 border-t">
-        <button
-          onClick={onClose}
-          className="px-3 py-1.5 rounded border hover:bg-gray-50"
-          disabled={submitting}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={submit}
-          disabled={submitting || !name.trim()}
-          className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-1.5"
-        >
-          {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="text" onClick={onClose} disabled={submitting}>Cancel</Button>
+        <Button variant="filled" onClick={submit} disabled={submitting || !name.trim()} loading={submitting}>
           {isEdit ? "Save" : "Create"}
-        </button>
+        </Button>
       </div>
-    </div>
-  );
-}
-
-function Section({
-  icon, title, children,
-}: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  return (
-    <div className="border rounded p-3 space-y-2">
-      <div className="flex items-center gap-2 font-medium text-gray-700">
-        {icon}
-        <span>{title}</span>
-      </div>
-      {children}
     </div>
   );
 }
@@ -213,24 +154,24 @@ export function CreatedView({ askUrl, cardUrl, onClose }: { askUrl: string; card
     toast.success("Copied");
   };
   return (
-    <div className="p-4 space-y-3 text-sm">
-      <p className="text-green-700 font-medium">✓ Agent created</p>
-      <div>
-        <span className="text-gray-700">Ask endpoint</span>
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 text-subtitle font-medium text-emerald-600">
+        <CheckCircle2 className="w-5 h-5" /> Agent created
+      </div>
+      <div className="space-y-1.5">
+        <span className="text-caption font-medium text-drive-text">Ask endpoint</span>
         <UrlRow url={askUrl} onCopy={() => copy(askUrl)} />
       </div>
-      <div>
-        <span className="text-gray-700">A2A agent card (public)</span>
+      <div className="space-y-1.5">
+        <span className="text-caption font-medium text-drive-text">A2A agent card (public)</span>
         <UrlRow url={cardUrl} onCopy={() => copy(cardUrl)} />
       </div>
-      <p className="text-xs text-gray-500">
+      <p className="text-caption text-drive-muted">
         Anyone whose identity passes the access policy you set can POST to the ask endpoint.
         The agent card is published per the A2A v1 spec for external discovery.
       </p>
-      <div className="flex justify-end pt-2 border-t">
-        <button onClick={onClose} className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700">
-          Done
-        </button>
+      <div className="flex justify-end pt-1">
+        <Button variant="filled" onClick={onClose}>Done</Button>
       </div>
     </div>
   );
@@ -238,11 +179,11 @@ export function CreatedView({ askUrl, cardUrl, onClose }: { askUrl: string; card
 
 function UrlRow({ url, onCopy }: { url: string; onCopy: () => void }) {
   return (
-    <div className="mt-1 flex items-center gap-2">
-      <code className="flex-1 px-2 py-1.5 bg-gray-100 rounded text-xs font-mono truncate">{url}</code>
-      <button onClick={onCopy} className="p-1.5 hover:bg-gray-100 rounded" title="Copy">
+    <div className="flex items-center gap-2">
+      <code className="flex-1 rounded-md bg-drive-sidebar px-2.5 py-1.5 text-caption font-mono text-drive-text truncate">{url}</code>
+      <IconButton size="sm" variant="text" aria-label="Copy" onClick={onCopy}>
         <Copy className="w-4 h-4" />
-      </button>
+      </IconButton>
     </div>
   );
 }

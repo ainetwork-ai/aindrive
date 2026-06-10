@@ -3,9 +3,16 @@
 // (share-dialog.tsx); these are pure render functions that receive data and
 // handlers as props. Extracting markup only — behavior is unchanged because
 // state ownership is unchanged.
+//
+// Each section is a SectionCard: an icon-badged header (title + optional
+// description) over the section body, so the dialog reads as a stack of
+// labelled cards instead of one long form. Controls use the design-system
+// primitives (Input/Select/Toggle/Button/Badge).
 import {
-  Copy, LinkIcon, UserPlus, Wallet, Trash2, DollarSign, TrendingUp, ExternalLink, Users,
+  Copy, LinkIcon, UserPlus, Trash2, DollarSign, TrendingUp, ExternalLink, Users,
 } from "lucide-react";
+import type { ReactNode } from "react";
+import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
 
 export type Share = {
   id: string;
@@ -16,15 +23,6 @@ export type Share = {
   price_usdc: number | null;
   currency: string | null; // token symbol within the drive policy; null = legacy USDC
   listed: number; // SQLite 0/1 — shown on the drive's showcase
-};
-export type Access = {
-  id: string;
-  wallet_address: string;
-  path: string;
-  role: "viewer" | "editor";
-  added_by: "owner" | "payment";
-  payment_tx: string | null;
-  added_at: string;
 };
 export type Receipt = {
   id: string;
@@ -45,28 +43,31 @@ export type Member = {
   name: string;
 };
 
+/** Compact list row used by Earnings / Members / Free-links. */
+function ListRow({ children }: { children: ReactNode }) {
+  return (
+    <li className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-caption">
+      {children}
+    </li>
+  );
+}
+
 export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]; totalEarned: number }) {
   return (
-    <section>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <TrendingUp className="w-4 h-4" /> Earnings
-        </div>
-        <span className="text-sm font-semibold text-green-700">
-          ${totalEarned.toFixed(2)} USDC
-        </span>
-      </div>
+    <SectionCard
+      icon={<TrendingUp className="w-4 h-4" />}
+      title="Earnings"
+      description="Settled payments into this drive"
+      action={<span className="text-subtitle font-semibold text-emerald-600 tabular-nums">${totalEarned.toFixed(2)}</span>}
+    >
       <ul className="space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
         {receipts.map((r) => (
-          <li
-            key={r.id}
-            className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
-          >
-            <span className="font-mono truncate w-20 shrink-0">
+          <ListRow key={r.id}>
+            <span className="font-mono w-20 shrink-0 truncate">
               {r.wallet.slice(0, 6)}…{r.wallet.slice(-4)}
             </span>
             <span className="text-drive-muted truncate flex-1">{r.path || "/"}</span>
-            <span className="shrink-0">
+            <span className="shrink-0 tabular-nums">
               {r.amount_usdc != null ? `$${r.amount_usdc.toFixed(2)}` : "—"}
             </span>
             {r.tx_hash.startsWith("0x") && !r.tx_hash.startsWith("0xdev_bypass") ? (
@@ -75,17 +76,17 @@ export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]
                 target="_blank"
                 rel="noreferrer"
                 className="p-0.5 rounded hover:bg-drive-hover shrink-0"
-                title="View tx"
+                title="View transaction"
               >
                 <ExternalLink className="w-3 h-3" />
               </a>
             ) : (
               <span className="w-4 shrink-0" />
             )}
-          </li>
+          </ListRow>
         ))}
       </ul>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -127,243 +128,154 @@ export function SellSection({
   setEditingSell: (v: boolean) => void;
   copyLink: (token: string) => void;
 }) {
+  const itemWord = defaultPath ? "item" : "drive";
   return (
-    <section className={focusSection === "sell" ? "ring-2 ring-drive-accent/40 rounded-xl p-3 -m-3" : ""}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <DollarSign className="w-4 h-4" /> Sell this {defaultPath.includes("/") || defaultPath ? "item" : "drive"}
-        </div>
-        <Toggle on={sellOn} disabled={!!paidShare} onChange={setEditingSell} />
-      </div>
-
-      {/* Active state: existing paid share (read-only) */}
-      {paidShare && sellOn && (
-        <div className="rounded-xl border border-drive-border p-3 space-y-2 bg-drive-sidebar/40">
-          <Row label="Price" value={priceLabel(paidShare.price_usdc, paidShare.currency)} />
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-drive-muted w-16 shrink-0">Link</span>
-            <code className="flex-1 text-xs truncate font-mono">/s/{paidShare.token}</code>
-            <button
-              onClick={() => copyLink(paidShare.token)}
-              className="p-1.5 rounded hover:bg-drive-hover" title="Copy link"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <p className="text-xs text-drive-muted">
-            Buyers pay once for permanent access. Send this link to them.
-          </p>
-        </div>
-      )}
-
-      {/* Payout wallet — where x402 payments for THIS drive land.
-          Shown whenever the Sell section is open (editing or active). */}
-      {sellOn && (
-        <div className="rounded-xl border border-drive-border p-3 space-y-2 mb-3">
-          <label className="text-xs text-drive-muted block">
-            Payout wallet {payoutWallet ? "" : "(not set — payments use the server default)"}
-          </label>
-          <div className="flex gap-2">
-            <input
-              value={payoutInput}
-              onChange={(e) => setPayoutInput(e.target.value.trim())}
-              placeholder="0x… (where you receive USDC)"
-              className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
-            />
-            <button
-              disabled={busy || payoutInput.trim() === payoutWallet}
-              onClick={savePayoutWallet}
-              className="rounded-lg bg-drive-accent text-white px-3 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-            >
-              Save
-            </button>
-          </div>
-          {!payoutWallet && (
-            <p className="text-xs text-amber-700">
-              ⚠ Set this before selling, or earnings route to the instance operator&rsquo;s wallet.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Editing state: no paid share yet, toggle on */}
-      {!paidShare && sellOn && (
-        <div className="rounded-xl border border-drive-border p-3 space-y-3">
-          <div>
-            <label className="text-xs text-drive-muted block mb-1">Price</label>
-            <div className="flex gap-2">
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                max="9999.99"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="0.50"
-                className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm"
-                autoFocus
-              />
-              <select
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className="rounded-lg border border-drive-border px-2 text-sm"
-                aria-label="Currency"
-              >
-                {currencyOptions.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
+    <SectionCard
+      icon={<DollarSign className="w-4 h-4" />}
+      title={`Sell this ${itemWord}`}
+      description="One payment grants a buyer permanent access"
+      highlight={focusSection === "sell"}
+      action={<Toggle on={sellOn} disabled={!!paidShare} onChange={setEditingSell} aria-label={`Sell this ${itemWord}`} />}
+    >
+      {!sellOn ? null : (
+        <div className="space-y-3">
+          {/* Active state: existing paid share (read-only). */}
+          {paidShare && (
+            <div className="rounded-lg border border-drive-border bg-drive-sidebar/50 p-3 space-y-2">
+              <Row label="Price" value={priceLabel(paidShare.price_usdc, paidShare.currency)} />
+              <div className="flex items-center gap-2">
+                <span className="text-caption text-drive-muted w-16 shrink-0">Link</span>
+                <code className="flex-1 text-caption truncate font-mono text-drive-text">/s/{paidShare.token}</code>
+                <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(paidShare.token)}>
+                  <Copy className="w-3.5 h-3.5" />
+                </IconButton>
+              </div>
+              <p className="text-caption text-drive-muted">
+                Buyers pay once for permanent access. Send them this link.
+              </p>
             </div>
-            <p className="text-xs text-drive-muted mt-1">
-              Buyers pay once for permanent access.
-            </p>
-          </div>
-          {/* [rev2-D] Listing is owner-only (API 403s listed:true otherwise) */}
-          {isOwner && (
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={listed}
-                onChange={(e) => setListed(e.target.checked)}
-              />
-              List in drive
-              <span className="text-drive-muted">— members without access see it for sale</span>
-            </label>
           )}
-          <button
-            disabled={busy || !price}
-            onClick={saveSell}
-            className="w-full rounded-lg bg-drive-accent text-white px-3 py-2 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-          >
-            Save as paid
-          </button>
+
+          {/* Payout wallet — where x402 payments for THIS drive land. */}
+          <div>
+            <div className="flex gap-2 items-end">
+              <Input
+                wrapClassName="flex-1"
+                label="Payout wallet"
+                value={payoutInput}
+                onChange={(e) => setPayoutInput(e.target.value.trim())}
+                placeholder="0x… (where you receive funds)"
+                className="font-mono"
+              />
+              <Button
+                variant="tonal"
+                disabled={busy || payoutInput.trim() === payoutWallet}
+                onClick={savePayoutWallet}
+              >
+                Save
+              </Button>
+            </div>
+            {!payoutWallet && (
+              <p className="mt-1.5 text-caption text-amber-700">
+                Set this before selling, or earnings route to the instance operator’s wallet.
+              </p>
+            )}
+          </div>
+
+          {/* Editing state: no paid share yet — price + currency + list option. */}
+          {!paidShare && (
+            <div className="rounded-lg border border-drive-border p-3 space-y-3">
+              <div className="flex gap-2 items-start">
+                <Input
+                  wrapClassName="flex-1"
+                  label="Price"
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max="9999.99"
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  placeholder="0.50"
+                  helper="Buyers pay once for permanent access."
+                  autoFocus
+                />
+                <Select
+                  wrapClassName="w-28"
+                  label="Currency"
+                  value={currency}
+                  onChange={(e) => setCurrency(e.target.value)}
+                >
+                  {currencyOptions.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </Select>
+              </div>
+              {/* [rev2-D] Listing is owner-only (API 403s listed:true otherwise) */}
+              {isOwner && (
+                <label className="flex items-start gap-2.5 rounded-lg bg-drive-sidebar/60 p-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={listed}
+                    onChange={(e) => setListed(e.target.checked)}
+                    className="mt-0.5 accent-drive-accent"
+                  />
+                  <span className="text-caption text-drive-text">
+                    List on the drive
+                    <span className="block text-drive-muted">Members without access see it for sale.</span>
+                  </span>
+                </label>
+              )}
+              <Button
+                variant="filled"
+                className="w-full justify-center"
+                disabled={busy || !price}
+                loading={busy}
+                onClick={saveSell}
+              >
+                Save as paid
+              </Button>
+            </div>
+          )}
+
+          {/* Drive-wide payment-token policy (spec D3): which currencies shares
+              may be priced in. Owner-only, like the PATCH behind it. */}
+          {isOwner && <PaymentTokensEditor editor={tokenEditor} busy={busy} />}
         </div>
       )}
-
-      {/* Drive-wide payment-token policy (spec D3): which currencies shares
-          may be priced in. Owner-only, like the PATCH behind it. */}
-      {isOwner && sellOn && (
-        <PaymentTokensEditor editor={tokenEditor} busy={busy} />
-      )}
-    </section>
+    </SectionCard>
   );
 }
 
 function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
   return (
-    <div className="rounded-xl border border-drive-border p-3 space-y-2 mt-3">
-      <label className="text-xs text-drive-muted block">Payment tokens (drive policy)</label>
-      <div className="flex items-center gap-4">
+    <div className="rounded-lg border border-drive-border p-3 space-y-2.5">
+      <div className="text-label uppercase text-drive-muted">Payment tokens (drive policy)</div>
+      <div className="flex flex-wrap items-center gap-3">
         {Object.keys(editor.sel).map((sym) => (
-          <label key={sym} className="flex items-center gap-1.5 text-sm">
+          <label key={sym} className="flex items-center gap-1.5 text-body cursor-pointer">
             <input
               type="checkbox"
               checked={editor.sel[sym]}
               onChange={() => editor.toggle(sym)}
+              className="accent-drive-accent"
             />
             {sym}
           </label>
         ))}
-        <button
-          disabled={busy}
-          onClick={editor.save}
-          className="ml-auto rounded-lg bg-drive-accent text-white px-3 py-1.5 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-        >
+        <Button variant="tonal" size="sm" className="ml-auto" disabled={busy} onClick={editor.save}>
           Save
-        </button>
+        </Button>
       </div>
       {editor.sel.FANCO && (
-        <div>
-          <input
-            value={editor.fancoAsset}
-            onChange={(e) => editor.setFancoAsset(e.target.value.trim())}
-            placeholder="0x… (FANCO contract address on Base)"
-            className="w-full rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
-          />
-          <p className="text-xs text-drive-muted mt-1">
-            FANCO on-chain settlement arrives with Phase 2b; address needed for the 402 policy.
-          </p>
-        </div>
+        <Input
+          value={editor.fancoAsset}
+          onChange={(e) => editor.setFancoAsset(e.target.value.trim())}
+          placeholder="0x… (FANCO contract address on Base)"
+          className="font-mono"
+          helper="FANCO on-chain settlement arrives with Phase 2b; address needed for the 402 policy."
+        />
       )}
     </div>
-  );
-}
-
-export function WalletAccessSection({
-  wallet, setWallet, walletRole, setWalletRole, addWallet, busy, access, removeAccess,
-}: {
-  wallet: string;
-  setWallet: (v: string) => void;
-  walletRole: "viewer" | "editor";
-  setWalletRole: (v: "viewer" | "editor") => void;
-  addWallet: () => void;
-  busy: boolean;
-  access: Access[];
-  removeAccess: (id: string) => void;
-}) {
-  return (
-    <section>
-      <div className="flex items-center gap-2 text-sm font-medium mb-2">
-        <Wallet className="w-4 h-4" /> Wallet access
-      </div>
-      <div className="flex gap-2">
-        <input
-          value={wallet}
-          onChange={(e) => setWallet(e.target.value.trim())}
-          placeholder="0x… (any EVM wallet)"
-          className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm font-mono"
-        />
-        <select
-          value={walletRole}
-          onChange={(e) => setWalletRole(e.target.value as "viewer" | "editor")}
-          className="rounded-lg border border-drive-border px-2 text-sm"
-        >
-          <option value="viewer">Viewer</option>
-          <option value="editor">Editor</option>
-        </select>
-        <button
-          disabled={busy}
-          onClick={addWallet}
-          className="rounded-lg bg-drive-accent text-white px-3 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-        >
-          Add
-        </button>
-      </div>
-      {access.length > 0 && (
-        <ul className="mt-3 space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
-          {access.map((a) => (
-            <li
-              key={a.id}
-              className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
-            >
-              <span className="font-mono truncate flex-1">
-                {a.wallet_address.slice(0, 8)}…{a.wallet_address.slice(-6)}
-              </span>
-              <span className="text-drive-muted">{a.path || "/"}</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-700">
-                {a.role}
-              </span>
-              <span
-                className={`px-1.5 py-0.5 rounded text-[10px] ${
-                  a.added_by === "payment"
-                    ? "bg-green-100 text-green-700"
-                    : "bg-blue-100 text-blue-700"
-                }`}
-              >
-                {a.added_by === "payment" ? "💰 paid" : "owner"}
-              </span>
-              <button
-                onClick={() => removeAccess(a.id)}
-                className="p-1 rounded hover:bg-drive-hover"
-                title="Revoke"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
   );
 }
 
@@ -379,50 +291,47 @@ export function MembersSection({
 }) {
   if (members.length === 0) return null;
   return (
-    <section>
-      <div className="flex items-center gap-2 text-sm font-medium mb-2">
-        <Users className="w-4 h-4" /> Members
-      </div>
-      <ul className="space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
+    <SectionCard
+      icon={<Users className="w-4 h-4" />}
+      title="Members"
+      description={`${members.length} ${members.length === 1 ? "person" : "people"} with access`}
+    >
+      <ul className="space-y-1.5 max-h-44 overflow-auto scrollbar-thin">
         {members.map((m) => (
-          <li
-            key={m.id}
-            className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
-          >
-            <span className="truncate flex-1">{m.name || m.email}</span>
+          <ListRow key={m.id}>
+            <span className="truncate flex-1 text-body text-drive-text">{m.name || m.email}</span>
             <span className="text-drive-muted truncate w-16 shrink-0">{m.path || "/"}</span>
             {isOwner ? (
-              <select
+              <Select
                 value={m.role}
                 disabled={busy}
-                onChange={(e) =>
-                  changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")
-                }
-                className="rounded-lg border border-drive-border px-1.5 py-0.5 text-[11px] disabled:opacity-50"
+                wrapClassName="w-24"
+                className="h-8"
+                aria-label={`Role for ${m.email}`}
+                onChange={(e) => changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")}
               >
                 <option value="viewer">Viewer</option>
                 <option value="editor">Editor</option>
                 <option value="owner">Owner</option>
-              </select>
+              </Select>
             ) : (
-              <span className="px-1.5 py-0.5 rounded text-[10px] bg-gray-100 text-gray-700">
-                {m.role}
-              </span>
+              <Badge tone="neutral">{m.role}</Badge>
             )}
             {isOwner && m.email !== currentUserEmail && (
-              <button
-                onClick={() => removeMember(m.id)}
+              <IconButton
+                size="sm"
+                variant="text"
+                aria-label={`Remove ${m.email}`}
                 disabled={busy}
-                className="p-1 rounded hover:bg-drive-hover disabled:opacity-50"
-                title="Remove member"
+                onClick={() => removeMember(m.id)}
               >
                 <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              </IconButton>
             )}
-          </li>
+          </ListRow>
         ))}
       </ul>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -437,35 +346,33 @@ export function EmailInviteSection({
   busy: boolean;
 }) {
   return (
-    <section>
-      <div className="flex items-center gap-2 text-sm font-medium mb-2">
-        <UserPlus className="w-4 h-4" /> Invite by email
-      </div>
-      <div className="flex gap-2">
-        <input
+    <SectionCard
+      icon={<UserPlus className="w-4 h-4" />}
+      title="Invite by email"
+      description="Add a collaborator to this path"
+    >
+      <div className="flex gap-2 items-end">
+        <Input
+          wrapClassName="flex-1"
+          type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="colleague@example.com"
-          type="email"
-          className="flex-1 rounded-lg border border-drive-border px-3 py-2 text-sm"
         />
-        <select
+        <Select
+          wrapClassName="w-28"
           value={role}
           onChange={(e) => setRole(e.target.value as "viewer" | "editor")}
-          className="rounded-lg border border-drive-border px-2 text-sm"
+          aria-label="Invite role"
         >
           <option value="viewer">Viewer</option>
           <option value="editor">Editor</option>
-        </select>
-        <button
-          disabled={busy}
-          onClick={invite}
-          className="rounded-lg bg-drive-accent text-white px-3 text-sm hover:bg-drive-accentHover disabled:opacity-50"
-        >
+        </Select>
+        <Button variant="filled" disabled={busy || !email} loading={busy} onClick={invite}>
           Invite
-        </button>
+        </Button>
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -477,37 +384,30 @@ export function FreeLinkSection({
   busy: boolean;
   copyLink: (token: string) => void;
 }) {
+  const freeShares = shares.filter((s) => !s.price_usdc);
   return (
-    <section>
-      <div className="flex items-center gap-2 text-sm font-medium mb-2">
-        <LinkIcon className="w-4 h-4" /> Free share link
-      </div>
-      <button
-        onClick={createFreeLink}
-        disabled={busy}
-        className="w-full rounded-lg border border-drive-border px-3 py-2 text-sm hover:bg-drive-hover disabled:opacity-50"
-      >
+    <SectionCard
+      icon={<LinkIcon className="w-4 h-4" />}
+      title="Free share link"
+      description="Anyone with the link gets access — no payment"
+    >
+      <Button variant="outline" className="w-full justify-center" disabled={busy} loading={busy} onClick={createFreeLink}>
         Create free share link
-      </button>
-      {shares.filter(s => !s.price_usdc).length > 0 && (
-        <ul className="mt-3 space-y-2 max-h-40 overflow-auto scrollbar-thin">
-          {shares.filter(s => !s.price_usdc).map((s) => (
-            <li
-              key={s.id}
-              className="text-xs flex items-center gap-2 bg-drive-sidebar rounded-lg px-2 py-1.5"
-            >
-              <span className="truncate flex-1">{s.path || "/"} · {s.role}</span>
-              <button
-                onClick={() => copyLink(s.token)}
-                className="p-1 rounded hover:bg-drive-hover" title="Copy link"
-              >
+      </Button>
+      {freeShares.length > 0 && (
+        <ul className="mt-3 space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
+          {freeShares.map((s) => (
+            <ListRow key={s.id}>
+              <span className="truncate flex-1 text-drive-text">{s.path || "/"}</span>
+              <Badge tone="neutral">{s.role}</Badge>
+              <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(s.token)}>
                 <Copy className="w-3.5 h-3.5" />
-              </button>
-            </li>
+              </IconButton>
+            </ListRow>
           ))}
         </ul>
       )}
-    </section>
+    </SectionCard>
   );
 }
 
@@ -521,31 +421,8 @@ function priceLabel(price: number | null, currency: string | null): string {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-drive-muted w-16 shrink-0">{label}</span>
-      <span className="text-sm font-medium">{value}</span>
+      <span className="text-caption text-drive-muted w-16 shrink-0">{label}</span>
+      <span className="text-body font-medium text-drive-text">{value}</span>
     </div>
-  );
-}
-
-function Toggle({
-  on, disabled, onChange,
-}: { on: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      disabled={disabled}
-      onClick={() => onChange(!on)}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-60 ${
-        on ? "bg-drive-accent" : "bg-drive-border"
-      }`}
-    >
-      <span
-        className={`inline-block h-4 w-4 rounded-full bg-white shadow transition transform ${
-          on ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
-    </button>
   );
 }

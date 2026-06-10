@@ -5,7 +5,8 @@ import { useAccount, useWalletClient } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { wrapFetchWithPayment } from "x402-fetch";
 import { toast } from "sonner";
-import { Lock, Loader2 } from "lucide-react";
+import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
+import { Button } from "@/components/ui";
 
 type PaymentRequirements = {
   scheme: string;
@@ -114,65 +115,116 @@ export function ShareGate({ token }: { token: string }) {
     }
   }
 
+  // ── Loading: branded, so a visitor landing on a payment link sees trust
+  //    chrome immediately rather than a bare spinner. ─────────────────────────
   if (state === "loading") {
     return (
-      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center text-drive-muted">
-        <Loader2 className="w-5 h-5 animate-spin" />
-      </main>
+      <GateShell>
+        <div className="flex flex-col items-center gap-4 py-6 text-drive-muted">
+          <Loader2 className="w-6 h-6 animate-spin text-drive-accent" />
+          <p className="text-body">Checking access…</p>
+        </div>
+      </GateShell>
     );
   }
+
+  // ── Error: a proper empty-state rather than bare text. ──────────────────────
   if (state === "error") {
-    const msg = data && "error" in data ? data.error : "share unavailable";
-    return <main className="p-10 text-center">{msg}</main>;
+    const msg = data && "error" in data ? data.error : "This share is unavailable.";
+    return (
+      <GateShell>
+        <div className="flex flex-col items-center gap-3 py-4 text-center">
+          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-50 text-amber-500">
+            <AlertTriangle className="w-7 h-7" />
+          </span>
+          <h1 className="text-title text-drive-text">Can’t open this share</h1>
+          <p className="text-body text-drive-muted max-w-xs">{msg}</p>
+          <Button variant="tonal" className="mt-1" onClick={() => router.replace("/")}>
+            Go to aindrive
+          </Button>
+        </div>
+      </GateShell>
+    );
   }
+
   if (state === "paywall" && requirement) {
     const currency = data && "accepts" in data ? data.currency : undefined;
     const symbol = currency?.symbol ?? "USDC";
     const amount = (Number(requirement.maxAmountRequired) / 10 ** (currency?.decimals ?? 6)).toFixed(2);
     // `$` prefix only makes sense for the dollar-pegged USDC.
     const amountLabel = symbol === "USDC" ? `$${amount} USDC` : `${amount} ${symbol}`;
+    const payTo = requirement.payTo;
+    const payToShort = payTo.length > 14 ? `${payTo.slice(0, 6)}…${payTo.slice(-4)}` : payTo;
     return (
-      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-4">
-        <div className="max-w-md w-full bg-white border border-drive-border rounded-2xl shadow-drive p-6">
-          <Lock className="w-8 h-8 text-drive-accent" />
-          <h1 className="mt-3 text-xl font-semibold">Payment required</h1>
-          <p className="mt-1 text-sm text-drive-muted">{requirement.description}</p>
-
-          <div className="mt-5 rounded-xl border border-drive-border p-4 text-sm space-y-1">
-            <Row label="Amount" value={amountLabel} />
-            <Row label="Network" value={requirement.network} />
-            <Row label="Recipient" value={requirement.payTo} mono truncate />
-          </div>
-
-          <div className="mt-5 flex justify-center">
-            <ConnectButton showBalance={false} chainStatus="icon" />
-          </div>
-
-          <button
-            onClick={pay}
-            disabled={!isConnected || paying}
-            className="mt-4 w-full rounded-lg bg-drive-accent text-white py-2.5 hover:bg-drive-accentHover disabled:opacity-50"
-          >
-            {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
-          </button>
-
-          <p className="mt-3 text-xs text-drive-muted text-center">
-            One payment unlocks permanent access for your wallet. No refunds.
+      <GateShell>
+        {/* Header: lock mark + what this is. The 402 deliberately carries no
+            item name/type (anyone with the link hits this), so we frame the
+            product as "permanent access" rather than inventing file metadata. */}
+        <div className="flex flex-col items-center text-center">
+          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-drive-selected text-drive-accent">
+            <Lock className="w-7 h-7" />
+          </span>
+          <h1 className="mt-4 text-title text-drive-text">Unlock permanent access</h1>
+          <p className="mt-1 text-body text-drive-muted max-w-xs">
+            One payment grants your wallet permanent access to this shared content.
           </p>
         </div>
-      </main>
+
+        {/* Hero price — the single most important number on the page. */}
+        <div className="mt-6 rounded-xl border border-drive-border bg-drive-panel px-5 py-4 text-center">
+          <div className="text-label uppercase text-drive-muted">Price</div>
+          <div className="mt-1 text-display text-drive-text tabular-nums">{amountLabel}</div>
+          <div className="mt-1 text-caption text-drive-muted">on {requirement.network}</div>
+        </div>
+
+        {/* Recipient — secondary, mono, truncated. */}
+        <div className="mt-4 flex items-center justify-between gap-4 text-caption">
+          <span className="text-drive-muted">Recipient</span>
+          <span className="font-mono text-drive-text truncate" title={payTo}>{payToShort}</span>
+        </div>
+
+        {/* Wallet connect + pay — clear primary action hierarchy. */}
+        <div className="mt-6 flex flex-col items-stretch gap-3">
+          <div className="flex justify-center">
+            <ConnectButton showBalance={false} chainStatus="icon" />
+          </div>
+          <Button
+            variant="filled"
+            size="md"
+            loading={paying}
+            disabled={!isConnected || paying}
+            icon={isConnected ? <Wallet className="w-4 h-4" /> : undefined}
+            onClick={pay}
+            className="w-full justify-center"
+          >
+            {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
+          </Button>
+        </div>
+
+        <p className="mt-4 flex items-center justify-center gap-1.5 text-caption text-drive-muted text-center">
+          <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+          Permanent access for your wallet. No refunds.
+        </p>
+      </GateShell>
     );
   }
   return null;
 }
 
-function Row({
-  label, value, mono, truncate,
-}: { label: string; value: string; mono?: boolean; truncate?: boolean }) {
+/**
+ * Centered card shell shared by every ShareGate state (loading / error /
+ * paywall), with a brand wordmark at the top. A visitor often lands here from
+ * an external link, so consistent, branded chrome builds payment trust.
+ */
+function GateShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex justify-between gap-4">
-      <span className="text-drive-muted">{label}</span>
-      <span className={`${mono ? "font-mono" : ""} ${truncate ? "truncate max-w-[200px]" : ""}`}>{value}</span>
-    </div>
+    <main className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center px-4 bg-drive-sidebar">
+      <div className="mb-5 flex items-center gap-2 text-subtitle font-semibold text-drive-text">
+        <HardDrive className="w-5 h-5 text-drive-accent" /> aindrive
+      </div>
+      <div className="w-full max-w-md rounded-2xl border border-drive-border bg-white shadow-e3 p-6 sm:p-7">
+        {children}
+      </div>
+    </main>
   );
 }
