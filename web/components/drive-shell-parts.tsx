@@ -578,8 +578,13 @@ function ContextMenu({
 /**
  * Grid (card) view. Each card = big type icon + 2-line name + price badge, with
  * a ⋮ menu in the top-right (canEdit). Click = same setPath/setSelected as the
- * list row. The card itself is the click target; the ⋮ button stops propagation
- * (RowMenu already does) so opening the menu doesn't navigate.
+ * list row.
+ *
+ * The card is a `div role="button"` (NOT Card's `interactive` <button>) on
+ * purpose: the ⋮ menu trigger is itself a <button>, and a button nested inside a
+ * button is invalid HTML + an a11y violation. A div-with-role keeps the card
+ * keyboard-activatable (Enter/Space) while letting the ⋮ button be a real,
+ * separately-focusable button. The ⋮ stops propagation so it doesn't navigate.
  */
 function FileGrid({
   entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onContextMenuEntry,
@@ -594,6 +599,7 @@ function FileGrid({
   isOwner: boolean;
   onContextMenuEntry: (ev: React.MouseEvent, entry: DriveEntry) => void;
 }) {
+  const activate = (e: DriveEntry) => { if (e.isDir) setPath(e.path); else setSelected(e); };
   return (
     <div className={GRID_CLASS}>
       {entries.map((e) => {
@@ -603,14 +609,23 @@ function FileGrid({
         return (
           <Card
             key={e.path}
-            interactive
             padded={false}
+            role="button"
+            tabIndex={0}
             aria-current={isSelected || undefined}
             className={clsx(
-              "relative flex flex-col items-center gap-2 p-4 pt-6",
+              "relative flex flex-col items-center gap-2 p-4 pt-6 cursor-pointer outline-none",
+              "transition-shadow duration-150 hover:shadow-e2 active:shadow-e1",
+              "focus-visible:ring-2 focus-visible:ring-drive-accent/40",
               isSelected && "ring-2 ring-drive-accent/50 bg-drive-selected/40",
             )}
-            onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
+            onClick={() => activate(e)}
+            onKeyDown={(ev) => {
+              // Enter/Space activate the card the way clicking it would. Ignore
+              // events bubbling up from the ⋮ button (its own target handles them).
+              if (ev.target !== ev.currentTarget) return;
+              if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activate(e); }
+            }}
             onContextMenu={(ev) => onContextMenuEntry(ev, e)}
           >
             {canEdit && (
