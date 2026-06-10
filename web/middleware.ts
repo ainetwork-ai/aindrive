@@ -47,8 +47,16 @@ export default async function middleware(
   return res;
 }
 
+// Exclude /api from the matcher. These security response headers (CSP,
+// X-Frame-Options, …) protect *rendered documents*; they do nothing for JSON
+// API responses. More importantly, when middleware matches a route, Next.js
+// buffers the request body up to middlewareClientMaxBodySize (10 MB) — which
+// truncated large uploads to /api/.../fs/write and /yjs mid-JSON, 500-ing every
+// file over ~7.5 MB (a base64 body > 10 MB). Not matching /api avoids the
+// buffering entirely; the route handlers stream their own bodies and enforce
+// their own size caps (AINDRIVE_MAX_WRITE_BYTES).
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image).*)",
+    "/((?!_next/static|_next/image|api/).*)",
   ],
 };

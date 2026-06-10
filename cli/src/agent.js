@@ -91,6 +91,10 @@ function connectOnce({ root, drive, wsUrl }) {
     const ws = new WebSocket(wsUrl, {
       headers: { authorization: `Bearer ${drive.agentToken}` },
       handshakeTimeout: 10_000,
+      // Match the server's WS frame cap (server.js). A base64 upload (×1.33)
+      // rides one RPC message; the 100 MB default drops the connection on
+      // ~75 MB+ files. 160 MB keeps the 100 MB fs-write cap within one frame.
+      maxPayload: 160 * 1024 * 1024,
     });
 
     let opened = false;

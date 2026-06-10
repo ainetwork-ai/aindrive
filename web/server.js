@@ -27,7 +27,12 @@ const server = createServer((req, res) => {
   handle(req, res, parseUrl(req.url, true));
 });
 
-const wss = new WebSocketServer({ noServer: true });
+// maxPayload caps a single WS frame. The default (100 MB) is too small once a
+// base64-encoded upload/download (×1.33) rides one RPC message — a ~75 MB file
+// already overflows it and drops the agent connection. 160 MB keeps the 100 MB
+// fs-write cap (≈133 MB base64) within one frame. Large-file streaming is the
+// real fix (follow-up); this just makes the existing limits consistent.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 160 * 1024 * 1024 });
 
 server.on("upgrade", (req, socket, head) => {
   const { pathname, query } = parseUrl(req.url, true);
