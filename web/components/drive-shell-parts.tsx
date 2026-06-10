@@ -6,14 +6,17 @@
 import Link from "next/link";
 import clsx from "clsx";
 import {
-  ChevronRight, FolderOpen, Upload, AlertTriangle,
+  ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Share2, HardDrive, Bot, MessageSquare, Menu, Lock,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu } from "./row-menu";
 import { fileIcon } from "./file-icons";
-import { Badge, EmptyState, Skeleton } from "@/components/ui";
+import { Badge, Card, EmptyState, IconButton, Skeleton, Tooltip } from "@/components/ui";
+
+// Shared grid track for FileGrid + its skeleton so the loading state matches.
+const GRID_CLASS = "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3";
 
 export type DriveSummary = { id: string; name: string; hostname: string | null; online: boolean };
 
@@ -24,6 +27,8 @@ export type ShareSummary = {
   role: string;
   price_usdc: number | null;
 };
+
+export type ViewMode = "list" | "grid";
 
 type Crumb = { label: string; path: string };
 
@@ -100,7 +105,7 @@ export function DriveSidebar({
 
 export function DriveHeader({
   setSidebarOpen, crumbs, setPath, canEdit, onUpload, setShareOpen, path, role,
-  setAgentModalOpen, setChatOpen, chatOpen, isOwner,
+  setAgentModalOpen, setChatOpen, chatOpen, isOwner, viewMode, setViewMode,
 }: {
   setSidebarOpen: (v: boolean) => void;
   crumbs: Crumb[];
@@ -114,6 +119,8 @@ export function DriveHeader({
   setChatOpen: (fn: (v: boolean) => boolean) => void;
   chatOpen: boolean;
   isOwner: boolean;
+  viewMode: ViewMode;
+  setViewMode: (v: ViewMode) => void;
 }) {
   return (
     <header className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
@@ -169,6 +176,7 @@ export function DriveHeader({
         })}
       </div>
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <ViewToggle viewMode={viewMode} setViewMode={setViewMode} />
         <label
           aria-label="Upload"
           className={clsx(
@@ -214,8 +222,33 @@ export function DriveHeader({
   );
 }
 
+/** Segmented list/grid switch. The active mode reads as tonal (filled accent). */
+function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode: (v: ViewMode) => void }) {
+  const opts: { mode: ViewMode; label: string; Icon: typeof List }[] = [
+    { mode: "list", label: "List view", Icon: List },
+    { mode: "grid", label: "Grid view", Icon: LayoutGrid },
+  ];
+  return (
+    <div className="flex items-center rounded-full border border-drive-border p-0.5">
+      {opts.map(({ mode, label, Icon }) => (
+        <Tooltip key={mode} content={label}>
+          <IconButton
+            aria-label={label}
+            aria-pressed={viewMode === mode}
+            size="sm"
+            variant={viewMode === mode ? "tonal" : "text"}
+            onClick={() => setViewMode(mode)}
+          >
+            <Icon className="w-4 h-4" />
+          </IconButton>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
 export function FileTable({
-  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload,
+  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload, viewMode,
 }: {
   loading: boolean;
   err: string | null;
@@ -228,8 +261,9 @@ export function FileTable({
   onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
   isOwner: boolean;
   onUpload: (files: FileList | null) => void;
+  viewMode: ViewMode;
 }) {
-  if (loading) return <ListSkeleton />;
+  if (loading) return viewMode === "grid" ? <GridSkeleton /> : <ListSkeleton />;
   if (err) {
     return (
       <EmptyState
@@ -246,6 +280,20 @@ export function FileTable({
         title="This folder is empty"
         description={canEdit ? "Drop files here or upload to get started." : "Nothing here yet."}
         action={canEdit ? <UploadButton onUpload={onUpload} /> : undefined}
+      />
+    );
+  }
+  if (viewMode === "grid") {
+    return (
+      <FileGrid
+        entries={entries}
+        paidByPath={paidByPath}
+        selected={selected}
+        setSelected={setSelected}
+        setPath={setPath}
+        canEdit={canEdit}
+        onRowAction={onRowAction}
+        isOwner={isOwner}
       />
     );
   }
@@ -305,6 +353,80 @@ export function FileTable({
         })}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * Grid (card) view. Each card = big type icon + 2-line name + price badge, with
+ * a ⋮ menu in the top-right (canEdit). Click = same setPath/setSelected as the
+ * list row. The card itself is the click target; the ⋮ button stops propagation
+ * (RowMenu already does) so opening the menu doesn't navigate.
+ */
+function FileGrid({
+  entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner,
+}: {
+  entries: DriveEntry[];
+  paidByPath: Map<string, ShareSummary>;
+  selected: DriveEntry | null;
+  setSelected: (e: DriveEntry | null) => void;
+  setPath: (next: string) => void;
+  canEdit: boolean;
+  onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
+  isOwner: boolean;
+}) {
+  return (
+    <div className={GRID_CLASS}>
+      {entries.map((e) => {
+        const paid = paidByPath.get(e.path);
+        const { Icon, className: tone } = fileIcon(e);
+        const isSelected = selected?.path === e.path;
+        return (
+          <Card
+            key={e.path}
+            interactive
+            padded={false}
+            aria-current={isSelected || undefined}
+            className={clsx(
+              "relative flex flex-col items-center gap-2 p-4 pt-6",
+              isSelected && "ring-2 ring-drive-accent/50 bg-drive-selected/40",
+            )}
+            onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
+          >
+            {canEdit && (
+              <div className="absolute top-1.5 right-1.5">
+                <RowMenu
+                  hasPaidShare={!!paid}
+                  onAction={(a) => onRowAction(e, a)}
+                  canSell={isOwner}
+                  canManage={canEdit}
+                />
+              </div>
+            )}
+            <Icon className={clsx("w-10 h-10 shrink-0", tone)} />
+            <span className="w-full text-center text-caption text-drive-text line-clamp-2 break-words" title={e.name}>
+              {e.name}
+            </span>
+            {paid && (
+              <Badge tone="sale">${paid.price_usdc!.toFixed(2)}</Badge>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Loading placeholder for the grid view — cards shaped like FileGrid cards. */
+function GridSkeleton() {
+  return (
+    <div className={GRID_CLASS} aria-hidden="true">
+      {Array.from({ length: 12 }).map((_, i) => (
+        <div key={i} className="flex flex-col items-center gap-3 rounded-lg border border-drive-border p-4 pt-6">
+          <Skeleton width={40} height={40} rounded="lg" />
+          <Skeleton width="70%" height={12} />
+        </div>
+      ))}
+    </div>
   );
 }
 
