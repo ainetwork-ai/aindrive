@@ -251,7 +251,7 @@ export function ShareDialog({
         </div>
       }
     >
-      <div className="space-y-5">
+      <div className="space-y-3">
         {receipts.length > 0 && (
           <EarningsSection receipts={receipts} totalEarned={totalEarned} />
         )}
