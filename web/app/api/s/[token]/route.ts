@@ -11,10 +11,18 @@ import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
-import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount } from "@/lib/payment-tokens";
+import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, paymentNetwork } from "@/lib/payment-tokens";
 
-const FACILITATOR_URL = (process.env.AINDRIVE_X402_FACILITATOR ||
-  "https://x402.org/facilitator") as `${string}://${string}`;
+// Facilitator that verifies/settles the x402 payment. testnet has a safe public
+// default (x402.org); mainnet has NONE — the public facilitator won't settle on
+// base mainnet, and silently using a testnet facilitator there would fail
+// confusingly. So on mainnet the operator MUST set AINDRIVE_X402_FACILITATOR
+// (e.g. a Coinbase CDP facilitator); if unset we refuse to settle (below)
+// rather than guess. Server-only env (never NEXT_PUBLIC) — it's infra config.
+const FACILITATOR_URL = (
+  process.env.AINDRIVE_X402_FACILITATOR ||
+  (paymentNetwork() === "mainnet" ? "" : "https://x402.org/facilitator")
+) as `${string}://${string}`;
 const DEV_BYPASS = process.env.AINDRIVE_DEV_BYPASS_X402 === "1";
 
 type ShareRow = {
@@ -118,6 +126,18 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // Display-only companion to `accepts`: share-gate reads symbol/decimals to
   // render the amount; x402-fetch only consumes `accepts`.
   const payCurrency = { symbol: tok.symbol, decimals: tok.decimals };
+
+  // Fail fast when the server cannot settle (mainnet without a configured
+  // facilitator): better a clear 503 on the FIRST hit than showing the paywall,
+  // collecting a signed authorization, and only then failing. DEV_BYPASS skips
+  // the facilitator entirely, so it stays exempt.
+  if (!DEV_BYPASS && !FACILITATOR_URL) {
+    console.error("[x402] no facilitator configured for mainnet — set AINDRIVE_X402_FACILITATOR");
+    return NextResponse.json(
+      { error: "payments are not configured on this server" },
+      { status: 503 },
+    );
+  }
 
   const xPayment = req.headers.get("X-PAYMENT");
   if (!xPayment) {

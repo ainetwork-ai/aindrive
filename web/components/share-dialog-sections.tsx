@@ -15,7 +15,7 @@ import { useState, type ReactNode } from "react";
 import { Plus, Trash2 as TrashIcon, Loader2, CheckCircle2, Clock } from "lucide-react";
 import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
 import { normalizePath, isAncestorOrSelf } from "@/lib/access-core.js";
-import { TOKEN_PRESETS, isX402Settleable, type PaymentToken } from "@/lib/payment-tokens";
+import { TOKEN_PRESETS, isX402Settleable, paymentNetwork, type PaymentToken } from "@/lib/payment-tokens";
 
 export type Share = {
   id: string;
@@ -75,7 +75,7 @@ export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]
             </span>
             {r.tx_hash.startsWith("0x") && !r.tx_hash.startsWith("0xdev_bypass") ? (
               <a
-                href={`https://sepolia.basescan.org/tx/${r.tx_hash}`}
+                href={`https://${r.network === "base" ? "" : "sepolia."}basescan.org/tx/${r.tx_hash}`}
                 target="_blank"
                 rel="noreferrer"
                 className="p-0.5 rounded hover:bg-drive-hover shrink-0"
@@ -321,7 +321,11 @@ type LookupResult = {
  *  resolved metadata + settle badge, let the owner add it to the policy. */
 function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[]; onAdd: (t: PaymentToken) => void }) {
   const [open, setOpen] = useState(false);
-  const [chain, setChain] = useState<"base" | "base-sepolia">("base");
+  // Default to the active payment network's chain so a testnet deployment
+  // doesn't nudge owners into adding mainnet tokens (and vice versa).
+  const [chain, setChain] = useState<"base" | "base-sepolia">(
+    paymentNetwork() === "mainnet" ? "base" : "base-sepolia",
+  );
   const [address, setAddress] = useState("");
   const [looking, setLooking] = useState(false);
   const [result, setResult] = useState<LookupResult | null>(null);

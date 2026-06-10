@@ -6,13 +6,30 @@ export type PaymentToken = {
   symbol: string; chain: string; asset: string;
   name: string | null; version: string | null; decimals: number;
 };
+
+// Single payment-network switch. `mainnet` flips the USDC preset chain+address
+// as ONE atomic set so chain and asset can never disagree. Read from a
+// NEXT_PUBLIC_ var because BOTH the server (402 verify) and the browser (policy
+// editor preset) need it — facilitator/payout stay server-only (NOT public).
+// Default testnet, so a missing/typo'd value can never accidentally take real
+// money. The chain switch in wagmi-config (browser wallet) reads the same flag.
+export type PaymentNetwork = "mainnet" | "testnet";
+export function paymentNetwork(): PaymentNetwork {
+  return process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? "mainnet" : "testnet";
+}
+
+// USDC preset per network. Both verified against the live chain (name differs:
+// sepolia "USDC" / mainnet "USD Coin" — version 2 on both). EIP-3009 settleable.
+const USDC_BY_NETWORK: Record<PaymentNetwork, PaymentToken> = {
+  testnet: { symbol: "USDC", chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", name: "USDC", version: "2", decimals: 6 },
+  mainnet: { symbol: "USDC", chain: "base", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", name: "USD Coin", version: "2", decimals: 6 },
+};
+
 export const TOKEN_PRESETS: Record<string, PaymentToken> = {
-  // x402-settleable (EIP-3009 transferWithAuthorization + EIP-712 domain). name/
-  // version are the on-chain EIP-712 domain values — getting them wrong breaks
-  // signature verification, so they're hand-verified here. Add more major tokens
-  // only with confirmed name/version; otherwise owners add them via the custom
-  // token flow, which reads these from chain.
-  USDC: { symbol: "USDC", chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", name: "USDC", version: "2", decimals: 6 },
+  // x402-settleable (EIP-3009 + EIP-712 domain). Chain/address follow the
+  // payment-network switch; name/version are the on-chain EIP-712 domain values
+  // (hand-verified — wrong values break signature verification).
+  USDC: USDC_BY_NETWORK[paymentNetwork()],
   // Not yet settleable on-chain: no EIP-3009 path (name/version null) — its
   // settle needs the Permit2 route (x402 v2), tracked as Phase 2b. Owners must
   // supply the asset address. Exercisable under DEV_BYPASS for the full UI/402
@@ -56,12 +73,30 @@ export function parseTokenPolicy(json: string): PaymentToken[] | null {
   return parsed;
 }
 
+// A stored policy keeps the token JSON it was saved with. After a network flip
+// that stale chain/asset would make the 402 quote — and possibly SETTLE — on
+// the OLD network: a buyer could pay worthless testnet USDC for real mainnet
+// content, with no operator signal. So reads rebind any stored token that is a
+// KNOWN USDC variant (asset matches one of the verified per-network addresses)
+// to the current network's preset. Custom tokens (owner-chosen chain+address)
+// are never touched — that chain choice is explicit and theirs.
+const KNOWN_USDC_ASSETS = new Set(
+  Object.values(USDC_BY_NETWORK).map((t) => t.asset.toLowerCase()),
+);
+function rebindPresetVariants(tokens: PaymentToken[]): PaymentToken[] {
+  return tokens.map((t) =>
+    t.symbol === "USDC" && KNOWN_USDC_ASSETS.has(t.asset.toLowerCase())
+      ? TOKEN_PRESETS.USDC
+      : t,
+  );
+}
+
 // drives.allowed_tokens (JSON TEXT) → token policy. NULL / empty array /
 // unparsable / malformed entries all fall back to DEFAULT_TOKENS so a bad
 // policy row can never brick payments (preserves pre-policy behaviour).
 export function resolveDriveTokens(allowedTokensJson: string | null): PaymentToken[] {
   if (!allowedTokensJson) return DEFAULT_TOKENS;
-  return parseTokenPolicy(allowedTokensJson) ?? DEFAULT_TOKENS;
+  return rebindPresetVariants(parseTokenPolicy(allowedTokensJson) ?? DEFAULT_TOKENS);
 }
 
 // [rev2-B] 금액 스케일링은 절대 float 곱셈 금지: 18 decimals에서 price 0.01만 돼도

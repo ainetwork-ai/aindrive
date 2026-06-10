@@ -7,7 +7,8 @@ import {
   walletConnectWallet,
 } from "@rainbow-me/rainbowkit/wallets";
 import { http, createConfig } from "wagmi";
-import { baseSepolia } from "wagmi/chains";
+import { base, baseSepolia } from "wagmi/chains";
+import { paymentNetwork } from "./payment-tokens";
 
 // We hand-roll the wallet list (instead of getDefaultConfig) for two reasons:
 //   1. We want Base front-and-centre: `coinbaseWallet` (Coinbase Wallet / Base
@@ -24,15 +25,22 @@ import { baseSepolia } from "wagmi/chains";
 //      component imports a client component that transitively imports this
 //      file. Defer construction until the first browser access.
 //
-// Chain: base-sepolia only for now — the drive token policy quotes USDC on
-// base-sepolia (lib/payment-tokens.ts) and x402 settles there. Base mainnet +
-// mainnet tokens is a production-switch follow-up (token presets + facilitator).
+// Chain follows the single payment-network switch (NEXT_PUBLIC_AINDRIVE_PAYMENT_
+// NETWORK, via paymentNetwork()) so the wallet's chain and the token policy's
+// chain (lib/payment-tokens.ts) can never disagree. Default testnet.
 type WagmiConfig = ReturnType<typeof createConfig>;
 let _config: WagmiConfig | null = null;
 
 export function getWagmiConfig(): WagmiConfig {
   if (!_config) {
     const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID || "aindrive-dev";
+    // Order the chain list so the payment network is FIRST (wagmi's default
+    // chain). Both are registered + given transports — the token policy decides
+    // which one payments actually quote/settle on; this just makes the wallet
+    // default to the right one.
+    const chains = paymentNetwork() === "mainnet"
+      ? ([base, baseSepolia] as const)
+      : ([baseSepolia, base] as const);
     const connectors = connectorsForWallets(
       [
         { groupName: "Base", wallets: [coinbaseWallet] },
@@ -41,9 +49,9 @@ export function getWagmiConfig(): WagmiConfig {
       { appName: "aindrive", projectId },
     );
     _config = createConfig({
-      chains: [baseSepolia],
+      chains,
       connectors,
-      transports: { [baseSepolia.id]: http() },
+      transports: { [base.id]: http(), [baseSepolia.id]: http() },
       ssr: true,
     });
   }
