@@ -31,7 +31,7 @@ type CheckResponse =
       error: string;
     };
 
-type State = "loading" | "paywall" | "error";
+type State = "loading" | "login" | "paywall" | "error";
 
 export function ShareGate({ token }: { token: string }) {
   const [state, setState] = useState<State>("loading");
@@ -72,7 +72,13 @@ export function ShareGate({ token }: { token: string }) {
       // Free share (or already-covered paid share): consume + redirect.
       await accept(body.driveId, body.path);
     } else if (res.status === 402) {
-      setState("paywall");
+      // Paid + not yet entitled. Establish identity BEFORE payment: signing a
+      // gasless x402 authorization and only THEN hitting a login wall is a bad
+      // buy flow, and logging in first means settle binds the grant straight to
+      // user.id (not the fragile wallet→account fallback). Logged-out → login
+      // gate; logged-in → paywall.
+      const me = await fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      setState(me?.user ? "paywall" : "login");
     } else {
       setState("error");
     }
@@ -83,6 +89,16 @@ export function ShareGate({ token }: { token: string }) {
     if (data && "accepts" in data && data.accepts?.[0]) return data.accepts[0];
     return null;
   }, [data]);
+
+  // Human price label, shared by the login gate + paywall. `$` prefix only for
+  // the dollar-pegged USDC; other tokens (e.g. FANCO) show "<amount> <symbol>".
+  const amountLabel = useMemo(() => {
+    if (!requirement) return "";
+    const currency = data && "accepts" in data ? data.currency : undefined;
+    const symbol = currency?.symbol ?? "USDC";
+    const amount = (Number(requirement.maxAmountRequired) / 10 ** (currency?.decimals ?? 6)).toFixed(2);
+    return symbol === "USDC" ? `$${amount} USDC` : `${amount} ${symbol}`;
+  }, [requirement, data]);
 
   async function pay() {
     if (!walletClient) { toast.error("Connect your wallet first"); return; }
@@ -147,12 +163,39 @@ export function ShareGate({ token }: { token: string }) {
     );
   }
 
+  // ── Login gate: paid content, visitor not signed in. Establish identity
+  //    BEFORE the wallet signature so the purchase binds to their account. ─────
+  if (state === "login" && requirement) {
+    return (
+      <GateShell>
+        <div className="flex flex-col items-center text-center">
+          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-drive-selected text-drive-accent">
+            <Lock className="w-7 h-7" />
+          </span>
+          <h1 className="mt-4 text-title text-drive-text">Sign in to purchase</h1>
+          <p className="mt-1 text-body text-drive-muted max-w-xs">
+            This content costs {amountLabel}. Sign in (or create an account) to continue — your purchase then unlocks permanent access.
+          </p>
+        </div>
+        <div className="mt-6 rounded-xl border border-drive-border bg-drive-panel px-5 py-4 text-center">
+          <div className="text-label uppercase text-drive-muted">Price</div>
+          <div className="mt-1 text-display text-drive-text tabular-nums">{amountLabel}</div>
+        </div>
+        <Button
+          variant="filled"
+          className="mt-6 w-full justify-center"
+          onClick={() => router.push(`/login?next=/s/${token}`)}
+        >
+          Sign in to continue
+        </Button>
+        <p className="mt-3 text-caption text-drive-muted text-center">
+          You’ll come right back here to pay after signing in.
+        </p>
+      </GateShell>
+    );
+  }
+
   if (state === "paywall" && requirement) {
-    const currency = data && "accepts" in data ? data.currency : undefined;
-    const symbol = currency?.symbol ?? "USDC";
-    const amount = (Number(requirement.maxAmountRequired) / 10 ** (currency?.decimals ?? 6)).toFixed(2);
-    // `$` prefix only makes sense for the dollar-pegged USDC.
-    const amountLabel = symbol === "USDC" ? `$${amount} USDC` : `${amount} ${symbol}`;
     const payTo = requirement.payTo;
     const payToShort = payTo.length > 14 ? `${payTo.slice(0, 6)}…${payTo.slice(-4)}` : payTo;
     return (
