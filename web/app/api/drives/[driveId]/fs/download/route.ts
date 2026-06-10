@@ -3,8 +3,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind, basenameForDownload } from "@/lib/mime";
-
-const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16 * 1024 * 1024), 10);
+import { agentByteStream } from "@/lib/agent-stream";
 
 /**
  * GET /api/drives/:driveId/fs/download?path=...
@@ -16,10 +15,10 @@ const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16
  *
  * Access: viewer+ via the same resolveAccess() gate as fs/read.
  *
- * Implementation: asks the CLI agent for base64 (always), then decodes
- * server-side and returns a Buffer-backed Response with the correct
- * Content-Type. v1 buffers the file in memory — large-file streaming is
- * a Phase-2 follow-up if MAX_READ_BYTES becomes a real constraint.
+ * Implementation: chunked download-chunk RPCs wrapped in a ReadableStream —
+ * no size cap, nothing buffered whole. (The old single-read version was
+ * capped at 16 MB and the agent silently truncated reads at 8 MiB, which
+ * corrupted big downloads.) fs/stream is the inline/Range twin for playback.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
@@ -35,30 +34,25 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   const { drive } = gate;
 
   try {
-    const result = await callAgent(driveId, drive.drive_secret, { method: "read", path, encoding: "base64" });
-    if (!result || typeof result.content !== "string") {
-      return NextResponse.json({ error: "agent returned no content" }, { status: 502 });
+    const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as
+      { entry: { size: number; isDir: boolean } | null };
+    if (!stat.entry || stat.entry.isDir) {
+      return NextResponse.json({ error: "not found" }, { status: 404 });
     }
-    const byteLength = Math.ceil(result.content.length * 3 / 4);
-    if (byteLength > MAX_READ_BYTES) {
-      return NextResponse.json(
-        { error: "file too large to stream", limit: MAX_READ_BYTES, size: byteLength },
-        { status: 413 },
-      );
-    }
-    const buf = Buffer.from(result.content, "base64");
+    const size = stat.entry.size;
     const { mime } = classifyKind(path);
     const filename = basenameForDownload(path) || "file";
-    return new Response(buf, {
-      status: 200,
-      headers: {
-        "content-type": mime,
-        // RFC 6266: filename* for non-ASCII names, filename for legacy clients.
-        "content-disposition": `attachment; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-        "content-length": String(buf.length),
-        "cache-control": "private, no-store",
-      },
-    });
+    const headers = {
+      "content-type": mime,
+      // RFC 6266: filename* for non-ASCII names, filename for legacy clients.
+      "content-disposition": `attachment; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      "content-length": String(size),
+      "cache-control": "private, no-store",
+      // attachment disposition is the XSS guard here; nosniff backs it up.
+      "x-content-type-options": "nosniff",
+    };
+    if (size === 0) return new Response(null, { status: 200, headers });
+    return new Response(agentByteStream(driveId, drive.drive_secret, path, 0, size), { status: 200, headers });
   } catch (e) {
     const err = e as AgentError;
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });

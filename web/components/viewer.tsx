@@ -36,7 +36,6 @@ export function Viewer({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [binaryDataUrl, setBinaryDataUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"connecting" | "connected" | "offline">("connecting");
@@ -229,23 +228,17 @@ export function Viewer({
     };
   }, [driveId, entry.path, isText, canEdit, debouncedAutosave]);
 
-  // Load binary preview (image / PDF / media). Skip collab editors (text=Monaco,
-  // richtext=TipTap) — those read their bytes through their own provider, not as base64.
+  // Binary previews stream straight from fs/stream (Range-aware, no size
+  // ceiling) — the old base64 data-URL path buffered the whole file AND broke
+  // on anything past the agent's 8 MiB read cap (videos played as corrupt).
+  // The &v= param re-keys the URL when the file changes.
+  const streamUrl = `/api/drives/${driveId}/fs/stream?path=${encodeURIComponent(entry.path)}&v=${entry.mtimeMs}`;
+  const downloadUrl = `/api/drives/${driveId}/fs/download?path=${encodeURIComponent(entry.path)}`;
   useEffect(() => {
     if (isText || isRichText) return;
-    let cancelled = false;
-    setLoading(true); setBinaryDataUrl(null);
-    (async () => {
-      const res = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=base64`);
-      if (cancelled) return;
-      if (res.ok) {
-        const data = await res.json();
-        setBinaryDataUrl(`data:${entry.mime};base64,${data.content}`);
-      }
-      setLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, [driveId, entry.path, entry.mime, isText, isRichText]);
+    // Nothing to prefetch — the media elements load from streamUrl themselves.
+    setLoading(false);
+  }, [isText, isRichText]);
 
   function onMonacoMount(editor: unknown, monaco: unknown) {
     if (!isText || !providerRef.current) return;
@@ -283,7 +276,7 @@ export function Viewer({
         canEdit={canEdit}
         saving={saving}
         onSave={save}
-        binaryDataUrl={binaryDataUrl}
+        downloadUrl={isText || isRichText ? null : downloadUrl}
         onClose={onClose}
       />
       {isRichText ? (
@@ -305,16 +298,18 @@ export function Viewer({
           <div className="h-full flex items-center justify-center text-drive-muted">
             <Loader2 className="w-4 h-4 animate-spin" />
           </div>
-        ) : isImage && binaryDataUrl ? (
-          <ImageViewer src={binaryDataUrl} name={entry.name} />
-        ) : isVideo && binaryDataUrl ? (
+        ) : isImage ? (
+          <ImageViewer src={streamUrl} name={entry.name} />
+        ) : isVideo ? (
           <div className="h-full flex items-center justify-center bg-black p-2">
-            <video src={binaryDataUrl} controls className="max-w-full max-h-full rounded-md" />
+            {/* preload=metadata: grab duration/dimensions only; bytes flow on
+                play/seek via Range requests. */}
+            <video src={streamUrl} controls preload="metadata" className="max-w-full max-h-full rounded-md" />
           </div>
-        ) : isAudio && binaryDataUrl ? (
-          <AudioCard src={binaryDataUrl} name={entry.name} />
-        ) : isPdf && binaryDataUrl ? (
-          <iframe src={binaryDataUrl} title={entry.name} className="w-full h-full" />
+        ) : isAudio ? (
+          <AudioCard src={streamUrl} name={entry.name} />
+        ) : isPdf ? (
+          <iframe src={streamUrl} title={entry.name} className="w-full h-full" />
         ) : isText ? (
           <MonacoEditor
             height="100%"
@@ -329,7 +324,7 @@ export function Viewer({
             }}
           />
         ) : (
-          <UnsupportedPreview entry={entry} canDownload={!!binaryDataUrl} />
+          <UnsupportedPreview entry={entry} canDownload={true} />
         )}
       </div>
       )}
