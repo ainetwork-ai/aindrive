@@ -1811,6 +1811,41 @@ registerCollabCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
 import { registerTraceCases } from "./trace-cases.mjs";
 registerTraceCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
 
+// #176 — grid thumbnails: image → 256px webp (disk-cached by mtime), guarded
+// like fs/read; non-images 415; anonymous rejected.
+add(176, "thumbnail: image → 200 webp, cached second hit, non-image 415, anon rejected", async () => {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+  // 1×1 red PNG fixture.
+  const PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const w = await jget(`/api/drives/${state.driveId}/fs/write`, {
+    method: "POST", headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ path: "thumb-target.png", content: PNG_1x1, encoding: "base64" }),
+  });
+  eq(w.status, 200, "fixture write: " + JSON.stringify(w.body));
+
+  const r1 = await jget(`/api/drives/${state.driveId}/fs/thumbnail?path=thumb-target.png`, { headers: { cookie } });
+  eq(r1.status, 200, "thumbnail 200: " + JSON.stringify(r1.body).slice(0, 200));
+  eq(r1.headers.get("content-type"), "image/webp", "webp content type");
+  assert((r1.headers.get("cache-control") || "").includes("immutable"), "immutable cache header");
+
+  // Second hit serves the disk cache (same bytes, still 200/webp).
+  const r2 = await jget(`/api/drives/${state.driveId}/fs/thumbnail?path=thumb-target.png`, { headers: { cookie } });
+  eq(r2.status, 200, "cache hit 200");
+  eq(r2.headers.get("content-type"), "image/webp", "cache hit content type");
+
+  const w2 = await jget(`/api/drives/${state.driveId}/fs/write`, {
+    method: "POST", headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ path: "thumb-target.txt", content: "not an image", encoding: "utf8" }),
+  });
+  eq(w2.status, 200, "txt fixture write");
+  const r3 = await jget(`/api/drives/${state.driveId}/fs/thumbnail?path=thumb-target.txt`, { headers: { cookie } });
+  eq(r3.status, 415, "non-image 415");
+
+  const r4 = await jget(`/api/drives/${state.driveId}/fs/thumbnail?path=thumb-target.png`); // no cookie
+  assert(r4.status === 401 || r4.status === 403, "anonymous rejected, got " + r4.status);
+});
+
 // Append the 20 emergent / steady-state scenarios.
 import { registerEmergentCases } from "./emergent-cases.mjs";
 registerEmergentCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
