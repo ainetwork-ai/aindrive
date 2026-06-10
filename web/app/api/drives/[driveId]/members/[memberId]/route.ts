@@ -56,6 +56,11 @@ export async function PATCH(
   }
   const member = getMemberRow(driveId, memberId);
   if (!member) return NextResponse.json({ error: "not found" }, { status: 404 });
+  // The creator's role row is immutable (same guard as DELETE): a co-owner must
+  // not be able to demote the creator or rewrite their path-scoped grants.
+  if (!canRemoveMember({ memberUserId: member.user_id, driveOwnerId: drive.owner_id })) {
+    return NextResponse.json({ error: "cannot change the drive creator's role" }, { status: 400 });
+  }
   // Explicit set (may downgrade) — distinct from CONSUME's upgrade-only merge.
   db.prepare("UPDATE drive_members SET role = ? WHERE id = ? AND drive_id = ?")
     .run(body.data.role, memberId, driveId);

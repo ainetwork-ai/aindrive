@@ -34,6 +34,9 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [payoutWallet, setPayoutWallet] = useState("");
   const [allowedTokens, setAllowedTokens] = useState<string | null>(null);
+  // Drive financial settings are creator-only (the GET 403s co-owners), so a
+  // co-owner managing people/links still can't read/write payout + tokens.
+  const [settingsReadable, setSettingsReadable] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -46,6 +49,7 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
     if (mem.ok) { setMembers(mem.data.members); setPending(mem.data.pending ?? []); }
     if (sh.ok) setShares(sh.data.shares);
     if (rc.ok) setReceipts(rc.data.receipts ?? []);
+    setSettingsReadable(d.ok);
     if (d.ok) { setPayoutWallet(d.data.payout_wallet ?? ""); setAllowedTokens(d.data.allowed_tokens ?? null); }
   }, [driveId]);
   useEffect(() => { load(); }, [load]);
@@ -91,7 +95,9 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
           <LinksTab driveId={driveId} shares={shares} receipts={receipts} busy={busy} setBusy={setBusy} reload={load} />
         )}
         {tab === "settings" && (
-          <SettingsTab driveId={driveId} payoutWallet={payoutWallet} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
+          settingsReadable
+            ? <SettingsTab driveId={driveId} payoutWallet={payoutWallet} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
+            : <EmptyState icon={<SettingsIcon />} title="Creator-only settings" description="Payout wallet and payment tokens can only be changed by the drive’s creator." />
         )}
       </div>
     </main>

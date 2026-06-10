@@ -1974,6 +1974,142 @@ add(178, "stream: 200 full + 206 Range slices byte-exact; download untruncated p
   eq(createHash("sha1").update(dlBuf).digest("hex"), createHash("sha1").update(payload).digest("hex"), "download hash");
 });
 
+// #179 — pending invite for an unregistered email → 202 + appears in the
+// owner's pending list → on signup converts to a real grant and disappears.
+add(179, "pending invite converts to a grant on signup", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const email = uniq("c179invitee") + "@example.com";
+  const inv = await jget(`/api/drives/${state.driveId}/members`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ email, path: "", role: "editor" }),
+  });
+  eq(inv.status, 202, "unregistered invite is 202 pending: " + JSON.stringify(inv.body));
+  assert(inv.body.pending === true, "pending flag");
+
+  const list = await jget(`/api/drives/${state.driveId}/members`, { headers: { cookie: ownerCookie } });
+  assert((list.body.pending ?? []).some((p) => p.email === email.toLowerCase()), "invite in pending list");
+
+  // The invitee signs up with that email — invite becomes a grant.
+  const seed = state.uniqueSeed;
+  const su = await jget("/api/auth/signup", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": `10.7.${(seed >> 8) & 0xff}.${seed & 0xff}` },
+    body: JSON.stringify({ email, name: "Invitee", password: "scenpass1234" }),
+  });
+  eq(su.status, 200, "invitee signup");
+  const inviteeCookie = su.headers.get("set-cookie")?.split(";")[0];
+
+  // The drive now shows for the new member, and the pending row is gone.
+  const drives = await jget("/api/drives", { headers: { cookie: inviteeCookie } });
+  assert((drives.body.drives ?? []).some((d) => d.id === state.driveId), "drive visible to converted member");
+  const list2 = await jget(`/api/drives/${state.driveId}/members`, { headers: { cookie: ownerCookie } });
+  assert(!(list2.body.pending ?? []).some((p) => p.email === email.toLowerCase()), "pending cleared after signup");
+});
+
+// #180 — registered invitee is granted immediately (200, not pending).
+add(180, "invite to an existing account grants immediately (not pending)", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const { email } = await signupUser("c180existing");
+  const inv = await jget(`/api/drives/${state.driveId}/members`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ email, path: "", role: "viewer" }),
+  });
+  eq(inv.status, 200, "existing-account invite is 200");
+  assert(!inv.body.pending, "not pending");
+});
+
+// #181 — revoke a share link → /s/token 404s, but an already-accepted grant
+// survives (revoke stops new redemptions only).
+add(181, "share revoke kills the link but keeps accepted grants", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer" }),
+  });
+  eq(sr.status, 200, "share create: " + JSON.stringify(sr.body));
+  const { id: shareId, token } = sr.body;
+
+  // A member accepts it.
+  const { cookie: memberCookie } = await signupUser("c181member");
+  const acc = await jget(`/api/s/${token}/accept`, { method: "POST", headers: { cookie: memberCookie } });
+  eq(acc.status, 200, "accept before revoke");
+
+  // Owner revokes.
+  const del = await jget(`/api/drives/${state.driveId}/shares/${shareId}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+  eq(del.status, 200, "revoke 200");
+  const gone = await jget(`/api/s/${token}`);
+  eq(gone.status, 404, "revoked link 404s");
+
+  // The accepted member still has access (drive visible).
+  const drives = await jget("/api/drives", { headers: { cookie: memberCookie } });
+  assert((drives.body.drives ?? []).some((d) => d.id === state.driveId), "accepted grant survives revoke");
+});
+
+// #182 — invite cancel + management guards.
+add(182, "cancel pending invite; non-owner blocked from revoke/cancel", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  const email = uniq("c182cancel") + "@example.com";
+  await jget(`/api/drives/${state.driveId}/members`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ email, path: "", role: "viewer" }),
+  });
+  const list = await jget(`/api/drives/${state.driveId}/members`, { headers: { cookie: ownerCookie } });
+  const inviteId = (list.body.pending ?? []).find((p) => p.email === email.toLowerCase())?.id;
+  assert(inviteId, "pending invite id");
+  const cancel = await jget(`/api/drives/${state.driveId}/members/invites/${inviteId}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+  eq(cancel.status, 200, "cancel 200");
+  const list2 = await jget(`/api/drives/${state.driveId}/members`, { headers: { cookie: ownerCookie } });
+  assert(!(list2.body.pending ?? []).some((p) => p.id === inviteId), "invite cancelled");
+
+  // A viewer member can neither see pending nor revoke shares.
+  const { cookie: viewerCookie, email: vEmail } = await signupUser("c182viewer");
+  await inviteMember(state.driveId, vEmail, "", "viewer", ownerCookie);
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer" }),
+  });
+  const vDel = await jget(`/api/drives/${state.driveId}/shares/${sr.body.id}`, { method: "DELETE", headers: { cookie: viewerCookie } });
+  eq(vDel.status, 403, "viewer cannot revoke a share");
+});
+
+// #183 — review hardening: the drive creator's member row can't be demoted via
+// PATCH (a co-owner must not corrupt the creator's grant), and a share creator
+// who lost membership can't revoke links anymore.
+add(183, "creator role PATCH blocked; ex-member can't revoke shares", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  // Find the creator's own root member row.
+  const list = await jget(`/api/drives/${state.driveId}/members`, { headers: { cookie: ownerCookie } });
+  const creatorRow = (list.body.members ?? []).find((m) => m.role === "owner" && m.path === "");
+  if (creatorRow) {
+    const patch = await jget(`/api/drives/${state.driveId}/members/${creatorRow.id}`, {
+      method: "PATCH", headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({ role: "viewer" }),
+    });
+    eq(patch.status, 400, "demoting the creator is rejected");
+  }
+
+  // An editor creates a share, then is removed — their stale created_by must
+  // not keep revoke rights.
+  const { cookie: edCookie, email: edEmail } = await signupUser("c183editor");
+  await inviteMember(state.driveId, edEmail, "", "editor", ownerCookie);
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: edCookie },
+    body: JSON.stringify({ path: "", role: "viewer" }),
+  });
+  eq(sr.status, 200, "editor creates share");
+  // Remove the editor.
+  const edRow = (await jget(`/api/drives/${state.driveId}/members`, { headers: { cookie: ownerCookie } }))
+    .body.members.find((m) => m.email === edEmail.toLowerCase());
+  await jget(`/api/drives/${state.driveId}/members/${edRow.id}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+  const revoke = await jget(`/api/drives/${state.driveId}/shares/${sr.body.id}`, { method: "DELETE", headers: { cookie: edCookie } });
+  eq(revoke.status, 403, "removed editor can't revoke their old share");
+});
+
 // Append the 20 emergent / steady-state scenarios.
 import { registerEmergentCases } from "./emergent-cases.mjs";
 registerEmergentCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });

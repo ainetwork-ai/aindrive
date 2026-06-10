@@ -30,8 +30,12 @@ export async function DELETE(
     .get(shareId, driveId) as { id: string; created_by: string | null } | undefined;
   if (!share) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const isOwner = atLeast(resolveRole(driveId, user.id, ""), "owner");
-  if (!isOwner && share.created_by !== user.id) {
+  // Owner can revoke any link; a non-owner only their own — and only while
+  // still a member. created_by has no FK, so a removed editor whose id still
+  // matches the column must NOT keep revoke rights after losing access.
+  const myRole = resolveRole(driveId, user.id, "");
+  const isOwner = atLeast(myRole, "owner");
+  if (!isOwner && (!atLeast(myRole, "viewer") || share.created_by !== user.id)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   db.prepare("DELETE FROM shares WHERE id = ? AND drive_id = ?").run(shareId, driveId);
