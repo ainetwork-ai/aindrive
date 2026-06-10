@@ -11,9 +11,11 @@
 import {
   Copy, LinkIcon, UserPlus, Trash2, DollarSign, TrendingUp, ExternalLink, Users,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { Plus, Trash2 as TrashIcon, Loader2, CheckCircle2, Clock } from "lucide-react";
 import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
 import { normalizePath, isAncestorOrSelf } from "@/lib/access-core.js";
+import { TOKEN_PRESETS, isX402Settleable, type PaymentToken } from "@/lib/payment-tokens";
 
 export type Share = {
   id: string;
@@ -92,12 +94,14 @@ export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]
 }
 
 // Token-policy mini-editor state + handlers, grouped to keep SellSection's
-// prop list readable. `sel` is keyed by preset symbol (USDC/FANCO/…).
+// prop list readable. `sel` is keyed by fixed-preset symbol; custom tokens are
+// added by contract-address lookup.
 export type TokenEditorProps = {
   sel: Record<string, boolean>;
   toggle: (symbol: string) => void;
-  fancoAsset: string;
-  setFancoAsset: (v: string) => void;
+  customTokens: PaymentToken[];
+  addCustom: (t: PaymentToken) => void;
+  removeCustom: (symbol: string) => void;
   save: () => void;
 };
 
@@ -247,34 +251,154 @@ export function SellSection({
   );
 }
 
+/** Badge: can this token settle x402 payments on-chain right now, or later? */
+function SettleBadge({ settleable }: { settleable: boolean }) {
+  return settleable ? (
+    <Badge tone="sale" icon={<CheckCircle2 className="w-3 h-3" />}>Settles now</Badge>
+  ) : (
+    <Badge tone="warning" icon={<Clock className="w-3 h-3" />}>Settle later</Badge>
+  );
+}
+
 function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
+  // Fixed presets the owner can toggle (only those with a built-in address).
+  const presetSymbols = Object.entries(TOKEN_PRESETS).filter(([, p]) => !!p.asset).map(([k]) => k);
   return (
-    <div className="rounded-lg border border-drive-border p-3 space-y-2.5">
-      <div className="text-label uppercase text-drive-muted">Payment tokens (drive policy)</div>
-      <div className="flex flex-wrap items-center gap-3">
-        {Object.keys(editor.sel).map((sym) => (
-          <label key={sym} className="flex items-center gap-1.5 text-body cursor-pointer">
-            <input
-              type="checkbox"
-              checked={editor.sel[sym]}
-              onChange={() => editor.toggle(sym)}
-              className="accent-drive-accent"
-            />
-            {sym}
-          </label>
-        ))}
-        <Button variant="tonal" size="sm" className="ml-auto" disabled={busy} onClick={editor.save}>
-          Save
+    <div className="rounded-lg border border-drive-border p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-label uppercase text-drive-muted">Payment tokens (drive policy)</div>
+        <Button variant="tonal" size="sm" disabled={busy} onClick={editor.save}>Save policy</Button>
+      </div>
+
+      {/* Fixed presets — checkbox + settle badge. */}
+      <div className="space-y-1.5">
+        {presetSymbols.map((sym) => {
+          const p = TOKEN_PRESETS[sym];
+          return (
+            <label key={sym} className="flex items-center gap-2 text-body cursor-pointer">
+              <input type="checkbox" checked={!!editor.sel[sym]} onChange={() => editor.toggle(sym)} className="accent-drive-accent" />
+              <span className="font-medium text-drive-text">{sym}</span>
+              <span className="text-caption text-drive-muted">{p.chain}</span>
+              <span className="ml-auto"><SettleBadge settleable={isX402Settleable(p)} /></span>
+            </label>
+          );
+        })}
+      </div>
+
+      {/* Custom tokens added by lookup. */}
+      {editor.customTokens.length > 0 && (
+        <div className="space-y-1.5 border-t border-drive-border pt-2.5">
+          {editor.customTokens.map((t) => (
+            <div key={t.symbol} className="flex items-center gap-2 text-body">
+              <span className="font-medium text-drive-text">{t.symbol}</span>
+              <span className="text-caption text-drive-muted truncate" title={t.asset}>{t.chain} · {t.asset.slice(0, 6)}…{t.asset.slice(-4)}</span>
+              <span className="ml-auto"><SettleBadge settleable={isX402Settleable(t)} /></span>
+              <IconButton size="sm" variant="text" aria-label={`Remove ${t.symbol}`} onClick={() => editor.removeCustom(t.symbol)}>
+                <TrashIcon className="w-3.5 h-3.5" />
+              </IconButton>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <AddCustomToken
+        existingSymbols={[...presetSymbols, ...editor.customTokens.map((t) => t.symbol)]}
+        onAdd={editor.addCustom}
+      />
+    </div>
+  );
+}
+
+type LookupResult = {
+  ok: true;
+  token: PaymentToken;
+  eip3009: boolean;
+  settleable: boolean;
+  needsVersion: boolean;
+};
+
+/** Add a custom token by contract address: look it up on-chain, show the
+ *  resolved metadata + settle badge, let the owner add it to the policy. */
+function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[]; onAdd: (t: PaymentToken) => void }) {
+  const [open, setOpen] = useState(false);
+  const [chain, setChain] = useState<"base" | "base-sepolia">("base");
+  const [address, setAddress] = useState("");
+  const [looking, setLooking] = useState(false);
+  const [result, setResult] = useState<LookupResult | null>(null);
+  const [version, setVersion] = useState(""); // owner-supplied when the token doesn't publish version()
+  const [error, setError] = useState<string | null>(null);
+
+  async function lookup() {
+    setError(null); setResult(null); setLooking(true);
+    try {
+      const r = await fetch("/api/token-lookup", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chain, address: address.trim() }),
+      });
+      const body = await r.json();
+      if (!r.ok || !body.ok) { setError(body.error || "lookup failed"); return; }
+      setResult(body as LookupResult);
+      setVersion((body as LookupResult).token.version ?? "");
+    } catch (e) {
+      setError((e as Error).message || "lookup failed");
+    } finally {
+      setLooking(false);
+    }
+  }
+
+  function add() {
+    if (!result) return;
+    const t: PaymentToken = { ...result.token, version: result.token.version ?? (version.trim() || null) };
+    if (existingSymbols.includes(t.symbol)) { setError(`${t.symbol} is already in the policy`); return; }
+    onAdd(t);
+    setOpen(false); setAddress(""); setResult(null); setVersion(""); setError(null);
+  }
+
+  if (!open) {
+    return (
+      <Button variant="text" size="sm" icon={<Plus className="w-4 h-4" />} onClick={() => setOpen(true)}>
+        Add custom token
+      </Button>
+    );
+  }
+
+  // settle-now requires the EIP-3009 entrypoint AND a version (resolved or supplied).
+  const effectiveSettleable = !!result && result.eip3009 && !!result.token.name && !!(result.token.version || version.trim());
+  return (
+    <div className="rounded-lg border border-drive-border bg-drive-sidebar/40 p-3 space-y-2.5">
+      <div className="flex gap-2 items-end">
+        <Select wrapClassName="w-32" label="Chain" value={chain} onChange={(e) => { setChain(e.target.value as "base" | "base-sepolia"); setResult(null); }}>
+          <option value="base">base</option>
+          <option value="base-sepolia">base-sepolia</option>
+        </Select>
+        <Input wrapClassName="flex-1" label="Contract address" className="font-mono" placeholder="0x…" value={address}
+          onChange={(e) => { setAddress(e.target.value.trim()); setResult(null); }} />
+        <Button variant="tonal" loading={looking} disabled={looking || !/^0x[a-fA-F0-9]{40}$/.test(address.trim())} onClick={lookup}>
+          {looking ? "" : "Look up"}
         </Button>
       </div>
-      {editor.sel.FANCO && (
-        <Input
-          value={editor.fancoAsset}
-          onChange={(e) => editor.setFancoAsset(e.target.value.trim())}
-          placeholder="0x… (FANCO contract address on Base)"
-          className="font-mono"
-          helper="FANCO on-chain settlement arrives with Phase 2b; address needed for the 402 policy."
-        />
+
+      {error && <p className="text-caption text-red-600">{error}</p>}
+
+      {result && (
+        <div className="rounded-md border border-drive-border bg-drive-panel p-2.5 space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-drive-text">{result.token.symbol}</span>
+            <span className="text-caption text-drive-muted">{result.token.name} · {result.token.decimals} decimals</span>
+            <span className="ml-auto"><SettleBadge settleable={effectiveSettleable} /></span>
+          </div>
+          {result.eip3009 && result.needsVersion && (
+            <Input label="EIP-712 version" placeholder="e.g. 2 (from the token's docs)" value={version}
+              onChange={(e) => setVersion(e.target.value.trim())}
+              helper="This token didn't publish version() on-chain. Enter the EIP-712 domain version to settle on-chain." />
+          )}
+          {!result.eip3009 && (
+            <p className="text-caption text-amber-700">No EIP-3009 entrypoint — listed for the storefront, but on-chain settlement needs the Permit2 path (Phase 2b).</p>
+          )}
+          <div className="flex justify-end">
+            <Button variant="filled" size="sm" icon={<Plus className="w-4 h-4" />} onClick={add}>Add to policy</Button>
+          </div>
+        </div>
       )}
     </div>
   );
