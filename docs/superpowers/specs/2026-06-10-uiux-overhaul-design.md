@@ -2,9 +2,11 @@
 
 설계일 2026-06-10. aindrive를 "기능은 있으나 거친" 상태에서 **구글드라이브급 경험**으로 끌어올린다. 자율 진행(사용자 위임) — 사용자-승인 게이트 대신 ultracode 디자인 비평으로 검증.
 
+> rev2: ultracode 4-lens 비평(confirmed 5/refuted 25) 반영 — 에디터 CRDT 충돌·Markdown 직렬화 누락(critical ×2), 폰트 진단 오류, Viewer 리팩토링 계약, 리치텍스트 e2e net 부재. **3'-4(에디터)는 직렬화·협업 계약이 무거워 별도 spec으로 분리**(아래 §3'-4 참조).
+
 ## 진단 (현 상태)
 
-- **색 토큰은 이미 Google Drive 팔레트** (`tailwind.config.ts`): accent `#0b57d0`, selected `#c2e7ff`, sidebar `#f0f4f9`, Google Sans, Drive 그림자. 방향성은 옳다.
+- **색 토큰은 이미 Google Drive 팔레트** (`tailwind.config.ts`): accent `#0b57d0`, selected `#c2e7ff`, sidebar `#f0f4f9`, Drive 그림자. 방향성은 옳다. ⚠️ **단 폰트는 거짓**: sans 스택이 "Google Sans"를 1순위로 적었으나 **실제 로드 안 됨**(@font-face 없음 → Inter/system-ui fallback 렌더). 유일하게 로드되는 Google 폰트는 `Instrument_Serif`(layout.tsx, --font-display). 게다가 CSP가 `fonts.googleapis.com`/`fonts.gstatic.com`를 허용(middleware.ts:6-7) — self-host 원칙(아래 #4)과 모순. → 3'-1에서 sans 페이스 확정·self-host(next/font가 빌드타임 self-host: Inter/Roboto) + CSP에서 원격 폰트 제거.
 - **그러나 재사용 프리미티브가 0개**: Button/Modal/Input/Select/Menu가 컴포넌트마다 ad-hoc. 모달은 각자 `<div className="fixed inset-0 z-50 bg-black/30 ...">`(create-agent-modal:126, share-dialog:240). `Row`·`Toggle`이 share-dialog-sections와 share-gate에 중복 정의. spacing/radii/type 스케일 토큰 없음.
 - **목록은 평범한 `<table>`** (drive-shell-parts FileTable): 그리드 뷰 없음, 파일타입 아이콘 빈약, 빈 상태/로딩 스켈레톤/드래그드롭 업로드 없음.
 - **에디터는 Monaco 단일** + 인라인 분기 (viewer.tsx:54-56 `isText/isImage/isPdf`, :283-290). 문서타입별 편집기 확장 seam 없음.
@@ -17,12 +19,12 @@
 2. **시스템 우선** — 화면을 한 땀씩 칠하지 않는다. 토큰 스케일 + 프리미티브를 먼저 세우고 모든 화면이 그 위에 선다(일관성=장인정신).
 3. **불변식 보존** — 권한 모델(drive_members)·진열 leaf-DTO·결제 정책·합성 root·162 e2e는 **UI 개편으로 절대 깨지지 않는다**. 이 작업은 표현층만 바꾼다(서버 라우트·권한 로직 무변경; 컴포넌트가 부르는 API 계약 유지).
 4. **self-host 제약** — 모든 에디터/폰트/아이콘은 same-origin(CSP `script-src 'self'`). Monaco self-host 교훈 준수. 신규 에디터도 CDN 금지.
-5. **협업 재사용** — Yjs/y-monaco가 이미 있다. 리치텍스트 에디터는 같은 Yjs 문서에 y-prosemirror로 얹어 협업을 공짜로 잇는다.
+5. **협업 재사용 (정밀)** — Yjs WS sync·IndexedDB·`/api/drives/{id}/yjs`(.bin)는 *불투명 전체-doc 바이트*를 동기화하므로 에디터 무관하게 그대로 재사용된다. **그러나** y-monaco는 `Y.Text("content")`(평문 CRDT), y-prosemirror는 `Y.XmlFragment`(트리)에 바인딩 — **같은 root에 둘을 쓰면 doc 손상**. 따라서 리치텍스트는 *같은 Y.Doc의 다른 root*(`getXmlFragment("prosemirror")`)에 바인딩하고, **디스크 file-body 왕복(`fs/write`)은 재사용 불가** — 현행은 `getText("content").toString()`이라 ProseMirror엔 빈/깨진 바이트를 씀(데이터 손실). → ProseMirror↔Markdown 직렬화기가 필수 신규 작업이며 3'-4 별도 spec에서 다룬다.
 
 ## 디자인 언어 (토큰 확장)
 
 기존 색 위에 스케일을 추가(`tailwind.config.ts` + `app/globals.css`):
-- **타이포** (Google Sans): `display`(28/600), `title`(20/600), `subtitle`(16/500), `body`(14/400), `caption`(12/400), `label`(11/500 uppercase). line-height 동반.
+- **타이포** (sans 페이스는 3'-1에서 확정·self-host — 잠정 Inter via next/font): `display`(28/600/lh1.2), `title`(20/600/lh1.3), `subtitle`(16/500/lh1.4), `body`(14/400/lh1.5), `caption`(12/400/lh1.4), `label`(11/500/lh1.3 uppercase tracking-wide).
 - **spacing**: 4px 베이스(Tailwind 기본 유지, 컴포넌트가 일관 사용 — 1/2/3/4/6/8).
 - **radii**: `sm 6` `md 8` `lg 12` `xl 16` `full`. Drive는 카드 12, pill 버튼 full.
 - **elevation**: `e1`(기존 drive 그림자 약화) `e2`(hover) `e3`(모달/팝오버). focus ring `accent/40`.
@@ -58,17 +60,20 @@
 - paywall(share-gate) → **상품 카드**(아이템 타입·가격·통화·"무엇을 사는지"·결제 버튼 위계).
 - create-agent-modal, folder-chat 패널 정리.
 
-### 3'-4 — 에디터 프레임워크 + 리치텍스트
-- Viewer의 인라인 분기를 **에디터 레지스트리**로: `mime/ext → EditorComponent`. `viewer.tsx`는 디스패처, 각 에디터는 독립 파일.
-- 기본 제공: **코드/텍스트(Monaco, 현행 유지)**, **이미지 뷰어**(줌/핏 개선), **PDF 뷰어**(개선), **리치텍스트**(신규: TipTap/ProseMirror, self-host, `.md`를 위지윅으로; Yjs 협업은 y-prosemirror로 동일 문서에).
-- **시트/슬라이드는 이 페이즈 비목표**(레지스트리에 "지원 예정" placeholder만 — 거대 기능, 별도 트랙). editor-roadmap memory의 방향과 일치.
-- 자동저장·협업·디스크 왕복은 기존 Viewer 메커니즘 재사용(에디터만 교체).
+### 3'-4 — 에디터 프레임워크 + 리치텍스트 (★ 별도 spec으로 분리)
+비평 결과 직렬화·협업 계약이 무거워(데이터 손실 위험) UIUX 표현층과 분리한다. 별도 spec `2026-XX-editor-framework-design.md`에서 다루되, 방향은:
+- Viewer 인라인 분기 → **에디터 레지스트리**: `mime/ext → { Component, serializeToDisk, deserializeFromDisk, reloadEquals, collab:boolean }`. 단순 `→Component`가 아니라 **per-editor 디스크 어댑터 계약**(critical 반영).
+- **Viewer에서 `useCollabDoc` 훅 추출**: provider 생성·awareness·debounced autosave·외부reload de-dup·beforeunload flush·teardown(현 `isText`-게이트 useEffect viewer.tsx:88-221)를 공유 훅으로. text-family는 공유, binary는 provider-free.
+- 리치텍스트: ProseMirror/TipTap **self-host**(번들, CDN 금지), 같은 Y.Doc의 `XmlFragment` root, **ProseMirror↔Markdown 직렬화기**(byte-stable/idempotent — reloadEquals가 직렬화 후 비교). 리치 dirty 중 디스크-origin reload 게이트.
+- 코드/텍스트(Monaco 현행), 이미지/PDF 뷰어 개선은 레지스트리에 흡수.
+- **시트/슬라이드 비목표**(placeholder만). editor-roadmap memory 방향 일치.
+- **신규 테스트 트랙(필수)**: 리치텍스트 디스크 왕복 무결성(빈 .md→위지윅 편집(heading/bold/list)→autosave→디스크 .md 재읽기→Markdown 비어있지 않고 정확) + 협업 수렴. 기존 162 e2e(Y.Text 경로)는 이 회귀를 못 잡으므로 별도.
 
 ## 불변식 / 제약 (절대)
 
 - 서버 라우트·권한 로직·DB **무변경**. 컴포넌트가 호출하는 API 계약 유지 → 162 e2e 그대로 GREEN(표현층 개편이라 e2e는 회귀 그물).
 - 권한·진열·결제 UI 규칙 보존: 잠긴 path 내용/전체 path 비노출(leaf만), listed owner-only, 합성 root role 리셋·canEdit 게이트.
-- self-host(CSP) — 폰트(Google Sans 이미 사용 — self-host 확인), 아이콘(lucide-react 번들, OK), 에디터(Monaco self-host 유지, ProseMirror 번들).
+- self-host(CSP) — 폰트(3'-1에서 sans self-host + `middleware.ts:6-7`의 `fonts.googleapis.com`/`fonts.gstatic.com` CSP 허용 제거), 아이콘(lucide-react 번들, OK), 에디터(Monaco self-host 유지, ProseMirror 번들 — 3'-4).
 - 번들 크기: 리치텍스트 추가 시 dynamic import(현 Viewer가 이미 dynamic — 동일).
 
 ## 테스트 / 검증
