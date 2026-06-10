@@ -15,16 +15,26 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# Payment network (testnet|mainnet) is inlined into the CLIENT bundle at build
+# time (NEXT_PUBLIC_*) — a runtime-only env var would flip the server but leave
+# the browser on the baked value (split-brain). Set it via --build-arg; the
+# runner stage re-exports the same value so server and client always agree.
+ARG NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=testnet
+ENV NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=$NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK
 RUN npm run build
 
 # ---- runner ----
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
+# Same build-arg as the builder stage: bakes the server-side value into the
+# image so it can never disagree with the client bundle built above.
+ARG NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=testnet
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=3737 \
-    AINDRIVE_DATA_DIR=/data
+    AINDRIVE_DATA_DIR=/data \
+    NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=$NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \

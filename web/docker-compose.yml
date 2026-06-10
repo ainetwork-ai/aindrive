@@ -5,6 +5,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Payment network must be a BUILD arg (NEXT_PUBLIC_* is inlined into the
+        # client bundle at `next build`). Putting it only in .env (runtime) would
+        # flip the server but leave the browser on the baked default — split-brain.
+        # Compose reads ${...} from the same .env, so one value drives both stages.
+        NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK: ${NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK:-testnet}
     restart: unless-stopped
     env_file:
       - path: ./.env
