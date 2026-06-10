@@ -1,16 +1,16 @@
 // On-chain token lookup for the drive's payment-token policy editor. An owner
 // pastes a contract address; this reads the token's metadata from chain so the
-// UI can (a) auto-fill symbol/decimals/name, and (b) decide whether the token
-// has the EIP-3009 entrypoint x402's "exact" scheme settles through.
+// UI can (a) auto-fill symbol/decimals/name, and (b) decide the token's x402
+// transferMethod: eip3009 when the entrypoint + full EIP-712 domain exist,
+// else the universal permit2 path (any ERC-20 settles).
 //
-// IMPORTANT (verified against the installed x402 client, signAuthorization):
-// x402 reads the EIP-712 domain name/version from PaymentRequirements.extra,
-// NOT from chain — `version()` is a USDC-ism, not an EIP-3009/712 requirement,
-// so most tokens won't expose it. We therefore: probe EIP-3009 via
-// authorizationState (the canonical marker), best-effort read name()/version(),
-// and let the UI ask the owner to fill version when the token doesn't publish
-// it. settleable here means "has the EIP-3009 entrypoint"; a complete domain
-// (name+version) is finalized at save time (isX402Settleable on the token).
+// IMPORTANT (verified against the x402 exact-evm scheme): eip3009 signing
+// reads the token's EIP-712 domain name/version from PaymentRequirements.extra,
+// NOT from chain — `version()` is a USDC-ism most tokens won't expose. We
+// probe EIP-3009 via authorizationState (the canonical marker), best-effort
+// read name()/version(), and let the UI ask the owner to fill version when
+// the token doesn't publish it. The dialog finalizes the transferMethod at
+// save time (version supplied → eip3009, otherwise permit2).
 //
 // Server-side on purpose: the RPC endpoint + the "is this really an ERC-20"
 // trust check live behind the API, not in the browser. Read-only (staticcall),
@@ -82,26 +82,24 @@ export async function POST(req: Request) {
   const name = await client.readContract({ ...contract, functionName: "name" }).catch(() => null);
   const version = await client.readContract({ ...contract, functionName: "version" }).catch(() => null);
 
-  // EIP-3009 probe: a settleable token answers authorizationState(0x0, 0x0)
-  // without reverting (returns false for an unused nonce). A revert / missing
-  // function means no transferWithAuthorization path → not settleable yet.
+  // EIP-3009 probe: a token with the entrypoint answers
+  // authorizationState(0x0, 0x0) without reverting (returns false for an
+  // unused nonce). A revert / missing function means no
+  // transferWithAuthorization path → the token settles via permit2 instead.
   const eip3009 = await client
     .readContract({ ...contract, functionName: "authorizationState", args: [ZERO, ZERO32] })
     .then(() => true)
     .catch(() => false);
 
-  // Settleable requires BOTH the EIP-3009 entrypoint AND a complete EIP-712
-  // domain (name + version) — mirrors isX402Settleable on the stored token.
-  // When eip3009 is true but version is missing, the token IS settleable once
-  // the owner supplies the version (UI prompts for it) — needsVersion flags that.
-  const settleable = eip3009 && !!name && !!version;
+  // When eip3009 is true but version() is unpublished, supplying the EIP-712
+  // version unlocks the eip3009 path (no approval step for buyers) — the UI
+  // prompts for it; left blank, the token still settles via permit2.
   const needsVersion = eip3009 && !version;
 
   return NextResponse.json({
     ok: true,
     token: { symbol, decimals, name, version, chain, asset: token },
     eip3009,
-    settleable,
     needsVersion,
   });
 }

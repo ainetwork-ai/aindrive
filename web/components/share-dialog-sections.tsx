@@ -251,12 +251,18 @@ export function SellSection({
   );
 }
 
-/** Badge: can this token settle x402 payments on-chain right now, or later? */
-function SettleBadge({ settleable }: { settleable: boolean }) {
-  return settleable ? (
-    <Badge tone="sale" icon={<CheckCircle2 className="w-3 h-3" />}>Settles now</Badge>
+/** Badge: how this token settles x402 payments on-chain. Every token with a
+ *  known address settles now — eip3009 directly, permit2 after the buyer's
+ *  one-time approval. The warning state survives only for malformed rows
+ *  (e.g. an explicit eip3009 token missing its EIP-712 domain). */
+function SettleBadge({ token }: { token: Pick<PaymentToken, "name" | "version" | "asset" | "transferMethod"> }) {
+  if (!isX402Settleable(token)) {
+    return <Badge tone="warning" icon={<Clock className="w-3 h-3" />}>Needs setup</Badge>;
+  }
+  return token.transferMethod === "permit2" ? (
+    <Badge tone="sale" icon={<CheckCircle2 className="w-3 h-3" />}>Settles now · one-time approval</Badge>
   ) : (
-    <Badge tone="warning" icon={<Clock className="w-3 h-3" />}>Settle later</Badge>
+    <Badge tone="sale" icon={<CheckCircle2 className="w-3 h-3" />}>Settles now</Badge>
   );
 }
 
@@ -279,7 +285,7 @@ function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy:
               <input type="checkbox" checked={!!editor.sel[sym]} onChange={() => editor.toggle(sym)} className="accent-drive-accent" />
               <span className="font-medium text-drive-text">{sym}</span>
               <span className="text-caption text-drive-muted">{p.chain}</span>
-              <span className="ml-auto"><SettleBadge settleable={isX402Settleable(p)} /></span>
+              <span className="ml-auto"><SettleBadge token={p} /></span>
             </label>
           );
         })}
@@ -292,7 +298,7 @@ function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy:
             <div key={t.symbol} className="flex items-center gap-2 text-body">
               <span className="font-medium text-drive-text">{t.symbol}</span>
               <span className="text-caption text-drive-muted truncate" title={t.asset}>{t.chain} · {t.asset.slice(0, 6)}…{t.asset.slice(-4)}</span>
-              <span className="ml-auto"><SettleBadge settleable={isX402Settleable(t)} /></span>
+              <span className="ml-auto"><SettleBadge token={t} /></span>
               <IconButton size="sm" variant="text" aria-label={`Remove ${t.symbol}`} onClick={() => editor.removeCustom(t.symbol)}>
                 <TrashIcon className="w-3.5 h-3.5" />
               </IconButton>
@@ -309,11 +315,12 @@ function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy:
   );
 }
 
+// The lookup returns raw chain facts; the transferMethod is decided here at
+// save time (the owner may supply the missing EIP-712 version).
 type LookupResult = {
   ok: true;
-  token: PaymentToken;
+  token: Omit<PaymentToken, "transferMethod">;
   eip3009: boolean;
-  settleable: boolean;
   needsVersion: boolean;
 };
 
@@ -350,9 +357,16 @@ function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[];
     }
   }
 
+  // Method decision: prefer eip3009 (no buyer approval step) when the
+  // entrypoint AND the full EIP-712 domain (version resolved or supplied)
+  // exist; everything else takes the universal permit2 path.
+  const effectiveVersion = result ? (result.token.version ?? (version.trim() || null)) : null;
+  const effectiveMethod: PaymentToken["transferMethod"] =
+    result && result.eip3009 && result.token.name && effectiveVersion ? "eip3009" : "permit2";
+
   function add() {
     if (!result) return;
-    const t: PaymentToken = { ...result.token, version: result.token.version ?? (version.trim() || null) };
+    const t: PaymentToken = { ...result.token, version: effectiveVersion, transferMethod: effectiveMethod };
     if (existingSymbols.includes(t.symbol)) { setError(`${t.symbol} is already in the policy`); return; }
     onAdd(t);
     setOpen(false); setAddress(""); setResult(null); setVersion(""); setError(null);
@@ -365,9 +379,6 @@ function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[];
       </Button>
     );
   }
-
-  // settle-now requires the EIP-3009 entrypoint AND a version (resolved or supplied).
-  const effectiveSettleable = !!result && result.eip3009 && !!result.token.name && !!(result.token.version || version.trim());
   return (
     <div className="rounded-lg border border-drive-border bg-drive-sidebar/40 p-3 space-y-2.5">
       <div className="flex gap-2 items-end">
@@ -389,15 +400,15 @@ function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[];
           <div className="flex items-center gap-2">
             <span className="font-medium text-drive-text">{result.token.symbol}</span>
             <span className="text-caption text-drive-muted">{result.token.name} · {result.token.decimals} decimals</span>
-            <span className="ml-auto"><SettleBadge settleable={effectiveSettleable} /></span>
+            <span className="ml-auto"><SettleBadge token={{ ...result.token, version: effectiveVersion, transferMethod: effectiveMethod }} /></span>
           </div>
           {result.eip3009 && result.needsVersion && (
             <Input label="EIP-712 version" placeholder="e.g. 2 (from the token's docs)" value={version}
               onChange={(e) => setVersion(e.target.value.trim())}
-              helper="This token didn't publish version() on-chain. Enter the EIP-712 domain version to settle on-chain." />
+              helper="This token didn't publish version() on-chain. Enter the EIP-712 domain version to settle via EIP-3009 (no approval step for buyers); leave blank to settle via Permit2 instead." />
           )}
           {!result.eip3009 && (
-            <p className="text-caption text-amber-700">No EIP-3009 entrypoint — listed for the storefront, but on-chain settlement needs the Permit2 path (Phase 2b).</p>
+            <p className="text-caption text-drive-muted">No EIP-3009 entrypoint — settles through Permit2: buyers approve the token once on-chain, then pay as usual.</p>
           )}
           <div className="flex justify-end">
             <Button variant="filled" size="sm" icon={<Plus className="w-4 h-4" />} onClick={add}>Add to policy</Button>
