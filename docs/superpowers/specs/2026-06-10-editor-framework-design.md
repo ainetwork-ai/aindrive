@@ -74,13 +74,16 @@ function useCollabDoc(driveId, path, descriptor, canEdit): {
 
 ## 리치텍스트 (핵심 위험)
 
-- **deps(신규)**: `@tiptap/core`,`@tiptap/react`,`@tiptap/starter-kit`,`@tiptap/extension-collaboration`(+ `@tiptap/extension-collaboration-cursor` 선택),`y-prosemirror`,`prosemirror-markdown`. 전부 번들(self-host).
-- **바인딩**: TipTap `Collaboration.configure({ document: ydoc, field: "prosemirror" })` → `ydoc.getXmlFragment("prosemirror")`. **`Y.Text("content")` 미사용**(코드 경로와 root 분리 → 한 파일 한 에디터라 충돌 없음).
-- **직렬화기 (byte-stable/idempotent)**:
-  - `serializeToDisk`: ProseMirror doc → Markdown. `prosemirror-markdown`의 `defaultMarkdownSerializer`(StarterKit 노드 커버) + GFM 확장(필요한 노드만).
-  - `seedFromDisk`: Markdown → ProseMirror doc. `prosemirror-markdown`의 `defaultMarkdownParser` → ProseMirror node → `prosemirrorToYXmlFragment`(y-prosemirror)로 XmlFragment 시드. **트랜잭션 origin=provider**(자기 reload 루프 방지).
-  - **idempotent 요구**: `parse(serialize(doc)) ≈ doc`, `serialize(parse(md))`가 안정(round-trip이 바이트를 흔들지 않음). `reloadEquals`는 `serializeToDisk(doc) === diskText`(정규화 후).
-- **dirty 게이트**: 리치 편집 중 디스크-origin reload는 `reloadEquals`로 막되, 충돌 시 디스크 우선 아닌 **CRDT 우선**(현행 text 정책과 동일 — CRDT가 authoritative, reload는 빈/외부변경만).
+> **검증 결과(리서치, current npm 2026-06)** — 초안의 prosemirror-markdown 가정 교정. 아래가 확정 방향.
+
+- **deps(신규, TipTap v3)**: `@tiptap/core@3`,`@tiptap/react@3`,`@tiptap/starter-kit@3`,`@tiptap/extension-collaboration@3`,`@tiptap/extension-collaboration-caret@3`(v2 collaboration-cursor의 v3 개명),`@tiptap/pm@3`(PM 번들 — 별도 `prosemirror-*` 설치 금지, dup schema 에러),`@tiptap/markdown@3`(공식, `marked` 기반),`y-prosemirror`(시드 헬퍼용). 전부 번들(self-host, CDN 없음 — CSP OK).
+- **Markdown 직렬화기는 `@tiptap/markdown`** (NOT prosemirror-markdown — 그건 CommonMark 스키마라 StarterKit과 불일치, 스키마 밖 콘텐츠 silent drop). API: 디스크쓰기 `editor.getMarkdown()`, 디스크읽기 `editor.commands.setContent(md, { contentType:"markdown" })`.
+- **바인딩**: `StarterKit.configure({ undoRedo:false })`(필수 — Collaboration이 Yjs 히스토리 제공, v3 개명) + `Collaboration.configure({ document: provider.doc, field:"prosemirror" })`(field 기본 'default' → **반드시 "prosemirror" 명시**, `getXmlFragment("prosemirror")` 매핑) + `CollaborationCaret.configure({ provider:{ awareness: provider.awareness }, user })`(`.awareness`만 읽음). `useEditor`에 `content` prop 금지(중복 시드).
+- **시드**: `await provider.whenReady` 후 `provider.doc.getXmlFragment("prosemirror").length===0`이면 `editor.commands.setContent(diskMarkdown,{contentType:"markdown"})`. **빈 판정은 XmlFragment root 기준**(`getText("content")` 아님 — 데이터손실 트랩). 마운트 후 PM이 빈 문단 삽입 → length 1 되므로 whenReady 게이트에서만 판정.
+- **reloadEquals는 canonical-vs-canonical**: `getMarkdown()`은 *정규화* 직렬화(공백·nbsp·mark/break) → raw 디스크와 byte-equal 안 됨. 루프가드는 `serializeToDisk(doc)` vs `getMarkdown(setContent(diskText))`(둘 다 정규화) 비교. **절대 canonical-vs-raw 금지**(무한 reload 루프).
+- **v1 노드 allow-list**(깨끗이 왕복): heading·bold·italic·bullet/ordered list(중첩 OK)·inline code·code block·blockquote·hr·link. **연기/비활성**: table·task-list(별도 ext + table cell `<br>` drop 버그 #7731), hard break(#7107/#7136 — 마크가 줄 넘어 새어 idempotency 깸 → v1은 비활성 또는 핀고정+테스트 커버).
+- **디스크 경로 분기 필수**: 현 `viewer.tsx`의 autosave(68)·reload(110-119)·seed(145-171)·save(255)가 `getText("content")` 하드코딩 → descriptor 경유로 분기 안 하면 .md가 빈 content root를 디스크에 씀 = **데이터손실**. 한 `.md`는 항상 fragment root만(절대 content text root fallback 금지).
+- **idempotency 단위테스트(필수, 와이어링 전)**: `getMarkdown(setContent(md)) === getMarkdown(setContent(getMarkdown(setContent(md))))`를 v1 노드 픽스처 corpus로. red면 .md는 Monaco 유지.
 
 ## 미디어 (저위험)
 
