@@ -67,6 +67,7 @@ export function AgentForm({
         <textarea
           className={TEXTAREA_CLASS}
           rows={4}
+          aria-label="Persona"
           placeholder={PERSONA_PLACEHOLDER}
           value={persona}
           maxLength={1500}

@@ -143,6 +143,7 @@ export function ChatInput({
                    focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent
                    disabled:opacity-50"
         rows={2}
+        aria-label={selectedAgent ? `Message ${selectedAgent.name}` : "Message agent"}
         placeholder={agentId && selectedAgent ? `Message ${selectedAgent.name}…` : "No agent selected"}
         value={input}
         onChange={(e) => setInput(e.target.value)}
