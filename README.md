@@ -350,116 +350,89 @@ if (!s.success) return 402;
 const payer = (s.payer || payerFromPayload(payload)).toLowerCase();
 const txHash = s.transaction;
 
-// 3. INSERT the wallet into folder_access (UNIQUE constraint = idempotent)
+// 3. Resolve the ACCOUNT this payment credits — identity is the email-login
+//    account, never the wallet itself. The buy flow gates on login first, so
+//    settle normally binds to the session user; a cookieless payer (e.g. an
+//    agent) gets a wallet-provisioned account via resolveAccountForWallet.
+const accountId = user?.id ?? resolveAccountForWallet(payer);
+
+// 4. Write the grant (UPGRADE-ONLY — never downgrades an existing role)
 db.prepare(`
-  INSERT INTO folder_access
-    (id, drive_id, path, wallet_address, added_by, payment_tx, role)
-  VALUES (?, ?, ?, ?, 'payment', ?, ?)
-`).run(nanoid(), share.drive_id, share.path, payer, txHash, share.role);
+  INSERT INTO drive_members (id, drive_id, user_id, path, role)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role
+`).run(nanoid(12), share.drive_id, accountId, share.path, mergedRole);
 
-// 4. Issue a Meadowcap capability for the same area
-const cap = await issueShareCap({
-  namespacePub:    drive.namespace_pubkey,
-  namespaceSecret: drive.namespace_secret,
-  pathPrefix:      share.path,
-  accessMode:      share.role === "viewer" ? "read" : "write",
-});
-
-// 5. Set the wallet cookie so subsequent requests are auto-authorized
-await setWalletCookie(payer);
+// 5. Append-only receipt (tx_hash UNIQUE = replay defense), then issue a
+//    Meadowcap capability for the same area and return it in the body
+db.prepare(`INSERT INTO payment_receipts (…) VALUES (…)`).run(/* … */);
+const cap = await issueShareCap({ pathPrefix: share.path, accessMode: "read", /* … */ });
 
 return { ok: true, driveId: share.drive_id, path: share.path,
          txHash, cap: cap.capBase64 };
 ```
 
-The `200` response carries the same JSON body. Per x402 v1, the server MAY
-also include an `X-PAYMENT-RESPONSE` header whose value is the base64-encoded
-JSON receipt returned by `facilitator.settle(...)` — clients that need to
-audit the on-chain settlement should read that header.
-
-After this single roundtrip, the wallet has **two independent proofs of
+After this single roundtrip, the buyer holds **two independent proofs of
 access** (defense in depth):
 
 | Proof | Where it lives | Verified by | Survives if… |
 |---|---|---|---|
-| `folder_access` row | server SQLite | every API request via `resolveAccess()` | server is up |
-| Meadowcap capability | client cookie (`aindrive_caps`) + downloadable | Ed25519 signature on the cap | server compromised — only owner can forge |
+| `drive_members` row (keyed to the account) | server SQLite | every API request via `resolveAccess()` | server is up |
+| Meadowcap capability | settle response (downloadable) | Ed25519 signature on the cap | server compromised — only owner can forge |
 
 ### Step 5 — visitor returns later (lifetime access)
 
-The visitor closes the browser, walks away, comes back next week:
-
-```http
-GET /api/drives/<driveId>/fs/list?path=research/
-Cookie: aindrive_wallet=<their-jwt-from-pay-step>
-```
-
-Server:
+The visitor closes the browser, walks away, comes back next week, and signs
+in with their **email account** — the same one they were logged into when
+they paid (the share gate requires sign-in before payment, exactly so the
+grant lands on a durable account):
 
 ```js
-const wallet = await getWallet();   // decodes cookie → 0xabc…
-const role = await resolveAccess(driveId, path, /* userId */ null);
-// resolveAccess fans out to:
-//   resolveRoleByUser(...)   → none (no session)
-//   resolveRoleByWallet(...) → SELECT role FROM folder_access
-//                              WHERE drive_id=? AND wallet_address=?
-//                              AND path is ancestor-or-self of requested path
-//   → returns 'viewer'
+const user = await getUser();                       // aindrive_session cookie
+const role = resolveAccess(driveId, path, user.id); // drive_members lookup
+// → 'viewer' — the grant bought at settle time
 ```
 
-The wallet stays authorized **forever** until either:
-- Owner revokes via `DELETE /api/drives/<id>/access/<rowId>` (→ `folder_access` row deleted), OR
-- The visitor's wallet cookie expires (30d JWT — they re-prove ownership via SIWE and continue).
+The grant stays **forever** until the owner removes the member. There's no
+per-request payment, no recurring billing. The mental model is **buying a
+key** — once you have it, you use it as much as you like.
 
-There's no per-request payment, no recurring billing, no rate-limit on
-reads. The mental model is **buying a key** — once you have it, you use it
-as much as you like.
+### Step 6 — second device
 
-### Step 6 — same wallet, second device
-
-The user's second laptop:
-
-1. Visit the share URL → cookie-less request → `402`.
-2. The wallet (e.g. WalletConnect on mobile) signs a SIWE challenge on
-   `/api/wallet/verify` → `aindrive_wallet` cookie set on this device too.
-3. Now this device's request matches the same `folder_access` row → `200`.
-
-No second payment needed. The wallet IS the identity; access follows the
-wallet across browsers, devices, even AI agents holding the same key.
+Just sign in with the same email account on the new device. The wallet is
+not involved at all — it was only the payment instrument; identity and
+access live on the account. (Wallet signatures via `/api/wallet/verify`
+still exist, but only to attribute receipts and link a paying wallet to an
+account — they are not a login method.)
 
 ### Step 7 — AI agent pays (no human in the loop)
 
-An autonomous agent does exactly the same x402 flow, with one difference:
+An autonomous agent does exactly the same x402 v2 flow, with one difference:
 it manages its own wallet:
 
 ```python
 # pseudo-code
 resp = httpx.get(share_url)
 if resp.status_code == 402:
-    accepts = resp.json()["accepts"]
-    req = next(a for a in accepts if a["scheme"] == "exact")
-    auth = wallet.sign_eip3009_transfer(
-        to=req["payTo"], value=req["maxAmountRequired"],
-        asset=req["asset"], network=req["network"],
-    )
+    pr = json.loads(b64decode(resp.headers["PAYMENT-REQUIRED"]))
+    req = next(a for a in pr["accepts"] if a["scheme"] == "exact")
+    # eip3009 token → sign transferWithAuthorization;
+    # permit2 token (extra.assetTransferMethod == "permit2") → one-time
+    # approve(Permit2) on-chain, then sign PermitWitnessTransferFrom.
     payment = base64.b64encode(json.dumps({
-        "x402Version": 1, "scheme": "exact", "network": req["network"],
+        "x402Version": 2, "accepted": req,
         "payload": { "authorization": auth.message, "signature": auth.signature }
     }).encode()).decode()
-    resp = httpx.get(share_url, headers={"X-PAYMENT": payment})
-# 200 → response body has { driveId, path, txHash, cap }; cookie is now set.
-files = httpx.get(f"{base}/api/drives/{driveId}/fs/list?path=research/").json()
-for f in files["entries"]:
-    content = httpx.get(f"{base}/api/drives/{driveId}/fs/read?path={f['path']}").json()
-    embed_and_index(content)
+    resp = httpx.get(share_url, headers={"PAYMENT-SIGNATURE": payment})
+# 200 → body has { driveId, path, txHash, cap } — keep the cap; it is the
+# agent's durable, cookie-independent proof of access for this subtree.
 ```
 
 For agents driving aindrive over MCP rather than HTTP, the same flow is
 exposed as the `resolve_share` tool (see [`aindrive mcp`](#mcp-server) below).
 
-Whenever the agent comes back, the wallet is recognized, no payment is
-required again. Persistent agent memory of "I paid for folder X with wallet Y"
-means it never accidentally re-pays.
+The settle also provisions a wallet-keyed account for the grant, so a human
+who later logs in and links that wallet reclaims the purchase history.
 
 ### Step 8 — owner sees + manages the new member
 
@@ -1056,7 +1029,7 @@ aindrive/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── auth/      # signup, login, logout
-│   │   │   ├── wallet/    # SIWE-style wallet sign-in
+│   │   │   ├── wallet/    # wallet ownership proof (payment attribution — NOT a login method)
 │   │   │   ├── drives/    # drive CRUD + per-drive fs/yjs/access/shares
 │   │   │   ├── s/         # share token endpoint (single GET; x402 X-PAYMENT)
 │   │   │   ├── cap/       # capability decode + verify
