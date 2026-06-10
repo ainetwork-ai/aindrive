@@ -1952,6 +1952,19 @@ add(178, "stream: 200 full + 206 Range slices byte-exact; download untruncated p
   const anon = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=stream-target.bin`);
   assert(anon.status === 401 || anon.status === 403, "anonymous rejected");
 
+  // XSS containment: an uploaded HTML file must never render inline on the
+  // app origin — fs/stream forces it to a download instead.
+  const evil = await fetch(`${BASE}/api/drives/${state.driveId}/fs/upload?path=evil.html`, {
+    method: "POST", headers: { cookie, "content-type": "application/octet-stream" },
+    body: Buffer.from("<script>alert(document.cookie)</script>"),
+  });
+  eq(evil.status, 200, "html fixture upload");
+  const evilRes = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=evil.html`, { headers: { cookie } });
+  eq(evilRes.status, 200, "html stream 200");
+  eq(evilRes.headers.get("content-type"), "application/octet-stream", "html neutralized to octet-stream");
+  eq(evilRes.headers.get("content-disposition"), "attachment", "html forced to attachment");
+  eq(evilRes.headers.get("x-content-type-options"), "nosniff", "nosniff present");
+
   // fs/download now streams the FULL file (the old single-read version
   // silently truncated this payload to 8 MiB).
   const dl = await fetch(`${BASE}/api/drives/${state.driveId}/fs/download?path=stream-target.bin`, { headers: { cookie } });

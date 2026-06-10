@@ -48,6 +48,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
       "content-disposition": `attachment; filename="${encodeURIComponent(filename)}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
       "content-length": String(size),
       "cache-control": "private, no-store",
+      // attachment disposition is the XSS guard here; nosniff backs it up.
+      "x-content-type-options": "nosniff",
     };
     if (size === 0) return new Response(null, { status: 200, headers });
     return new Response(agentByteStream(driveId, drive.drive_secret, path, 0, size), { status: 200, headers });
