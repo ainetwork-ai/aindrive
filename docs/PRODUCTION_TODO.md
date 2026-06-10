@@ -20,7 +20,7 @@
 - [ ] **P0** `AINDRIVE_SESSION_SECRET` required in prod (no fallback to `~/.aindrive/session-secret`); 32B base64; absent → boot fail
 - [ ] **P0** Force cookies `Secure; HttpOnly; SameSite=Lax` in prod; refuse to start if `AINDRIVE_PUBLIC_URL` is not `https://`
 - [ ] **P0** `AINDRIVE_PAYOUT_WALLET` set; reject all-zero placeholder when DEV_BYPASS off
-- [ ] **P0** `AINDRIVE_X402_FACILITATOR` explicitly set; conscious base-mainnet vs base-sepolia choice (document in runbook)
+- [ ] **P0** Facilitator explicitly configured: `AINDRIVE_X402_FACILITATOR` URL or `CDP_API_KEY_ID`/`CDP_API_KEY_SECRET` (CDP required for mainnet permit2 settles); conscious base-mainnet vs base-sepolia choice (document in runbook)
 - [ ] **P0** Rate limit `/api/auth/*`, `/api/wallet/verify`, `/api/drives/.../shares` POST, `/api/s/<token>` (especially 402 retry); IP + cookie keys
 - [ ] **P0** Hard size cap on `fs/write` body and `fs/read` response (16 MB yjs limit already in; regular fs needs same)
 - [ ] **P0** `npm audit` gate in CI + Dependabot

@@ -273,7 +273,7 @@ export function registerCollabCases(add, state, helpers) {
   }));
 
   add(109, "viewer-role peer denied subscription", wrap(async () => {
-    // Create a paid share with role=viewer; pay via X-PAYMENT header (DEV_BYPASS).
+    // Create a paid share with role=viewer; pay via PAYMENT-SIGNATURE header (DEV_BYPASS).
     const cookie = state.ownerCookie;
     const p = freshFile("109");
     await ensureFresh(state, p, "viewer-only");
@@ -281,13 +281,13 @@ export function registerCollabCases(add, state, helpers) {
       method: "POST", headers: { "content-type": "application/json", cookie },
       body: JSON.stringify({ path: "", role: "viewer", price_usdc: 0.01 }),
     });
-    // Build a minimal X-PAYMENT payload accepted by AINDRIVE_DEV_BYPASS_X402=1
+    // Build a minimal PAYMENT-SIGNATURE payload (x402 v2) accepted by AINDRIVE_DEV_BYPASS_X402=1
     const fakePayer = "0xdemodemodemodemodemodemodemodemodemo0000";
-    const xPayment = Buffer.from(JSON.stringify({
-      x402Version: 1, scheme: "exact", network: "base-sepolia",
+    const paymentSig = Buffer.from(JSON.stringify({
+      x402Version: 2,
       payload: { authorization: { from: fakePayer } },
     })).toString("base64");
-    const pay = await jget(`/api/s/${s.body.token}`, { headers: { "X-PAYMENT": xPayment } });
+    const pay = await jget(`/api/s/${s.body.token}`, { headers: { "PAYMENT-SIGNATURE": paymentSig } });
     const visitorCookie = pay.headers.get("set-cookie")?.split(";")[0];
     const V = new Peer("V", visitorCookie, state.driveId, p);
     await V.connect();

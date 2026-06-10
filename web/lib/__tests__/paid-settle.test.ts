@@ -30,9 +30,21 @@ const LOGGED_PAYER = "0xpayerpayerpayerpayerpayerpayerpayer00002";
 const UPGRADE_PAYER = "0xpayerpayerpayerpayerpayerpayerpayer00003";
 
 function devPaymentHeader(from: string): string {
-  // DEV_BYPASS accepts any well-formed JSON; reads authorization.from.
+  // DEV_BYPASS accepts any well-formed JSON; reads authorization.from
+  // (eip3009 payloads) or permit2Authorization.from (permit2 payloads).
   const payload = { payload: { authorization: { from } } };
   return Buffer.from(JSON.stringify(payload)).toString("base64");
+}
+
+function devPermit2PaymentHeader(from: string): string {
+  const payload = { payload: { permit2Authorization: { from } } };
+  return Buffer.from(JSON.stringify(payload)).toString("base64");
+}
+
+function decodeRequiredHeader(res: Response) {
+  const header = res.headers.get("PAYMENT-REQUIRED");
+  expect(header).toBeTruthy();
+  return JSON.parse(Buffer.from(header!, "base64").toString());
 }
 
 describe("paid share settle → drive_members", () => {
@@ -50,12 +62,66 @@ describe("paid share settle → drive_members", () => {
     db.prepare(
       "INSERT INTO shares (id, drive_id, path, role, token, price_usdc) VALUES (?,?,?,?,?,?)"
     ).run("sh2", "d1", "docs", "viewer", "tok2", 1.0);
+    // A drive whose policy allows a permit2 token (no EIP-3009/EIP-712 domain),
+    // plus a share priced in it — exercises the v2 permit2 requirements path.
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret, allowed_tokens) VALUES (?,?,?,?,?,?)")
+      .run("d2", "owner1", "D2", "h2", "s2", JSON.stringify([
+        { symbol: "FANCO", chain: "base", asset: "0x187e30921d687583e5e35f3dc6474f59a6e6fe5b", name: null, version: null, decimals: 18, transferMethod: "permit2" },
+      ]));
+    db.prepare(
+      "INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency) VALUES (?,?,?,?,?,?,?)"
+    ).run("sh3", "d2", "media", "viewer", "tok3", 5.0, "FANCO");
+  });
+
+  it("402 carries a v2 PAYMENT-REQUIRED header (eip3009 token: full EIP-712 domain in extra)", async () => {
+    cookieJar.clear();
+    const res = await GET(new Request("http://localhost/api/s/tok1"), { params: Promise.resolve({ token: "tok1" }) });
+    expect(res.status).toBe(402);
+    const pr = decodeRequiredHeader(res);
+    expect(pr.x402Version).toBe(2);
+    expect(pr.resource.url).toContain("/api/s/tok1");
+    expect(pr.accepts).toHaveLength(1);
+    const r = pr.accepts[0];
+    expect(r.scheme).toBe("exact");
+    expect(r.network).toBe("eip155:84532"); // default testnet USDC
+    expect(r.amount).toBe("2000000");
+    expect(r.extra).toEqual({ assetTransferMethod: "eip3009", name: "USDC", version: "2" });
+    // Informational body for the gate UI stays alongside the protocol header.
+    const body = await res.json();
+    expect(body.x402Version).toBe(2);
+    expect(body.currency).toEqual({ symbol: "USDC", decimals: 6 });
+  });
+
+  it("402 carries permit2 requirements for tokens without an EIP-712 domain", async () => {
+    cookieJar.clear();
+    const res = await GET(new Request("http://localhost/api/s/tok3"), { params: Promise.resolve({ token: "tok3" }) });
+    expect(res.status).toBe(402);
+    const r = decodeRequiredHeader(res).accepts[0];
+    expect(r.network).toBe("eip155:8453");
+    expect(r.amount).toBe("5" + "0".repeat(18));
+    expect(r.asset).toBe("0x187e30921d687583e5e35f3dc6474f59a6e6fe5b");
+    // permit2 signs against the Permit2 contract domain — no token name/version.
+    expect(r.extra).toEqual({ assetTransferMethod: "permit2" });
+  });
+
+  it("extracts the payer from permit2Authorization payloads", async () => {
+    cookieJar.clear();
+    const PERMIT2_PAYER = "0xpayerpayerpayerpayerpayerpayerpayer00004";
+    const req = new Request("http://localhost/api/s/tok3", {
+      headers: { "PAYMENT-SIGNATURE": devPermit2PaymentHeader(PERMIT2_PAYER) },
+    });
+    const res = await GET(req, { params: Promise.resolve({ token: "tok3" }) });
+    expect(res.status).toBe(200);
+    const receipt = db.prepare("SELECT network FROM payment_receipts WHERE wallet = ?")
+      .get(PERMIT2_PAYER.toLowerCase()) as { network: string };
+    // Receipts keep the internal chain name, not the CAIP-2 wire form.
+    expect(receipt.network).toBe("base");
   });
 
   it("writes a drive_members grant for a placeholder account + receipt with account_id", async () => {
     cookieJar.clear();
     const req = new Request("http://localhost/api/s/tok1", {
-      headers: { "X-PAYMENT": devPaymentHeader(PAYER) },
+      headers: { "PAYMENT-SIGNATURE": devPaymentHeader(PAYER) },
     });
     const res = await GET(req, { params: Promise.resolve({ token: "tok1" }) });
     expect(res.status).toBe(200);
@@ -79,7 +145,7 @@ describe("paid share settle → drive_members", () => {
     // getUser() resolves member1 via a real signed session cookie.
     cookieJar.set("aindrive_session", await sign("member1"));
     const req = new Request("http://localhost/api/s/tok1", {
-      headers: { "X-PAYMENT": devPaymentHeader(LOGGED_PAYER) },
+      headers: { "PAYMENT-SIGNATURE": devPaymentHeader(LOGGED_PAYER) },
     });
     const res = await GET(req, { params: Promise.resolve({ token: "tok1" }) });
     expect(res.status).toBe(200);

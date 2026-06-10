@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { useFacilitator } from "x402/verify";
-import { safeBase64Decode } from "x402/shared";
-import { PaymentPayloadSchema, type PaymentRequirements } from "x402/types";
+import { HTTPFacilitatorClient } from "@x402/core/server";
+import { encodePaymentRequiredHeader, decodePaymentSignatureHeader } from "@x402/core/http";
+import type { PaymentRequirements, PaymentRequired, PaymentPayload } from "@x402/core/types";
+import { createFacilitatorConfig } from "@coinbase/x402";
 import { db } from "@/lib/db";
 import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
@@ -11,19 +12,31 @@ import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
-import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, paymentNetwork } from "@/lib/payment-tokens";
+import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork } from "@/lib/payment-tokens";
 
-// Facilitator that verifies/settles the x402 payment. testnet has a safe public
-// default (x402.org); mainnet has NONE — the public facilitator won't settle on
-// base mainnet, and silently using a testnet facilitator there would fail
-// confusingly. So on mainnet the operator MUST set AINDRIVE_X402_FACILITATOR
-// (e.g. a Coinbase CDP facilitator); if unset we refuse to settle (below)
-// rather than guess. Server-only env (never NEXT_PUBLIC) — it's infra config.
-const FACILITATOR_URL = (
-  process.env.AINDRIVE_X402_FACILITATOR ||
-  (paymentNetwork() === "mainnet" ? "" : "https://x402.org/facilitator")
-) as `${string}://${string}`;
+// Facilitator that verifies/settles the x402 payment, in priority order:
+// explicit AINDRIVE_X402_FACILITATOR URL (self-hosted or any third party),
+// CDP API keys (Coinbase facilitator — URL + per-request JWT auth built in),
+// then the public x402.org default on testnet only. Mainnet has NO default —
+// silently settling real money through a guessed facilitator is exactly the
+// failure mode we refuse (503 below). Server-only env (never NEXT_PUBLIC).
+function resolveFacilitatorConfig(): ConstructorParameters<typeof HTTPFacilitatorClient>[0] | null {
+  if (process.env.AINDRIVE_X402_FACILITATOR) return { url: process.env.AINDRIVE_X402_FACILITATOR };
+  if (process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET) {
+    return createFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
+  }
+  return paymentNetwork() === "mainnet" ? null : { url: "https://x402.org/facilitator" };
+}
 const DEV_BYPASS = process.env.AINDRIVE_DEV_BYPASS_X402 === "1";
+
+// Payer address from a v2 exact-evm payload: eip3009 payloads carry
+// authorization.from, permit2 payloads permit2Authorization.from.
+function payerFromPayload(payload: PaymentPayload): string | undefined {
+  const p = payload?.payload as
+    | { authorization?: { from?: string }; permit2Authorization?: { from?: string } }
+    | undefined;
+  return p?.authorization?.from ?? p?.permit2Authorization?.from;
+}
 
 type ShareRow = {
   id: string;
@@ -106,59 +119,68 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     "0x0000000000000000000000000000000000000000";
   const requirements: PaymentRequirements = {
     scheme: "exact",
-    // Preset chains are x402 network ids; the type is a literal union the
-    // policy's plain string can't narrow to.
-    network: tok.chain as PaymentRequirements["network"],
-    maxAmountRequired: toAtomicAmount(share.price_usdc, tok.decimals),
-    resource: req.url as `${string}://${string}`,
-    description: `aindrive: access to share ${token}`,
-    mimeType: "application/json",
+    network: toCaip2Network(tok.chain),
+    amount: toAtomicAmount(share.price_usdc, tok.decimals),
     payTo,
     maxTimeoutSeconds: 300,
     asset: tok.asset,
-    // ERC-3009 EIP-712 domain for the asset above. Required by the x402
-    // exact-evm scheme so the client can sign transferWithAuthorization;
-    // facilitator rejects the request as `invalid_exact_evm_missing_eip712_domain`
-    // when this is absent. Tokens without a domain (name null, e.g. FANCO
-    // pending the Phase 2b Permit2 path) omit it.
-    extra: tok.name ? { name: tok.name, version: tok.version } : undefined,
+    // Asset-transfer method per the token's capability. eip3009 needs the
+    // TOKEN's EIP-712 domain (name/version) so the client can sign
+    // transferWithAuthorization; permit2 signs against the Permit2 contract's
+    // own domain, so no token domain is sent — omitting name/version also
+    // tells the client "no EIP-2612 gas-sponsored approval, payer approves
+    // on-chain themselves".
+    extra: tok.transferMethod === "permit2"
+      ? { assetTransferMethod: "permit2" }
+      : { assetTransferMethod: "eip3009", name: tok.name, version: tok.version },
   };
   // Display-only companion to `accepts`: share-gate reads symbol/decimals to
-  // render the amount; x402-fetch only consumes `accepts`.
+  // render the amount; the x402 client only consumes the PAYMENT-REQUIRED header.
   const payCurrency = { symbol: tok.symbol, decimals: tok.decimals };
+
+  // 402/412 response: protocol payload travels in the v2 PAYMENT-REQUIRED
+  // header; the JSON body is OUR gate UI's render data (v2 leaves bodies to
+  // the server). 412 is the spec's status for permit2_allowance_required —
+  // the client reacts by running the one-time approve flow, then retries.
+  function paymentGate(status: 402 | 412, error: string) {
+    const paymentRequired: PaymentRequired = {
+      x402Version: 2,
+      error,
+      resource: { url: req.url, description: `aindrive: access to share ${token}`, mimeType: "application/json" },
+      accepts: [requirements],
+    };
+    return NextResponse.json(
+      { x402Version: 2, accepts: [requirements], currency: payCurrency, error },
+      { status, headers: { "PAYMENT-REQUIRED": encodePaymentRequiredHeader(paymentRequired) } },
+    );
+  }
 
   // Fail fast when the server cannot settle (mainnet without a configured
   // facilitator): better a clear 503 on the FIRST hit than showing the paywall,
   // collecting a signed authorization, and only then failing. DEV_BYPASS skips
   // the facilitator entirely, so it stays exempt.
-  if (!DEV_BYPASS && !FACILITATOR_URL) {
-    console.error("[x402] no facilitator configured for mainnet — set AINDRIVE_X402_FACILITATOR");
+  const facilitatorConfig = resolveFacilitatorConfig();
+  if (!DEV_BYPASS && !facilitatorConfig) {
+    console.error("[x402] no facilitator configured for mainnet — set AINDRIVE_X402_FACILITATOR or CDP_API_KEY_ID/SECRET");
     return NextResponse.json(
       { error: "payments are not configured on this server" },
       { status: 503 },
     );
   }
 
-  const xPayment = req.headers.get("X-PAYMENT");
-  if (!xPayment) {
-    return NextResponse.json(
-      { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "X-PAYMENT header is required" },
-      { status: 402 }
-    );
+  const paymentSig = req.headers.get("PAYMENT-SIGNATURE");
+  if (!paymentSig) {
+    return paymentGate(402, "PAYMENT-SIGNATURE header is required");
   }
 
-  // Decode + validate payment payload.
-  // In DEV_BYPASS we accept any well-formed JSON so local demos / scenarios
-  // don't need to construct a real EIP-3009 authorisation.
-  let payload;
+  // Decode the payment payload (base64 JSON; no schema validation here — the
+  // facilitator is the authority on payload validity, and DEV_BYPASS accepts
+  // any well-formed JSON so local demos don't need real signatures).
+  let payload: PaymentPayload;
   try {
-    const raw = JSON.parse(safeBase64Decode(xPayment));
-    payload = DEV_BYPASS ? raw : PaymentPayloadSchema.parse(raw);
+    payload = decodePaymentSignatureHeader(paymentSig);
   } catch {
-    return NextResponse.json(
-      { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "invalid X-PAYMENT header" },
-      { status: 402 }
-    );
+    return paymentGate(402, "invalid PAYMENT-SIGNATURE header");
   }
 
   let payerWallet: string;
@@ -166,8 +188,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
 
   if (DEV_BYPASS) {
     payerWallet = (
-      (payload.payload as { authorization?: { from?: string } }).authorization?.from
-        || "0xdemodemodemodemodemodemodemodemodemo0000"
+      payerFromPayload(payload) || "0xdemodemodemodemodemodemodemodemodemo0000"
     ).toLowerCase();
     txHash = "0xdev_bypass_" + nanoid(20);
     console.warn(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
@@ -203,7 +224,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       return msg.replace(/0x[0-9a-fA-F]{40,}/g, "0x\u2026").slice(0, 200);
     }
 
-    const facilitator = useFacilitator({ url: FACILITATOR_URL });
+    const facilitator = new HTTPFacilitatorClient(facilitatorConfig!);
 
     // --- verify: 10 s timeout, one retry on facilitator error ---
     type VerifyResult = Awaited<ReturnType<typeof facilitator.verify>>;
@@ -214,23 +235,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       );
       if (r.ok) { verifyRes = r.value; break; }
       if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
-        return NextResponse.json(
-          { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
-          { status: 402 },
-        );
+        return paymentGate(402, "facilitator unavailable, please retry");
       }
     }
     if (!verifyRes) {
-      return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
-        { status: 402 },
-      );
+      return paymentGate(402, "facilitator unavailable, please retry");
     }
     if (!verifyRes.isValid) {
-      return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: verifyRes.invalidReason || "verification failed" },
-        { status: 402 }
-      );
+      const reason = verifyRes.invalidReason || "verification failed";
+      // Spec: missing Permit2 allowance is a precondition failure (412), not a
+      // payment rejection — the gate UI answers it with the approve flow.
+      return paymentGate(reason === "permit2_allowance_required" ? 412 : 402, reason);
     }
 
     // --- settle: 15 s timeout, one retry on facilitator error ---
@@ -242,27 +257,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       );
       if (r.ok) { settleRes = r.value; break; }
       if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
-        return NextResponse.json(
-          { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
-          { status: 402 },
-        );
+        return paymentGate(402, "facilitator unavailable, please retry");
       }
     }
     if (!settleRes) {
-      return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: "facilitator unavailable, please retry" },
-        { status: 402 },
-      );
+      return paymentGate(402, "facilitator unavailable, please retry");
     }
     if (!settleRes.success) {
-      return NextResponse.json(
-        { x402Version: 1, accepts: [requirements], currency: payCurrency, error: sanitizeSettleError(settleRes.errorReason || "settlement failed") },
-        { status: 402 }
-      );
+      return paymentGate(402, sanitizeSettleError(settleRes.errorReason || "settlement failed"));
     }
-    payerWallet = (settleRes.payer
-      || (payload.payload as { authorization?: { from?: string } }).authorization?.from
-      || "0x0").toLowerCase();
+    payerWallet = (settleRes.payer || payerFromPayload(payload) || "0x0").toLowerCase();
     txHash = settleRes.transaction;
   }
 

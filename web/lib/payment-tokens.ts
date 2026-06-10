@@ -1,10 +1,15 @@
 // Payment-token presets a drive owner can allow. decimals/EIP-712 fields feed
-// x402 requirements; FANCO's eip712 fields are null — its on-chain settle needs
-// the Permit2 path (x402 v2), tracked as Phase 2b. Under DEV_BYPASS the policy
-// plumbing (402 body, receipts, UI) is fully exercisable regardless.
+// x402 requirements. Every token settles through one of x402 v2's two
+// asset-transfer methods: eip3009 (transferWithAuthorization — needs the
+// token's EIP-712 domain) or permit2 (universal ERC-20 fallback — signature
+// domain is the Permit2 contract itself, so no token domain needed).
+export type TransferMethod = "eip3009" | "permit2";
 export type PaymentToken = {
   symbol: string; chain: string; asset: string;
+  // EIP-712 domain of the TOKEN. Required for eip3009 settles; for permit2
+  // they only matter to the (future) EIP-2612 gas-sponsoring extension.
   name: string | null; version: string | null; decimals: number;
+  transferMethod: TransferMethod;
 };
 
 // Single payment-network switch. `mainnet` flips the USDC preset chain+address
@@ -21,32 +26,49 @@ export function paymentNetwork(): PaymentNetwork {
 // USDC preset per network. Both verified against the live chain (name differs:
 // sepolia "USDC" / mainnet "USD Coin" — version 2 on both). EIP-3009 settleable.
 const USDC_BY_NETWORK: Record<PaymentNetwork, PaymentToken> = {
-  testnet: { symbol: "USDC", chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", name: "USDC", version: "2", decimals: 6 },
-  mainnet: { symbol: "USDC", chain: "base", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", name: "USD Coin", version: "2", decimals: 6 },
+  testnet: { symbol: "USDC", chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", name: "USDC", version: "2", decimals: 6, transferMethod: "eip3009" },
+  mainnet: { symbol: "USDC", chain: "base", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", name: "USD Coin", version: "2", decimals: 6, transferMethod: "eip3009" },
 };
 
 export const TOKEN_PRESETS: Record<string, PaymentToken> = {
-  // x402-settleable (EIP-3009 + EIP-712 domain). Chain/address follow the
-  // payment-network switch; name/version are the on-chain EIP-712 domain values
-  // (hand-verified — wrong values break signature verification).
+  // EIP-3009 settleable. Chain/address follow the payment-network switch;
+  // name/version are the on-chain EIP-712 domain values (hand-verified —
+  // wrong values break signature verification).
   USDC: USDC_BY_NETWORK[paymentNetwork()],
-  // Not yet settleable on-chain: no EIP-3009 path (name/version null) — its
-  // settle needs the Permit2 route (x402 v2), tracked as Phase 2b. Owners must
-  // supply the asset address. Exercisable under DEV_BYPASS for the full UI/402
-  // plumbing, but real settlement is deferred.
-  FANCO: { symbol: "FANCO", chain: "base", asset: "", name: null, version: null, decimals: 18 },
+  // No EIP-3009 entrypoint → settles via the universal permit2 path. Owners
+  // must supply the asset address (the empty asset keeps it out of the preset
+  // checkboxes; add by CA lookup instead).
+  FANCO: { symbol: "FANCO", chain: "base", asset: "", name: null, version: null, decimals: 18, transferMethod: "permit2" },
 };
 export const DEFAULT_TOKENS: PaymentToken[] = [TOKEN_PRESETS.USDC];
 
-// x402's "exact" scheme settles via EIP-3009 transferWithAuthorization, which
-// needs a complete EIP-712 domain (name + version). A token missing either has
-// no on-chain settle path yet (e.g. FANCO → Permit2/Phase 2b): the UI can list
-// it and exercise the 402 flow under DEV_BYPASS, but it can't take real money.
-export function isX402Settleable(t: Pick<PaymentToken, "name" | "version" | "asset">): boolean {
+// Can x402's "exact" scheme settle this token on-chain? eip3009 signs against
+// the token's own EIP-712 domain, so it needs name+version+asset; permit2
+// signs against the Permit2 contract's domain, so the asset address alone
+// suffices. A token failing this can still be listed and exercised under
+// DEV_BYPASS, but it can't take real money.
+export function isX402Settleable(t: Pick<PaymentToken, "name" | "version" | "asset" | "transferMethod">): boolean {
+  if (t.transferMethod === "permit2") return !!t.asset;
   return !!(t.name && t.version && t.asset);
 }
 
-function isPaymentToken(t: unknown): t is PaymentToken {
+// Internal chain names (PaymentToken.chain, receipts.network) stay human
+// strings; x402 v2 speaks CAIP-2 on the wire. Convert at the protocol
+// boundary only. Throws on unknown chains so a policy bug can't silently
+// quote requirements on a network we never meant to settle on.
+const CAIP2_BY_CHAIN: Record<string, `${string}:${string}`> = {
+  base: "eip155:8453",
+  "base-sepolia": "eip155:84532",
+};
+export function toCaip2Network(chain: string): `${string}:${string}` {
+  const id = CAIP2_BY_CHAIN[chain];
+  if (!id) throw new Error(`unknown payment chain: ${chain}`);
+  return id;
+}
+
+// Stored token rows written before the transferMethod field exist without it
+// (undefined) — those are normalized below, so "missing" is valid here.
+function isPaymentToken(t: unknown): t is Omit<PaymentToken, "transferMethod"> & { transferMethod?: TransferMethod } {
   if (typeof t !== "object" || t === null) return false;
   const o = t as Record<string, unknown>;
   return (
@@ -55,8 +77,20 @@ function isPaymentToken(t: unknown): t is PaymentToken {
     typeof o.asset === "string" &&
     (o.name === null || typeof o.name === "string") &&
     (o.version === null || typeof o.version === "string") &&
-    typeof o.decimals === "number" && Number.isInteger(o.decimals)
+    // decimals >= 2: toAtomicAmount scales from cents (10^(decimals-2)) and
+    // BigInt cannot take a negative exponent — a 0/1-decimal token would crash
+    // every 402 quote for the share. Real 0-decimal ERC-20s exist; they are
+    // rejected at write time (here) and at lookup time instead.
+    typeof o.decimals === "number" && Number.isInteger(o.decimals) && o.decimals >= 2 &&
+    (o.transferMethod === undefined || o.transferMethod === "eip3009" || o.transferMethod === "permit2")
   );
+}
+
+// Legacy rows (no transferMethod): a full EIP-712 domain was exactly the old
+// "x402-settleable" rule, so those tokens keep settling via eip3009; anything
+// else gains the permit2 path it never had.
+function withTransferMethod(t: Omit<PaymentToken, "transferMethod"> & { transferMethod?: TransferMethod }): PaymentToken {
+  return { ...t, transferMethod: t.transferMethod ?? (t.name && t.version ? "eip3009" : "permit2") };
 }
 
 // Strict counterpart of resolveDriveTokens for *writes*: returns null on
@@ -70,7 +104,7 @@ export function parseTokenPolicy(json: string): PaymentToken[] | null {
     return null;
   }
   if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every(isPaymentToken)) return null;
-  return parsed;
+  return parsed.map(withTransferMethod);
 }
 
 // A stored policy keeps the token JSON it was saved with. After a network flip
@@ -103,6 +137,9 @@ export function resolveDriveTokens(allowedTokensJson: string | null): PaymentTok
 // Number.MAX_SAFE_INTEGER 초과(정밀도 손실), 1000 이상이면 "1e+21" 지수표기가 되어
 // x402의 digit-string 검증/BigInt() 소비자가 throw. BigInt 십진 문자열 스케일링으로.
 export function toAtomicAmount(price: number, decimals: number): string {
+  // BigInt 음수 지수 불가 — decimals < 2 는 정책 검증(isPaymentToken)과
+  // token-lookup 에서 차단되므로 여기 도달하면 검증 누락 버그다.
+  if (decimals < 2) throw new Error(`toAtomicAmount: decimals must be >= 2, got ${decimals}`);
   // price는 소수 2자리까지만 허용(shares 입력 검증과 동일) — 그 이상은 반올림.
   const cents = Math.round(price * 100); // safe: price < 1e13
   return (BigInt(cents) * 10n ** BigInt(decimals - 2)).toString();

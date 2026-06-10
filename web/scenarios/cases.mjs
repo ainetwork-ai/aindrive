@@ -188,11 +188,11 @@ async function makePaidShare({ path = "", role = "viewer", price_usdc = 0.01 } =
   return r.body.token;
 }
 
-// Builds a minimal X-PAYMENT header value accepted by AINDRIVE_DEV_BYPASS_X402=1.
-// Mirrors the format used by collab-cases.mjs #109.
-function buildXPayment(from = "0xdemodemodemodemodemodemodemodemodemo0000") {
+// Builds a minimal PAYMENT-SIGNATURE header value (x402 v2) accepted by
+// AINDRIVE_DEV_BYPASS_X402=1. Mirrors the format used by collab-cases.mjs #109.
+function buildPaymentSignature(from = "0xdemodemodemodemodemodemodemodemodemo0000") {
   return Buffer.from(JSON.stringify({
-    x402Version: 1, scheme: "exact", network: "base-sepolia",
+    x402Version: 2,
     payload: { authorization: { from } },
   })).toString("base64");
 }
@@ -216,7 +216,7 @@ async function getPaidCap(driveId, path = "", ownerCookie) {
     payload: { authorization: { from: "0x" + "de".repeat(20) } },
   })).toString("base64");
   const r = await jget(`/api/s/${shareRes.body.token}`, {
-    headers: { "X-PAYMENT": bypassPayload },  // no cookie → not the owner → DEV_BYPASS settle issues cap
+    headers: { "PAYMENT-SIGNATURE": bypassPayload },  // no cookie → not the owner → DEV_BYPASS settle issues cap
   });
   if (r.status !== 200) throw new Error("paid GET failed: " + JSON.stringify(r.body));
   if (!r.body.cap) throw new Error("no cap in body: " + JSON.stringify(r.body));
@@ -1057,11 +1057,11 @@ add(171, "policy 402 (USDC): accepts reflects USDC preset + currency.symbol", as
     body: JSON.stringify({ path: "", role: "viewer", price_usdc: 2, currency: "USDC", listed: true }),
   });
   eq(sr.status, 200, "USDC listed share create: " + JSON.stringify(sr.body));
-  // First GET with no X-PAYMENT → 402 regardless of DEV_BYPASS (bypass only
-  // skips the facilitator once a payment header is presented).
+  // First GET with no PAYMENT-SIGNATURE → 402 regardless of DEV_BYPASS (bypass
+  // only skips the facilitator once a payment header is presented).
   const r = await jget(`/api/s/${sr.body.token}`);
   eq(r.status, 402, "no-payment GET must be 402: " + JSON.stringify(r.body));
-  eq(r.body.accepts[0].network, "base-sepolia", "USDC network");
+  eq(r.body.accepts[0].network, "eip155:84532", "USDC network (CAIP-2)");
   eq(r.body.accepts[0].asset, "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "USDC asset");
   eq(r.body.currency.symbol, "USDC", "top-level currency.symbol");
 });
@@ -1092,11 +1092,13 @@ add(172, "policy discriminator 402 (FANCO): non-USDC values + exact 10^18 amount
   eq(sr.status, 200, "FANCO listed share create: " + JSON.stringify(sr.body));
   const r = await jget(`/api/s/${sr.body.token}`);
   eq(r.status, 402, "no-payment GET must be 402: " + JSON.stringify(r.body));
-  eq(r.body.accepts[0].network, "base", "FANCO network from policy");
+  eq(r.body.accepts[0].network, "eip155:8453", "FANCO network from policy (CAIP-2)");
   eq(r.body.accepts[0].asset, FANCO_ASSET, "FANCO asset from policy");
+  // Legacy policy row (no transferMethod) + null EIP-712 domain → inferred permit2.
+  eq(r.body.accepts[0].extra.assetTransferMethod, "permit2", "FANCO settles via permit2");
   // 1 FANCO at 18 decimals = exactly 1 followed by 18 zeros, as a digit string.
-  eq(r.body.accepts[0].maxAmountRequired, "1000000000000000000", "exact 1*10^18 atomic amount");
-  assert(!r.body.accepts[0].maxAmountRequired.includes("e"), "amount must be a digit string, no exponent");
+  eq(r.body.accepts[0].amount, "1000000000000000000", "exact 1*10^18 atomic amount");
+  assert(!r.body.accepts[0].amount.includes("e"), "amount must be a digit string, no exponent");
   eq(r.body.currency.symbol, "FANCO", "top-level currency.symbol from policy");
 });
 
@@ -1153,7 +1155,7 @@ add(174, "settle-gated: showcase visible, no drive_members until DEV_BYPASS sett
   handle1.close();
   assert(!before, "buyer must have NO drive_members row before settle");
   // DEV_BYPASS paid GET (no cookie → not the owner → settle issues the grant).
-  const pay = await jget(`/api/s/${token}`, { headers: { "X-PAYMENT": buildXPayment(payer) } });
+  const pay = await jget(`/api/s/${token}`, { headers: { "PAYMENT-SIGNATURE": buildPaymentSignature(payer) } });
   eq(pay.status, 200, "paid settle GET: " + JSON.stringify(pay.body));
   const handle2 = await dbHandle();
   const after = handle2.prepare(memberSql).get(state.driveId, payer);
@@ -1220,9 +1222,8 @@ add(67, "paid share without wallet → 402", async () => {
   eq(share.status, 402);
 });
 
-// #68–#75 removed: legacy /api/s/<token>/pay endpoint and PAYMENT-REQUIRED
-// header are gone. Modern x402 X-PAYMENT GET flow is covered by
-// collab-cases.mjs #109.
+// #68–#75 removed: legacy /api/s/<token>/pay endpoint is gone. Modern x402
+// PAYMENT-SIGNATURE GET flow is covered by collab-cases.mjs #109.
 
 // ──────────────────────── H. Meadowcap ────────────────────────
 
@@ -1647,17 +1648,17 @@ add(161, "free CONSUME accept → drive_members row written", async () => {
 });
 
 // #162 — Paid DEV_BYPASS settle → payment_receipts row + drive_members grant.
-// GET /api/s/[token] with X-PAYMENT (DEV_BYPASS) writes payment_receipts and drive_members.
+// GET /api/s/[token] with PAYMENT-SIGNATURE (DEV_BYPASS) writes payment_receipts and drive_members.
 // Asserts REAL DB state via dbHandle(). Stashes tx_hash for #163 replay case.
 add(162, "paid DEV_BYPASS settle → payment_receipts row + drive_members grant", async () => {
   await ensureDrive();
   const token = await makePaidShare({ path: "", role: "viewer", price_usdc: 0.02 });
 
   const payer = "0xc162c162c162c162c162c162c162c162c162c162";
-  const xPayment = buildXPayment(payer);
+  const paymentSig = buildPaymentSignature(payer);
 
   const r = await jget(`/api/s/${token}`, {
-    headers: { "X-PAYMENT": xPayment },
+    headers: { "PAYMENT-SIGNATURE": paymentSig },
   });
   eq(r.status, 200, "settle response: " + JSON.stringify(r.body));
   assert(
@@ -1704,7 +1705,7 @@ add(163, "replay same tx_hash → no duplicate receipt (UNIQUE guard)", async ()
     await ensureDrive();
     state.lastSettleToken = await makePaidShare({ path: "", role: "viewer", price_usdc: 0.01 });
     const r0 = await jget(`/api/s/${state.lastSettleToken}`, {
-      headers: { "X-PAYMENT": buildXPayment("0xc163replay0000000000000000000000000000aa") },
+      headers: { "PAYMENT-SIGNATURE": buildPaymentSignature("0xc163replay0000000000000000000000000000aa") },
     });
     eq(r0.status, 200, "fallback settle: " + JSON.stringify(r0.body));
     state.lastSettleTxHash = r0.body.txHash;
