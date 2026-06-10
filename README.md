@@ -249,8 +249,13 @@ charges. The mental model is "buying a key", not "paying per door open".
 
 ## Payment → permission lifecycle (deep dive)
 
-This is the core economic loop: a wallet pays once, gets durable folder access,
-keeps that access across sessions/devices/agents until the owner revokes.
+> The full permission model — roles, path-scoped grants & inheritance,
+> upgrade-only merging, invites/links/payment, and entry resolution — is in
+> [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md). This section covers the payment
+> half of it.
+
+This is the core economic loop: a buyer pays once, gets durable folder access
+on their account, keeps it across sessions/devices/agents until the owner removes them.
 
 ### Step 1 — owner publishes a paid share
 
