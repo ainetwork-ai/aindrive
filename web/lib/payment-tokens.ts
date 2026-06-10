@@ -56,11 +56,11 @@ export function isX402Settleable(t: Pick<PaymentToken, "name" | "version" | "ass
 // strings; x402 v2 speaks CAIP-2 on the wire. Convert at the protocol
 // boundary only. Throws on unknown chains so a policy bug can't silently
 // quote requirements on a network we never meant to settle on.
-const CAIP2_BY_CHAIN: Record<string, string> = {
+const CAIP2_BY_CHAIN: Record<string, `${string}:${string}`> = {
   base: "eip155:8453",
   "base-sepolia": "eip155:84532",
 };
-export function toCaip2Network(chain: string): string {
+export function toCaip2Network(chain: string): `${string}:${string}` {
   const id = CAIP2_BY_CHAIN[chain];
   if (!id) throw new Error(`unknown payment chain: ${chain}`);
   return id;
