@@ -63,6 +63,11 @@ export function RichTextEditor({
   }
   const provider = providerRef.current;
   const docIdRef = useRef<string>("");
+  // Autosave is armed only AFTER the seed completes. Before then the editor's
+  // bind inserts an empty paragraph (a doc update) — without this gate a slow
+  // whenReady lets that empty state autosave to disk and wipe the file, and a
+  // pure open→close would rewrite (re-canonicalize) the file with no edit.
+  const readyToSaveRef = useRef(false);
   // Keep the parent callbacks in refs so the collab effect doesn't depend on
   // their identity — the parent passes inline arrows, and depending on them
   // would re-run the effect (→ refreshPresence → setState → re-render → loop).
@@ -89,7 +94,7 @@ export function RichTextEditor({
 
   // Debounced autosave: markdown body to disk + full Yjs update to the store.
   const debouncedAutosave = useDebouncedCallback(async () => {
-    if (!canEdit || !editor || !docIdRef.current) return;
+    if (!canEdit || !editor || !docIdRef.current || !readyToSaveRef.current) return;
     const md = editor.getMarkdown();
     const update = Y.encodeStateAsUpdate(provider.doc);
     try {
@@ -153,6 +158,10 @@ export function RichTextEditor({
           }
         } catch (e) { console.warn("richtext seed failed:", e); }
       }
+      // Arm autosave only now — after seed (or the decision to skip it). Updates
+      // before this point (the editor's empty-paragraph bind, the seed setContent)
+      // must NOT schedule a write.
+      readyToSaveRef.current = true;
       if (!cancelled) setLoading(false);
     })();
 
@@ -176,7 +185,11 @@ export function RichTextEditor({
     provider.awareness.on("change", refreshPresence);
     refreshPresence();
 
-    const triggerSave = () => void debouncedAutosave();
+    // Gate at SCHEDULE time, not just execution: the seed's setContent fires doc
+    // updates synchronously before readyToSave flips, so they must not even
+    // schedule a debounce (else it fires 5s later when readyToSave is true → a
+    // no-edit rewrite of the file).
+    const triggerSave = () => { if (readyToSaveRef.current) void debouncedAutosave(); };
     provider.doc.on("update", triggerSave);
     const onUnload = () => debouncedAutosave.flush();
     window.addEventListener("beforeunload", onUnload);
