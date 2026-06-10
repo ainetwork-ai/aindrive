@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { setCookie } from "@/lib/session";
+import { claimInvitesForEmail } from "@/lib/invites.js";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 
 const Body = z.object({
@@ -37,6 +38,9 @@ export async function POST(req: Request) {
   db.prepare(
     "INSERT INTO users (id, email, name, password_hash, role) VALUES (?, ?, ?, ?, ?)"
   ).run(id, email, name, hash, isFirst ? "admin" : "member");
+  // Turn any invites addressed to this email into real grants so the drives
+  // they were invited to show up immediately after signup.
+  claimInvitesForEmail(id, email);
   await setCookie(id);
   return NextResponse.json({ ok: true });
 }

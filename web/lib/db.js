@@ -102,6 +102,23 @@ function open() {
       FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_account_wallets_account ON account_wallets(account_id);
+    -- Invites for emails that don't have an account yet. On signup these convert
+    -- to drive_members (upgrade-only) and are deleted; a registered invitee is
+    -- granted immediately and never lands here. UNIQUE keeps one pending grant
+    -- per (drive, email, path) — re-invite overwrites the role.
+    CREATE TABLE IF NOT EXISTS drive_invites (
+      id TEXT PRIMARY KEY,
+      drive_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL,
+      created_by TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(drive_id, email, path),
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_drive_invites_email ON drive_invites(email);
+    CREATE INDEX IF NOT EXISTS idx_drive_invites_drive ON drive_invites(drive_id);
   `);
   // payment_chain → currency rename. Must run BEFORE the ADD loop: on a fresh
   // DB the CREATE above already made `currency`, so adding payment_chain first
