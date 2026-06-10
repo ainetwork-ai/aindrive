@@ -272,6 +272,36 @@ export function FileTable({
   // here — the menu item clicks it programmatically).
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
+  // Drag-drop upload (canEdit only). dragDepth counts enter/leave so the
+  // overlay doesn't flicker as the pointer crosses child elements — it hides
+  // only when the count returns to 0 (left the area entirely).
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
+  const dndProps = canEdit ? {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragging(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!Array.from(e.dataTransfer.types).includes("Files")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      e.preventDefault();
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragging(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragging(false);
+      if (e.dataTransfer.files?.length) onUpload(e.dataTransfer.files);
+    },
+  } : {};
+
   // Open the positioned menu at the cursor. entry=null → empty-area menu.
   const openCtx = (ev: React.MouseEvent, entry: DriveEntry | null) => {
     ev.preventDefault();
@@ -397,12 +427,28 @@ export function FileTable({
   }
 
   return (
-    // min-h-full so empty-area right-click works across the whole scroll area,
-    // not just the few rows. The empty-area handler fires when the event wasn't
-    // stopped by a row/card (entry handlers stopPropagation).
-    <div className="min-h-full" onContextMenu={(ev) => openCtx(ev, null)}>
+    // min-h-full so empty-area right-click + drop work across the whole scroll
+    // area, not just the few rows. The empty-area context handler fires when the
+    // event wasn't stopped by a row/card (entry handlers stopPropagation).
+    <div
+      className="relative min-h-full"
+      onContextMenu={(ev) => openCtx(ev, null)}
+      {...dndProps}
+    >
       {body}
       {contextMenu}
+      {dragging && (
+        <div
+          className="pointer-events-none absolute inset-0 z-40 flex flex-col items-center justify-center gap-3
+                     rounded-xl border-2 border-dashed border-drive-accent bg-drive-accent/5 backdrop-blur-[1px]"
+          aria-hidden="true"
+        >
+          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-drive-selected text-drive-accent">
+            <Upload className="w-7 h-7" />
+          </div>
+          <p className="text-subtitle text-drive-accent">Drop files to upload</p>
+        </div>
+      )}
       <input ref={uploadInputRef} type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
     </div>
   );
