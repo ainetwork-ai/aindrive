@@ -224,13 +224,17 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     if (!files || !canEdit) return;
     const uploadedPaths: string[] = [];
     for (const file of Array.from(files)) {
-      const arr = await file.arrayBuffer();
-      const b64 = arrayBufferToBase64(arr);
       const target = path ? `${path}/${file.name}` : file.name;
-      const res = await apiFetch(`/api/drives/${driveId}/fs/write`, {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: target, content: b64, encoding: "base64" }),
+      // Streamed raw-body upload (fs/upload re-chunks to the agent and
+      // publishes atomically). XHR instead of fetch: the browser streams a
+      // File body from disk without buffering it in JS, AND exposes upload
+      // progress — fetch only does the former.
+      const toastId = `upload-${target}`;
+      toast.loading(`Uploading ${file.name} — 0%`, { id: toastId });
+      const res = await uploadFile(driveId, target, file, (pct) => {
+        toast.loading(`Uploading ${file.name} — ${pct}%`, { id: toastId });
       });
+      toast.dismiss(toastId);
       if (!res.ok) toast.error(`${file.name}: ${res.error}`);
       else uploadedPaths.push(target);
     }
@@ -387,12 +391,31 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   );
 }
 
-function arrayBufferToBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
+// Single-file streamed upload with progress. Resolves (never rejects) so the
+// caller's per-file loop continues past failures.
+function uploadFile(
+  driveId: string,
+  target: string,
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/drives/${driveId}/fs/upload?path=${encodeURIComponent(target)}`);
+    xhr.setRequestHeader("content-type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve({ ok: true });
+      let error = `upload failed (${xhr.status})`;
+      try { error = JSON.parse(xhr.responseText).error || error; } catch {}
+      resolve({ ok: false, error });
+    };
+    xhr.onerror = () => resolve({ ok: false, error: "network error" });
+    // Without this, an aborted XHR settles nothing and the multi-file loop
+    // awaits forever (with its loading toast pinned).
+    xhr.onabort = () => resolve({ ok: false, error: "upload cancelled" });
+    xhr.send(file);
+  });
 }

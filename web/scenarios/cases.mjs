@@ -1846,6 +1846,66 @@ add(176, "thumbnail: image → 200 webp, cached second hit, non-image 415, anon 
   assert(r4.status === 401 || r4.status === 403, "anonymous rejected, got " + r4.status);
 });
 
+// #177 — streaming upload: 10 MiB raw body → chunked to the agent through a
+// hidden temp, atomically renamed; byte-exact roundtrip; editor-only.
+add(177, "streaming upload: 10MiB roundtrip, no temp leak, viewer/anon rejected", async () => {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+  // 10 MiB (3 chunks at 4 MiB) — size verified via the listing, because the
+  // agent's read RPC silently truncates at its 8 MiB maxReadBytes (pre-existing
+  // read-path limit; large-file DOWNLOAD streaming is a separate follow-up).
+  const payload = randomBytes(10 * 1024 * 1024);
+  const up = await fetch(`${BASE}/api/drives/${state.driveId}/fs/upload?path=big-upload.bin`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/octet-stream" },
+    body: payload,
+  });
+  eq(up.status, 200, "upload 200: " + (await up.text()).slice(0, 200));
+  const sized = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
+  const bigEntry = (sized.body.entries ?? []).find((en) => en.name === "big-upload.bin");
+  assert(bigEntry, "uploaded file appears in listing");
+  eq(bigEntry.size, payload.length, "full 10MiB size on disk");
+
+  // Byte-exact roundtrip with a 6 MiB file (still 2 chunks, under the 8 MiB
+  // read cap): proves chunk reassembly ordering, not just byte counts.
+  const small = randomBytes(6 * 1024 * 1024);
+  const up2 = await fetch(`${BASE}/api/drives/${state.driveId}/fs/upload?path=roundtrip.bin`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/octet-stream" },
+    body: small,
+  });
+  eq(up2.status, 200, "6MiB upload 200");
+  const rd = await jget(`/api/drives/${state.driveId}/fs/read?path=roundtrip.bin&encoding=base64`, { headers: { cookie } });
+  eq(rd.status, 200, "read back 200");
+  const got = Buffer.from(rd.body.content, "base64");
+  eq(got.length, small.length, "byte length matches");
+  eq(
+    createHash("sha1").update(got).digest("hex"),
+    createHash("sha1").update(small).digest("hex"),
+    "content hash matches",
+  );
+
+  // The temp dir left nothing behind, and .aindrive stays hidden from listings.
+  const tmpList = await jget(`/api/drives/${state.driveId}/fs/list?path=${encodeURIComponent(".aindrive/uploads")}`, { headers: { cookie } });
+  if (tmpList.status === 200) {
+    eq((tmpList.body.entries ?? []).length, 0, ".aindrive/uploads must be empty after upload");
+  } // non-200 (dir missing on a fresh agent) is equally clean
+  const rootList = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie } });
+  assert(!(rootList.body.entries ?? []).some((en) => en.name === ".aindrive"), ".aindrive hidden from root listing");
+
+  // Write-gated: a viewer member and an anonymous visitor are both rejected.
+  const { cookie: viewerCookie, email } = await signupUser("c177viewer");
+  await inviteMember(state.driveId, email, "", "viewer", cookie);
+  const vUp = await fetch(`${BASE}/api/drives/${state.driveId}/fs/upload?path=nope.bin`, {
+    method: "POST", headers: { cookie: viewerCookie, "content-type": "application/octet-stream" }, body: Buffer.from("x"),
+  });
+  eq(vUp.status, 403, "viewer rejected");
+  const aUp = await fetch(`${BASE}/api/drives/${state.driveId}/fs/upload?path=nope.bin`, {
+    method: "POST", headers: { "content-type": "application/octet-stream" }, body: Buffer.from("x"),
+  });
+  assert(aUp.status === 401 || aUp.status === 403, "anonymous rejected, got " + aUp.status);
+});
+
 // Append the 20 emergent / steady-state scenarios.
 import { registerEmergentCases } from "./emergent-cases.mjs";
 registerEmergentCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
