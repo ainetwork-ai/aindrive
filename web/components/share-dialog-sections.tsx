@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
+import { normalizePath, isAncestorOrSelf } from "@/lib/access-core.js";
 
 export type Share = {
   id: string;
@@ -279,64 +280,106 @@ function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy:
   );
 }
 
+/** Pretty path for a grant: "" → "drive root", else "/artists/alice". */
+function prettyPath(p: string): string {
+  return p ? `/${p}` : "drive root";
+}
+
 export function MembersSection({
-  members, isOwner, currentUserEmail, changeMemberRole, removeMember, busy,
+  members, isOwner, currentUserEmail, currentPath, changeMemberRole, removeMember, busy,
 }: {
   members: Member[];
   isOwner: boolean;
   currentUserEmail: string;
+  /** Folder the dialog is scoped to — members are shown relative to THIS path. */
+  currentPath: string;
   changeMemberRole: (id: string, role: "viewer" | "editor" | "owner") => void;
   removeMember: (id: string) => void;
   busy: boolean;
 }) {
-  if (members.length === 0) return null;
+  // Scope the list to who can actually see THIS folder, split into:
+  //  - direct:   granted at exactly this path → editable here.
+  //  - inherited: granted at an ancestor (covers this folder) → read-only;
+  //    removing them here would change their broader access, so it's managed at
+  //    the ancestor. Members of *other* subfolders are hidden entirely — they
+  //    have no access to this folder, and showing them was the source of the
+  //    "everyone appears in every folder" confusion.
+  const cur = normalizePath(currentPath);
+  const direct: Member[] = [];
+  const inherited: Member[] = [];
+  for (const m of members) {
+    const p = normalizePath(m.path);
+    if (p === cur) direct.push(m);
+    else if (isAncestorOrSelf(p, cur)) inherited.push(m);
+  }
+  if (direct.length === 0 && inherited.length === 0) return null;
+
+  const total = direct.length + inherited.length;
   return (
     <SectionCard
       icon={<Users className="w-4 h-4" />}
       title="Members"
-      description={`${members.length} ${members.length === 1 ? "person" : "people"} with access`}
+      description={`${total} ${total === 1 ? "person" : "people"} can access ${prettyPath(cur)}`}
     >
-      <ul className="space-y-1.5 max-h-44 overflow-auto scrollbar-thin">
-        {members.map((m) => (
-          <ListRow key={m.id}>
-            <span className="truncate flex-1 text-body text-drive-text">{m.name || m.email}</span>
-            <span className="text-drive-muted truncate w-16 shrink-0">{m.path || "/"}</span>
-            {isOwner ? (
-              <Select
-                value={m.role}
-                disabled={busy}
-                wrapClassName="w-24"
-                className="h-8"
-                aria-label={`Role for ${m.email}`}
-                onChange={(e) => changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")}
-              >
-                <option value="viewer">Viewer</option>
-                <option value="editor">Editor</option>
-                <option value="owner">Owner</option>
-              </Select>
-            ) : (
-              <Badge tone="neutral">{m.role}</Badge>
-            )}
-            {isOwner && m.email !== currentUserEmail && (
-              <IconButton
-                size="sm"
-                variant="text"
-                aria-label={`Remove ${m.email}`}
-                disabled={busy}
-                onClick={() => removeMember(m.id)}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </IconButton>
-            )}
-          </ListRow>
-        ))}
-      </ul>
+      {direct.length > 0 && (
+        <ul className="space-y-1.5 max-h-44 overflow-auto scrollbar-thin">
+          {direct.map((m) => (
+            <ListRow key={m.id}>
+              <span className="truncate flex-1 text-body text-drive-text">{m.name || m.email}</span>
+              {isOwner ? (
+                <Select
+                  value={m.role}
+                  disabled={busy}
+                  wrapClassName="w-24"
+                  className="h-8"
+                  aria-label={`Role for ${m.email}`}
+                  onChange={(e) => changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")}
+                >
+                  <option value="viewer">Viewer</option>
+                  <option value="editor">Editor</option>
+                  <option value="owner">Owner</option>
+                </Select>
+              ) : (
+                <Badge tone="neutral">{m.role}</Badge>
+              )}
+              {isOwner && m.email !== currentUserEmail && (
+                <IconButton
+                  size="sm"
+                  variant="text"
+                  aria-label={`Remove ${m.email}`}
+                  disabled={busy}
+                  onClick={() => removeMember(m.id)}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </IconButton>
+              )}
+            </ListRow>
+          ))}
+        </ul>
+      )}
+
+      {inherited.length > 0 && (
+        <div className={direct.length > 0 ? "mt-3" : ""}>
+          <div className="text-label uppercase text-drive-muted mb-1.5">Inherited access</div>
+          <ul className="space-y-1.5 max-h-32 overflow-auto scrollbar-thin">
+            {inherited.map((m) => (
+              <ListRow key={m.id}>
+                <span className="truncate flex-1 text-body text-drive-text">{m.name || m.email}</span>
+                <span className="text-caption text-drive-muted truncate shrink-0" title={`Granted at ${prettyPath(normalizePath(m.path))} — manage it there`}>
+                  from {prettyPath(normalizePath(m.path))}
+                </span>
+                <Badge tone="neutral">{m.role}</Badge>
+              </ListRow>
+            ))}
+          </ul>
+        </div>
+      )}
     </SectionCard>
   );
 }
 
 export function EmailInviteSection({
-  email, setEmail, role, setRole, invite, busy,
+  email, setEmail, role, setRole, invite, busy, currentPath,
 }: {
   email: string;
   setEmail: (v: string) => void;
@@ -344,12 +387,16 @@ export function EmailInviteSection({
   setRole: (v: "viewer" | "editor") => void;
   invite: () => void;
   busy: boolean;
+  /** Path the grant lands on — invites are scoped here. */
+  currentPath: string;
 }) {
+  const cur = normalizePath(currentPath);
+  const isRoot = cur === "";
   return (
     <SectionCard
       icon={<UserPlus className="w-4 h-4" />}
       title="Invite by email"
-      description="Add a collaborator to this path"
+      description={<>Grants access to <span className="font-medium text-drive-text">{prettyPath(cur)}</span>{!isRoot && " only"}</>}
     >
       <div className="flex gap-2 items-end">
         <Input
@@ -372,6 +419,11 @@ export function EmailInviteSection({
           Invite
         </Button>
       </div>
+      {isRoot && (
+        <p className="mt-2 text-caption text-amber-700">
+          This is the drive root — the collaborator will see every folder. Open a subfolder’s Share to scope access to just that folder.
+        </p>
+      )}
     </SectionCard>
   );
 }
