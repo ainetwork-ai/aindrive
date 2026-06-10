@@ -1906,6 +1906,61 @@ add(177, "streaming upload: 10MiB roundtrip, no temp leak, viewer/anon rejected"
   assert(aUp.status === 401 || aUp.status === 403, "anonymous rejected, got " + aUp.status);
 });
 
+// #178 — fs/stream Range playback + untruncated fs/download. 10 MiB payload
+// deliberately exceeds the agent read RPC's silent 8 MiB cap: only the
+// chunked download path can return it byte-exact.
+add(178, "stream: 200 full + 206 Range slices byte-exact; download untruncated past 8MiB", async () => {
+  await ensureDrive();
+  const cookie = await reEnsureOwner();
+  const payload = randomBytes(10 * 1024 * 1024);
+  const up = await fetch(`${BASE}/api/drives/${state.driveId}/fs/upload?path=stream-target.bin`, {
+    method: "POST", headers: { cookie, "content-type": "application/octet-stream" }, body: payload,
+  });
+  eq(up.status, 200, "fixture upload");
+
+  // Full body — proves the chunk loop reassembles past the 8 MiB read cap.
+  const full = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=stream-target.bin`, { headers: { cookie } });
+  eq(full.status, 200, "full stream 200");
+  eq(full.headers.get("accept-ranges"), "bytes", "advertises ranges");
+  const fullBuf = Buffer.from(await full.arrayBuffer());
+  eq(fullBuf.length, payload.length, "full length");
+  eq(createHash("sha1").update(fullBuf).digest("hex"), createHash("sha1").update(payload).digest("hex"), "full hash");
+
+  // Range crossing the 4 MiB chunk boundary.
+  const a = 4 * 1024 * 1024 - 100, b = 4 * 1024 * 1024 + 200;
+  const part = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=stream-target.bin`, {
+    headers: { cookie, range: `bytes=${a}-${b}` },
+  });
+  eq(part.status, 206, "range 206");
+  eq(part.headers.get("content-range"), `bytes ${a}-${b}/${payload.length}`, "content-range");
+  const partBuf = Buffer.from(await part.arrayBuffer());
+  eq(partBuf.length, b - a + 1, "range length");
+  eq(Buffer.compare(partBuf, payload.subarray(a, b + 1)), 0, "range bytes equal");
+
+  // Suffix form: last 1000 bytes.
+  const tail = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=stream-target.bin`, {
+    headers: { cookie, range: "bytes=-1000" },
+  });
+  eq(tail.status, 206, "suffix 206");
+  eq(Buffer.compare(Buffer.from(await tail.arrayBuffer()), payload.subarray(payload.length - 1000)), 0, "suffix bytes equal");
+
+  // Unsatisfiable + anonymous.
+  const bad = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=stream-target.bin`, {
+    headers: { cookie, range: `bytes=${payload.length}-` },
+  });
+  eq(bad.status, 416, "out-of-range 416");
+  const anon = await fetch(`${BASE}/api/drives/${state.driveId}/fs/stream?path=stream-target.bin`);
+  assert(anon.status === 401 || anon.status === 403, "anonymous rejected");
+
+  // fs/download now streams the FULL file (the old single-read version
+  // silently truncated this payload to 8 MiB).
+  const dl = await fetch(`${BASE}/api/drives/${state.driveId}/fs/download?path=stream-target.bin`, { headers: { cookie } });
+  eq(dl.status, 200, "download 200");
+  const dlBuf = Buffer.from(await dl.arrayBuffer());
+  eq(dlBuf.length, payload.length, "download untruncated");
+  eq(createHash("sha1").update(dlBuf).digest("hex"), createHash("sha1").update(payload).digest("hex"), "download hash");
+});
+
 // Append the 20 emergent / steady-state scenarios.
 import { registerEmergentCases } from "./emergent-cases.mjs";
 registerEmergentCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });

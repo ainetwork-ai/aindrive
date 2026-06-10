@@ -21,6 +21,13 @@
 - [ ] **P0** Force cookies `Secure; HttpOnly; SameSite=Lax` in prod; refuse to start if `AINDRIVE_PUBLIC_URL` is not `https://`
 - [ ] **P0** `AINDRIVE_PAYOUT_WALLET` set; reject all-zero placeholder when DEV_BYPASS off
 - [ ] **P0** Facilitator explicitly configured: `AINDRIVE_X402_FACILITATOR` URL or `CDP_API_KEY_ID`/`CDP_API_KEY_SECRET` (CDP required for mainnet permit2 settles); conscious base-mainnet vs base-sepolia choice (document in runbook)
+- [ ] **P0** Reverse proxy (nginx) sized for streaming transfers — without these, nginx 413s large uploads at its 1 MB default regardless of the app's 2 GiB cap:
+  ```nginx
+  client_max_body_size 2g;          # ≥ AINDRIVE_MAX_UPLOAD_BYTES
+  proxy_request_buffering off;      # stream uploads through instead of spooling 2 GB to disk first
+  proxy_buffering off;              # stream fs/stream / fs/download responses (video playback)
+  proxy_read_timeout 1h; proxy_send_timeout 1h;  # slow links × large files
+  ```
 - [ ] **P0** Rate limit `/api/auth/*`, `/api/wallet/verify`, `/api/drives/.../shares` POST, `/api/s/<token>` (especially 402 retry); IP + cookie keys
 - [ ] **P0** Hard size cap on `fs/write` body and `fs/read` response (16 MB yjs limit already in; regular fs needs same)
 - [ ] **P0** `npm audit` gate in CI + Dependabot

@@ -7,7 +7,7 @@ import { X, Save, Download, Wifi, WifiOff } from "lucide-react";
 type Presence = { id: number; name: string; color: string };
 
 export function ViewerHeader({
-  name, collaborative, showSave, status, presence, canEdit, saving, onSave, binaryDataUrl, onClose,
+  name, collaborative, showSave, status, presence, canEdit, saving, onSave, downloadUrl, onClose,
 }: {
   name: string;
   /** Show collab chrome (status dot, presence avatars, view-only badge) — text + rich-text. */
@@ -19,7 +19,8 @@ export function ViewerHeader({
   canEdit: boolean;
   saving: boolean;
   onSave: () => void;
-  binaryDataUrl: string | null;
+  /** fs/download URL (attachment-streamed, no size cap) — null hides the button. */
+  downloadUrl: string | null;
   onClose: () => void;
 }) {
   return (
@@ -61,8 +62,8 @@ export function ViewerHeader({
             <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save"}
           </button>
         )}
-        {binaryDataUrl && (
-          <a href={binaryDataUrl} download={name} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
+        {downloadUrl && (
+          <a href={downloadUrl} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
             <Download className="w-4 h-4" /> Download
           </a>
         )}
