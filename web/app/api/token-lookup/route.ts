@@ -76,6 +76,15 @@ export async function POST(req: Request) {
     );
   }
 
+  // Pricing scales from cents, so sub-2-decimal tokens can't be quoted —
+  // mirror the policy validator's cutoff here for the earliest owner feedback.
+  if (decimals < 2) {
+    return NextResponse.json(
+      { error: `token has ${decimals} decimals — minimum 2 required for pricing` },
+      { status: 422 },
+    );
+  }
+
   // name() and version() are the EIP-712 domain fields. name() is common;
   // version() is often absent — null means we couldn't confirm the domain, so
   // the token can't be auto-marked settleable.

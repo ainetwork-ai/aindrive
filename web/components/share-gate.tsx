@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAccount, usePublicClient, useWalletClient } from "wagmi";
+import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from "wagmi";
+import { base, baseSepolia } from "viem/chains";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme, createPermit2ApprovalTx, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
@@ -22,10 +23,13 @@ type PaymentRequirements = {
   extra?: { assetTransferMethod?: string; name?: string; version?: string };
 };
 
-// Human chain label for the CAIP-2 wire id shown on the paywall.
-const NETWORK_LABELS: Record<string, string> = {
-  "eip155:8453": "Base",
-  "eip155:84532": "Base Sepolia",
+// Payment chains by CAIP-2 wire id. The allowance probe and the approve tx
+// must run on the TOKEN's chain — the wallet may be connected elsewhere, and
+// an approval mined on the wrong chain looks successful but settles nothing
+// (the payer would loop approve → 412 while burning gas).
+const CHAIN_BY_CAIP: Record<string, typeof base | typeof baseSepolia> = {
+  "eip155:8453": base,
+  "eip155:84532": baseSepolia,
 };
 
 // wagmi WalletClient → the x402 ClientEvmSigner shape (address +
@@ -75,7 +79,7 @@ export function ShareGate({ token }: { token: string }) {
   const router = useRouter();
   const { isConnected, address } = useAccount();
   const { data: walletClient } = useWalletClient();
-  const publicClient = usePublicClient();
+  const { switchChainAsync } = useSwitchChain();
 
   // Consume the share into a persistent drive_members grant, then hand the
   // visitor off to the real drive at the share's path (not root).
@@ -138,6 +142,10 @@ export function ShareGate({ token }: { token: string }) {
 
   const tokenSymbol = (data && "accepts" in data ? data.currency?.symbol : undefined) ?? "USDC";
   const isPermit2 = requirement?.extra?.assetTransferMethod === "permit2";
+  // Everything on-chain below (allowance probe, approve tx, receipt wait)
+  // is pinned to the TOKEN's chain, regardless of where the wallet sits.
+  const requirementChain = requirement ? CHAIN_BY_CAIP[requirement.network] : undefined;
+  const publicClient = usePublicClient({ chainId: requirementChain?.id });
 
   // Permit2 pre-check: read the payer's ERC-20 allowance to the Permit2
   // contract before they sign, so the approve step shows up front instead of
@@ -145,7 +153,7 @@ export function ShareGate({ token }: { token: string }) {
   // (e.g. when this probe fails or the allowance races to spent).
   useEffect(() => {
     if (!isPermit2) { setApprovalNeeded(false); return; }
-    if (!requirement || !address || !publicClient) { setApprovalNeeded(null); return; }
+    if (!requirement || !address || !publicClient || !requirementChain) { setApprovalNeeded(null); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -161,16 +169,23 @@ export function ShareGate({ token }: { token: string }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [isPermit2, requirement, address, publicClient]);
+  }, [isPermit2, requirement, address, publicClient, requirementChain]);
 
   // One-time on-chain approval that lets the Permit2 contract move this token
   // for the payer (the pay signature itself stays gasless).
   async function approve() {
     if (!walletClient || !publicClient || !requirement) { toast.error("Connect your wallet first"); return; }
+    if (!requirementChain) { toast.error("Unsupported payment network"); return; }
     setApproving(true);
     try {
+      // The approval must mine on the token's chain; a wrong-chain approval
+      // confirms fine but unlocks nothing. Switch first, then pass `chain` so
+      // viem refuses to send if the wallet still disagrees.
+      if (walletClient.chain?.id !== requirementChain.id) {
+        await switchChainAsync({ chainId: requirementChain.id });
+      }
       const tx = createPermit2ApprovalTx(requirement.asset as `0x${string}`);
-      const hash = await walletClient.sendTransaction({ to: tx.to, data: tx.data });
+      const hash = await walletClient.sendTransaction({ to: tx.to, data: tx.data, chain: requirementChain });
       await publicClient.waitForTransactionReceipt({ hash });
       setApprovalNeeded(false);
       toast.success(`${tokenSymbol} approved — you can pay now.`);
@@ -186,14 +201,24 @@ export function ShareGate({ token }: { token: string }) {
     if (!requirement) return;
     setPaying(true);
     try {
-      const displayedMax = BigInt(requirement.amount);
+      const displayed = requirement;
+      const displayedMax = BigInt(displayed.amount);
       const client = new x402Client();
       client.register("eip155:*", new ExactEvmScheme(walletClientToSigner(walletClient)));
-      // Replaces v1's maxValue guard: never sign for more than the price this
-      // paywall displayed, even if the server re-quotes higher on the retry.
+      // Replaces v1's maxValue guard, hardened: only sign a requirement that
+      // matches what this paywall DISPLAYED — same network, asset and
+      // recipient, amount no higher. A server re-quote that flips any of
+      // these between render and retry gets no signature.
       client.registerPolicy((_version, reqs) =>
         reqs.filter((r) => {
-          try { return BigInt(r.amount) <= displayedMax; } catch { return false; }
+          try {
+            return (
+              BigInt(r.amount) <= displayedMax &&
+              r.network === displayed.network &&
+              r.asset.toLowerCase() === displayed.asset.toLowerCase() &&
+              r.payTo.toLowerCase() === displayed.payTo.toLowerCase()
+            );
+          } catch { return false; }
         }),
       );
       const fetchWithPay = wrapFetchWithPayment(globalThis.fetch, client);
@@ -308,7 +333,7 @@ export function ShareGate({ token }: { token: string }) {
         <div className="mt-6 rounded-xl border border-drive-border bg-drive-panel px-5 py-4 text-center">
           <div className="text-label uppercase text-drive-muted">Price</div>
           <div className="mt-1 text-display text-drive-text tabular-nums">{amountLabel}</div>
-          <div className="mt-1 text-caption text-drive-muted">on {NETWORK_LABELS[requirement.network] ?? requirement.network}</div>
+          <div className="mt-1 text-caption text-drive-muted">on {CHAIN_BY_CAIP[requirement.network]?.name ?? requirement.network}</div>
         </div>
 
         {/* Recipient — secondary, mono, truncated. */}

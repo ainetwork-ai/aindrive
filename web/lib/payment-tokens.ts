@@ -77,7 +77,11 @@ function isPaymentToken(t: unknown): t is Omit<PaymentToken, "transferMethod"> &
     typeof o.asset === "string" &&
     (o.name === null || typeof o.name === "string") &&
     (o.version === null || typeof o.version === "string") &&
-    typeof o.decimals === "number" && Number.isInteger(o.decimals) &&
+    // decimals >= 2: toAtomicAmount scales from cents (10^(decimals-2)) and
+    // BigInt cannot take a negative exponent — a 0/1-decimal token would crash
+    // every 402 quote for the share. Real 0-decimal ERC-20s exist; they are
+    // rejected at write time (here) and at lookup time instead.
+    typeof o.decimals === "number" && Number.isInteger(o.decimals) && o.decimals >= 2 &&
     (o.transferMethod === undefined || o.transferMethod === "eip3009" || o.transferMethod === "permit2")
   );
 }
@@ -133,6 +137,9 @@ export function resolveDriveTokens(allowedTokensJson: string | null): PaymentTok
 // Number.MAX_SAFE_INTEGER 초과(정밀도 손실), 1000 이상이면 "1e+21" 지수표기가 되어
 // x402의 digit-string 검증/BigInt() 소비자가 throw. BigInt 십진 문자열 스케일링으로.
 export function toAtomicAmount(price: number, decimals: number): string {
+  // BigInt 음수 지수 불가 — decimals < 2 는 정책 검증(isPaymentToken)과
+  // token-lookup 에서 차단되므로 여기 도달하면 검증 누락 버그다.
+  if (decimals < 2) throw new Error(`toAtomicAmount: decimals must be >= 2, got ${decimals}`);
   // price는 소수 2자리까지만 허용(shares 입력 검증과 동일) — 그 이상은 반올림.
   const cents = Math.round(price * 100); // safe: price < 1e13
   return (BigInt(cents) * 10n ** BigInt(decimals - 2)).toString();

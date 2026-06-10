@@ -51,6 +51,15 @@ describe("transferMethod", () => {
     expect(parseTokenPolicy(bad)).toBeNull();
   });
 
+  // [adv-review CRITICAL-1] sub-2-decimal tokens would make toAtomicAmount's
+  // 10^(decimals-2) BigInt exponent negative → RangeError on every 402 quote.
+  it("rejects tokens with decimals < 2 (atomic scaling floor)", () => {
+    const zero = JSON.stringify([{ symbol: "Z", chain: "base", asset: "0xC", name: null, version: null, decimals: 0 }]);
+    const one = JSON.stringify([{ symbol: "O", chain: "base", asset: "0xC", name: null, version: null, decimals: 1 }]);
+    expect(parseTokenPolicy(zero)).toBeNull();
+    expect(parseTokenPolicy(one)).toBeNull();
+  });
+
   it("presets carry explicit methods", () => {
     expect(TOKEN_PRESETS.USDC.transferMethod).toBe("eip3009");
     expect(TOKEN_PRESETS.FANCO.transferMethod).toBe("permit2");
@@ -108,5 +117,10 @@ describe("toAtomicAmount", () => {
     const s = toAtomicAmount(5, 6);
     expect(s).toBe("5000000");
     expect(s).not.toContain("e+");
+  });
+
+  it("throws a clear error below the 2-decimal floor (validators must catch first)", () => {
+    expect(() => toAtomicAmount(1, 0)).toThrow(/decimals must be >= 2/);
+    expect(() => toAtomicAmount(1, 1)).toThrow(/decimals must be >= 2/);
   });
 });
