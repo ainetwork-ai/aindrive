@@ -9,8 +9,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
+  Search, X, ArrowUp, ArrowDown, SearchX,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
+import type { SortKey, SortState } from "@/lib/sort-entries";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu, rowMenuItems, type Action } from "./row-menu";
 import { fileIcon, fileIconForName } from "./file-icons";
@@ -126,7 +128,7 @@ export function DriveSidebar({
 
 export function DriveHeader({
   setSidebarOpen, crumbs, setPath, canEdit, onUpload, setShareOpen, path, role,
-  setAgentModalOpen, setChatOpen, chatOpen, isOwner, viewMode, setViewMode,
+  setAgentModalOpen, setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery,
 }: {
   setSidebarOpen: (v: boolean) => void;
   crumbs: Crumb[];
@@ -142,6 +144,8 @@ export function DriveHeader({
   isOwner: boolean;
   viewMode: ViewMode;
   setViewMode: (v: ViewMode) => void;
+  query: string;
+  onQuery: (q: string) => void;
 }) {
   return (
     <header className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
@@ -197,6 +201,28 @@ export function DriveHeader({
         })}
       </div>
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {/* Folder-scoped filename filter (client-side). Hidden on <sm where the
+            crumbs already fight for space — mobile search is a follow-up. */}
+        <div className="relative hidden sm:block">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-drive-muted pointer-events-none" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder="Search in this folder"
+            aria-label="Search in this folder"
+            className="w-40 md:w-56 rounded-full border border-drive-border bg-drive-sidebar/60 pl-8 pr-7 py-1.5 text-sm text-drive-text placeholder:text-drive-muted focus:outline-none focus:ring-2 focus:ring-drive-accent/40 focus:bg-white [&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <button
+              aria-label="Clear search"
+              onClick={() => onQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-drive-muted hover:text-drive-text"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
         <ViewToggle viewMode={viewMode} setViewMode={setViewMode} />
         <label
           aria-label="Upload"
@@ -243,6 +269,35 @@ export function DriveHeader({
   );
 }
 
+/** Clickable column header: active column shows the direction arrow; clicking
+ *  it again flips the direction (state lives in the shell). */
+function SortHeader({ label, k, sort, onSort, align, className }: {
+  label: string;
+  k: SortKey;
+  sort: SortState;
+  onSort: (k: SortKey) => void;
+  align?: "right";
+  className?: string;
+}) {
+  const active = sort.key === k;
+  const Arrow = sort.dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th className={className} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : undefined}>
+      <button
+        onClick={() => onSort(k)}
+        className={clsx(
+          "inline-flex items-center gap-1 uppercase hover:text-drive-text",
+          align === "right" && "flex-row-reverse",
+          active && "text-drive-text",
+        )}
+      >
+        {label}
+        {active && <Arrow className="w-3.5 h-3.5" />}
+      </button>
+    </th>
+  );
+}
+
 /** Segmented list/grid switch. The active mode reads as tonal (filled accent). */
 function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode: (v: ViewMode) => void }) {
   const opts: { mode: ViewMode; label: string; Icon: typeof List }[] = [
@@ -269,12 +324,17 @@ function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode
 }
 
 export function FileTable({
-  loading, err, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload, viewMode,
+  loading, err, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload, viewMode,
   onNewFolder, ctxMenu, setCtxMenu,
 }: {
   loading: boolean;
   err: string | null;
+  driveId: string;
   entries: DriveEntry[];
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+  query: string;
+  onQuery: (q: string) => void;
   paidByPath: Map<string, ShareSummary>;
   selected: DriveEntry | null;
   setSelected: (e: DriveEntry | null) => void;
@@ -362,6 +422,20 @@ export function FileTable({
         description={err}
       />
     );
+  } else if (entries.length === 0 && query.trim()) {
+    // The folder has files, the filter just matched none of them.
+    body = (
+      <EmptyState
+        icon={<SearchX />}
+        title={`No files match “${query.trim()}”`}
+        description="Try a different name, or clear the search."
+        action={
+          <button onClick={() => onQuery("")} className="text-sm text-drive-accent hover:underline">
+            Clear search
+          </button>
+        }
+      />
+    );
   } else if (entries.length === 0) {
     body = (
       <EmptyState
@@ -374,6 +448,7 @@ export function FileTable({
   } else if (viewMode === "grid") {
     body = (
       <FileGrid
+        driveId={driveId}
         entries={entries}
         paidByPath={paidByPath}
         selected={selected}
@@ -390,9 +465,9 @@ export function FileTable({
       <table className="w-full text-body border-separate border-spacing-0">
         <thead className="text-label uppercase text-drive-muted">
           <tr>
-            <th className="text-left font-medium px-3 pb-2">Name</th>
-            <th className="text-left font-medium px-3 pb-2 hidden sm:table-cell w-44">Modified</th>
-            <th className="text-right font-medium px-3 pb-2 hidden md:table-cell w-28">Size</th>
+            <SortHeader label="Name" k="name" sort={sort} onSort={onSort} className="text-left font-medium px-3 pb-2" />
+            <SortHeader label="Modified" k="mtime" sort={sort} onSort={onSort} className="text-left font-medium px-3 pb-2 hidden sm:table-cell w-44" />
+            <SortHeader label="Size" k="size" sort={sort} onSort={onSort} align="right" className="text-right font-medium px-3 pb-2 hidden md:table-cell w-28" />
             <th className="w-10" />
           </tr>
         </thead>
@@ -587,8 +662,9 @@ function ContextMenu({
  * separately-focusable button. The ⋮ stops propagation so it doesn't navigate.
  */
 function FileGrid({
-  entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onContextMenuEntry,
+  driveId, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onContextMenuEntry,
 }: {
+  driveId: string;
   entries: DriveEntry[];
   paidByPath: Map<string, ShareSummary>;
   selected: DriveEntry | null;
@@ -638,7 +714,10 @@ function FileGrid({
                 />
               </div>
             )}
-            <Icon className={clsx("w-10 h-10 shrink-0", tone)} />
+            {/* Keyed by path+mtime so replacing the file remounts the visual —
+                otherwise a failed thumbnail's `broken` state would stick to the
+                reused instance and pin the icon fallback forever. */}
+            <GridVisual key={`${e.path}-${e.mtimeMs}`} driveId={driveId} entry={e} Icon={Icon} tone={tone} />
             <span className="w-full text-center text-caption text-drive-text line-clamp-2 break-words" title={e.name}>
               {e.name}
             </span>
@@ -650,6 +729,32 @@ function FileGrid({
       })}
     </div>
   );
+}
+
+/** Card visual: image files render a server-resized thumbnail (lazy, cached by
+ *  mtime — the &v= param keys the browser's immutable cache); anything else,
+ *  and any thumbnail that fails (agent offline, oversized, decode error),
+ *  falls back to the type icon. */
+function GridVisual({ driveId, entry, Icon, tone }: {
+  driveId: string;
+  entry: DriveEntry;
+  Icon: ReturnType<typeof fileIcon>["Icon"];
+  tone: string;
+}) {
+  const [broken, setBroken] = useState(false);
+  if (!entry.isDir && entry.mime.startsWith("image/") && !broken) {
+    return (
+      <img
+        src={`/api/drives/${driveId}/fs/thumbnail?path=${encodeURIComponent(entry.path)}&v=${entry.mtimeMs}`}
+        alt=""
+        loading="lazy"
+        onError={() => setBroken(true)}
+        draggable={false}
+        className="w-full aspect-[4/3] object-cover rounded-md bg-drive-sidebar"
+      />
+    );
+  }
+  return <Icon className={clsx("w-10 h-10 shrink-0", tone)} />;
 }
 
 /** Loading placeholder for the grid view — cards shaped like FileGrid cards. */

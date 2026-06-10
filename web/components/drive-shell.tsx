@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { apiFetch } from "@/lib/api-client";
+import { sortEntries, type SortKey, type SortState } from "@/lib/sort-entries";
 import {
   DriveSidebar, DriveHeader, FileTable, ShowcaseSection,
   type DriveSummary, type ShareSummary, type ViewMode,
@@ -85,6 +86,30 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     setViewMode(v);
     localStorage.setItem("aindrive:view", v);
   }, []);
+  // Sort preference — same SSR-safe pattern as viewMode (default first, read
+  // the persisted choice in an effect).
+  const [sort, setSortState] = useState<SortState>({ key: "name", dir: "asc" });
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("aindrive:sort") || "");
+      if (saved && ["name", "mtime", "size"].includes(saved.key) && ["asc", "desc"].includes(saved.dir)) {
+        setSortState(saved);
+      }
+    } catch { /* unset/corrupt → keep default */ }
+  }, []);
+  // Clicking the active column toggles direction; a new column starts asc.
+  const onSort = useCallback((key: SortKey) => {
+    setSortState((cur) => {
+      const next: SortState = cur.key === key
+        ? { key, dir: cur.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" };
+      localStorage.setItem("aindrive:sort", JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  // Folder-scoped filename search; navigating away clears it.
+  const [query, setQuery] = useState("");
+  useEffect(() => { setQuery(""); }, [path]);
   // Right-click context menu. entry=null → empty-area menu (New folder/Upload).
   const [ctxMenu, setCtxMenu] = useState<{ entry: DriveEntry | null; x: number; y: number } | null>(null);
 
@@ -142,6 +167,13 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     }
     return m;
   }, [shares]);
+
+  // Filter → sort in one place so the list and grid consume the same array.
+  const visibleEntries = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const filtered = q ? entries.filter((e) => e.name.toLowerCase().includes(q)) : entries;
+    return sortEntries(filtered, sort.key, sort.dir);
+  }, [entries, query, sort]);
 
   const canEdit = !isSyntheticRoot && (role === "editor" || role === "owner");
   const rootPath = initialPath ?? "";
@@ -284,6 +316,8 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
           isOwner={isOwner}
           viewMode={viewMode}
           setViewMode={changeViewMode}
+          query={query}
+          onQuery={setQuery}
         />
 
         <section className="flex-1 flex min-h-0">
@@ -291,7 +325,12 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
             <FileTable
               loading={loading}
               err={err}
-              entries={entries}
+              driveId={driveId}
+              entries={visibleEntries}
+              sort={sort}
+              onSort={onSort}
+              query={query}
+              onQuery={setQuery}
               paidByPath={paidByPath}
               selected={selected}
               setSelected={setSelected}
