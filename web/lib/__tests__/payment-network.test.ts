@@ -84,8 +84,9 @@ describe("stored-policy rebinding across a network flip", () => {
     // on a mainnet server (buyer would pay worthless testnet USDC for real content).
     expect(tokens[0]).toEqual(m.TOKEN_PRESETS.USDC);
     expect(tokens[0].chain).toBe("base");
-    // Owner-chosen custom token is untouched.
-    expect(tokens[1]).toEqual(CUSTOM_FANCO);
+    // Owner-chosen custom token is untouched (reads only normalize the
+    // legacy row with its inferred transferMethod).
+    expect(tokens[1]).toEqual({ ...CUSTOM_FANCO, transferMethod: "permit2" });
   });
 
   it("a mainnet-saved USDC policy follows the flip back to testnet", async () => {
@@ -98,6 +99,6 @@ describe("stored-policy rebinding across a network flip", () => {
   it("never rewrites a custom token that merely shares the USDC symbol", async () => {
     const m = await loadWithNetwork("mainnet");
     const tokens = m.resolveDriveTokens(JSON.stringify([IMPOSTOR_USDC]));
-    expect(tokens[0]).toEqual(IMPOSTOR_USDC);
+    expect(tokens[0]).toEqual({ ...IMPOSTOR_USDC, transferMethod: "eip3009" });
   });
 });
