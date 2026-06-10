@@ -8,13 +8,13 @@ import clsx from "clsx";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
-  FolderPlus, Share2, HardDrive, Bot, MessageSquare, Menu, Lock,
+  FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu, rowMenuItems, type Action } from "./row-menu";
 import { fileIcon, fileIconForName } from "./file-icons";
-import { Badge, Card, EmptyState, IconButton, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
+import { Badge, Card, EmptyState, IconButton, Menu, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
 
 // Shared grid track for FileGrid + its skeleton so the loading state matches.
 const GRID_CLASS = "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3";
@@ -34,16 +34,24 @@ export type ViewMode = "list" | "grid";
 type Crumb = { label: string; path: string };
 
 export function DriveSidebar({
-  sidebarOpen, setSidebarOpen, onNewFolder, canEdit, drives, driveId, role,
+  sidebarOpen, setSidebarOpen, onNewFolder, onUpload, canEdit, drives, driveId, role,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: (v: boolean) => void;
   onNewFolder: () => void;
+  onUpload: (files: FileList | null) => void;
   canEdit: boolean;
   drives: DriveSummary[];
   driveId: string;
   role: string;
 }) {
+  // Hidden input the "New → Upload files" menu item triggers, so the sidebar's
+  // New button mirrors Drive's (folder + upload) without threading a shared ref.
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const newItems: MenuItem[] = [
+    { label: "New folder", icon: <FolderPlus className="w-4 h-4" />, onClick: onNewFolder },
+    { label: "Upload files", icon: <Upload className="w-4 h-4" />, onClick: () => uploadRef.current?.click() },
+  ];
   return (
     <aside
       className={clsx(
@@ -55,21 +63,30 @@ export function DriveSidebar({
       <Link
         href="/"
         onClick={() => setSidebarOpen(false)}
-        className="flex items-center gap-2 font-semibold text-lg px-2 py-1.5"
+        className="flex items-center gap-2 font-semibold text-title px-2 py-1.5"
       >
         <HardDrive className="w-5 h-5 text-drive-accent" /> aindrive
       </Link>
       <div className="mt-2">
-        <button
-          onClick={onNewFolder}
-          disabled={!canEdit}
-          className="w-full flex items-center gap-3 rounded-full bg-white border border-drive-border shadow-sm px-4 py-3 hover:shadow-md disabled:opacity-50"
-        >
-          <FolderPlus className="w-5 h-5 text-drive-accent" /> New folder
-        </button>
+        <Menu
+          align="start"
+          items={newItems}
+          trigger={({ onClick, "aria-expanded": expanded, "aria-haspopup": haspopup }) => (
+            <button
+              onClick={onClick}
+              disabled={!canEdit}
+              aria-expanded={expanded}
+              aria-haspopup={haspopup}
+              className="w-full flex items-center gap-3 rounded-full bg-drive-panel border border-drive-border shadow-e1 px-4 py-3 text-body font-medium hover:shadow-e2 transition disabled:opacity-50"
+            >
+              <Plus className="w-5 h-5 text-drive-accent" /> New
+            </button>
+          )}
+        />
+        <input ref={uploadRef} type="file" multiple hidden onChange={(e) => onUpload(e.target.files)} />
       </div>
-      <div className="mt-3 px-3 text-xs uppercase tracking-wide text-drive-muted">My drives</div>
-      <nav className="mt-1 text-sm space-y-0.5 overflow-y-auto scrollbar-thin">
+      <div className="mt-3 px-3 text-label uppercase text-drive-muted">My drives</div>
+      <nav className="mt-1 text-body space-y-0.5 overflow-y-auto scrollbar-thin">
         {drives.map((d) => {
           const active = d.id === driveId;
           return (
@@ -77,7 +94,7 @@ export function DriveSidebar({
               key={d.id}
               href={`/d/${d.id}`}
               className={clsx(
-                "w-full flex items-center gap-2 px-3 py-1.5 rounded-2xl",
+                "w-full flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors",
                 active ? "bg-drive-selected" : "hover:bg-drive-hover",
               )}
             >
@@ -85,21 +102,24 @@ export function DriveSidebar({
               <span className="flex-1 min-w-0">
                 <span className="block truncate">{d.name}</span>
                 {d.hostname && (
-                  <span className="block truncate text-xs text-drive-muted">{d.hostname}</span>
+                  <span className="block truncate text-caption text-drive-muted">{d.hostname}</span>
                 )}
               </span>
-              <span
-                className={clsx(
-                  "w-2 h-2 rounded-full shrink-0",
-                  d.online ? "bg-emerald-500" : "bg-drive-muted/40",
-                )}
-                title={d.online ? "agent online" : "agent offline"}
-              />
+              <Tooltip content={d.online ? "agent online" : "agent offline"}>
+                <span
+                  className={clsx(
+                    "w-2 h-2 rounded-full shrink-0",
+                    d.online ? "bg-emerald-500" : "bg-drive-muted/40",
+                  )}
+                />
+              </Tooltip>
             </Link>
           );
         })}
       </nav>
-      <div className="mt-auto text-xs text-drive-muted px-2">Role: {role}</div>
+      <div className="mt-auto px-2">
+        <Badge tone="neutral">Role: {role}</Badge>
+      </div>
     </aside>
   );
 }
@@ -131,7 +151,7 @@ export function DriveHeader({
           onClick={() => setSidebarOpen(true)}
           className="md:hidden mr-1 p-1.5 -ml-1 rounded hover:bg-drive-hover shrink-0"
         >
-          <Menu className="w-5 h-5" />
+          <MenuIcon className="w-5 h-5" />
         </button>
         {crumbs.map((c, i) => {
           // On <sm screens, collapse middle crumbs into "…" so the current

@@ -261,6 +261,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
         onNewFolder={onNewFolder}
+        onUpload={onUpload}
         canEdit={canEdit}
         drives={drives}
         driveId={driveId}
