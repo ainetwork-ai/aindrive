@@ -22,6 +22,8 @@ export { Tooltip } from "./Tooltip";
 export type { TooltipProps, TooltipSide } from "./Tooltip";
 export { Card } from "./Card";
 export type { CardProps, InteractiveCardProps } from "./Card";
+export { SectionCard } from "./SectionCard";
+export type { SectionCardProps } from "./SectionCard";
 export { Badge } from "./Badge";
 export type { BadgeProps, BadgeTone } from "./Badge";
 export { Avatar } from "./Avatar";

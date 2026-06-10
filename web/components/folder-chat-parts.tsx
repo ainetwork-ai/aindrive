@@ -4,9 +4,10 @@
 // shell (folder-chat.tsx); these are pure render functions that receive data
 // and handlers as props. Extracting markup only — behavior is unchanged.
 import { useMemo, useState } from "react";
-import { Bot, Send, Loader2, MessageSquare, X, Pencil, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { Bot, Send, MessageSquare, Pencil, Trash2, ChevronDown, ChevronRight, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Select, IconButton } from "@/components/ui";
 
 export type AgentSummary = {
   id: string;
@@ -32,15 +33,15 @@ export type Msg =
 
 export function ChatHeader({ onClose }: { onClose?: () => void }) {
   return (
-    <div className="flex items-center justify-between px-3 py-2 border-b">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <MessageSquare className="w-4 h-4 text-blue-600" />
+    <div className="flex items-center justify-between px-3 py-2.5 border-b border-drive-border">
+      <div className="flex items-center gap-2 text-subtitle text-drive-text">
+        <MessageSquare className="w-4 h-4 text-drive-accent" />
         <span>Folder Chat</span>
       </div>
       {onClose && (
-        <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
+        <IconButton size="sm" variant="text" aria-label="Close chat" onClick={onClose}>
           <X className="w-4 h-4" />
-        </button>
+        </IconButton>
       )}
     </div>
   );
@@ -58,16 +59,15 @@ export function AgentPicker({
   onDelete: (target: AgentSummary) => void;
 }) {
   return (
-    <div className="px-3 py-2 border-b text-xs">
+    <div className="px-3 py-2.5 border-b border-drive-border">
       {agents === null ? (
-        <span className="text-gray-500">Loading agents…</span>
+        <span className="text-caption text-drive-muted">Loading agents…</span>
       ) : agents.length === 0 ? (
         <EmptyState isOwner={isOwner} />
       ) : (
-        <label className="block">
-          <span className="text-gray-600">Agent</span>
-          <select
-            className="mt-1 w-full border rounded px-2 py-1 text-xs"
+        <>
+          <Select
+            label="Agent"
             value={agentId ?? ""}
             onChange={(e) => setAgentId(e.target.value)}
           >
@@ -76,33 +76,25 @@ export function AgentPicker({
                 {a.name} — {a.folder || "/"}
               </option>
             ))}
-          </select>
+          </Select>
           {selectedAgent && (
-            <div className="mt-1 flex items-center justify-between gap-2">
-              <p className="text-[11px] text-gray-500 font-mono truncate">
+            <div className="mt-1.5 flex items-center justify-between gap-2">
+              <p className="text-caption text-drive-muted font-mono truncate">
                 {selectedAgent.llm.provider} · {selectedAgent.llm.model}
               </p>
               {isOwner && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => onEdit(selectedAgent)}
-                    title="Edit agent"
-                    className="p-1 hover:bg-gray-100 rounded text-gray-600"
-                  >
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <IconButton size="sm" variant="text" aria-label="Edit agent" onClick={() => onEdit(selectedAgent)}>
                     <Pencil className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => onDelete(selectedAgent)}
-                    title="Delete agent"
-                    className="p-1 hover:bg-red-50 rounded text-red-600"
-                  >
+                  </IconButton>
+                  <IconButton size="sm" variant="danger" aria-label="Delete agent" onClick={() => onDelete(selectedAgent)}>
                     <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  </IconButton>
                 </div>
               )}
             </div>
           )}
-        </label>
+        </>
       )}
     </div>
   );
@@ -116,9 +108,9 @@ export function MessageList({
   selectedAgent: AgentSummary | null;
 }) {
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 text-sm">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 text-body">
       {msgs.length === 0 ? (
-        <p className="text-gray-400 text-xs text-center mt-6">
+        <p className="text-caption text-drive-muted text-center mt-6">
           {selectedAgent
             ? `Ask ${selectedAgent.name} anything about this drive.`
             : "Pick an agent to start chatting."}
@@ -143,16 +135,15 @@ export function ChatInput({
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); ask(); }}
-      className="border-t p-2 flex items-end gap-2"
+      className="border-t border-drive-border p-2 flex items-end gap-2"
     >
       <textarea
-        className="flex-1 border rounded px-2 py-1.5 text-sm resize-none"
+        className="flex-1 rounded-md border border-drive-border bg-drive-panel px-3 py-2 text-body text-drive-text
+                   placeholder:text-drive-muted resize-none outline-none transition-colors duration-150
+                   focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent
+                   disabled:opacity-50"
         rows={2}
-        placeholder={
-          agentId && selectedAgent
-            ? `Message ${selectedAgent.name}…`
-            : "No agent selected"
-        }
+        placeholder={agentId && selectedAgent ? `Message ${selectedAgent.name}…` : "No agent selected"}
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
@@ -163,13 +154,15 @@ export function ChatInput({
         }}
         disabled={!agentId || busy}
       />
-      <button
+      <IconButton
         type="submit"
+        variant="filled"
+        aria-label="Send"
+        loading={busy}
         disabled={!agentId || !input.trim() || busy}
-        className="px-2 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-      </button>
+        <Send className="w-4 h-4" />
+      </IconButton>
     </form>
   );
 }
@@ -178,7 +171,7 @@ function MessageBubble({ msg }: { msg: Msg }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="bg-blue-600 text-white rounded-lg px-3 py-1.5 max-w-[85%] whitespace-pre-wrap">
+        <div className="bg-drive-accent text-white rounded-lg px-3 py-1.5 max-w-[85%] whitespace-pre-wrap">
           {msg.text}
         </div>
       </div>
@@ -186,7 +179,7 @@ function MessageBubble({ msg }: { msg: Msg }) {
   }
   if (msg.role === "error") {
     return (
-      <div className="bg-red-50 text-red-700 rounded-lg px-3 py-1.5 text-xs border border-red-200">
+      <div className="bg-red-50 text-red-700 rounded-lg px-3 py-1.5 text-caption border border-red-200">
         {msg.text}
       </div>
     );
@@ -194,8 +187,8 @@ function MessageBubble({ msg }: { msg: Msg }) {
   return (
     <div className="space-y-1">
       <div className="flex items-start gap-1.5">
-        <Bot className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-        <div className="bg-gray-100 rounded-lg px-3 py-2 max-w-[85%] agent-prose">
+        <Bot className="w-4 h-4 text-drive-accent shrink-0 mt-0.5" />
+        <div className="bg-drive-sidebar rounded-lg px-3 py-2 max-w-[85%] agent-prose">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
@@ -204,7 +197,7 @@ function MessageBubble({ msg }: { msg: Msg }) {
                   {...props}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-blue-600 underline hover:text-blue-800"
+                  className="text-drive-accent underline hover:text-drive-accentHover"
                 />
               ),
               code: ({ className, children, ...props }) => {
@@ -212,7 +205,7 @@ function MessageBubble({ msg }: { msg: Msg }) {
                 return inline ? (
                   <code
                     {...props}
-                    className="px-1 py-0.5 rounded bg-gray-200 text-gray-800 font-mono text-[0.85em]"
+                    className="px-1 py-0.5 rounded bg-drive-hover text-drive-text font-mono text-[0.85em]"
                   >
                     {children}
                   </code>
@@ -230,16 +223,16 @@ function MessageBubble({ msg }: { msg: Msg }) {
               h2: (props) => <h2 {...props} className="text-sm font-semibold mt-1 mb-0.5" />,
               h3: (props) => <h3 {...props} className="text-sm font-semibold mt-1 mb-0.5" />,
               blockquote: (props) => (
-                <blockquote {...props} className="border-l-2 border-gray-300 pl-2 my-1 text-gray-700 italic" />
+                <blockquote {...props} className="border-l-2 border-drive-border pl-2 my-1 text-drive-muted italic" />
               ),
               table: (props) => (
                 <div className="my-1.5 overflow-x-auto">
                   <table {...props} className="border-collapse text-xs" />
                 </div>
               ),
-              th: (props) => <th {...props} className="border border-gray-300 px-1.5 py-0.5 bg-gray-100 text-left font-medium" />,
-              td: (props) => <td {...props} className="border border-gray-200 px-1.5 py-0.5" />,
-              hr: () => <hr className="my-2 border-gray-200" />,
+              th: (props) => <th {...props} className="border border-drive-border px-1.5 py-0.5 bg-drive-sidebar text-left font-medium" />,
+              td: (props) => <td {...props} className="border border-drive-border px-1.5 py-0.5" />,
+              hr: () => <hr className="my-2 border-drive-border" />,
               strong: (props) => <strong {...props} className="font-semibold" />,
             }}
           >
@@ -267,11 +260,11 @@ function SourcesFooter({ sources }: { sources: Source[] }) {
   }, [sources]);
   if (paths.length === 0) return null;
   return (
-    <div className="ml-5 mt-1 text-[11px] text-gray-500">
+    <div className="ml-5 mt-1 text-caption text-drive-muted">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-0.5 hover:text-gray-700"
+        className="inline-flex items-center gap-0.5 hover:text-drive-text"
       >
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         Referenced {paths.length} {paths.length === 1 ? "source" : "sources"}
@@ -281,7 +274,7 @@ function SourcesFooter({ sources }: { sources: Source[] }) {
           {paths.map((p) => (
             <span
               key={p}
-              className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-mono text-[10px]"
+              className="inline-flex items-center px-1.5 py-0.5 rounded bg-drive-sidebar text-drive-text font-mono text-[10px]"
               title={p}
             >
               {p}
@@ -295,9 +288,9 @@ function SourcesFooter({ sources }: { sources: Source[] }) {
 
 function EmptyState({ isOwner }: { isOwner?: boolean }) {
   return (
-    <div className="text-gray-500 text-center py-2">
+    <div className="text-caption text-drive-muted text-center py-2">
       {isOwner ? (
-        <>No agents yet. Right-click a folder → <strong>Create Agent</strong>.</>
+        <>No agents yet. Right-click a folder → <strong className="text-drive-text">Create Agent</strong>.</>
       ) : (
         <>No agents available on this drive yet.</>
       )}

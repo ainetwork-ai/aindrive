@@ -11,9 +11,8 @@
 import {
   Copy, LinkIcon, UserPlus, Trash2, DollarSign, TrendingUp, ExternalLink, Users,
 } from "lucide-react";
-import clsx from "clsx";
 import type { ReactNode } from "react";
-import { Input, Select, Toggle, Button, Badge, IconButton } from "@/components/ui";
+import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
 
 export type Share = {
   id: string;
@@ -43,41 +42,6 @@ export type Member = {
   email: string;
   name: string;
 };
-
-/** Icon-badged section card. `action` sits top-right (toggle / total / etc.). */
-function SectionCard({
-  icon, title, description, action, highlight, children,
-}: {
-  icon: ReactNode;
-  title: ReactNode;
-  description?: ReactNode;
-  action?: ReactNode;
-  highlight?: boolean;
-  children?: ReactNode;
-}) {
-  return (
-    <section
-      className={clsx(
-        "rounded-xl border border-drive-border bg-drive-panel p-4",
-        highlight && "ring-2 ring-drive-accent/50",
-      )}
-    >
-      <header className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-drive-selected text-drive-accent">
-            {icon}
-          </span>
-          <div className="min-w-0">
-            <h3 className="text-subtitle text-drive-text leading-tight">{title}</h3>
-            {description && <p className="text-caption text-drive-muted">{description}</p>}
-          </div>
-        </div>
-        {action && <div className="shrink-0">{action}</div>}
-      </header>
-      {children && <div className="mt-3">{children}</div>}
-    </section>
-  );
-}
 
 /** Compact list row used by Earnings / Members / Free-links. */
 function ListRow({ children }: { children: ReactNode }) {
