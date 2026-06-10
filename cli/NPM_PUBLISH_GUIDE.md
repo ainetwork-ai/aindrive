@@ -86,7 +86,13 @@ npm pack --dry-run
 npm version patch            # 0.1.6 → 0.1.7  (버그/작은 변경)
 # npm version minor           # 0.1.6 → 0.2.0  (기능 추가, 호환)
 # npm version major           # 0.1.6 → 1.0.0  (호환 깨짐)
-# 위 명령은 자동으로 cli/package.json + git tag(v0.1.7) + commit 까지 만든다.
+# ⚠ 이 repo에선 npm version이 package.json/package-lock의 *숫자만* 바꾸고
+#   git commit/tag는 안 만든다 (cli/가 루트 package.json 없는 서브디렉터리라
+#   npm이 git 단계를 조용히 스킵 — git-tag-version=true여도). 그래서 commit +
+#   tag를 손으로 완성한다 (버전 숫자는 npm version이 만든 그대로 둔다):
+git add cli/package.json cli/package-lock.json
+git commit -m "chore(cli): bump 0.1.6 -> 0.1.7"
+git tag -a v0.1.7 -m "aindrive 0.1.7 (cli npm release)"
 
 # 5) publish — OTP 입력
 npm publish --access public --otp=<6자리>
@@ -110,9 +116,11 @@ git push --follow-tags origin main
 판단이 애매하면 **patch**로 간다. minor를 너무 아껴 받지 않는다 — 받는
 쪽이 `npm i -g aindrive@latest` 한 줄로 따라가니 비용이 거의 없다.
 
-**중요**: 버전을 절대 손으로 `cli/package.json`에서 안 고친다. 항상
-`npm version`으로. 그래야 git tag(`v0.1.7`)가 같이 만들어지고, 누가 무슨
-버전을 publish했는지 history로 남는다.
+**중요**: 버전 *숫자*는 손으로 `cli/package.json`에서 고치지 말고 항상
+`npm version`으로 만든다 (package-lock까지 일관되게 갱신됨). 단 이 repo에선
+§3-4)에서 봤듯 git commit/tag가 자동으로 안 만들어지니 그 두 단계는 직접
+완성해야 한다 — 그래야 누가 무슨 버전을 publish했는지 history(`v0.1.7` 태그)로
+남는다.
 
 ---
 
