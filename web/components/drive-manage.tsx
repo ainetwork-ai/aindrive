@@ -1,21 +1,21 @@
 "use client";
-// Full-page drive management (owner-only): People / Links & sales / Settings.
-// The cramped share modal stays for quick per-folder sharing; this is the home
-// for "who has access where", pending invites, link revocation, earnings, and
-// drive-wide settings (payout wallet + token policy).
+// Full-page drive management (owner-only) — the audit/ledger surface for the
+// whole drive: who has access where, all share links, sales & storefront, and
+// payment settings. Creating a link or selling a file happens in CONTEXT (the
+// Share panel on a file/folder), not here; each section points there.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Users, LinkIcon, Settings as SettingsIcon, UserPlus, Search,
-  TrashIcon, ShieldCheck, Clock, ExternalLink, Copy, Ban,
+  ArrowLeft, Users, Link2, Wallet, TrendingUp, Search, UserPlus, Clock,
+  TrashIcon, ShieldCheck, ExternalLink, Copy, Ban, Store,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { Avatar, Badge, Button, IconButton, Input, Select, SectionCard, EmptyState } from "@/components/ui";
-import { TOKEN_PRESETS, DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
+import { TOKEN_PRESETS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import { PaymentTokensEditor, type Member, type Share, type Receipt, type PendingInvite } from "./share-dialog-sections";
 
-type Tab = "people" | "links" | "settings";
+type Section = "members" | "links" | "sales" | "payments";
 type Role = "viewer" | "editor" | "owner";
 
 const ROLE_HELP: Record<Role, string> = {
@@ -27,7 +27,7 @@ const ROLE_HELP: Record<Role, string> = {
 function prettyPath(p: string) { return p ? `/${p}` : "Whole drive"; }
 
 export function DriveManage({ driveId, driveName }: { driveId: string; driveName: string }) {
-  const [tab, setTab] = useState<Tab>("people");
+  const [section, setSection] = useState<Section>("members");
   const [members, setMembers] = useState<Member[]>([]);
   const [pending, setPending] = useState<PendingInvite[]>([]);
   const [shares, setShares] = useState<Share[]>([]);
@@ -54,16 +54,17 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
   }, [driveId]);
   useEffect(() => { load(); }, [load]);
 
-  const tabs: { id: Tab; label: string; Icon: typeof Users }[] = [
-    { id: "people", label: "People", Icon: Users },
-    { id: "links", label: "Links & sales", Icon: LinkIcon },
-    { id: "settings", label: "Settings", Icon: SettingsIcon },
+  const nav: { id: Section; label: string; Icon: typeof Users; hint: string }[] = [
+    { id: "members", label: "Members", Icon: Users, hint: "Who has access" },
+    { id: "links", label: "Links", Icon: Link2, hint: "Share links" },
+    { id: "sales", label: "Sales", Icon: TrendingUp, hint: "Earnings & storefront" },
+    { id: "payments", label: "Payments", Icon: Wallet, hint: "Payout & tokens" },
   ];
 
   return (
     <main className="min-h-screen bg-drive-bg">
       <header className="border-b border-drive-border bg-white">
-        <div className="mx-auto max-w-3xl px-4 sm:px-6 py-4 flex items-center gap-3">
+        <div className="mx-auto max-w-5xl px-4 sm:px-6 py-4 flex items-center gap-3">
           <Link href={`/d/${driveId}`} aria-label="Back to drive" className="rounded p-1.5 hover:bg-drive-hover">
             <ArrowLeft className="w-5 h-5" />
           </Link>
@@ -72,41 +73,60 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
             <h1 className="text-title text-drive-text truncate">{driveName}</h1>
           </div>
         </div>
-        <div className="mx-auto max-w-3xl px-4 sm:px-6 flex gap-1">
-          {tabs.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-body border-b-2 -mb-px transition-colors ${
-                tab === id ? "border-drive-accent text-drive-accent font-medium" : "border-transparent text-drive-muted hover:text-drive-text"
-              }`}
-            >
+        {/* Mobile: horizontal section tabs (the left rail collapses away). */}
+        <nav className="md:hidden mx-auto max-w-5xl px-4 flex gap-1 overflow-x-auto">
+          {nav.map(({ id, label, Icon }) => (
+            <button key={id} onClick={() => setSection(id)}
+              className={`flex items-center gap-1.5 px-3 py-2 text-body whitespace-nowrap border-b-2 -mb-px ${
+                section === id ? "border-drive-accent text-drive-accent font-medium" : "border-transparent text-drive-muted"
+              }`}>
               <Icon className="w-4 h-4" /> {label}
             </button>
           ))}
-        </div>
+        </nav>
       </header>
 
-      <div className="mx-auto max-w-3xl px-4 sm:px-6 py-6 space-y-5">
-        {tab === "people" && (
-          <PeopleTab driveId={driveId} members={members} pending={pending} busy={busy} setBusy={setBusy} reload={load} />
-        )}
-        {tab === "links" && (
-          <LinksTab driveId={driveId} shares={shares} receipts={receipts} busy={busy} setBusy={setBusy} reload={load} />
-        )}
-        {tab === "settings" && (
-          settingsReadable
-            ? <SettingsTab driveId={driveId} payoutWallet={payoutWallet} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
-            : <EmptyState icon={<SettingsIcon />} title="Creator-only settings" description="Payout wallet and payment tokens can only be changed by the drive’s creator." />
-        )}
+      <div className="mx-auto max-w-5xl px-4 sm:px-6 py-6 flex gap-6">
+        {/* Desktop left rail. */}
+        <nav className="hidden md:flex flex-col gap-0.5 w-48 shrink-0">
+          {nav.map(({ id, label, Icon, hint }) => (
+            <button key={id} onClick={() => setSection(id)}
+              className={`flex items-start gap-2.5 rounded-lg px-3 py-2 text-left transition-colors ${
+                section === id ? "bg-drive-selected/60 text-drive-accent" : "text-drive-text hover:bg-drive-hover"
+              }`}>
+              <Icon className="w-4 h-4 mt-0.5 shrink-0" />
+              <span className="min-w-0">
+                <span className="block text-body font-medium leading-tight">{label}</span>
+                <span className="block text-caption text-drive-muted">{hint}</span>
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1 space-y-5">
+          {section === "members" && (
+            <MembersSection driveId={driveId} members={members} pending={pending} busy={busy} setBusy={setBusy} reload={load} />
+          )}
+          {section === "links" && (
+            <LinksSection driveId={driveId} shares={shares} busy={busy} setBusy={setBusy} reload={load} />
+          )}
+          {section === "sales" && (
+            <SalesSection shares={shares} receipts={receipts} />
+          )}
+          {section === "payments" && (
+            settingsReadable
+              ? <PaymentsSection driveId={driveId} payoutWallet={payoutWallet} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
+              : <EmptyState icon={<Wallet />} title="Creator-only" description="Payout wallet and payment tokens can only be changed by the drive’s creator." />
+          )}
+        </div>
       </div>
     </main>
   );
 }
 
-// ── People ──────────────────────────────────────────────────────────────────
+// ── Members ──────────────────────────────────────────────────────────────────
 
-function PeopleTab({ driveId, members, pending, busy, setBusy, reload }: {
+function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
   driveId: string; members: Member[]; pending: PendingInvite[];
   busy: boolean; setBusy: (b: boolean) => void; reload: () => void;
 }) {
@@ -263,14 +283,24 @@ function InviteCard({ driveId, busy, setBusy, reload }: { driveId: string; busy:
   );
 }
 
-// ── Links & sales ─────────────────────────────────────────────────────────────
+// ── Links (the doors) ─────────────────────────────────────────────────────────
+// "What doors exist into this drive." Creation lives on the file/folder Share
+// panel — this section audits & revokes. Filterable by kind.
 
-function LinksTab({ driveId, shares, receipts, busy, setBusy, reload }: {
-  driveId: string; shares: Share[]; receipts: Receipt[];
-  busy: boolean; setBusy: (b: boolean) => void; reload: () => void;
+type LinkFilter = "all" | "free" | "paid" | "listed";
+
+function LinksSection({ driveId, shares, busy, setBusy, reload }: {
+  driveId: string; shares: Share[]; busy: boolean; setBusy: (b: boolean) => void; reload: () => void;
 }) {
-  const totalEarned = receipts.reduce((s, r) => s + (r.amount_usdc ?? 0), 0);
+  const [filter, setFilter] = useState<LinkFilter>("all");
   const origin = typeof window !== "undefined" ? window.location.origin : "";
+
+  const shown = useMemo(() => shares.filter((s) =>
+    filter === "all" ? true :
+    filter === "free" ? s.price_usdc == null :
+    filter === "paid" ? s.price_usdc != null :
+    /* listed */ !!s.listed,
+  ), [shares, filter]);
 
   async function revoke(shareId: string) {
     if (!confirm("Revoke this link? People who already accepted keep their access.")) return;
@@ -285,25 +315,79 @@ function LinksTab({ driveId, shares, receipts, busy, setBusy, reload }: {
     toast[ok ? "success" : "error"](ok ? "Link copied" : "Couldn’t copy");
   }
 
+  const filters: { id: LinkFilter; label: string }[] = [
+    { id: "all", label: "All" }, { id: "free", label: "Free" }, { id: "paid", label: "Paid" }, { id: "listed", label: "Listed" },
+  ];
+
+  return (
+    <SectionCard
+      icon={<Link2 className="w-4 h-4" />}
+      title="Share links"
+      description="Every link into this drive. Create new ones from a file or folder’s Share panel."
+      action={
+        <div className="flex gap-0.5 rounded-full border border-drive-border p-0.5">
+          {filters.map((f) => (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              className={`rounded-full px-2.5 py-0.5 text-caption ${filter === f.id ? "bg-drive-selected/70 text-drive-accent font-medium" : "text-drive-muted hover:text-drive-text"}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      {shown.length === 0 ? (
+        <EmptyState
+          icon={<Link2 />}
+          title={shares.length === 0 ? "No links yet" : "Nothing matches this filter"}
+          description={shares.length === 0
+            ? "Right-click a file or folder → Share to create a free or paid link."
+            : "Try a different filter."}
+        />
+      ) : (
+        <ul className="space-y-1.5">
+          {shown.map((s) => (
+            <li key={s.id} className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-body">
+              <Link href={`/d/${driveId}?path=${encodeURIComponent(s.path)}`} className="text-caption text-drive-muted hover:text-drive-accent hover:underline truncate w-24 sm:w-36">{prettyPath(s.path)}</Link>
+              <Badge tone="neutral" className="shrink-0">{s.role}</Badge>
+              {s.price_usdc != null
+                ? <Badge tone="sale" className="shrink-0">{s.price_usdc.toFixed(2)} {s.currency ?? "USDC"}</Badge>
+                : <span className="text-caption text-drive-muted">Free</span>}
+              {!!s.listed && <Badge tone="warning" className="shrink-0">Listed</Badge>}
+              <div className="ml-auto flex items-center gap-0.5">
+                <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copy(s.token)}><Copy className="w-3.5 h-3.5" /></IconButton>
+                <IconButton size="sm" variant="text" aria-label="Revoke link" disabled={busy} onClick={() => revoke(s.id)}><Ban className="w-3.5 h-3.5" /></IconButton>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </SectionCard>
+  );
+}
+
+// ── Sales (the money) ─────────────────────────────────────────────────────────
+// "What you're selling, and what you've earned." Distinct from Links: Links is
+// the door inventory; Sales is the storefront + ledger.
+
+function SalesSection({ shares, receipts }: { shares: Share[]; receipts: Receipt[] }) {
+  const totalEarned = receipts.reduce((s, r) => s + (r.amount_usdc ?? 0), 0);
+  const listed = useMemo(() => shares.filter((s) => s.price_usdc != null && !!s.listed), [shares]);
+
   return (
     <>
-      <SectionCard icon={<LinkIcon className="w-4 h-4" />} title="Share links" description="Free and paid links into this drive.">
-        {shares.length === 0 ? (
-          <EmptyState icon={<LinkIcon />} title="No links yet" description="Create share links from a folder’s Share dialog." />
+      <SectionCard
+        icon={<Store className="w-4 h-4" />}
+        title="On the storefront"
+        description="Paid items you’ve listed for members to discover and buy."
+      >
+        {listed.length === 0 ? (
+          <EmptyState icon={<Store />} title="Nothing listed" description="When you create a paid link, tick “List on storefront” to show it here." />
         ) : (
           <ul className="space-y-1.5">
-            {shares.map((s) => (
+            {listed.map((s) => (
               <li key={s.id} className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-body">
-                <span className="text-caption text-drive-muted truncate w-24 sm:w-32">{prettyPath(s.path)}</span>
-                <Badge tone="neutral" className="shrink-0">{s.role}</Badge>
-                {s.price_usdc != null
-                  ? <Badge tone="sale" className="shrink-0">{s.price_usdc.toFixed(2)} {s.currency ?? "USDC"}</Badge>
-                  : <span className="text-caption text-drive-muted">Free</span>}
-                {!!s.listed && <Badge tone="warning" className="shrink-0">Listed</Badge>}
-                <div className="ml-auto flex items-center gap-0.5">
-                  <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copy(s.token)}><Copy className="w-3.5 h-3.5" /></IconButton>
-                  <IconButton size="sm" variant="text" aria-label="Revoke link" disabled={busy} onClick={() => revoke(s.id)}><Ban className="w-3.5 h-3.5" /></IconButton>
-                </div>
+                <span className="truncate font-medium text-drive-text">{prettyPath(s.path)}</span>
+                <Badge tone="sale" className="ml-auto shrink-0">{s.price_usdc!.toFixed(2)} {s.currency ?? "USDC"}</Badge>
               </li>
             ))}
           </ul>
@@ -311,7 +395,7 @@ function LinksTab({ driveId, shares, receipts, busy, setBusy, reload }: {
       </SectionCard>
 
       <SectionCard
-        icon={<ShieldCheck className="w-4 h-4" />}
+        icon={<TrendingUp className="w-4 h-4" />}
         title="Earnings"
         description="Settled on-chain payments."
         action={<span className="text-body font-semibold text-green-600 tabular-nums">${totalEarned.toFixed(2)}</span>}
@@ -319,7 +403,7 @@ function LinksTab({ driveId, shares, receipts, busy, setBusy, reload }: {
         {receipts.length === 0 ? (
           <EmptyState icon={<ShieldCheck />} title="No sales yet" description="Paid shares appear here once a buyer settles." />
         ) : (
-          <ul className="space-y-1.5 max-h-72 overflow-auto">
+          <ul className="space-y-1.5 max-h-80 overflow-auto">
             {receipts.map((r) => (
               <li key={r.id} className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-caption">
                 <span className="font-mono text-drive-muted truncate w-28">{r.wallet.slice(0, 6)}…{r.wallet.slice(-4)}</span>
@@ -339,9 +423,9 @@ function LinksTab({ driveId, shares, receipts, busy, setBusy, reload }: {
   );
 }
 
-// ── Settings ──────────────────────────────────────────────────────────────────
+// ── Payments ──────────────────────────────────────────────────────────────────
 
-function SettingsTab({ driveId, payoutWallet, allowedTokens, busy, setBusy, reload }: {
+function PaymentsSection({ driveId, payoutWallet, allowedTokens, busy, setBusy, reload }: {
   driveId: string; payoutWallet: string; allowedTokens: string | null;
   busy: boolean; setBusy: (b: boolean) => void; reload: () => void;
 }) {
@@ -400,7 +484,7 @@ function SettingsTab({ driveId, payoutWallet, allowedTokens, busy, setBusy, relo
 
   return (
     <>
-      <SectionCard icon={<SettingsIcon className="w-4 h-4" />} title="Payout wallet" description="Where buyers’ payments are sent. Required before selling.">
+      <SectionCard icon={<Wallet className="w-4 h-4" />} title="Payout wallet" description="Where buyers’ payments are sent. Required before selling.">
         <div className="flex gap-2">
           <Input wrapClassName="flex-1" className="font-mono" placeholder="0x…" value={wallet} onChange={(e) => setWallet(e.target.value)} />
           <Button variant="tonal" disabled={busy} onClick={saveWallet}>Save</Button>
