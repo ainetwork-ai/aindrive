@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
-import { getDrive } from "@/lib/drives";
+import { getDrive, payoutWalletFor } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
 import { env } from "@/lib/env";
@@ -54,14 +54,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // Defaults to the policy's first token when the caller doesn't pick one.
   let currency: string | null = null;
   if (body.data.price_usdc) {
-    // A paid share needs somewhere for the money to land. Each drive sets its
-    // OWN payout_wallet (Settings → Payments); there is no global fallback —
-    // routing one owner's sales to a deployment-wide wallet would misroute
-    // funds in a multi-tenant drive. Block the sale at creation instead of
-    // minting a link that settles to 0x0 and fails at checkout.
-    if (!drive.payout_wallet) {
+    // A paid share needs somewhere for the money to land. The payout wallet is
+    // path-scoped: this share's funds go to the nearest ANCESTOR folder's
+    // wallet (set in that folder's Share panel; inherits down to the drive
+    // root). If no ancestor — not even root — has one, block at creation
+    // instead of minting a link that settles to 0x0 and fails at checkout.
+    if (!payoutWalletFor(driveId, body.data.path)) {
       return NextResponse.json(
-        { error: "set a payout wallet (Settings → Payments) before selling" },
+        { error: "set a payout wallet for this folder (or a parent) before selling" },
         { status: 400 },
       );
     }

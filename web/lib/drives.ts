@@ -21,13 +21,38 @@ export type DriveRow = {
   allowed_tokens: string | null;
 };
 
-/** Update the payout wallet for a drive. Pass null to clear it. */
+import { resolvePayoutWallet, type PayoutRow } from "./payout";
+
+/** All path-scoped payout wallets for a drive (incl. the root "" row). */
+export function listPayoutWallets(driveId: string): PayoutRow[] {
+  return db
+    .prepare("SELECT path, wallet FROM drive_payout_wallets WHERE drive_id = ? ORDER BY path")
+    .all(driveId) as PayoutRow[];
+}
+
+/** Set (or clear, wallet=null) the payout wallet for one path. */
+export function setPayoutWallet(driveId: string, path: string, wallet: string | null) {
+  if (wallet) {
+    db.prepare(
+      `INSERT INTO drive_payout_wallets (id, drive_id, path, wallet) VALUES (?, ?, ?, ?)
+       ON CONFLICT(drive_id, path) DO UPDATE SET wallet = excluded.wallet`,
+    ).run(nanoid(12), driveId, path, wallet);
+  } else {
+    db.prepare("DELETE FROM drive_payout_wallets WHERE drive_id = ? AND path = ?").run(driveId, path);
+  }
+}
+
+/** The wallet a sale at `path` pays out to — nearest ancestor's, or null. */
+export function payoutWalletFor(driveId: string, path: string): string | null {
+  return resolvePayoutWallet(listPayoutWallets(driveId), path);
+}
+
+/** Back-compat: the drive-level payout wallet is the root ("") path wallet. */
 export function setDrivePayoutWallet(driveId: string, payoutWallet: string | null) {
-  drizzleDb
-    .update(drives)
-    .set({ payout_wallet: payoutWallet })
-    .where(eq(drives.id, driveId))
-    .run();
+  setPayoutWallet(driveId, "", payoutWallet);
+}
+export function getDriveRootPayoutWallet(driveId: string): string | null {
+  return (db.prepare("SELECT wallet FROM drive_payout_wallets WHERE drive_id = ? AND path = ''").get(driveId) as { wallet: string } | undefined)?.wallet ?? null;
 }
 
 /** Update the payment-token policy (JSON of PaymentToken[]). Pass null to reset to default. */

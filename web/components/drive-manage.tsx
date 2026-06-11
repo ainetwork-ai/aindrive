@@ -13,6 +13,7 @@ import {
 import { apiFetch } from "@/lib/api-client";
 import { Avatar, Badge, Button, IconButton, Input, Select, SectionCard, EmptyState } from "@/components/ui";
 import { TOKEN_PRESETS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
+import { type PayoutRow } from "@/lib/payout";
 import { PaymentTokensEditor, type Member, type Share, type Receipt, type PendingInvite } from "./share-dialog-sections";
 
 type Section = "members" | "links" | "sales" | "payments";
@@ -32,7 +33,7 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
   const [pending, setPending] = useState<PendingInvite[]>([]);
   const [shares, setShares] = useState<Share[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [payoutWallet, setPayoutWallet] = useState("");
+  const [payoutWallets, setPayoutWallets] = useState<PayoutRow[]>([]);
   const [allowedTokens, setAllowedTokens] = useState<string | null>(null);
   // Drive financial settings are creator-only (the GET 403s co-owners), so a
   // co-owner managing people/links still can't read/write payout + tokens.
@@ -44,13 +45,13 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
       apiFetch<{ members: Member[]; pending: PendingInvite[]; myRole: Role }>(`/api/drives/${driveId}/members`),
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
       apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
-      apiFetch<{ payout_wallet: string | null; allowed_tokens: string | null }>(`/api/drives/${driveId}`),
+      apiFetch<{ payout_wallets?: PayoutRow[]; allowed_tokens: string | null }>(`/api/drives/${driveId}`),
     ]);
     if (mem.ok) { setMembers(mem.data.members); setPending(mem.data.pending ?? []); }
     if (sh.ok) setShares(sh.data.shares);
     if (rc.ok) setReceipts(rc.data.receipts ?? []);
     setSettingsReadable(d.ok);
-    if (d.ok) { setPayoutWallet(d.data.payout_wallet ?? ""); setAllowedTokens(d.data.allowed_tokens ?? null); }
+    if (d.ok) { setPayoutWallets(d.data.payout_wallets ?? []); setAllowedTokens(d.data.allowed_tokens ?? null); }
   }, [driveId]);
   useEffect(() => { load(); }, [load]);
 
@@ -115,7 +116,7 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
           )}
           {section === "payments" && (
             settingsReadable
-              ? <PaymentsSection driveId={driveId} payoutWallet={payoutWallet} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
+              ? <PaymentsSection driveId={driveId} payoutWallets={payoutWallets} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
               : <EmptyState icon={<Wallet />} title="Creator-only" description="Payout wallet and payment tokens can only be changed by the drive’s creator." />
           )}
         </div>
@@ -425,13 +426,10 @@ function SalesSection({ shares, receipts }: { shares: Share[]; receipts: Receipt
 
 // ── Payments ──────────────────────────────────────────────────────────────────
 
-function PaymentsSection({ driveId, payoutWallet, allowedTokens, busy, setBusy, reload }: {
-  driveId: string; payoutWallet: string; allowedTokens: string | null;
+function PaymentsSection({ driveId, payoutWallets, allowedTokens, busy, setBusy, reload }: {
+  driveId: string; payoutWallets: PayoutRow[]; allowedTokens: string | null;
   busy: boolean; setBusy: (b: boolean) => void; reload: () => void;
 }) {
-  const [wallet, setWallet] = useState(payoutWallet);
-  useEffect(() => { setWallet(payoutWallet); }, [payoutWallet]);
-
   // Token policy state mirrors share-dialog: preset checkboxes ∪ custom tokens.
   const tokens = useMemo(() => resolveDriveTokens(allowedTokens), [allowedTokens]);
   const isFixedPreset = (t: PaymentToken) => {
@@ -453,17 +451,6 @@ function PaymentsSection({ driveId, payoutWallet, allowedTokens, busy, setBusy, 
     setCustomTokens(customs);
   }, [tokens]);
 
-  async function saveWallet() {
-    const v = wallet.trim();
-    if (v && !/^0x[a-fA-F0-9]{40}$/.test(v)) { toast.error("Must be 0x + 40 hex chars"); return; }
-    setBusy(true);
-    const res = await apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`, {
-      method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ payout_wallet: v || null }),
-    });
-    setBusy(false);
-    if (!res.ok) { toast.error(res.error || "Failed to save"); return; }
-    toast.success(v ? "Payout wallet saved" : "Payout wallet cleared"); reload();
-  }
   async function saveTokens() {
     // Saved policy = every token toggled ON (presets + customs). OFF customs
     // simply aren't persisted (matches "accepted = in the menu").
@@ -484,10 +471,29 @@ function PaymentsSection({ driveId, payoutWallet, allowedTokens, busy, setBusy, 
 
   return (
     <>
-      <SectionCard icon={<Wallet className="w-4 h-4" />} title="Payout wallet" description="Where buyers’ payments are sent. Required before selling.">
-        <div className="flex gap-2">
-          <Input wrapClassName="flex-1" className="font-mono" placeholder="0x…" value={wallet} onChange={(e) => setWallet(e.target.value)} />
-          <Button variant="tonal" disabled={busy} onClick={saveWallet}>Save</Button>
+      <SectionCard
+        icon={<Wallet className="w-4 h-4" />}
+        title="Payout wallets"
+        description="Where buyers’ payments land. A folder inherits the nearest parent’s wallet (down to the drive default); add per-folder overrides from a folder’s Share panel."
+      >
+        <div className="space-y-3">
+          {/* Drive default ("" path) is always editable here; per-folder rows are
+              created in the Share drawer and audited/removed from this list. */}
+          <PayoutWalletRow
+            driveId={driveId} path="" label="Drive default"
+            wallet={payoutWallets.find((w) => w.path === "")?.wallet ?? ""}
+            busy={busy} setBusy={setBusy} reload={reload}
+          />
+          {payoutWallets
+            .filter((w) => w.path !== "")
+            .sort((a, b) => a.path.localeCompare(b.path))
+            .map((w) => (
+              <PayoutWalletRow
+                key={w.path} driveId={driveId} path={w.path} label={`/${w.path}`}
+                wallet={w.wallet} removable
+                busy={busy} setBusy={setBusy} reload={reload}
+              />
+            ))}
         </div>
       </SectionCard>
 
@@ -505,5 +511,57 @@ function PaymentsSection({ driveId, payoutWallet, allowedTokens, busy, setBusy, 
         />
       </SectionCard>
     </>
+  );
+}
+
+// One row of the payout-wallets audit list. `path === ""` is the drive default
+// (not removable — clear it to fall back to nothing); folder rows are removable.
+// Both Save (PUT) and Remove (DELETE) hit the path-scoped /payout endpoint.
+function PayoutWalletRow({ driveId, path, label, wallet, removable, busy, setBusy, reload }: {
+  driveId: string; path: string; label: string; wallet: string;
+  removable?: boolean; busy: boolean; setBusy: (b: boolean) => void; reload: () => void;
+}) {
+  const [v, setV] = useState(wallet);
+  useEffect(() => { setV(wallet); }, [wallet]);
+
+  async function save() {
+    const t = v.trim();
+    if (t && !/^0x[a-fA-F0-9]{40}$/.test(t)) { toast.error("Must be 0x + 40 hex chars"); return; }
+    setBusy(true);
+    const res = t
+      ? await apiFetch(`/api/drives/${driveId}/payout`, {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, wallet: t }),
+        })
+      : await apiFetch(`/api/drives/${driveId}/payout`, {
+          method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }),
+        });
+    setBusy(false);
+    if (!res.ok) { toast.error(res.error || "Failed to save"); return; }
+    toast.success(t ? "Payout wallet saved" : "Payout wallet cleared"); reload();
+  }
+
+  async function remove() {
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}/payout`, {
+      method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }),
+    });
+    setBusy(false);
+    if (!res.ok) { toast.error(res.error || "Failed to remove"); return; }
+    toast.success("Folder override removed"); reload();
+  }
+
+  return (
+    <div>
+      <div className="text-caption text-drive-muted mb-1 font-mono truncate">{label}</div>
+      <div className="flex gap-2">
+        <Input wrapClassName="flex-1" className="font-mono" placeholder="0x…" value={v} onChange={(e) => setV(e.target.value)} />
+        <Button variant="tonal" disabled={busy || v.trim() === wallet} onClick={save}>Save</Button>
+        {removable && (
+          <IconButton variant="text" aria-label="Remove folder override" disabled={busy} onClick={remove}>
+            <TrashIcon className="w-4 h-4" />
+          </IconButton>
+        )}
+      </div>
+    </div>
   );
 }

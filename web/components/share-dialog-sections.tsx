@@ -114,7 +114,8 @@ export type TokenEditorProps = {
 };
 
 export function SellSection({
-  defaultPath, focusSection, sellOn, paidShare, payoutWallet, payoutInput,
+  defaultPath, focusSection, sellOn, paidShare,
+  payoutOwnWallet, payoutEffective, payoutInherited, payoutInput,
   setPayoutInput, savePayoutWallet, price, setPrice, currency, setCurrency,
   currencyOptions, listed, setListed, isOwner, tokenEditor, saveSell, busy,
   setEditingSell, copyLink,
@@ -123,7 +124,13 @@ export function SellSection({
   focusSection?: "sell" | "share";
   sellOn: boolean;
   paidShare: Share | undefined;
-  payoutWallet: string;
+  // Payout wallet is path-scoped (see lib/payout.ts). `payoutOwnWallet` is the
+  // wallet set on THIS folder ("" if none — what the input edits); `payoutEffective`
+  // is the resolved wallet including inheritance; `payoutInherited` is true when
+  // the effective wallet comes from a parent folder rather than this one.
+  payoutOwnWallet: string;
+  payoutEffective: string | null;
+  payoutInherited: boolean;
   payoutInput: string;
   setPayoutInput: (v: string) => void;
   savePayoutWallet: () => void;
@@ -169,30 +176,36 @@ export function SellSection({
             </div>
           )}
 
-          {/* Payout wallet — where x402 payments for THIS drive land. */}
+          {/* Payout wallet — where x402 payments for THIS folder land. Scoped to
+              defaultPath; if left empty it inherits the nearest parent folder's
+              wallet (down to the drive root). No operator fallback exists. */}
           <div>
             <div className="flex gap-2 items-end">
               <Input
                 wrapClassName="flex-1"
-                label="Payout wallet"
+                label={defaultPath ? "Payout wallet for this folder" : "Payout wallet (drive default)"}
                 value={payoutInput}
                 onChange={(e) => setPayoutInput(e.target.value.trim())}
-                placeholder="0x… (where you receive funds)"
+                placeholder={payoutInherited && payoutEffective ? `${payoutEffective} (inherited)` : "0x… (where you receive funds)"}
                 className="font-mono"
               />
               <Button
                 variant="tonal"
-                disabled={busy || payoutInput.trim() === payoutWallet}
+                disabled={busy || payoutInput.trim() === payoutOwnWallet}
                 onClick={savePayoutWallet}
               >
                 Save
               </Button>
             </div>
-            {!payoutWallet && (
+            {!payoutEffective ? (
               <p className="mt-1.5 text-caption text-amber-700">
-                Set this before selling, or earnings route to the instance operator’s wallet.
+                Set a payout wallet for this folder (or a parent) before selling — there is no operator fallback.
               </p>
-            )}
+            ) : payoutInherited ? (
+              <p className="mt-1.5 text-caption text-drive-muted">
+                Inherited from a parent folder: <code className="font-mono">{payoutEffective}</code>. Set one here to override for this folder.
+              </p>
+            ) : null}
           </div>
 
           {/* Editing state: no paid share yet — price + currency + list option. */}

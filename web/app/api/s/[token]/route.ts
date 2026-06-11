@@ -9,7 +9,7 @@ import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
 import { resolveRoleByUser, atLeast, type Role } from "@/lib/access";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
-import { getDriveNamespace } from "@/lib/drives";
+import { getDriveNamespace, payoutWalletFor } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
 import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork } from "@/lib/payment-tokens";
@@ -109,12 +109,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     );
   }
 
-  // Build x402 payment requirements. payTo is the drive's own payout_wallet —
-  // set per-drive by its owner (Settings → Payments) and required before a
-  // paid share can be created, so it's normally present. The zero-address
-  // last resort only triggers for a legacy paid share predating that gate;
-  // the facilitator rejects it rather than misrouting funds.
-  const payTo = share.payout_wallet || "0x0000000000000000000000000000000000000000";
+  // Build x402 payment requirements. payTo resolves to the nearest ANCESTOR
+  // folder's payout wallet for this share's path (set by the owner in the
+  // folder's Share panel; falls back through parents to the drive root). A
+  // wallet is required before a paid share can be created, so it's normally
+  // present; the zero-address last resort only triggers for a legacy share
+  // predating the gate — the facilitator rejects it rather than misrouting.
+  const payTo = payoutWalletFor(share.drive_id, share.path) || "0x0000000000000000000000000000000000000000";
   const requirements: PaymentRequirements = {
     scheme: "exact",
     network: toCaip2Network(tok.chain),
