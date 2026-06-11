@@ -1,7 +1,7 @@
 # Sub-project 1 — Stand up the e2e Test Net — Design Spec
 
 > 2026-06-05. First sub-project of the hackathon→product architecture work
-> (`docs/ARCHITECTURE_ASSESSMENT.md`, P0 first move). Re-scoped after a first
+> (P0 first move of the then-current architecture assessment). Re-scoped after a first
 > adversarial review (the prior draft falsely assumed the scenario suite was
 > in-process) and a second focused re-review (harness env/port mechanics +
 > reconciliation reality). This spec owns the *real* net. sig/protocol

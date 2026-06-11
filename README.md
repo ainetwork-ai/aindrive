@@ -1058,10 +1058,15 @@ aindrive/
 │   └── diagnose.mjs       # trace analyzer + invariant checker
 │
 └── docs/
+    ├── PERMISSIONS.md          # roles, grants, invites/links/payment
+    ├── DEPLOY.md               # release runbook (mainnet payment go-live)
+    ├── DOCKER_PUBLISH_GUIDE.md # container build/restart coordination
+    ├── PRODUCTION_TODO.md      # prod-readiness checklist
+    ├── ARCHITECTURE.md
     ├── TRACE_CONTRACT.md
     ├── CONCURRENT_EDITING_DESIGN.md
     ├── WILLOW_DESIGN.md
-    └── TEST_SCENARIOS.md  # 160-scenario checklist
+    └── TEST_SCENARIOS.md       # scenario suite checklist
 ```
 
 ---
