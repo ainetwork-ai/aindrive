@@ -12,6 +12,8 @@ import clsx from "clsx";
 import { IconButton } from "./IconButton";
 
 export type ModalSize = "sm" | "md" | "lg";
+/** center = classic dialog; drawer = right-docked side panel (share/details). */
+export type ModalVariant = "center" | "drawer";
 
 const SIZE: Record<ModalSize, string> = {
   sm: "max-w-md",
@@ -30,11 +32,12 @@ export interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   size?: ModalSize;
+  variant?: ModalVariant;
   /** Hide the header close button (e.g. forced-choice flows). Esc/backdrop still close. */
   hideClose?: boolean;
 }
 
-export function Modal({ open, onClose, title, children, footer, size = "md", hideClose }: ModalProps) {
+export function Modal({ open, onClose, title, children, footer, size = "md", variant = "center", hideClose }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // Element focused before the modal opened — restored on close so keyboard
@@ -112,11 +115,13 @@ export function Modal({ open, onClose, title, children, footer, size = "md", hid
 
   if (!open) return null;
 
+  const isDrawer = variant === "drawer";
+
   return (
     <div
       className={clsx(
-        "fixed inset-0 z-50 flex items-center justify-center p-4",
-        "bg-black/40 transition-opacity duration-150",
+        "fixed inset-0 z-50 flex bg-black/40 transition-opacity duration-150",
+        isDrawer ? "items-stretch justify-end" : "items-center justify-center p-4",
         entered ? "opacity-100" : "opacity-0",
       )}
       onMouseDown={(e) => {
@@ -131,11 +136,17 @@ export function Modal({ open, onClose, title, children, footer, size = "md", hid
         aria-labelledby={title ? titleId : undefined}
         tabIndex={-1}
         className={clsx(
-          "w-full max-h-[90vh] flex flex-col outline-none",
-          "bg-drive-panel rounded-xl shadow-e3",
-          "transition-all duration-150 ease-out",
-          entered ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.98]",
-          SIZE[size],
+          "flex flex-col outline-none bg-drive-panel transition-all duration-150 ease-out",
+          isDrawer
+            ? clsx(
+                "h-full w-full sm:max-w-md border-l border-drive-border shadow-e3 sm:rounded-l-2xl",
+                entered ? "opacity-100 translate-x-0" : "opacity-0 translate-x-4",
+              )
+            : clsx(
+                "w-full max-h-[90vh] rounded-xl shadow-e3",
+                entered ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.98]",
+                SIZE[size],
+              ),
         )}
       >
         {(title || !hideClose) && (

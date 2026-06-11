@@ -8,9 +8,9 @@ import { atLeast } from "@/lib/access-core.js";
 // Pure presets/parsers — safe in a client component.
 import { TOKEN_PRESETS, DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import {
-  EarningsSection, SellSection, EmailInviteSection, FreeLinkSection,
+  SellSection, EmailInviteSection, FreeLinkSection,
   MembersSection,
-  type Share, type Receipt, type Member,
+  type Share, type Member,
 } from "./share-dialog-sections";
 
 type FocusSection = "sell" | "share" | undefined;
@@ -40,7 +40,6 @@ export function ShareDialog({
     () => Object.fromEntries(Object.keys(TOKEN_PRESETS).map((k) => [k, k === "USDC"])),
   );
   const [customTokens, setCustomTokens] = useState<PaymentToken[]>([]);
-  const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [payoutWallet, setPayoutWallet] = useState<string>("");
   const [payoutInput, setPayoutInput] = useState<string>("");
   const [members, setMembers] = useState<Member[]>([]);
@@ -50,15 +49,15 @@ export function ShareDialog({
   });
 
   async function load() {
-    const [s, r, d, mem, who] = await Promise.all([
+    // Earnings/receipts moved to the Manage page (Sales) — this contextual
+    // panel no longer fetches them.
+    const [s, d, mem, who] = await Promise.all([
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
-      apiFetch<{ receipts: Receipt[] }>(`/api/drives/${driveId}/receipts`),
       apiFetch<{ payout_wallet: string | null; allowed_tokens: string | null }>(`/api/drives/${driveId}`),
       apiFetch<{ members: Member[]; myRole: "viewer" | "editor" | "owner" }>(`/api/drives/${driveId}/members`),
       apiFetch<{ user: { email: string } | null }>(`/api/auth/me`),
     ]);
     if (s.ok) setShares(s.data.shares);
-    if (r.ok) setReceipts(r.data.receipts ?? []);
     if (d.ok) {
       setPayoutWallet(d.data.payout_wallet ?? "");
       setPayoutInput(d.data.payout_wallet ?? "");
@@ -145,8 +144,6 @@ export function ShareDialog({
     toast.success("Payment tokens saved");
     load();
   }
-
-  const totalEarned = receipts.reduce((sum, r) => sum + (r.amount_usdc ?? 0), 0);
 
   // Existing paid share for this exact path (most recent first)
   const paidShare = shares.find(s => s.path === defaultPath && s.price_usdc !== null);
@@ -253,6 +250,7 @@ export function ShareDialog({
   return (
     <Modal
       open
+      variant="drawer"
       onClose={onClose}
       title={<>Share &ldquo;{defaultPath || "/"}&rdquo;</>}
       footer={
@@ -265,23 +263,19 @@ export function ShareDialog({
       }
     >
       <div className="space-y-3">
-        {/* This modal is the quick per-folder share surface; the full member
-            roster, pending invites, link revocation, earnings and settings
-            live on the dedicated Manage page. */}
+        {/* Contextual share panel for THIS path: invite, sell, link, and who
+            can access here. The drive-wide ledger — full roster, all links,
+            earnings, storefront, payment settings — lives on the Manage page. */}
         {isOwner && (
           <a
             href={`/d/${driveId}/manage`}
             className="flex items-center justify-between gap-2 rounded-lg border border-drive-border bg-drive-sidebar px-3 py-2 text-body hover:bg-drive-hover"
           >
             <span className="flex items-center gap-2 text-drive-text">
-              <Users className="w-4 h-4 text-drive-muted" /> Manage all members &amp; settings
+              <Users className="w-4 h-4 text-drive-muted" /> Members, links &amp; settings
             </span>
             <ArrowRight className="w-4 h-4 text-drive-muted" />
           </a>
-        )}
-
-        {receipts.length > 0 && (
-          <EarningsSection receipts={receipts} totalEarned={totalEarned} />
         )}
 
         <SellSection

@@ -5,7 +5,7 @@ export type { ButtonProps, ButtonVariant, ButtonSize } from "./Button";
 export { IconButton } from "./IconButton";
 export type { IconButtonProps } from "./IconButton";
 export { Modal } from "./Modal";
-export type { ModalProps, ModalSize } from "./Modal";
+export type { ModalProps, ModalSize, ModalVariant } from "./Modal";
 export { Input } from "./Input";
 export type { InputProps } from "./Input";
 export { Select } from "./Select";
