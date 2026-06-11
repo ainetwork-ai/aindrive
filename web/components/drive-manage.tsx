@@ -357,10 +357,16 @@ function SettingsTab({ driveId, payoutWallet, allowedTokens, busy, setBusy, relo
   const [sel, setSel] = useState<Record<string, boolean>>({});
   const [customTokens, setCustomTokens] = useState<PaymentToken[]>([]);
   useEffect(() => {
-    setSel(Object.fromEntries(
-      Object.entries(TOKEN_PRESETS).filter(([, p]) => !!p.asset).map(([k]) => [k, tokens.some((t) => t.symbol === k && isFixedPreset(t))]),
-    ));
-    setCustomTokens(tokens.filter((t) => !isFixedPreset(t)));
+    const customs = tokens.filter((t) => !isFixedPreset(t));
+    setSel({
+      // Presets: on if present as a fixed preset in the saved policy.
+      ...Object.fromEntries(
+        Object.entries(TOKEN_PRESETS).filter(([, p]) => !!p.asset).map(([k]) => [k, tokens.some((t) => t.symbol === k && isFixedPreset(t))]),
+      ),
+      // Customs: anything in the saved policy is, by definition, accepted (on).
+      ...Object.fromEntries(customs.map((t) => [t.symbol, true])),
+    });
+    setCustomTokens(customs);
   }, [tokens]);
 
   async function saveWallet() {
@@ -375,11 +381,14 @@ function SettingsTab({ driveId, payoutWallet, allowedTokens, busy, setBusy, relo
     toast.success(v ? "Payout wallet saved" : "Payout wallet cleared"); reload();
   }
   async function saveTokens() {
+    // Saved policy = every token toggled ON (presets + customs). OFF customs
+    // simply aren't persisted (matches "accepted = in the menu").
     const presetTokens = Object.entries(TOKEN_PRESETS).filter(([k, p]) => sel[k] && p.asset).map(([, p]) => p);
+    const activeCustoms = customTokens.filter((t) => sel[t.symbol]);
     const bySymbol = new Map<string, PaymentToken>();
-    for (const t of [...presetTokens, ...customTokens]) bySymbol.set(t.symbol, t);
+    for (const t of [...presetTokens, ...activeCustoms]) bySymbol.set(t.symbol, t);
     const policy = [...bySymbol.values()];
-    if (policy.length === 0) { toast.error("Select or add at least one token"); return; }
+    if (policy.length === 0) { toast.error("Turn on at least one token"); return; }
     setBusy(true);
     const res = await apiFetch(`/api/drives/${driveId}`, {
       method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ allowed_tokens: JSON.stringify(policy) }),
@@ -405,7 +414,7 @@ function SettingsTab({ driveId, payoutWallet, allowedTokens, busy, setBusy, relo
             sel,
             toggle: (symbol) => setSel((s) => ({ ...s, [symbol]: !s[symbol] })),
             customTokens,
-            addCustom: (t) => setCustomTokens((c) => [...c, t]),
+            addCustom: (t) => { setCustomTokens((c) => [...c, t]); setSel((s) => ({ ...s, [t.symbol]: true })); },
             removeCustom: (symbol) => setCustomTokens((c) => c.filter((t) => t.symbol !== symbol)),
             save: saveTokens,
           }}
