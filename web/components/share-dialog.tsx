@@ -73,12 +73,16 @@ export function ShareDialog({
         const p = TOKEN_PRESETS[t.symbol];
         return p && p.asset && p.asset.toLowerCase() === t.asset.toLowerCase();
       };
-      setTokenSel(Object.fromEntries(
-        Object.entries(TOKEN_PRESETS)
-          .filter(([, p]) => !!p.asset) // only presets with a built-in address are checkbox presets
-          .map(([k]) => [k, tokens.some((t) => t.symbol === k && isFixedPreset(t))]),
-      ));
-      setCustomTokens(tokens.filter((t) => !isFixedPreset(t)));
+      const customs = tokens.filter((t) => !isFixedPreset(t));
+      setTokenSel({
+        ...Object.fromEntries(
+          Object.entries(TOKEN_PRESETS)
+            .filter(([, p]) => !!p.asset)
+            .map(([k]) => [k, tokens.some((t) => t.symbol === k && isFixedPreset(t))]),
+        ),
+        ...Object.fromEntries(customs.map((t) => [t.symbol, true])), // stored custom = accepted (on)
+      });
+      setCustomTokens(customs);
     }
     if (mem.ok) setMembers(mem.data.members);
     if (who.ok && who.data.user) {
@@ -119,8 +123,9 @@ export function ShareDialog({
     const presetTokens = Object.entries(TOKEN_PRESETS)
       .filter(([k, p]) => tokenSel[k] && p.asset)
       .map(([, p]) => p);
+    const activeCustoms = customTokens.filter((t) => tokenSel[t.symbol]);
     const bySymbol = new Map<string, PaymentToken>();
-    for (const t of [...presetTokens, ...customTokens]) bySymbol.set(t.symbol, t);
+    for (const t of [...presetTokens, ...activeCustoms]) bySymbol.set(t.symbol, t);
     const policy = [...bySymbol.values()];
     if (policy.length === 0) {
       toast.error("Select or add at least one payment token");
@@ -300,10 +305,10 @@ export function ShareDialog({
             sel: tokenSel,
             toggle: (sym) => setTokenSel((s) => ({ ...s, [sym]: !s[sym] })),
             customTokens,
-            addCustom: (t) =>
-              setCustomTokens((list) =>
-                list.some((x) => x.symbol === t.symbol) ? list : [...list, t],
-              ),
+            addCustom: (t) => {
+              setCustomTokens((list) => list.some((x) => x.symbol === t.symbol) ? list : [...list, t]);
+              setTokenSel((s) => ({ ...s, [t.symbol]: true })); // added = accepted (on)
+            },
             removeCustom: (sym) => setCustomTokens((list) => list.filter((x) => x.symbol !== sym)),
             save: saveTokenPolicy,
           }}

@@ -274,51 +274,93 @@ function SettleBadge({ token }: { token: Pick<PaymentToken, "name" | "version" |
   );
 }
 
-export function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
-  // Fixed presets the owner can toggle (only those with a built-in address).
-  const presetSymbols = Object.entries(TOKEN_PRESETS).filter(([, p]) => !!p.asset).map(([k]) => k);
+/** One row in the token policy: a uniform on/off Toggle ("accepted as a pricing
+ *  option"), the token identity, and a quiet settle-type line. Custom tokens
+ *  additionally show their address + a delete button — kept OFF the on/off axis
+ *  so "accepted?" and "remove identity" never look like the same control. */
+function TokenPolicyRow({
+  token, on, onToggle, onRemove, busy,
+}: {
+  token: PaymentToken;
+  on: boolean;
+  onToggle: () => void;
+  onRemove?: () => void;
+  busy: boolean;
+}) {
+  const settleLabel = token.transferMethod === "permit2"
+    ? "Instant settle · one-time approval"
+    : "Instant settle";
   return (
-    <div className="rounded-lg border border-drive-border p-3 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-label uppercase text-drive-muted">Payment tokens (drive policy)</div>
-        <Button variant="tonal" size="sm" disabled={busy} onClick={editor.save}>Save policy</Button>
-      </div>
-
-      {/* Fixed presets — checkbox + settle badge. */}
-      <div className="space-y-1.5">
-        {presetSymbols.map((sym) => {
-          const p = TOKEN_PRESETS[sym];
-          return (
-            <label key={sym} className="flex items-center gap-2 text-body cursor-pointer">
-              <input type="checkbox" checked={!!editor.sel[sym]} onChange={() => editor.toggle(sym)} className="accent-drive-accent" />
-              <span className="font-medium text-drive-text">{sym}</span>
-              <span className="text-caption text-drive-muted">{p.chain}</span>
-              <span className="ml-auto"><SettleBadge token={p} /></span>
-            </label>
-          );
-        })}
-      </div>
-
-      {/* Custom tokens added by lookup. */}
-      {editor.customTokens.length > 0 && (
-        <div className="space-y-1.5 border-t border-drive-border pt-2.5">
-          {editor.customTokens.map((t) => (
-            <div key={t.symbol} className="flex items-center gap-2 text-body">
-              <span className="font-medium text-drive-text">{t.symbol}</span>
-              <span className="text-caption text-drive-muted truncate" title={t.asset}>{t.chain} · {t.asset.slice(0, 6)}…{t.asset.slice(-4)}</span>
-              <span className="ml-auto"><SettleBadge token={t} /></span>
-              <IconButton size="sm" variant="text" aria-label={`Remove ${t.symbol}`} onClick={() => editor.removeCustom(t.symbol)}>
-                <TrashIcon className="w-3.5 h-3.5" />
-              </IconButton>
-            </div>
-          ))}
+    <div className={`flex items-center gap-3 py-2 ${on ? "" : "opacity-55"}`}>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-drive-text">{token.symbol}</span>
+          {!on && <span className="text-caption text-drive-muted">off</span>}
         </div>
+        <div className="text-caption text-drive-muted truncate">
+          {token.chain}
+          {onRemove
+            ? <> · <span title={token.asset}>{token.asset.slice(0, 6)}…{token.asset.slice(-4)}</span> · custom</>
+            : <> · built-in</>}
+        </div>
+        <div className="text-caption text-drive-muted">⚡ {settleLabel}</div>
+      </div>
+      {onRemove && (
+        <IconButton size="sm" variant="text" aria-label={`Remove ${token.symbol}`} disabled={busy} onClick={onRemove}>
+          <TrashIcon className="w-3.5 h-3.5" />
+        </IconButton>
       )}
+      <Toggle on={on} onChange={onToggle} disabled={busy} aria-label={`Accept ${token.symbol}`} />
+    </div>
+  );
+}
+
+export function PaymentTokensEditor({ editor, busy }: { editor: TokenEditorProps; busy: boolean }) {
+  // Presets with a built-in address are always listable (toggle to accept).
+  const presets = Object.entries(TOKEN_PRESETS).filter(([, p]) => !!p.asset).map(([, p]) => p);
+  const presetSymbols = presets.map((p) => p.symbol);
+  const activeCount =
+    presets.filter((p) => editor.sel[p.symbol]).length +
+    editor.customTokens.filter((t) => editor.sel[t.symbol]).length;
+
+  return (
+    <div className="space-y-3">
+      {/* The de-confusing frame: this is a MENU of pricing options, not
+          simultaneous charging. A buyer pays ONE token per sale. */}
+      <p className="text-caption text-drive-muted">
+        Pick the currencies you can price sales in. You set one currency on each sale —
+        buyers pay only that one. Turning on more here just gives you more options at pricing time.
+      </p>
+
+      <div className="rounded-lg border border-drive-border divide-y divide-drive-border px-3">
+        {presets.map((p) => (
+          <TokenPolicyRow key={p.symbol} token={p} on={!!editor.sel[p.symbol]} onToggle={() => editor.toggle(p.symbol)} busy={busy} />
+        ))}
+        {editor.customTokens.map((t) => (
+          <TokenPolicyRow
+            key={t.symbol}
+            token={t}
+            on={!!editor.sel[t.symbol]}
+            onToggle={() => editor.toggle(t.symbol)}
+            onRemove={() => editor.removeCustom(t.symbol)}
+            busy={busy}
+          />
+        ))}
+      </div>
 
       <AddCustomToken
         existingSymbols={[...presetSymbols, ...editor.customTokens.map((t) => t.symbol)]}
         onAdd={editor.addCustom}
       />
+
+      <div className="flex items-center justify-between border-t border-drive-border pt-3">
+        <span className="text-caption text-drive-muted">
+          {activeCount === 0
+            ? "No currencies accepted — turn on at least one to sell."
+            : `${activeCount} ${activeCount === 1 ? "currency" : "currencies"} accepted · you choose one per sale`}
+        </span>
+        <Button variant="tonal" size="sm" disabled={busy || activeCount === 0} onClick={editor.save}>Save</Button>
+      </div>
     </div>
   );
 }
