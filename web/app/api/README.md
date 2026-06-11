@@ -44,7 +44,8 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 |-------|-------|
 | `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). |
 | `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). Tiered file-count cap on create. |
-| `upload` | streaming raw octet-stream → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. ≤2 GiB. Aborts never publish a partial file. |
+| `upload` | single-POST raw octet-stream for files ≤ one part (8 MiB) → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. Aborts never publish a partial file. |
+| `upload-sessions` | chunked + resumable upload for larger files (tus-style). POST opens a session; PATCH `:uploadId` appends sequential ≤8 MiB parts (`X-Upload-Offset` must equal server `receivedBytes`, else 409 + authoritative offset); final part renames atomically. Recovery truth = agent temp's stat size, so a part that died mid-append never double-appends. ≤2 GiB. |
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
 | `download` | chunked stream, `Content-Disposition: attachment`, no size cap. |
 | `thumbnail` | 256px webp via sharp, disk cache keyed by `sha1(path)+mtime`. |
