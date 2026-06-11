@@ -5,11 +5,22 @@ import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from "wa
 import { base, baseSepolia } from "viem/chains";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { ExactEvmScheme, createPermit2ApprovalTx, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
+import { ExactEvmScheme, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
 import { toast } from "sonner";
 import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
-import type { Account, Chain, Transport, WalletClient } from "viem";
+import { encodeFunctionData, type Account, type Chain, type Transport, type WalletClient } from "viem";
 import { Button } from "@/components/ui";
+
+// Canonical Uniswap Permit2 contract — same address on every EVM chain.
+// (Mirrors @x402/evm's PERMIT2_ADDRESS, which isn't re-exported from the
+// client entrypoint.) The payer approves THIS contract to pull the token,
+// then the x402 proxy moves exactly the sale amount via the signed permit.
+const PERMIT2_ADDRESS = "0x000000000022D473030F116dDEE9F6B43aC78BA3" as const;
+const ERC20_APPROVE_ABI = [{
+  type: "function", name: "approve", stateMutability: "nonpayable",
+  inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }],
+  outputs: [{ type: "bool" }],
+}] as const;
 
 // v2 requirement as mirrored in the 402 body (the x402 client itself consumes
 // the PAYMENT-REQUIRED header; this body copy only drives the gate UI).
@@ -184,8 +195,19 @@ export function ShareGate({ token }: { token: string }) {
       if (walletClient.chain?.id !== requirementChain.id) {
         await switchChainAsync({ chainId: requirementChain.id });
       }
-      const tx = createPermit2ApprovalTx(requirement.asset as `0x${string}`);
-      const hash = await walletClient.sendTransaction({ to: tx.to, data: tx.data, chain: requirementChain });
+      // Approve EXACTLY this sale's amount — not the SDK's MaxUint256, which
+      // makes wallets warn "this site can withdraw ALL your <token>" and
+      // leaves a standing unlimited allowance. aindrive grants are one-shot
+      // (buy once, keep forever), so re-approving per purchase costs the buyer
+      // nothing meaningful and keeps the wallet prompt honest ("approve N").
+      const data = encodeFunctionData({
+        abi: ERC20_APPROVE_ABI,
+        functionName: "approve",
+        args: [PERMIT2_ADDRESS, BigInt(requirement.amount)],
+      });
+      const hash = await walletClient.sendTransaction({
+        to: requirement.asset as `0x${string}`, data, chain: requirementChain,
+      });
       await publicClient.waitForTransactionReceipt({ hash });
       setApprovalNeeded(false);
       toast.success(`${tokenSymbol} approved — you can pay now.`);
@@ -359,10 +381,10 @@ export function ShareGate({ token }: { token: string }) {
                 onClick={approve}
                 className="w-full justify-center"
               >
-                {approving ? "Approving…" : `Approve ${tokenSymbol} (one-time)`}
+                {approving ? "Approving…" : `Approve ${amountLabel}`}
               </Button>
               <p className="text-caption text-drive-muted text-center">
-                Step 1 of 2 — a one-time on-chain approval lets {tokenSymbol} be spent for this payment. You’ll pay right after.
+                Step 1 of 2 — approves exactly {amountLabel} for this purchase (not your whole balance). You’ll pay right after.
               </p>
             </>
           ) : (
