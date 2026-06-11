@@ -19,8 +19,8 @@
 - [ ] **P0** Boot guard: `NODE_ENV=production && AINDRIVE_DEV_BYPASS_X402=1` → process.exit(1) with loud log
 - [ ] **P0** `AINDRIVE_SESSION_SECRET` required in prod (no fallback to `~/.aindrive/session-secret`); 32B base64; absent → boot fail
 - [ ] **P0** Force cookies `Secure; HttpOnly; SameSite=Lax` in prod; refuse to start if `AINDRIVE_PUBLIC_URL` is not `https://`
-- [ ] **P0** `AINDRIVE_PAYOUT_WALLET` set; reject all-zero placeholder when DEV_BYPASS off
-- [ ] **P0** Facilitator explicitly configured: `AINDRIVE_X402_FACILITATOR` URL or `CDP_API_KEY_ID`/`CDP_API_KEY_SECRET` (CDP required for mainnet permit2 settles); conscious base-mainnet vs base-sepolia choice (document in runbook)
+- [x] **P0** Payout wallet is per-drive (Settings → Payments); paid-share creation is blocked until set. No global env wallet (removed — would misroute funds in multi-tenant).
+- [ ] **P0** Mainnet payment go-live: CDP facilitator keys, `DEV_BYPASS=0`, build-time `NEXT_PUBLIC_*`, small real smoke. Full procedure: [`DEPLOY.md`](DEPLOY.md).
 - [ ] **P0** Reverse proxy (nginx) sized for streaming transfers — without these, nginx 413s large uploads at its 1 MB default regardless of the app's 2 GiB cap:
   ```nginx
   client_max_body_size 2g;          # ≥ AINDRIVE_MAX_UPLOAD_BYTES
