@@ -12,8 +12,17 @@ services:
         # Compose reads ${...} from the same .env, so one value drives both stages.
         NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK: ${NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK:-testnet}
     restart: unless-stopped
+    # Runtime env. Both files are optional and later wins, so prod hosts can
+    # keep real values in `.env.production` (gitignored) without renaming to
+    # `.env`. NOTE: the NEXT_PUBLIC_* build arg above is read by compose from
+    # the HOST shell or `.env` only (compose does NOT read `.env.production`
+    # for ${...} interpolation) — so for a mainnet build, either put
+    # NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK in `.env`/the shell, or pass
+    # `--build-arg`. See .env.production.example go-live checklist.
     env_file:
       - path: ./.env
+        required: false
+      - path: ./.env.production
         required: false
     environment:
       NODE_ENV: production
