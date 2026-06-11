@@ -302,6 +302,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
         drives={drives}
         driveId={driveId}
         role={role}
+        onCreateAgent={() => setAgentModalOpen(true)}
       />
 
       <main className="flex-1 flex flex-col min-w-0">
@@ -309,13 +310,11 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
           setSidebarOpen={setSidebarOpen}
           crumbs={crumbs}
           setPath={setPath}
-          driveId={driveId}
           canEdit={canEdit}
           onUpload={onUpload}
           setShareOpen={setShareOpen}
           path={path}
           role={role}
-          setAgentModalOpen={setAgentModalOpen}
           setChatOpen={setChatOpen}
           chatOpen={chatOpen}
           isOwner={isOwner}
