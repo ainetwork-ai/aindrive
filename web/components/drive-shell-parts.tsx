@@ -36,7 +36,7 @@ export type ViewMode = "list" | "grid";
 type Crumb = { label: string; path: string };
 
 export function DriveSidebar({
-  sidebarOpen, setSidebarOpen, onNewFolder, onUpload, canEdit, drives, driveId, role,
+  sidebarOpen, setSidebarOpen, onNewFolder, onUpload, canEdit, drives, driveId, role, onCreateAgent,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: (v: boolean) => void;
@@ -46,7 +46,10 @@ export function DriveSidebar({
   drives: DriveSummary[];
   driveId: string;
   role: string;
+  /** Owner-only: open the Create-agent modal (relocated here from the header). */
+  onCreateAgent: () => void;
 }) {
+  const isOwner = role === "owner";
   // Hidden input the "New → Upload files" menu item triggers, so the sidebar's
   // New button mirrors Drive's (folder + upload) without threading a shared ref.
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -119,8 +122,29 @@ export function DriveSidebar({
           );
         })}
       </nav>
-      <div className="mt-auto px-2">
-        <Badge tone="neutral">Role: {role}</Badge>
+      {/* Drive-administration shelf — owner-only actions relocated off the
+          top bar so the file view's chrome stays calm. */}
+      <div className="mt-auto pt-2 border-t border-drive-border space-y-0.5">
+        {isOwner && (
+          <button
+            onClick={() => { onCreateAgent(); setSidebarOpen(false); }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-body text-drive-text hover:bg-drive-hover"
+          >
+            <Bot className="w-4 h-4 text-drive-muted" /> Create agent
+          </button>
+        )}
+        {isOwner && (
+          <Link
+            href={`/d/${driveId}/manage`}
+            onClick={() => setSidebarOpen(false)}
+            className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-body text-drive-text hover:bg-drive-hover"
+          >
+            <Settings className="w-4 h-4 text-drive-muted" /> Manage
+          </Link>
+        )}
+        <div className="px-2 pt-1">
+          <Badge tone="neutral">Role: {role}</Badge>
+        </div>
       </div>
     </aside>
   );
@@ -128,18 +152,16 @@ export function DriveSidebar({
 
 export function DriveHeader({
   setSidebarOpen, crumbs, setPath, canEdit, onUpload, setShareOpen, path, role,
-  setAgentModalOpen, setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery, driveId,
+  setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery,
 }: {
   setSidebarOpen: (v: boolean) => void;
   crumbs: Crumb[];
   setPath: (next: string) => void;
-  driveId: string;
   canEdit: boolean;
   onUpload: (files: FileList | null) => void;
   setShareOpen: (v: { path: string; focus?: "sell" } | null) => void;
   path: string;
   role: string;
-  setAgentModalOpen: (v: boolean) => void;
   setChatOpen: (fn: (v: boolean) => boolean) => void;
   chatOpen: boolean;
   isOwner: boolean;
@@ -243,26 +265,6 @@ export function DriveHeader({
           >
             <Share2 className="w-4 h-4" /> <span className="hidden sm:inline">Share</span>
           </button>
-        )}
-        {isOwner && (
-          <button
-            aria-label="Create Agent"
-            onClick={() => setAgentModalOpen(true)}
-            title="Create Agent"
-            className="flex items-center gap-2 rounded-full border border-drive-border px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-hover"
-          >
-            <Bot className="w-4 h-4" /> <span className="hidden sm:inline">Agent</span>
-          </button>
-        )}
-        {isOwner && (
-          <Link
-            href={`/d/${driveId}/manage`}
-            aria-label="Manage members & settings"
-            title="Manage"
-            className="flex items-center gap-2 rounded-full border border-drive-border px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-hover"
-          >
-            <Settings className="w-4 h-4" /> <span className="hidden sm:inline">Manage</span>
-          </Link>
         )}
         <button
           aria-label="Folder chat"

@@ -91,10 +91,12 @@
 
 ## 구현 우선순위 (라이브 반영)
 
-1. **토큰 정책 토글화 + 문구**(즉시 혼란 해소, 작음).
-2. **Settings 재작성**(Members 그룹·Links/Sales 분리·Payments·General).
-3. **Share 드로우**(맥락 생성, 모달→드로우).
-4. **파일 크롬**(선택 툴바·+New·아바타·사이드바 푸터·folder-chat 레일).
+1. ✅ **토큰 정책 토글화 + 문구** — PR #13.
+2. ✅ **Settings 재작성**(Members·Links·Sales·Payments 좌측 레일) — PR #13.
+3. ✅ **Share 드로우**(모달→우측 드로우, Earnings는 Settings로) — PR #14.
+4. **파일 크롬** — ⏳ 부분: 상단바 정리(Agent·Manage → 사이드바 푸터). 잔여:
+   선택 툴바(선택 시 Open/Download/Share/Sell/Rename/Delete), +New 단일화,
+   아바타/계정 메뉴(sign-out), folder-chat 우측 레일화.
 
 각 단계 typecheck/build/e2e green 유지, 증분 커밋. 권한 회귀는 적대 리뷰로 닫음.
 
