@@ -1069,6 +1069,13 @@ aindrive/
     └── TEST_SCENARIOS.md       # scenario suite checklist
 ```
 
+**Subsystem docs** (detail lives next to the code — see each `README.md`):
+[`web/app/api`](web/app/api/README.md) (HTTP surface + access gates) ·
+[`web/lib`](web/lib/README.md) (server lib, grouped) ·
+[`web/components`](web/components/README.md) (UI surfaces + primitives) ·
+[`web/shared`](web/shared/README.md) (cross-package contracts) ·
+[`cli`](cli/README.md) (the agent). Doc-system rules: `CLAUDE.md`.
+
 ---
 
 ## Quickstart (local dev)

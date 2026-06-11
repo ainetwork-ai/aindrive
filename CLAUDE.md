@@ -47,3 +47,31 @@ Don't reach for a top-level `shared/`. Options, in order of preference:
 1. Duplicate and mark with a comment (`// Mirrors web/shared/x.ts`) — fine for small types/constants.
 2. Publish a small package (`@aindrive/protocol` or similar) and add it as a dep to both.
 3. Set up a workspaces structure — only if 1 and 2 stop working.
+
+## Documentation system
+
+Docs live at the layer that matches how often they change (the *why* is the
+global doc meta-principles in the user's `~/.claude/CLAUDE.md` — §1 natural
+habitat, §2 positive cross-ref, §3 deletion test). Where things go in **this**
+repo:
+
+| Layer | Holds | Examples |
+|-------|-------|----------|
+| `CLAUDE.md` (this file) | repo-wide conventions + architecture overview | product/UX principles, package layout, this table |
+| root `README.md` | what aindrive is, architecture, **pointers** to domain READMEs | — |
+| `<dir>/README.md` | that subsystem's responsibility, file map, contracts, gotchas | `web/app/api/`, `web/lib/`, `web/components/`, `web/shared/`, `cli/` |
+| `docs/*.md` | cross-cutting design not tied to one dir | `PERMISSIONS.md`, `DEPLOY.md`, `ARCHITECTURE.md`, `WILLOW_DESIGN.md`, `TRACE_CONTRACT.md`, `PRODUCTION_TODO.md` |
+| `docs/superpowers/{specs,plans}/` | dated design history (brainstorm → plan), immutable record | per-feature `YYYY-MM-DD-*.md` |
+| code comments | invariants / intent / WHY (machine-checked where possible) | — |
+
+Rules (enforced by review):
+- **Locality** — document a subsystem in its own `<dir>/README.md`, next to the
+  code, so it changes with the code and never goes stale at a distance.
+- **Reference, don't duplicate** — one source of truth. The root README and
+  domain READMEs *point at* `docs/PERMISSIONS.md`, `docs/DEPLOY.md`, the specs,
+  etc.; they never restate them.
+- **New meaningful subsystem → add its README**; touching one → keep its README
+  ↔ code consistent. A domain README is a tight map (≈25–60 lines: purpose,
+  files, contracts, gotchas, related) — not prose, not code dumps, not history.
+- **Test:** a fresh agent reading the relevant README + filenames can locate the
+  file to change without reading every file. If not, the doc/structure is wrong.
