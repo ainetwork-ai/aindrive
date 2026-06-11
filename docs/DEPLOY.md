@@ -84,8 +84,20 @@ Checked against a live `getSupported()` call with the prod CDP key:
 
 - **Payment returns 503** → mainnet with no facilitator configured. Set the CDP
   keys (and leave `AINDRIVE_X402_FACILITATOR` unset).
-- **Browser pays on testnet but server is mainnet** (or vice versa) → the
-  `NEXT_PUBLIC_*` build arg wasn't set at build time. Rebuild per step 3.
+- **Wallet confirm popup shows the wrong network** (e.g. "Base Sepolia" while
+  funds settle on mainnet) → the browser bundle was built with the wrong
+  `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK` (wagmi's default chain is baked at
+  build). Settlement is server-driven so it's still correct, but rebuild per
+  step 3 to fix the display. (The pay/approve flow also switches the wallet to
+  the right chain before signing, so a fresh client self-corrects.)
+- **Browser pays on testnet but server is mainnet** (or vice versa) → same
+  build-arg cause. Rebuild per step 3.
+- **Large upload fails partway** (e.g. a 1 GB+ video dies mid-stream) → the
+  reverse proxy is cutting the slow request. Apply the nginx block from
+  `PRODUCTION_TODO.md` — `proxy_read_timeout`/`proxy_send_timeout` long (1h),
+  `proxy_request_buffering off` (stream, don't spool the whole body),
+  `client_max_body_size 2g`. (The app already gives each chunk a 120s RPC
+  timeout; the remaining cause is proxy-side.)
 - **"set a payout wallet before selling" (400) on share create** → the drive
   has no payout wallet; owner sets it in Settings → Payments.
 - **Payment "succeeds" but no funds / dev tx hash** → `AINDRIVE_DEV_BYPASS_X402`

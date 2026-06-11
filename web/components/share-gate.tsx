@@ -223,6 +223,16 @@ export function ShareGate({ token }: { token: string }) {
     if (!requirement) return;
     setPaying(true);
     try {
+      // Sign on the requirement's chain. The pay signature settles on
+      // requirement.network regardless of the wallet's connected chain (the
+      // EIP-712 domain carries it), but the wallet's CONFIRM popup shows its
+      // *connected* network — if the bundle defaulted the wallet to the wrong
+      // network (e.g. a testnet-built bundle on a mainnet server), the prompt
+      // misleadingly reads "Base Sepolia". Switching first keeps the prompt
+      // honest. (approve() already does this; pay() must too.)
+      if (requirementChain && walletClient.chain?.id !== requirementChain.id) {
+        await switchChainAsync({ chainId: requirementChain.id });
+      }
       const displayed = requirement;
       const displayedMax = BigInt(displayed.amount);
       const client = new x402Client();
