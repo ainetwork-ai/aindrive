@@ -54,6 +54,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // Defaults to the policy's first token when the caller doesn't pick one.
   let currency: string | null = null;
   if (body.data.price_usdc) {
+    // A paid share needs somewhere for the money to land. Each drive sets its
+    // OWN payout_wallet (Settings → Payments); there is no global fallback —
+    // routing one owner's sales to a deployment-wide wallet would misroute
+    // funds in a multi-tenant drive. Block the sale at creation instead of
+    // minting a link that settles to 0x0 and fails at checkout.
+    if (!drive.payout_wallet) {
+      return NextResponse.json(
+        { error: "set a payout wallet (Settings → Payments) before selling" },
+        { status: 400 },
+      );
+    }
     const tokens = resolveDriveTokens(drive.allowed_tokens);
     currency = body.data.currency ?? tokens[0].symbol;
     if (!tokens.some((t) => t.symbol === currency)) {

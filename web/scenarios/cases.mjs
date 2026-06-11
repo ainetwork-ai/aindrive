@@ -261,6 +261,13 @@ async function ensureDrive() {
   state.driveId = r.body.driveId;
   state.agentToken = r.body.agentToken;
   state.driveSecret = r.body.driveSecret;
+  // Paid shares require the drive to have a payout wallet (no global fallback),
+  // so set one up front — many cases create priced shares on this drive.
+  await jget(`/api/drives/${state.driveId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ payout_wallet: "0x000000000000000000000000000000000000dEaD" }),
+  });
   // Pair sample folder + start the agent if it isn't already running for this drive
   if (!existsSync(join(SAMPLE, ".aindrive"))) mkdirSync(join(SAMPLE, ".aindrive"), { recursive: true });
   writeFileSync(
@@ -2111,6 +2118,45 @@ add(183, "creator role PATCH blocked; ex-member can't revoke shares", async () =
 });
 
 // Append the 20 emergent / steady-state scenarios.
+// #184 — a paid share can't be created without a drive payout wallet (no
+// global fallback). A fresh drive with payout_wallet cleared → 400; setting
+// it → 200.
+add(184, "paid share blocked until the drive has a payout wallet", async () => {
+  const ownerCookie = await reEnsureOwner();
+  // Fresh drive so we control payout_wallet independent of ensureDrive's setup.
+  const cr = await jget("/api/drives", {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ name: "payout-gate" }),
+  });
+  eq(cr.status, 200, "drive create");
+  const did = cr.body.driveId;
+
+  // No payout wallet yet → paid share rejected.
+  const blocked = await jget(`/api/drives/${did}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer", price_usdc: 1 }),
+  });
+  eq(blocked.status, 400, "paid share without payout wallet is 400: " + JSON.stringify(blocked.body));
+
+  // A FREE share is still fine without a wallet.
+  const free = await jget(`/api/drives/${did}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer" }),
+  });
+  eq(free.status, 200, "free share allowed without wallet");
+
+  // Set the wallet → paid share now allowed.
+  await jget(`/api/drives/${did}`, {
+    method: "PATCH", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ payout_wallet: "0x000000000000000000000000000000000000dEaD" }),
+  });
+  const ok = await jget(`/api/drives/${did}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "", role: "viewer", price_usdc: 1, currency: "USDC" }),
+  });
+  eq(ok.status, 200, "paid share allowed after wallet set: " + JSON.stringify(ok.body));
+});
+
 import { registerEmergentCases } from "./emergent-cases.mjs";
 registerEmergentCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
 

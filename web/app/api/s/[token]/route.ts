@@ -109,14 +109,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     );
   }
 
-  // Build x402 payment requirements.
-  // Payout priority: the drive's own payout_wallet (set by its owner) wins;
-  // fall back to the global env wallet (single-tenant deployments), then the
-  // zero address as a last resort (which the facilitator will reject).
-  const payTo =
-    share.payout_wallet ||
-    process.env.AINDRIVE_PAYOUT_WALLET ||
-    "0x0000000000000000000000000000000000000000";
+  // Build x402 payment requirements. payTo is the drive's own payout_wallet —
+  // set per-drive by its owner (Settings → Payments) and required before a
+  // paid share can be created, so it's normally present. The zero-address
+  // last resort only triggers for a legacy paid share predating that gate;
+  // the facilitator rejects it rather than misrouting funds.
+  const payTo = share.payout_wallet || "0x0000000000000000000000000000000000000000";
   const requirements: PaymentRequirements = {
     scheme: "exact",
     network: toCaip2Network(tok.chain),

@@ -40,20 +40,8 @@ export function runBootChecks() {
     );
   }
 
-  // 4. Payout wallet must be set when x402 is active.
-  const bypassX402 = process.env.AINDRIVE_DEV_BYPASS_X402 === "1";
-  if (!bypassX402) {
-    const wallet = process.env.AINDRIVE_PAYOUT_WALLET ?? "";
-    if (!wallet) {
-      errors.push(
-        "AINDRIVE_PAYOUT_WALLET is not set. Set it to your payout wallet address so x402 payments can be received."
-      );
-    } else if (/^0x0+$/i.test(wallet)) {
-      errors.push(
-        `AINDRIVE_PAYOUT_WALLET is all-zeros (${wallet}). Replace with a real wallet address before accepting payments.`
-      );
-    }
-  }
+  // Payout wallet is per-drive (Settings → Payments), enforced when a paid
+  // share is created — not a deployment-wide env var. No boot check here.
 
   if (errors.length > 0) {
     console.error("\n[aindrive] BOOT FAILED — production environment is misconfigured:\n");
