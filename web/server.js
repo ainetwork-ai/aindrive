@@ -27,6 +27,15 @@ const server = createServer((req, res) => {
   handle(req, res, parseUrl(req.url, true));
 });
 
+// Node's default requestTimeout (300s, swept every ~30s) covers the ENTIRE
+// request INCLUDING the body — but fs/upload consumes its body at the pace of
+// sequential 4 MiB agent RPCs (base64 over the agent's WS), so a GB-scale
+// upload legitimately takes >5 min. The default killed such uploads mid-body
+// with a 408 + socket reset, surfacing as a progress bar frozen at the
+// fraction ≈ 300s × throughput / size. 2h bounds the slowest sane case
+// (2 GiB cap on a slow link); headersTimeout (60s) still guards slowloris.
+server.requestTimeout = 2 * 60 * 60 * 1000;
+
 // maxPayload caps a single WS frame. The default (100 MB) is too small once a
 // base64-encoded upload/download (×1.33) rides one RPC message — a ~75 MB file
 // already overflows it and drops the agent connection. 160 MB keeps the 100 MB
