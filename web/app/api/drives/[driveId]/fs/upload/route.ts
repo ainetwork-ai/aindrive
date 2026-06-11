@@ -101,7 +101,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
         // `total` is advisory in the protocol (the agent appends by chunkId);
         // -1 = unknown, kept for forward compatibility.
         method: "upload-chunk", path: tmp, chunkId, total: -1, data: data.toString("base64"),
-      });
+        // Override the 25s default: appending each 4 MiB chunk to a multi-hundred-MB
+        // .part file on a slow/contended disk can exceed it (a GB upload is ~hundreds
+        // of sequential chunk RPCs), which surfaced as a large upload dying mid-stream.
+      }, { timeoutMs: 120_000 });
       chunkId += 1;
     };
 
@@ -145,8 +148,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     if (buf.length > 0 || chunkId === 0) await sendChunk(buf);
 
     // Atomic publish: the target path either keeps its old content or gets
-    // the complete new one — never a partial file.
-    await callAgent(driveId, drive.drive_secret, { method: "rename", from: tmp, to: path });
+    // the complete new one — never a partial file. Same-volume rename is a
+    // metadata op (fast), but give it headroom too for a contended disk.
+    await callAgent(driveId, drive.drive_secret, { method: "rename", from: tmp, to: path }, { timeoutMs: 120_000 });
     renamed = true;
 
     if (creating) bumpOwnerUsage(ownerId, { files: 1 });
