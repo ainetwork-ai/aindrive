@@ -391,9 +391,24 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   );
 }
 
-// Single-file streamed upload with progress. Resolves (never rejects) so the
-// caller's per-file loop continues past failures.
+// Single-file upload with progress. Resolves (never rejects) so the caller's
+// per-file loop continues past failures. Files over one part go through the
+// chunked/resumable session flow — a single giant POST dies on whichever
+// proxy/runtime body-size or time limit it meets first (nginx caps, Node
+// requestTimeout), while ≤8 MiB parts pass them all and survive retries.
+const UPLOAD_PART_BYTES = 8 * 1024 * 1024; // server-declared; create response can override
+
 function uploadFile(
+  driveId: string,
+  target: string,
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (file.size <= UPLOAD_PART_BYTES) return uploadSmall(driveId, target, file, onProgress);
+  return uploadChunked(driveId, target, file, onProgress);
+}
+
+function uploadSmall(
   driveId: string,
   target: string,
   file: File,
@@ -417,5 +432,125 @@ function uploadFile(
     // awaits forever (with its loading toast pinned).
     xhr.onabort = () => resolve({ ok: false, error: "upload cancelled" });
     xhr.send(file);
+  });
+}
+
+// Chunked + resumable: sequential ≤partSize PATCHes against a server session;
+// the server's receivedBytes (verified against the agent temp file) is the
+// only truth — on any disagreement (409) or failure the client re-syncs and
+// re-slices from it. The session id is remembered per (drive, path, file
+// fingerprint) so re-dropping the same file resumes instead of restarting.
+async function uploadChunked(
+  driveId: string,
+  target: string,
+  file: File,
+  onProgress: (pct: number) => void,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const base = `/api/drives/${driveId}/fs/upload-sessions`;
+  const resumeKey = `aindrive-upload:${driveId}:${target}:${file.size}:${file.lastModified}`;
+
+  // Resume if we hold a live session for this exact file, else open one.
+  let uploadId = localStorage.getItem(resumeKey);
+  let offset = 0;
+  let partSize = UPLOAD_PART_BYTES;
+  if (uploadId) {
+    const st = await apiFetch<{ receivedBytes: number; partSize: number }>(`${base}/${uploadId}`);
+    if (st.ok) { offset = st.data.receivedBytes; partSize = st.data.partSize; }
+    else { localStorage.removeItem(resumeKey); uploadId = null; }
+  }
+  if (!uploadId) {
+    const res = await apiFetch<{ uploadId: string; partSize: number }>(base, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: target, size: file.size }),
+    });
+    if (!res.ok) return { ok: false, error: res.error || "failed to start upload" };
+    uploadId = res.data.uploadId;
+    partSize = res.data.partSize;
+    localStorage.setItem(resumeKey, uploadId);
+  }
+
+  let failures = 0;
+  for (;;) {
+    // offset === size yields an empty part = the rename-retry signal.
+    const part = file.slice(offset, Math.min(offset + partSize, file.size));
+    const r = await sendPart(driveId, uploadId, offset, part, (loaded) =>
+      onProgress(Math.min(99, Math.round(((offset + loaded) / file.size) * 100))),
+    );
+    if (r.ok) {
+      failures = 0;
+      offset = r.receivedBytes;
+      if (r.complete) {
+        localStorage.removeItem(resumeKey);
+        onProgress(100);
+        return { ok: true };
+      }
+      continue;
+    }
+    if (r.status === 409 && typeof r.receivedBytes === "number") {
+      offset = r.receivedBytes; // server truth; re-slice from there
+      failures += 1;            // still counts — a 409 loop must terminate
+    } else if (r.status === 404 || r.status === 410) {
+      // Session gone (completed elsewhere / temp lost / TTL-swept): the old
+      // uploadId is dead — open a fresh session and start over.
+      failures += 1;
+      localStorage.removeItem(resumeKey);
+      const res = await apiFetch<{ uploadId: string; partSize: number }>(base, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: target, size: file.size }),
+      });
+      if (!res.ok) return { ok: false, error: res.error || r.error };
+      uploadId = res.data.uploadId;
+      partSize = res.data.partSize;
+      offset = 0;
+      localStorage.setItem(resumeKey, uploadId);
+    } else {
+      failures += 1;
+      if (failures <= 5) {
+        // Transient (network blip, agent hiccup): back off, re-sync offset.
+        await new Promise((res) => setTimeout(res, 1000 * 2 ** Math.min(failures, 4)));
+        const st = await apiFetch<{ receivedBytes: number }>(`${base}/${uploadId}`);
+        if (st.ok) offset = st.data.receivedBytes;
+      }
+    }
+    if (failures > 5) {
+      // Keep the resume key: re-dropping the same file continues from offset.
+      return { ok: false, error: r.error };
+    }
+  }
+}
+
+function sendPart(
+  driveId: string,
+  uploadId: string,
+  offset: number,
+  part: Blob,
+  onLoaded: (loaded: number) => void,
+): Promise<
+  | { ok: true; complete: boolean; receivedBytes: number }
+  | { ok: false; status: number; error: string; receivedBytes?: number }
+> {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PATCH", `/api/drives/${driveId}/fs/upload-sessions/${uploadId}`);
+    xhr.setRequestHeader("content-type", "application/octet-stream");
+    xhr.setRequestHeader("x-upload-offset", String(offset));
+    xhr.upload.onprogress = (e) => onLoaded(e.loaded);
+    xhr.onload = () => {
+      let data: { complete?: boolean; receivedBytes?: number; error?: string } | null = null;
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300 && data && typeof data.receivedBytes === "number") {
+        return resolve({ ok: true, complete: !!data.complete, receivedBytes: data.receivedBytes });
+      }
+      resolve({
+        ok: false, status: xhr.status,
+        error: data?.error || `part failed (${xhr.status})`,
+        receivedBytes: typeof data?.receivedBytes === "number" ? data.receivedBytes : undefined,
+      });
+    };
+    xhr.onerror = () => resolve({ ok: false, status: 0, error: "network error" });
+    xhr.onabort = () => resolve({ ok: false, status: 0, error: "upload cancelled" });
+    xhr.send(part);
   });
 }

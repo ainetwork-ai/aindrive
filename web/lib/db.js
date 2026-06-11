@@ -133,6 +133,24 @@ function open() {
       FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_drive_payout_drive ON drive_payout_wallets(drive_id);
+    -- Chunked/resumable upload sessions (lib/upload-sessions.ts). One row per
+    -- in-flight upload: the client PATCHes sequential parts against
+    -- received_bytes (tus-style offset check) into temp_path on the agent,
+    -- and the final part triggers the atomic rename onto path.
+    CREATE TABLE IF NOT EXISTS upload_sessions (
+      id TEXT PRIMARY KEY,
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      temp_path TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      received_bytes INTEGER NOT NULL DEFAULT 0,
+      is_creating INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_upload_sessions_drive ON upload_sessions(drive_id);
   `);
   // payment_chain → currency rename. Must run BEFORE the ADD loop: on a fresh
   // DB the CREATE above already made `currency`, so adding payment_chain first

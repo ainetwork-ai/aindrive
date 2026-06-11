@@ -9,9 +9,12 @@ import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 /**
  * POST /api/drives/:driveId/fs/upload?path=...
  *
- * Streaming large-file upload: raw octet-stream body (NOT base64 JSON — that
+ * Single-POST upload: raw octet-stream body (NOT base64 JSON — that
  * path buffers the whole file in memory on both ends and caps at
- * AINDRIVE_MAX_WRITE_BYTES). The body is re-chunked to the agent's 4 MiB
+ * AINDRIVE_MAX_WRITE_BYTES). The web client uses this only for files at or
+ * under one part (8 MiB); larger files go through the chunked/resumable
+ * fs/upload-sessions flow, which a single giant POST can't match (proxy body
+ * caps, request timeouts, no resume). The body is re-chunked to the agent's 4 MiB
  * upload-chunk limit and forwarded sequentially (each RPC awaited = natural
  * backpressure) into a hidden temp file (.aindrive/uploads/<id>.part — the
  * .aindrive dir is excluded from listings), then atomically renamed onto the
