@@ -119,6 +119,20 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_drive_invites_email ON drive_invites(email);
     CREATE INDEX IF NOT EXISTS idx_drive_invites_drive ON drive_invites(drive_id);
+    -- Path-scoped payout wallets. A paid share's funds go to the wallet of the
+    -- nearest ANCESTOR path (same inheritance as drive_members roles): e.g. a
+    -- sale under artists/alice/ uses artists/alice's wallet, else artists', else
+    -- the root ("") wallet. drives.payout_wallet is migrated into the "" row.
+    CREATE TABLE IF NOT EXISTS drive_payout_wallets (
+      id TEXT PRIMARY KEY,
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      wallet TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(drive_id, path),
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_drive_payout_drive ON drive_payout_wallets(drive_id);
   `);
   // payment_chain → currency rename. Must run BEFORE the ADD loop: on a fresh
   // DB the CREATE above already made `currency`, so adding payment_chain first
@@ -151,6 +165,16 @@ function open() {
   // the column (CREATE INDEX IF NOT EXISTS is safe to run every startup).
   handle.exec(`
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_account ON payment_receipts(account_id);
+  `);
+  // Backfill: a drive's old single payout_wallet becomes its root ("") path
+  // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
+  // UNIQUE(drive_id, path) so it only seeds drives that don't already have a
+  // root row, and only for drives that had a wallet set.
+  handle.exec(`
+    INSERT OR IGNORE INTO drive_payout_wallets (id, drive_id, path, wallet)
+    SELECT lower(hex(randomblob(6))), id, '', payout_wallet
+    FROM drives
+    WHERE payout_wallet IS NOT NULL AND payout_wallet != '';
   `);
   return handle;
 }

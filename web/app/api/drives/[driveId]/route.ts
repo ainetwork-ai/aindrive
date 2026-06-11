@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAddress } from "viem";
 import { getUser } from "@/lib/session";
-import { getDrive, setDrivePayoutWallet, setDriveAllowedTokens } from "@/lib/drives";
+import { getDrive, setDrivePayoutWallet, setDriveAllowedTokens, getDriveRootPayoutWallet, listPayoutWallets } from "@/lib/drives";
 import { parseTokenPolicy } from "@/lib/payment-tokens";
 
 /**
@@ -10,8 +10,11 @@ import { parseTokenPolicy } from "@/lib/payment-tokens";
  *
  * Owner-only drive settings update. Fields are independent — send only the
  * ones you're changing:
- * - payout_wallet: EVM address that receives x402 payments for this drive's
- *   paid shares. null clears it (falls back to the global env wallet).
+ * - payout_wallet: EVM address that receives x402 payments for paid shares at
+ *   the drive root. This is just the root ("") row of the path-scoped payout
+ *   table (lib/payout.ts); per-folder overrides go through
+ *   PUT /api/drives/:id/payout. null clears the root row (paid shares with no
+ *   covering ancestor wallet are then blocked at creation — no operator fallback).
  * - allowed_tokens: JSON string of PaymentToken[] — the drive's payment-token
  *   policy (spec D3). null clears it (policy reads as DEFAULT_TOKENS).
  */
@@ -68,7 +71,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
   return NextResponse.json({
     id: drive.id,
     name: drive.name,
-    payout_wallet: drive.payout_wallet,
+    // Root ("") wallet for back-compat; the full per-path list drives the new
+    // folder-scoped payout UI.
+    payout_wallet: getDriveRootPayoutWallet(driveId),
+    payout_wallets: listPayoutWallets(driveId),
     allowed_tokens: drive.allowed_tokens,
   });
 }

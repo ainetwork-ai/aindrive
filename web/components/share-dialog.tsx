@@ -7,6 +7,7 @@ import { Modal, Button } from "@/components/ui";
 import { atLeast } from "@/lib/access-core.js";
 // Pure presets/parsers — safe in a client component.
 import { TOKEN_PRESETS, DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
+import { resolvePayoutWallet, type PayoutRow } from "@/lib/payout";
 import {
   SellSection, EmailInviteSection, FreeLinkSection,
   MembersSection,
@@ -40,7 +41,10 @@ export function ShareDialog({
     () => Object.fromEntries(Object.keys(TOKEN_PRESETS).map((k) => [k, k === "USDC"])),
   );
   const [customTokens, setCustomTokens] = useState<PaymentToken[]>([]);
-  const [payoutWallet, setPayoutWallet] = useState<string>("");
+  // Path-scoped payout wallets for the whole drive; `payoutInput` edits the
+  // wallet set on THIS folder (defaultPath), while the effective/inherited
+  // wallet is resolved from the full list (nearest ancestor wins).
+  const [payoutRows, setPayoutRows] = useState<PayoutRow[]>([]);
   const [payoutInput, setPayoutInput] = useState<string>("");
   const [members, setMembers] = useState<Member[]>([]);
   const [me, setMe] = useState<{ email: string; role: "viewer" | "editor" | "owner" | "none" }>({
@@ -53,14 +57,17 @@ export function ShareDialog({
     // panel no longer fetches them.
     const [s, d, mem, who] = await Promise.all([
       apiFetch<{ shares: Share[] }>(`/api/drives/${driveId}/shares`),
-      apiFetch<{ payout_wallet: string | null; allowed_tokens: string | null }>(`/api/drives/${driveId}`),
+      apiFetch<{ payout_wallets?: PayoutRow[]; allowed_tokens: string | null }>(`/api/drives/${driveId}`),
       apiFetch<{ members: Member[]; myRole: "viewer" | "editor" | "owner" }>(`/api/drives/${driveId}/members`),
       apiFetch<{ user: { email: string } | null }>(`/api/auth/me`),
     ]);
     if (s.ok) setShares(s.data.shares);
     if (d.ok) {
-      setPayoutWallet(d.data.payout_wallet ?? "");
-      setPayoutInput(d.data.payout_wallet ?? "");
+      const rows = d.data.payout_wallets ?? [];
+      setPayoutRows(rows);
+      // The input edits the wallet set ON this exact folder (empty if none).
+      const here = rows.find((r) => r.path === defaultPath)?.wallet ?? "";
+      setPayoutInput(here);
       const tokens = resolveDriveTokens(d.data.allowed_tokens ?? null);
       setDriveTokens(tokens);
       // Keep the user's pick if still allowed; otherwise snap to the policy's first token
@@ -90,6 +97,9 @@ export function ShareDialog({
   }
   useEffect(() => { load(); }, [driveId]);
 
+  // Set/clear the wallet on THIS folder (defaultPath) via the path-scoped
+  // endpoint. Clearing falls back to the inherited ancestor wallet, not to any
+  // operator default — empty input deletes this folder's override.
   async function savePayoutWallet() {
     const v = payoutInput.trim();
     if (v && !/^0x[a-fA-F0-9]{40}$/.test(v)) {
@@ -97,18 +107,29 @@ export function ShareDialog({
       return;
     }
     setBusy(true);
-    const res = await apiFetch<{ payout_wallet: string | null }>(`/api/drives/${driveId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ payout_wallet: v || null }),
-    });
+    const res = v
+      ? await apiFetch(`/api/drives/${driveId}/payout`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: defaultPath, wallet: v }),
+        })
+      : await apiFetch(`/api/drives/${driveId}/payout`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: defaultPath }),
+        });
     setBusy(false);
     if (!res.ok) {
       toast.error(res.error || "Failed to save payout wallet");
       return;
     }
-    setPayoutWallet(res.data.payout_wallet ?? "");
-    toast.success(res.data.payout_wallet ? "Payout wallet saved" : "Payout wallet cleared");
+    // Reflect the change locally: replace/remove this folder's row.
+    const wallet = v.toLowerCase();
+    setPayoutRows((prev) => {
+      const rest = prev.filter((r) => r.path !== defaultPath);
+      return wallet ? [...rest, { path: defaultPath, wallet }] : rest;
+    });
+    toast.success(wallet ? "Payout wallet saved for this folder" : "Folder payout wallet cleared");
   }
 
   // Same owner test MembersSection uses; gates the List checkbox and the
@@ -283,7 +304,12 @@ export function ShareDialog({
           focusSection={focusSection}
           sellOn={sellOn}
           paidShare={paidShare}
-          payoutWallet={payoutWallet}
+          payoutOwnWallet={payoutRows.find((r) => r.path === defaultPath)?.wallet ?? ""}
+          payoutEffective={resolvePayoutWallet(payoutRows, defaultPath)}
+          payoutInherited={
+            !payoutRows.some((r) => r.path === defaultPath) &&
+            resolvePayoutWallet(payoutRows, defaultPath) !== null
+          }
           payoutInput={payoutInput}
           setPayoutInput={setPayoutInput}
           savePayoutWallet={savePayoutWallet}
