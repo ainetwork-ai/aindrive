@@ -11,6 +11,9 @@ services:
         # flip the server but leave the browser on the baked default — split-brain.
         # Compose reads ${...} from the same .env, so one value drives both stages.
         NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK: ${NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK:-testnet}
+        # Same build-time rule as above. Empty = WalletConnect relay flows
+        # (mobile-browser visitors paying with a wallet APP) stay broken.
+        NEXT_PUBLIC_WC_PROJECT_ID: ${NEXT_PUBLIC_WC_PROJECT_ID:-}
     restart: unless-stopped
     # Runtime env. Both files are optional and later wins, so prod hosts can
     # keep real values in `.env.production` (gitignored) without renaming to

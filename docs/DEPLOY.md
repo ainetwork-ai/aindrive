@@ -37,6 +37,7 @@ load-bearing ones:
 
 | Var | Mainnet value | Why it bites |
 |-----|---------------|-------------|
+| `NEXT_PUBLIC_WC_PROJECT_ID` | set (free, cloud.reown.com) | **Build-time inlined** (same rule as the network var below — shell/`.env` at build time). Empty = every WalletConnect relay flow breaks: mobile-browser visitors paying with a wallet APP get an infinite spinner. Desktop extensions and Base Account don't need it. |
 | `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK` | `mainnet` | **Build-time inlined.** A runtime-only change leaves the *browser bundle* on testnet while the server is on mainnet (split-brain). Must be set on the **shell/`.env`** at `build` time — compose does NOT read `.env.production` for build-arg `${...}` interpolation. |
 | `AINDRIVE_DEV_BYPASS_X402` | `0` (or unset) | `=1` skips on-chain verification — payments "succeed" without money moving. Never on mainnet. (Boot check refuses to start prod with it on.) |
 | `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` | set | The Coinbase CDP facilitator that settles mainnet payments. Without them mainnet refuses with 503 (no safe default). |

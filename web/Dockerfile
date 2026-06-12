@@ -21,6 +21,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # runner stage re-exports the same value so server and client always agree.
 ARG NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=testnet
 ENV NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=$NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK
+# WalletConnect relay project id — also NEXT_PUBLIC_* (client-bundle inlined),
+# so it must be a build arg for the same reason as the payment network.
+ARG NEXT_PUBLIC_WC_PROJECT_ID=
+ENV NEXT_PUBLIC_WC_PROJECT_ID=$NEXT_PUBLIC_WC_PROJECT_ID
 RUN npm run build
 
 # ---- runner ----
@@ -29,6 +33,8 @@ WORKDIR /app
 # Same build-arg as the builder stage: bakes the server-side value into the
 # image so it can never disagree with the client bundle built above.
 ARG NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=testnet
+ARG NEXT_PUBLIC_WC_PROJECT_ID=
+ENV NEXT_PUBLIC_WC_PROJECT_ID=$NEXT_PUBLIC_WC_PROJECT_ID
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
