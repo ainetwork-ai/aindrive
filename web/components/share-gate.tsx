@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from "wagmi";
+import { getWalletClient } from "wagmi/actions";
 import { base, baseSepolia } from "viem/chains";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
@@ -10,6 +11,7 @@ import { toast } from "sonner";
 import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
 import { encodeFunctionData, type Account, type Chain, type Transport, type WalletClient } from "viem";
 import { Button } from "@/components/ui";
+import { getWagmiConfig } from "@/lib/wagmi-config";
 
 // Canonical Uniswap Permit2 contract — same address on every EVM chain.
 // (Mirrors @x402/evm's PERMIT2_ADDRESS, which isn't re-exported from the
@@ -91,6 +93,26 @@ export function ShareGate({ token }: { token: string }) {
   const { isConnected, address } = useAccount();
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
+  // A wallet request can hang forever (popup blocked, request landed in a
+  // different extension, wallet closed). Each attempt gets an epoch; Cancel
+  // bumps it so a late resolution is ignored instead of mutating UI state,
+  // and the user is never stuck staring at an un-cancellable spinner.
+  const walletEpoch = useRef(0);
+  function cancelWalletWait() {
+    walletEpoch.current += 1;
+    setPaying(false);
+    setApproving(false);
+    toast("Stopped waiting. If a request is open in your wallet, dismiss it there.");
+  }
+  // The chain-switch invalidates the closure-captured wallet client (it stays
+  // bound to the previous chain — some wallets then queue the next request
+  // without ever showing a popup). Always sign with a freshly resolved client.
+  async function freshWalletClient(chainId: number) {
+    if (walletClient && walletClient.chain?.id !== chainId) {
+      await switchChainAsync({ chainId });
+    }
+    return (await getWalletClient(getWagmiConfig(), { chainId })) ?? walletClient ?? null;
+  }
 
   // Consume the share into a persistent drive_members grant, then hand the
   // visitor off to the real drive at the share's path (not root).
@@ -187,14 +209,21 @@ export function ShareGate({ token }: { token: string }) {
   async function approve() {
     if (!walletClient || !publicClient || !requirement) { toast.error("Connect your wallet first"); return; }
     if (!requirementChain) { toast.error("Unsupported payment network"); return; }
+    const epoch = ++walletEpoch.current;
+    const hint = setTimeout(() => {
+      if (epoch === walletEpoch.current) {
+        toast("Wallet not showing a prompt? Check the popup blocker, or open the wallet extension manually.");
+      }
+    }, 15_000);
     setApproving(true);
     try {
       // The approval must mine on the token's chain; a wrong-chain approval
-      // confirms fine but unlocks nothing. Switch first, then pass `chain` so
-      // viem refuses to send if the wallet still disagrees.
-      if (walletClient.chain?.id !== requirementChain.id) {
-        await switchChainAsync({ chainId: requirementChain.id });
-      }
+      // confirms fine but unlocks nothing. Switch first, then sign with a
+      // fresh client (see freshWalletClient) and pass `chain` so viem refuses
+      // to send if the wallet still disagrees.
+      const wc = await freshWalletClient(requirementChain.id);
+      if (!wc) { toast.error("Wallet connection lost — reconnect and retry"); return; }
+      if (epoch !== walletEpoch.current) return; // cancelled during the switch
       // Approve EXACTLY this sale's amount — not the SDK's MaxUint256, which
       // makes wallets warn "this site can withdraw ALL your <token>" and
       // leaves a standing unlimited allowance. aindrive grants are one-shot
@@ -205,22 +234,30 @@ export function ShareGate({ token }: { token: string }) {
         functionName: "approve",
         args: [PERMIT2_ADDRESS, BigInt(requirement.amount)],
       });
-      const hash = await walletClient.sendTransaction({
+      const hash = await wc.sendTransaction({
         to: requirement.asset as `0x${string}`, data, chain: requirementChain,
       });
       await publicClient.waitForTransactionReceipt({ hash });
+      if (epoch !== walletEpoch.current) return; // cancelled while mining
       setApprovalNeeded(false);
       toast.success(`${tokenSymbol} approved — you can pay now.`);
     } catch (e) {
-      toast.error((e as Error).message || "approval failed");
+      if (epoch === walletEpoch.current) toast.error((e as Error).message || "approval failed");
     } finally {
-      setApproving(false);
+      clearTimeout(hint);
+      if (epoch === walletEpoch.current) setApproving(false);
     }
   }
 
   async function pay() {
     if (!walletClient) { toast.error("Connect your wallet first"); return; }
     if (!requirement) return;
+    const epoch = ++walletEpoch.current;
+    const hint = setTimeout(() => {
+      if (epoch === walletEpoch.current) {
+        toast("Wallet not showing a prompt? Check the popup blocker, or open the wallet extension manually.");
+      }
+    }, 15_000);
     setPaying(true);
     try {
       // Sign on the requirement's chain. The pay signature settles on
@@ -229,14 +266,16 @@ export function ShareGate({ token }: { token: string }) {
       // *connected* network — if the bundle defaulted the wallet to the wrong
       // network (e.g. a testnet-built bundle on a mainnet server), the prompt
       // misleadingly reads "Base Sepolia". Switching first keeps the prompt
-      // honest. (approve() already does this; pay() must too.)
-      if (requirementChain && walletClient.chain?.id !== requirementChain.id) {
-        await switchChainAsync({ chainId: requirementChain.id });
-      }
+      // honest, and signing happens on a FRESH client — the closure-captured
+      // one stays bound to the pre-switch chain, which some wallets handle by
+      // silently queueing the request (reported as "pay popup never shows").
+      const wc = requirementChain ? await freshWalletClient(requirementChain.id) : walletClient;
+      if (!wc) { toast.error("Wallet connection lost — reconnect and retry"); return; }
+      if (epoch !== walletEpoch.current) return; // cancelled during the switch
       const displayed = requirement;
       const displayedMax = BigInt(displayed.amount);
       const client = new x402Client();
-      client.register("eip155:*", new ExactEvmScheme(walletClientToSigner(walletClient)));
+      client.register("eip155:*", new ExactEvmScheme(walletClientToSigner(wc)));
       // Replaces v1's maxValue guard, hardened: only sign a requirement that
       // matches what this paywall DISPLAYED — same network, asset and
       // recipient, amount no higher. A server re-quote that flips any of
@@ -255,6 +294,7 @@ export function ShareGate({ token }: { token: string }) {
       );
       const fetchWithPay = wrapFetchWithPayment(globalThis.fetch, client);
       const res = await fetchWithPay(`/api/s/${token}`);
+      if (epoch !== walletEpoch.current) return; // cancelled — ignore the late result
       // 412 = Permit2 allowance missing (raced past the pre-check): show the
       // approve step instead of a dead "payment failed".
       if (res.status === 412) {
@@ -273,9 +313,10 @@ export function ShareGate({ token }: { token: string }) {
         toast.error(body.error || "payment failed");
       }
     } catch (e) {
-      toast.error((e as Error).message || "payment failed");
+      if (epoch === walletEpoch.current) toast.error((e as Error).message || "payment failed");
     } finally {
-      setPaying(false);
+      clearTimeout(hint);
+      if (epoch === walletEpoch.current) setPaying(false);
     }
   }
 
@@ -409,6 +450,14 @@ export function ShareGate({ token }: { token: string }) {
             >
               {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
             </Button>
+          )}
+          {(paying || approving) && (
+            <button
+              onClick={cancelWalletWait}
+              className="text-caption text-drive-muted hover:text-drive-text underline underline-offset-2 self-center"
+            >
+              Waiting for your wallet… Cancel
+            </button>
           )}
         </div>
 
