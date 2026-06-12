@@ -12,7 +12,7 @@ import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace, payoutWalletFor } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
-import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork } from "@/lib/payment-tokens";
+import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork, policyChainViolation } from "@/lib/payment-tokens";
 
 // Facilitator that verifies/settles the x402 payment, in priority order:
 // explicit AINDRIVE_X402_FACILITATOR URL (self-hosted or any third party),
@@ -106,6 +106,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     return NextResponse.json(
       { error: "share currency no longer allowed by drive policy" },
       { status: 410 }
+    );
+  }
+  // Chain guard for policies stored before the PATCH-time check existed: a
+  // mainnet deployment must never quote (or settle) on a testnet chain —
+  // buyers would pay worthless coins for real content.
+  if (policyChainViolation([tok])) {
+    return NextResponse.json(
+      { error: `this sale's token is on ${tok.chain}, which a mainnet deployment cannot settle` },
+      { status: 503 },
     );
   }
 

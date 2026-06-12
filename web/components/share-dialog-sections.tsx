@@ -445,9 +445,16 @@ function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[];
   return (
     <div className="rounded-lg border border-drive-border bg-drive-sidebar/40 p-3 space-y-2.5">
       <div className="flex gap-2 items-end">
-        <Select wrapClassName="w-32" label="Chain" value={chain} onChange={(e) => { setChain(e.target.value as "base" | "base-sepolia"); setResult(null); }}>
+        {/* Mainnet deployment accepts ONLY mainnet-chain tokens (server
+            rejects the rest) — no choice to render. Testnet keeps both so dev
+            can exercise real mainnet tokens against a local build. */}
+        <Select
+          wrapClassName="w-32" label="Chain" value={chain}
+          disabled={paymentNetwork() === "mainnet"}
+          onChange={(e) => { setChain(e.target.value as "base" | "base-sepolia"); setResult(null); }}
+        >
           <option value="base">base</option>
-          <option value="base-sepolia">base-sepolia</option>
+          {paymentNetwork() !== "mainnet" && <option value="base-sepolia">base-sepolia</option>}
         </Select>
         <Input wrapClassName="flex-1" label="Contract address" className="font-mono" placeholder="0x…" value={address}
           onChange={(e) => { setAddress(e.target.value.trim()); setResult(null); }} />

@@ -102,3 +102,22 @@ describe("stored-policy rebinding across a network flip", () => {
     expect(tokens[0]).toEqual({ ...IMPOSTOR_USDC, transferMethod: "eip3009" });
   });
 });
+
+describe("deployment chain guard", () => {
+  it("activeChain follows the network switch", async () => {
+    expect((await loadWithNetwork("mainnet")).activeChain()).toBe("base");
+    expect((await loadWithNetwork(undefined)).activeChain()).toBe("base-sepolia");
+  });
+
+  it("mainnet rejects any non-base chain in a policy", async () => {
+    const m = await loadWithNetwork("mainnet");
+    expect(m.policyChainViolation([{ chain: "base" }])).toBeNull();
+    expect(m.policyChainViolation([{ chain: "base" }, { chain: "base-sepolia" }])).toBe("base-sepolia");
+  });
+
+  it("testnet deployments stay permissive (dev exercises real mainnet tokens)", async () => {
+    const m = await loadWithNetwork(undefined);
+    expect(m.policyChainViolation([{ chain: "base" }])).toBeNull();
+    expect(m.policyChainViolation([{ chain: "base-sepolia" }])).toBeNull();
+  });
+});
