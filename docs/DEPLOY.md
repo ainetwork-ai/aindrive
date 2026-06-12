@@ -92,12 +92,13 @@ Checked against a live `getSupported()` call with the prod CDP key:
   the right chain before signing, so a fresh client self-corrects.)
 - **Browser pays on testnet but server is mainnet** (or vice versa) → same
   build-arg cause. Rebuild per step 3.
-- **Large upload fails partway** (e.g. a 1 GB+ video dies mid-stream) → the
-  reverse proxy is cutting the slow request. Apply the nginx block from
-  `PRODUCTION_TODO.md` — `proxy_read_timeout`/`proxy_send_timeout` long (1h),
-  `proxy_request_buffering off` (stream, don't spool the whole body),
-  `client_max_body_size 2g`. (The app already gives each chunk a 120s RPC
-  timeout; the remaining cause is proxy-side.)
+- **Large upload fails partway** → large files go up as ≤8 MiB resumable parts
+  (`fs/upload-sessions`), so proxy body caps / request timeouts no longer apply
+  to them; re-dropping the same file resumes from the last confirmed byte. If
+  parts themselves keep failing, the cause is the agent side (offline agent,
+  full/slow agent disk — check the error toast text). The nginx sizing block in
+  `PRODUCTION_TODO.md` still matters for streaming *downloads* (`fs/stream`
+  video playback).
 - **"set a payout wallet before selling" (400) on share create** → the drive
   has no payout wallet; owner sets it in Settings → Payments.
 - **Payment "succeeds" but no funds / dev tx hash** → `AINDRIVE_DEV_BYPASS_X402`
