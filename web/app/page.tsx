@@ -3,6 +3,7 @@ import { getUser } from "@/lib/session";
 import { listUserDrives } from "@/lib/drives";
 import { isOnline } from "@/lib/rpc";
 import { HardDrive, Terminal } from "lucide-react";
+import { LeaveDriveButton } from "@/components/leave-drive-button";
 
 export default async function Home() {
   const user = await getUser();
@@ -53,10 +54,10 @@ aindrive`}
       ) : (
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {drives.map((d) => (
-            <li key={d.id}>
+            <li key={d.id} className="relative group">
               <Link
                 href={`/d/${d.id}`}
-                className="group flex items-start gap-3 rounded-2xl bg-white border border-drive-border p-4 hover:shadow-drive transition"
+                className="flex items-start gap-3 rounded-2xl bg-white border border-drive-border p-4 hover:shadow-drive transition"
               >
                 <HardDrive className="w-6 h-6 text-drive-accent mt-0.5" />
                 <div className="min-w-0 flex-1">
@@ -67,6 +68,8 @@ aindrive`}
                   </div>
                 </div>
               </Link>
+              {/* Members can leave (creator can't — API enforces too) */}
+              {d.owner_id !== user.id && <LeaveDriveButton driveId={d.id} driveName={d.name} />}
             </li>
           ))}
         </ul>
