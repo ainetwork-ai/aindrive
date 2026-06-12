@@ -21,7 +21,7 @@
 - [ ] **P0** Force cookies `Secure; HttpOnly; SameSite=Lax` in prod; refuse to start if `AINDRIVE_PUBLIC_URL` is not `https://`
 - [x] **P0** Payout wallet is per-drive (Settings → Payments); paid-share creation is blocked until set. No global env wallet (removed — would misroute funds in multi-tenant).
 - [ ] **P0** Mainnet payment go-live: CDP facilitator keys, `DEV_BYPASS=0`, build-time `NEXT_PUBLIC_*`, small real smoke. Full procedure: [`DEPLOY.md`](DEPLOY.md).
-- [ ] **P0** Reverse proxy (nginx) sized for streaming transfers — without these, nginx 413s large uploads at its 1 MB default regardless of the app's 2 GiB cap:
+- [x] **P0** Reverse proxy (nginx) sized for streaming transfers (applied on prod 2026-06, verified by probe: 2 GiB body boundary, request buffering off). Uploads no longer depend on this — the web client sends ≤8 MiB resumable parts (`fs/upload-sessions`) — but `proxy_buffering off` + long timeouts still matter for `fs/stream`/`fs/download` responses:
   ```nginx
   client_max_body_size 2g;          # ≥ AINDRIVE_MAX_UPLOAD_BYTES
   proxy_request_buffering off;      # stream uploads through instead of spooling 2 GB to disk first
