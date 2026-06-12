@@ -11,8 +11,10 @@ export type Action = "sell" | "share" | "rename" | "delete";
 
 /**
  * Build the action items for an entry. sell/share are owner-only (O2);
- * rename/delete follow canManage (editor or owner). "Sell…" is disabled (not
- * hidden) when a paid share already exists, so the affordance still reads.
+ * rename/delete follow canManage (editor or owner). A sale is ongoing — one
+ * link, any number of buyers — never "consumed" by a purchase, so an existing
+ * paid share relabels the item to "Manage sale…" (same drawer) instead of
+ * disabling it.
  */
 export function rowMenuItems({
   hasPaidShare, onAction, canSell, canManage,
@@ -25,9 +27,8 @@ export function rowMenuItems({
   const items: MenuItem[] = [];
   if (canSell) {
     items.push({
-      label: hasPaidShare ? "Already selling" : "Sell…",
+      label: hasPaidShare ? "Manage sale…" : "Sell…",
       icon: <DollarSign className="w-4 h-4" />,
-      disabled: hasPaidShare,
       onClick: () => onAction("sell"),
     });
     items.push({

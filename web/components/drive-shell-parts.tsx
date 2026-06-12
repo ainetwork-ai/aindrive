@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
-  Search, X, ArrowUp, ArrowDown, SearchX, Settings,
+  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { SortKey, SortState } from "@/lib/sort-entries";
@@ -145,8 +145,36 @@ export function DriveSidebar({
         <div className="px-2 pt-1">
           <Badge tone="neutral">Role: {role}</Badge>
         </div>
+        <AccountFooter />
       </div>
     </aside>
+  );
+}
+
+/** Sidebar account footer: who am I + sign out. Self-contained (fetches
+ *  /api/auth/me itself) so the otherwise-presentational sidebar doesn't grow
+ *  a user prop just for this. Sign-out was previously reachable only from the
+ *  home page header — invisible to anyone living inside a drive view. */
+function AccountFooter() {
+  const [email, setEmail] = useState<string | null>(null);
+  useEffect(() => {
+    fetch("/api/auth/me").then((r) => r.json()).then((d) => {
+      if (d?.user?.email) setEmail(d.user.email);
+    }).catch(() => {});
+  }, []);
+  return (
+    <form action="/api/auth/logout" method="POST">
+      <button
+        type="submit"
+        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-body text-drive-text hover:bg-drive-hover"
+      >
+        <LogOut className="w-4 h-4 text-drive-muted shrink-0" />
+        <span className="flex-1 min-w-0 text-left">
+          <span className="block">Sign out</span>
+          {email && <span className="block truncate text-caption text-drive-muted">{email}</span>}
+        </span>
+      </button>
+    </form>
   );
 }
 
