@@ -23,6 +23,27 @@ export function paymentNetwork(): PaymentNetwork {
   return process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? "mainnet" : "testnet";
 }
 
+// The chain this deployment's payments live on. A mainnet deployment accepts
+// ONLY mainnet-chain tokens — a sepolia token in a mainnet drive would quote
+// (and settle!) on sepolia, letting buyers pay worthless testnet coins for
+// real content. Testnet deployments stay permissive: dev deliberately
+// exercises real mainnet tokens (e.g. FANCO) against a local build.
+export function activeChain(): "base" | "base-sepolia" {
+  return paymentNetwork() === "mainnet" ? "base" : "base-sepolia";
+}
+
+/**
+ * Mainnet-deployment chain guard: the first disallowed chain in `tokens`, or
+ * null when the policy is fine. Enforced at every boundary a token can enter
+ * or leave by — policy PATCH, token lookup, and the 402 quote (which also
+ * covers policies stored before this guard existed).
+ */
+export function policyChainViolation(tokens: Pick<PaymentToken, "chain">[]): string | null {
+  if (paymentNetwork() !== "mainnet") return null;
+  const bad = tokens.find((t) => t.chain !== "base");
+  return bad ? bad.chain : null;
+}
+
 // USDC preset per network. Both verified against the live chain (name differs:
 // sepolia "USDC" / mainnet "USD Coin" — version 2 on both). EIP-3009 settleable.
 const USDC_BY_NETWORK: Record<PaymentNetwork, PaymentToken> = {

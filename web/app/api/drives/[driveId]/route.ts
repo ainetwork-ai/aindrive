@@ -3,7 +3,7 @@ import { z } from "zod";
 import { isAddress } from "viem";
 import { getUser } from "@/lib/session";
 import { getDrive, setDrivePayoutWallet, setDriveAllowedTokens, getDriveRootPayoutWallet, listPayoutWallets } from "@/lib/drives";
-import { parseTokenPolicy } from "@/lib/payment-tokens";
+import { parseTokenPolicy, policyChainViolation } from "@/lib/payment-tokens";
 
 /**
  * PATCH /api/drives/:driveId
@@ -41,11 +41,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ driveI
   }
   // Validate everything before writing anything — a 400 must not leave a
   // half-applied multi-field PATCH.
-  if (
-    body.data.allowed_tokens != null &&
-    !parseTokenPolicy(body.data.allowed_tokens)
-  ) {
-    return NextResponse.json({ error: "invalid token policy" }, { status: 400 });
+  if (body.data.allowed_tokens != null) {
+    const policy = parseTokenPolicy(body.data.allowed_tokens);
+    if (!policy) {
+      return NextResponse.json({ error: "invalid token policy" }, { status: 400 });
+    }
+    const badChain = policyChainViolation(policy);
+    if (badChain) {
+      return NextResponse.json(
+        { error: `${badChain} tokens cannot be accepted on a mainnet deployment` },
+        { status: 400 },
+      );
+    }
   }
   const updated: { payout_wallet?: string | null; allowed_tokens?: string | null } = {};
   if (body.data.payout_wallet !== undefined) {

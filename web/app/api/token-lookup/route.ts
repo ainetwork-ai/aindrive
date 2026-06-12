@@ -20,6 +20,7 @@ import { z } from "zod";
 import { createPublicClient, http, getAddress, type Abi } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { getUser } from "@/lib/session";
+import { policyChainViolation } from "@/lib/payment-tokens";
 
 // chain symbol (matches PaymentToken.chain / TOKEN_PRESETS) → viem chain + RPC.
 const CHAINS = {
@@ -56,6 +57,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "invalid input" }, { status: 400 });
   }
   const { chain, address } = parsed.data;
+  // Same chain guard as the policy PATCH — a lookup is the on-ramp into a
+  // policy, so don't resolve tokens the policy could never accept.
+  if (policyChainViolation([{ chain }])) {
+    return NextResponse.json(
+      { error: `${chain} tokens cannot be accepted on a mainnet deployment` },
+      { status: 400 },
+    );
+  }
   const { chain: viemChain, rpc } = CHAINS[chain];
   const client = createPublicClient({ chain: viemChain, transport: http(rpc) });
   const token = getAddress(address);
