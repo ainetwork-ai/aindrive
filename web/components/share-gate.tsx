@@ -403,7 +403,7 @@ export function ShareGate({ token }: { token: string }) {
           </span>
           <h1 className="mt-4 text-title text-drive-text">Unlock permanent access</h1>
           <p className="mt-1 text-body text-drive-muted max-w-xs">
-            One payment grants your wallet permanent access to this shared content.
+            One payment grants your account permanent access to this shared content.
           </p>
         </div>
 
@@ -424,7 +424,10 @@ export function ShareGate({ token }: { token: string }) {
             tokens insert a one-time approve step before the pay signature. */}
         <div className="mt-6 flex flex-col items-stretch gap-3">
           <div className="flex justify-center">
-            <ConnectButton showBalance={false} chainStatus="icon" />
+            {/* No chain switcher: the paywall pins on-chain work to the sale's
+                chain (pay/approve switch before signing) and shows the network
+                in the price card, so a chooser here is an inert no-op. */}
+            <ConnectButton showBalance={false} chainStatus="none" />
           </div>
           {walletConnecting ? (
             // Post-redirect rehydration gap (wallet app → back to aindrive):
@@ -475,7 +478,7 @@ export function ShareGate({ token }: { token: string }) {
 
         <p className="mt-4 flex items-center justify-center gap-1.5 text-caption text-drive-muted text-center">
           <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-          Permanent access for your wallet. No refunds.
+          Permanent access on your account. No refunds.
         </p>
       </GateShell>
     );

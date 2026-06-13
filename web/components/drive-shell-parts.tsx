@@ -29,6 +29,9 @@ export type ShareSummary = {
   path: string;
   role: string;
   price_usdc: number | null;
+  // Token the sale is priced in (drive policy symbol); null = legacy USDC.
+  // GET /shares already returns it — badges show "<amount> <symbol>".
+  currency: string | null;
 };
 
 export type ViewMode = "list" | "grid";
@@ -533,7 +536,7 @@ export function FileTable({
                     <span className="truncate">{e.name}</span>
                     {paid && (
                       <Badge tone="sale" className="shrink-0">
-                        ${paid.price_usdc!.toFixed(2)}
+                        {paid.price_usdc!.toFixed(2)} {paid.currency ?? "USDC"}
                       </Badge>
                     )}
                   </div>
@@ -763,7 +766,7 @@ function FileGrid({
               {e.name}
             </span>
             {paid && (
-              <Badge tone="sale">${paid.price_usdc!.toFixed(2)}</Badge>
+              <Badge tone="sale">{paid.price_usdc!.toFixed(2)} {paid.currency ?? "USDC"}</Badge>
             )}
           </Card>
         );
