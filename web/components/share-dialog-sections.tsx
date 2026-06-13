@@ -44,6 +44,10 @@ export type Member = {
   role: "viewer" | "editor" | "owner";
   email: string;
   name: string;
+  // True when this grant belongs to the drive creator. The creator can't be
+  // demoted or removed (API enforces it), so the UI locks the row's role
+  // dropdown + remove button instead of offering controls that only 400.
+  isCreator: boolean;
 };
 
 /** A pending (pre-account) invite — converts to a Member on signup. */

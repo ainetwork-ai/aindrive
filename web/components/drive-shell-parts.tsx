@@ -456,11 +456,21 @@ export function FileTable({
   if (loading) {
     body = viewMode === "grid" ? <GridSkeleton /> : <ListSkeleton />;
   } else if (err) {
+    // "agent offline" is the common case and a dead-end if shown raw — a drive
+    // is served by a local CLI agent, so an offline agent means nothing loads.
+    // Turn it into a role-aware next step instead of jargon.
+    const offline = /offline/i.test(err);
     body = (
       <EmptyState
         icon={<AlertTriangle className="text-amber-500" />}
-        title="Couldn’t load this folder"
-        description={err}
+        title={offline ? "This drive is offline" : "Couldn’t load this folder"}
+        description={
+          offline
+            ? isOwner
+              ? "The local aindrive agent that serves this drive isn’t connected. Start the agent in this drive’s folder to bring it back online — files and sharing resume automatically."
+              : "This drive’s agent is offline right now. Check back once the owner brings it online."
+            : err
+        }
       />
     );
   } else if (entries.length === 0 && query.trim()) {
