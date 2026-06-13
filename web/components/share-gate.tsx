@@ -90,7 +90,12 @@ export function ShareGate({ token }: { token: string }) {
   const [approvalNeeded, setApprovalNeeded] = useState<boolean | null>(null);
   const [approving, setApproving] = useState(false);
   const router = useRouter();
-  const { isConnected, address } = useAccount();
+  // `isReconnecting` covers the gap after a wallet redirect/deeplink returns
+  // (e.g. Coinbase Wallet / Base App): wagmi rehydrates the connection over a
+  // few seconds before `isConnected` flips, during which the UI must read as
+  // "connecting", not "not connected" (else users think it failed and bail).
+  const { isConnected, address, isConnecting, isReconnecting } = useAccount();
+  const walletConnecting = (isConnecting || isReconnecting) && !isConnected;
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
   // A wallet request can hang forever (popup blocked, request landed in a
@@ -421,7 +426,14 @@ export function ShareGate({ token }: { token: string }) {
           <div className="flex justify-center">
             <ConnectButton showBalance={false} chainStatus="icon" />
           </div>
-          {isConnected && isPermit2 && approvalNeeded ? (
+          {walletConnecting ? (
+            // Post-redirect rehydration gap (wallet app → back to aindrive):
+            // an explicit "connecting" state so the ~seconds before the
+            // address resolves don't read as a failed connect.
+            <Button variant="filled" size="md" loading disabled className="w-full justify-center">
+              Connecting your wallet…
+            </Button>
+          ) : isConnected && isPermit2 && approvalNeeded ? (
             <>
               <Button
                 variant="filled"
