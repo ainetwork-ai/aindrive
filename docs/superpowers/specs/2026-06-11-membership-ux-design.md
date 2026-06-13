@@ -1,5 +1,12 @@
 # 권한 정책 정리 + 멤버/공유 관리 UX 개편 — design
 
+> **SUPERSEDED (Manage layout):** the Manage-page layout here (3 tabs +
+> in-page InviteCard) is superseded by `2026-06-11-ux-overhaul-design.md`
+> (5 left-rail sections: Members/Links/Sales/Payments/General; invite-creation
+> moves to the Share drawer — "create in context, audit in settings"). The
+> permission-model reasoning below remains valid; for the canonical who-can-do-
+> what map see `2026-06-14-permission-surface-matrix-design.md`.
+
 피드백: "멤버 권한 주고 받고 관리하고 이런 게 엄청 불편" — 페이지 신설·버튼
 재배치 허용, 최적 UX 구성 요청. 서비스 정체성: 구글 공유드라이브 + 드라이브 안
 유료 컨텐츠.

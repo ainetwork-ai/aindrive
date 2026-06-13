@@ -35,6 +35,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const { driveId } = await params;
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
+  // The owner role is whole-drive only: every management gate (Manage, member
+  // ops, storefront listing) resolves at root, so a path-scoped "owner" would
+  // be a dead, confusing concept — grant owner at root or not at all.
+  if (body.data.role === "owner" && body.data.path !== "") {
+    return NextResponse.json({ error: "the owner role can only be granted on the whole drive" }, { status: 400 });
+  }
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const drive = getDrive(driveId);
