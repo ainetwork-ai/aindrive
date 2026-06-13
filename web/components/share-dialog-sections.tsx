@@ -82,10 +82,11 @@ export function SellSection({
   defaultPath, focusSection, sellOn, paidShare,
   payoutOwnWallet, payoutEffective, payoutInherited, payoutInput,
   setPayoutInput, savePayoutWallet, price, setPrice, currency, setCurrency,
-  currencyOptions, listed, setListed, isOwner, tokenEditor, saveSell, busy,
+  currencyOptions, listed, setListed, isOwner, driveId, saveSell, busy,
   setEditingSell, copyLink,
 }: {
   defaultPath: string;
+  driveId: string;
   focusSection?: "sell" | "share";
   sellOn: boolean;
   paidShare: Share | undefined;
@@ -107,7 +108,6 @@ export function SellSection({
   listed: boolean;
   setListed: (v: boolean) => void;
   isOwner: boolean;
-  tokenEditor: TokenEditorProps;
   saveSell: () => void;
   busy: boolean;
   setEditingSell: (v: boolean) => void;
@@ -228,9 +228,22 @@ export function SellSection({
             </div>
           )}
 
-          {/* Drive-wide payment-token policy (spec D3): which currencies shares
-              may be priced in. Owner-only, like the PATCH behind it. */}
-          {isOwner && <PaymentTokensEditor editor={tokenEditor} busy={busy} />}
+          {/* Read-only: the currencies this drive accepts (the per-sale Currency
+              select above picks ONE). EDITING the policy lives in Settings →
+              Payments — "create in context, audit in settings". */}
+          <div className="rounded-lg border border-drive-border bg-drive-sidebar/40 p-2.5">
+            <div className="text-caption text-drive-muted">Accepted in this drive</div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {currencyOptions.map((c) => (
+                <Badge key={c} tone="neutral">{c}</Badge>
+              ))}
+            </div>
+            {isOwner && (
+              <a href={`/d/${driveId}/manage`} className="mt-2 inline-block text-caption text-drive-accent hover:underline">
+                Manage payment tokens in Settings →
+              </a>
+            )}
+          </div>
         </div>
       )}
     </SectionCard>

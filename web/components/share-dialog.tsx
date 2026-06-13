@@ -6,7 +6,7 @@ import { apiFetch } from "@/lib/api-client";
 import { Modal, Button } from "@/components/ui";
 import { atLeast } from "@/lib/access-core.js";
 // Pure presets/parsers — safe in a client component.
-import { TOKEN_PRESETS, DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
+import { DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import { resolvePayoutWallet, type PayoutRow } from "@/lib/payout";
 import {
   SellSection, EmailInviteSection, FreeLinkSection,
@@ -35,12 +35,6 @@ export function ShareDialog({
   // Drive token policy (currency select options). Non-owners can't read the
   // drive GET (403) and keep the default — the server re-validates anyway.
   const [driveTokens, setDriveTokens] = useState<PaymentToken[]>(DEFAULT_TOKENS);
-  // Token-policy editor (owner-only UI): preset checkboxes + custom tokens added
-  // by contract-address lookup. The saved policy = selected presets ∪ custom.
-  const [tokenSel, setTokenSel] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(Object.keys(TOKEN_PRESETS).map((k) => [k, k === "USDC"])),
-  );
-  const [customTokens, setCustomTokens] = useState<PaymentToken[]>([]);
   // Path-scoped payout wallets for the whole drive; `payoutInput` edits the
   // wallet set on THIS folder (defaultPath), while the effective/inherited
   // wallet is resolved from the full list (nearest ancestor wins).
@@ -68,27 +62,13 @@ export function ShareDialog({
       // The input edits the wallet set ON this exact folder (empty if none).
       const here = rows.find((r) => r.path === defaultPath)?.wallet ?? "";
       setPayoutInput(here);
+      // Drive token policy feeds the read-only "Accepted in this drive" chips +
+      // the per-sale Currency select. EDITING the policy lives in Settings →
+      // Payments (audit in settings), not in this contextual drawer.
       const tokens = resolveDriveTokens(d.data.allowed_tokens ?? null);
       setDriveTokens(tokens);
       // Keep the user's pick if still allowed; otherwise snap to the policy's first token
       setCurrency((cur) => (tokens.some((t) => t.symbol === cur) ? cur : tokens[0].symbol));
-      // A token is a "fixed preset" only if it matches the preset's symbol AND
-      // its built-in asset (USDC). Everything else — including FANCO, which
-      // carries an owner-supplied address — is a custom token.
-      const isFixedPreset = (t: PaymentToken) => {
-        const p = TOKEN_PRESETS[t.symbol];
-        return p && p.asset && p.asset.toLowerCase() === t.asset.toLowerCase();
-      };
-      const customs = tokens.filter((t) => !isFixedPreset(t));
-      setTokenSel({
-        ...Object.fromEntries(
-          Object.entries(TOKEN_PRESETS)
-            .filter(([, p]) => !!p.asset)
-            .map(([k]) => [k, tokens.some((t) => t.symbol === k && isFixedPreset(t))]),
-        ),
-        ...Object.fromEntries(customs.map((t) => [t.symbol, true])), // stored custom = accepted (on)
-      });
-      setCustomTokens(customs);
     }
     if (mem.ok) setMembers(mem.data.members);
     if (who.ok && who.data.user) {
@@ -139,33 +119,6 @@ export function ShareDialog({
   // Owner saves the drive's payment-token policy: selected fixed presets (USDC)
   // ∪ custom tokens added by contract-address lookup. Dedupe by symbol so a
   // custom token can't collide with a preset.
-  async function saveTokenPolicy() {
-    const presetTokens = Object.entries(TOKEN_PRESETS)
-      .filter(([k, p]) => tokenSel[k] && p.asset)
-      .map(([, p]) => p);
-    const activeCustoms = customTokens.filter((t) => tokenSel[t.symbol]);
-    const bySymbol = new Map<string, PaymentToken>();
-    for (const t of [...presetTokens, ...activeCustoms]) bySymbol.set(t.symbol, t);
-    const policy = [...bySymbol.values()];
-    if (policy.length === 0) {
-      toast.error("Select or add at least one payment token");
-      return;
-    }
-    setBusy(true);
-    const res = await apiFetch(`/api/drives/${driveId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ allowed_tokens: JSON.stringify(policy) }),
-    });
-    setBusy(false);
-    if (!res.ok) {
-      toast.error(res.error || "Failed to save payment tokens");
-      return;
-    }
-    toast.success("Payment tokens saved");
-    load();
-  }
-
   // Existing paid share for this exact path (most recent first)
   const paidShare = shares.find(s => s.path === defaultPath && s.price_usdc !== null);
 
@@ -321,17 +274,7 @@ export function ShareDialog({
           listed={listed}
           setListed={setListed}
           isOwner={isOwner}
-          tokenEditor={{
-            sel: tokenSel,
-            toggle: (sym) => setTokenSel((s) => ({ ...s, [sym]: !s[sym] })),
-            customTokens,
-            addCustom: (t) => {
-              setCustomTokens((list) => list.some((x) => x.symbol === t.symbol) ? list : [...list, t]);
-              setTokenSel((s) => ({ ...s, [t.symbol]: true })); // added = accepted (on)
-            },
-            removeCustom: (sym) => setCustomTokens((list) => list.filter((x) => x.symbol !== sym)),
-            save: saveTokenPolicy,
-          }}
+          driveId={driveId}
           saveSell={saveSell}
           busy={busy}
           setEditingSell={setEditingSell}

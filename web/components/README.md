@@ -37,9 +37,11 @@ Viewer / editors:
 
 Sharing / payments:
 - `share-dialog(.tsx/-sections)` — the Share **drawer**: per-path invite, sell,
-  free link, members. Owns drive token-policy editor (`PaymentTokensEditor`,
-  reused by manage).
+  free link, members. Shows the drive token policy READ-ONLY (accepted-currency
+  chips + a Settings link) — editing is in manage (create in context, audit in
+  settings). Still exports `PaymentTokensEditor`, which `drive-manage` renders.
 - `drive-manage` — owner Settings page, Members/Links/Sales/Payments left-rail.
+  Owns the editable drive token-policy editor (`PaymentTokensEditor`) + payout.
 - `share-gate(.tsx/-client)` — the `/s/[token]` paywall: x402 pay + Permit2
   approve. `-client` is the SSR-skipping wrapper.
 - `x402-badges` / `x402-logo` — price badge + brand mark.
