@@ -348,18 +348,23 @@ export function ShareDialog({
           busy={busy}
         />
 
-        <EmailInviteSection
-          email={email}
-          setEmail={setEmail}
-          role={role}
-          setRole={setRole}
-          invite={invite}
-          busy={busy}
-          currentPath={defaultPath}
-        />
+        {/* Inviting by email POSTs to owner-only /members (403s otherwise),
+            so only owners see the control. */}
+        {isOwner && (
+          <EmailInviteSection
+            email={email}
+            setEmail={setEmail}
+            role={role}
+            setRole={setRole}
+            invite={invite}
+            busy={busy}
+            currentPath={defaultPath}
+          />
+        )}
 
         <FreeLinkSection
           shares={shares}
+          currentPath={defaultPath}
           createFreeLink={createFreeLink}
           busy={busy}
           copyLink={copyLink}

@@ -9,7 +9,7 @@
 // labelled cards instead of one long form. Controls use the design-system
 // primitives (Input/Select/Toggle/Button/Badge).
 import {
-  Copy, LinkIcon, UserPlus, Trash2, DollarSign, TrendingUp, ExternalLink, Users,
+  Copy, LinkIcon, UserPlus, Trash2, DollarSign, Users,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Plus, Trash2 as TrashIcon, Loader2, CheckCircle2, Clock } from "lucide-react";
@@ -63,43 +63,8 @@ function ListRow({ children }: { children: ReactNode }) {
   );
 }
 
-export function EarningsSection({ receipts, totalEarned }: { receipts: Receipt[]; totalEarned: number }) {
-  return (
-    <SectionCard
-      icon={<TrendingUp className="w-4 h-4" />}
-      title="Earnings"
-      description="Settled payments into this drive"
-      action={<span className="text-subtitle font-semibold text-emerald-600 tabular-nums">${totalEarned.toFixed(2)}</span>}
-    >
-      <ul className="space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
-        {receipts.map((r) => (
-          <ListRow key={r.id}>
-            <span className="font-mono w-20 shrink-0 truncate">
-              {r.wallet.slice(0, 6)}…{r.wallet.slice(-4)}
-            </span>
-            <span className="text-drive-muted truncate flex-1">{r.path || "/"}</span>
-            <span className="shrink-0 tabular-nums">
-              {r.amount_usdc != null ? `$${r.amount_usdc.toFixed(2)}` : "—"}
-            </span>
-            {r.tx_hash.startsWith("0x") && !r.tx_hash.startsWith("0xdev_bypass") ? (
-              <a
-                href={`https://${r.network === "base" ? "" : "sepolia."}basescan.org/tx/${r.tx_hash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="p-0.5 rounded hover:bg-drive-hover shrink-0"
-                title="View transaction"
-              >
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            ) : (
-              <span className="w-4 shrink-0" />
-            )}
-          </ListRow>
-        ))}
-      </ul>
-    </SectionCard>
-  );
-}
+// (Earnings ledger lives in drive-manage.tsx SalesSection — "audit in
+// settings". The Receipt type below is still imported there.)
 
 // Token-policy mini-editor state + handlers, grouped to keep SellSection's
 // prop list readable. `sel` is keyed by fixed-preset symbol; custom tokens are
@@ -246,7 +211,7 @@ export function SellSection({
                     className="mt-0.5 accent-drive-accent"
                   />
                   <span className="text-caption text-drive-text">
-                    List on the drive
+                    List on storefront
                     <span className="block text-drive-muted">Members without access see it for sale.</span>
                   </span>
                 </label>
@@ -481,7 +446,7 @@ function AddCustomToken({ existingSymbols, onAdd }: { existingSymbols: string[];
             <p className="text-caption text-drive-muted">No EIP-3009 entrypoint — settles through Permit2: buyers approve the token once on-chain, then pay as usual.</p>
           )}
           <div className="flex justify-end">
-            <Button variant="filled" size="sm" icon={<Plus className="w-4 h-4" />} onClick={add}>Add to policy</Button>
+            <Button variant="filled" size="sm" icon={<Plus className="w-4 h-4" />} onClick={add}>Add &amp; accept</Button>
           </div>
         </div>
       )}
@@ -638,14 +603,18 @@ export function EmailInviteSection({
 }
 
 export function FreeLinkSection({
-  shares, createFreeLink, busy, copyLink,
+  shares, currentPath, createFreeLink, busy, copyLink,
 }: {
   shares: Share[];
+  currentPath: string;
   createFreeLink: () => void;
   busy: boolean;
   copyLink: (token: string) => void;
 }) {
-  const freeShares = shares.filter((s) => !s.price_usdc);
+  // Scope to THIS item, like every other drawer section (create in context).
+  // The drive-wide link ledger lives in Manage → Links.
+  const cur = normalizePath(currentPath);
+  const freeShares = shares.filter((s) => !s.price_usdc && normalizePath(s.path) === cur);
   return (
     <SectionCard
       icon={<LinkIcon className="w-4 h-4" />}
@@ -659,8 +628,8 @@ export function FreeLinkSection({
         <ul className="mt-3 space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
           {freeShares.map((s) => (
             <ListRow key={s.id}>
-              <span className="truncate flex-1 text-drive-text">{s.path || "/"}</span>
               <Badge tone="neutral">{s.role}</Badge>
+              <code className="flex-1 text-caption truncate font-mono text-drive-text">/s/{s.token}</code>
               <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(s.token)}>
                 <Copy className="w-3.5 h-3.5" />
               </IconButton>

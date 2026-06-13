@@ -411,7 +411,7 @@ function SalesSection({ shares, receipts }: { shares: Share[]; receipts: Receipt
                 <span className="text-drive-muted truncate">{prettyPath(r.path)}</span>
                 <span className="ml-auto font-medium text-drive-text tabular-nums">${(r.amount_usdc ?? 0).toFixed(2)}</span>
                 {!r.tx_hash.startsWith("0xdev_bypass") && (
-                  <a href={`https://basescan.org/tx/${r.tx_hash}`} target="_blank" rel="noreferrer" className="text-drive-muted hover:text-drive-accent" aria-label="View transaction">
+                  <a href={`https://${r.network === "base" ? "" : "sepolia."}basescan.org/tx/${r.tx_hash}`} target="_blank" rel="noreferrer" className="text-drive-muted hover:text-drive-accent" aria-label="View transaction">
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 )}
