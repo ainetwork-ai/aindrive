@@ -10,12 +10,12 @@ const PatchBody = z.object({
   role: z.enum(["viewer", "editor", "owner"]),
 });
 
-type MemberRow = { id: string; user_id: string };
+type MemberRow = { id: string; user_id: string; path: string };
 
 /** Load the target row, scoped to this drive so a foreign memberId 404s. */
 function getMemberRow(driveId: string, memberId: string): MemberRow | undefined {
   return db
-    .prepare("SELECT id, user_id FROM drive_members WHERE id = ? AND drive_id = ?")
+    .prepare("SELECT id, user_id, path FROM drive_members WHERE id = ? AND drive_id = ?")
     .get(memberId, driveId) as MemberRow | undefined;
 }
 
@@ -60,6 +60,11 @@ export async function PATCH(
   // not be able to demote the creator or rewrite their path-scoped grants.
   if (!canRemoveMember({ memberUserId: member.user_id, driveOwnerId: drive.owner_id })) {
     return NextResponse.json({ error: "cannot change the drive creator's role" }, { status: 400 });
+  }
+  // Owner is whole-drive only (see POST /members): never promote a path-scoped
+  // grant to owner — it would be a dead concept (management gates resolve at root).
+  if (body.data.role === "owner" && member.path !== "") {
+    return NextResponse.json({ error: "the owner role can only be granted on the whole drive" }, { status: 400 });
   }
   // Explicit set (may downgrade) — distinct from CONSUME's upgrade-only merge.
   db.prepare("UPDATE drive_members SET role = ? WHERE id = ? AND drive_id = ?")

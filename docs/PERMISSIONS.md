@@ -11,11 +11,26 @@ A four-rung ladder (`ROLE_RANK`): `none` < `viewer` < `editor` < `owner`.
 |------|-----|
 | viewer | read & download files |
 | editor | + upload, edit, delete files |
-| owner | + manage members, links, sales, settings |
+| owner | + manage members & links; create / price / list shares |
 
-"Owner" is not only the drive creator: anyone holding the `owner` role via a
-`drive_members` row is a co-owner. The **creator** is special in exactly one
-way — they can't be removed (`canRemoveMember`).
+The `owner` role is **whole-drive only** — it is granted at `path=""`, never on
+a subtree (the API rejects a non-root owner grant), because every owner-level
+gate resolves at root.
+
+**Creator vs co-owner.** Anyone holding `owner` via a `drive_members` row at
+`""` is a *co-owner*. The **creator** (`drives.owner_id`) is special in several
+ways a co-owner is NOT — these are **creator-only**, not "owner":
+
+- their member row is immutable (`canRemoveMember`) — can't be removed/demoted;
+- **payout wallets** (per-path) — `GET/PUT/DELETE /payout`;
+- **payment-token policy** — `PATCH /api/drives/:id`;
+- the **earnings ledger** — `GET /receipts`;
+- **drive deletion** + agent-token rotation; and the creator can't *leave*
+  (they delete the drive instead).
+
+A co-owner manages members and links and can create/price/list shares, but the
+financial config + earnings above stay with the creator (blast-radius safety).
+The UI shows co-owners an explicit "creator-only" state on those surfaces.
 
 ## Grants are path-scoped, and inherit downward
 

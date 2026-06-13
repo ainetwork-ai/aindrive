@@ -38,6 +38,7 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
   // Drive financial settings are creator-only (the GET 403s co-owners), so a
   // co-owner managing people/links still can't read/write payout + tokens.
   const [settingsReadable, setSettingsReadable] = useState(true);
+  const [receiptsReadable, setReceiptsReadable] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -50,6 +51,10 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
     if (mem.ok) { setMembers(mem.data.members); setPending(mem.data.pending ?? []); }
     if (sh.ok) setShares(sh.data.shares);
     if (rc.ok) setReceipts(rc.data.receipts ?? []);
+    // Earnings ledger is creator-only (GET /receipts 403s co-owners). Track
+    // readability so a co-owner sees an explicit creator-only state instead of
+    // a misleading "$0.00 / No sales yet".
+    setReceiptsReadable(rc.ok);
     setSettingsReadable(d.ok);
     if (d.ok) { setPayoutWallets(d.data.payout_wallets ?? []); setAllowedTokens(d.data.allowed_tokens ?? null); }
   }, [driveId]);
@@ -112,7 +117,7 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
             <LinksSection driveId={driveId} shares={shares} busy={busy} setBusy={setBusy} reload={load} />
           )}
           {section === "sales" && (
-            <SalesSection shares={shares} receipts={receipts} />
+            <SalesSection shares={shares} receipts={receipts} receiptsReadable={receiptsReadable} />
           )}
           {section === "payments" && (
             settingsReadable
@@ -370,7 +375,7 @@ function LinksSection({ driveId, shares, busy, setBusy, reload }: {
 // "What you're selling, and what you've earned." Distinct from Links: Links is
 // the door inventory; Sales is the storefront + ledger.
 
-function SalesSection({ shares, receipts }: { shares: Share[]; receipts: Receipt[] }) {
+function SalesSection({ shares, receipts, receiptsReadable }: { shares: Share[]; receipts: Receipt[]; receiptsReadable: boolean }) {
   const totalEarned = receipts.reduce((s, r) => s + (r.amount_usdc ?? 0), 0);
   const listed = useMemo(() => shares.filter((s) => s.price_usdc != null && !!s.listed), [shares]);
 
@@ -399,9 +404,11 @@ function SalesSection({ shares, receipts }: { shares: Share[]; receipts: Receipt
         icon={<TrendingUp className="w-4 h-4" />}
         title="Earnings"
         description="Settled on-chain payments."
-        action={<span className="text-body font-semibold text-green-600 tabular-nums">${totalEarned.toFixed(2)}</span>}
+        action={receiptsReadable ? <span className="text-body font-semibold text-green-600 tabular-nums">${totalEarned.toFixed(2)}</span> : undefined}
       >
-        {receipts.length === 0 ? (
+        {!receiptsReadable ? (
+          <EmptyState icon={<ShieldCheck />} title="Creator-only" description="Earnings are visible to the drive’s creator only." />
+        ) : receipts.length === 0 ? (
           <EmptyState icon={<ShieldCheck />} title="No sales yet" description="Paid shares appear here once a buyer settles." />
         ) : (
           <ul className="space-y-1.5 max-h-80 overflow-auto">
