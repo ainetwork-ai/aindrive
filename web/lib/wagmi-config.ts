@@ -1,6 +1,7 @@
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import {
   baseAccount,
+  coinbaseWallet,
   injectedWallet,
   metaMaskWallet,
   okxWallet,
@@ -12,16 +13,22 @@ import { base, baseSepolia } from "wagmi/chains";
 import { paymentNetwork } from "./payment-tokens";
 
 // We hand-roll the wallet list (instead of getDefaultConfig) for two reasons:
-//   1. Base front-and-centre via `baseAccount` (Sign in with Base — the
-//      passkey Smart Wallet, "the evolution of Coinbase Smart Wallet" per
-//      RainbowKit docs and the official successor; `coinbaseWallet` was
-//      DEPRECATED in 2.2.9 and we no longer list it — its legacy QR/install
-//      flow threw `invalid border=0` and broke Coinbase/Base connects). We do
-//      NOT need an explicit Coinbase entry: RainbowKit v2 auto-lists installed
-//      EIP-6963 extensions (incl. the Coinbase Wallet extension) under
-//      "Installed" — the same path that makes OKX work. `okxWallet`,
-//      `injectedWallet`, `walletConnectWallet` stay per RainbowKit's
-//      broad-support recommendation.
+//   1. Base front-and-centre with BOTH Coinbase connectors, because they cover
+//      DIFFERENT transports (verified against Base's docs):
+//      - `baseAccount` (Sign in with Base) = passkey Smart Wallet via
+//        keys.coinbase.com. Great on desktop, but it does NOT deeplink to an
+//        installed mobile app — on mobile with no passkey it dead-ends at
+//        "try again".
+//      - `coinbaseWallet` (Coinbase Wallet SDK, Base's "legacy SDK access")
+//        IS the path that opens the installed Coinbase Wallet / Base mobile
+//        APP via a deeplink. Coinbase/Base wallets connect through this SDK,
+//        NOT WalletConnect, so they never appear in the WC list — without this
+//        connector a mobile Base-App user has no working path. (An earlier
+//        change dropped it as "deprecated"; that was right for desktop, where
+//        EIP-6963 auto-lists the extension, but wrong for mobile.)
+//      `okxWallet`, `injectedWallet`, `walletConnectWallet` stay per
+//      RainbowKit's broad-support recommendation; installed EIP-6963 extensions
+//      still auto-list under "Installed".
 //   2. getDefaultConfig instantiates connectors at module load. Some of them
 //      touch `window`/`localStorage` during construction, which crashes SSR
 //      with "ReferenceError: window is not defined" the moment any server
@@ -52,7 +59,7 @@ export function getWagmiConfig(): WagmiConfig {
       : ([baseSepolia, base] as const);
     const connectors = connectorsForWallets(
       [
-        { groupName: "Base", wallets: [baseAccount] },
+        { groupName: "Base", wallets: [baseAccount, coinbaseWallet] },
         { groupName: "Other wallets", wallets: [okxWallet, metaMaskWallet, rainbowWallet, walletConnectWallet, injectedWallet] },
       ],
       { appName: "aindrive", projectId },
