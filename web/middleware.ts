@@ -7,7 +7,14 @@ const CSP = [
   "font-src 'self' data:",
   "img-src 'self' data: blob: https:",
   "connect-src 'self' wss: https:",
-  "frame-src 'self' blob:",
+  // Wallet connect flows iframe these origins: WalletConnect's Verify
+  // anti-phishing attestation (verify/secure.walletconnect.*) and the
+  // Coinbase/Base smart-wallet communicator (keys.coinbase.com). Without them
+  // the connect modal's iframe is CSP-blocked and Base/Coinbase Wallet fail,
+  // while injected wallets (OKX/MetaMask, no iframe) still work. Domains per
+  // Reown's recommended CSP (connect-src already covered by the https:/wss:
+  // wildcards above).
+  "frame-src 'self' blob: https://verify.walletconnect.com https://verify.walletconnect.org https://secure.walletconnect.com https://secure.walletconnect.org https://keys.coinbase.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
