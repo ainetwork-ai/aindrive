@@ -50,12 +50,17 @@ export function getWagmiConfig(): WagmiConfig {
       // with a desktop browser) need a real project id from cloud.reown.com.
       console.warn("[aindrive] NEXT_PUBLIC_WC_PROJECT_ID is not set — WalletConnect/mobile QR pairing will fail");
     }
-    // Order the chain list so the payment network is FIRST (wagmi's default
-    // chain). Both are registered + given transports — the token policy decides
-    // which one payments actually quote/settle on; this just makes the wallet
-    // default to the right one.
+    // Register ONLY the chains a payment can actually be on for this
+    // deployment. RainbowKit auto-renders a network switcher for every
+    // registered chain, so registering both leaked a pointless "Base /
+    // Base Sepolia" chooser to buyers. A mainnet deployment settles only on
+    // Base (the token-policy chain guard rejects testnet tokens — see
+    // payment-tokens.ts policyChainViolation), so register Base alone and the
+    // switcher disappears. A testnet/dev deployment deliberately allows tokens
+    // on EITHER chain (so dev can exercise real mainnet tokens locally), so it
+    // registers both. First entry is wagmi's default chain.
     const chains = paymentNetwork() === "mainnet"
-      ? ([base, baseSepolia] as const)
+      ? ([base] as const)
       : ([baseSepolia, base] as const);
     const connectors = connectorsForWallets(
       [
