@@ -1,7 +1,6 @@
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import {
   baseAccount,
-  coinbaseWallet,
   injectedWallet,
   metaMaskWallet,
   okxWallet,
@@ -13,15 +12,16 @@ import { base, baseSepolia } from "wagmi/chains";
 import { paymentNetwork } from "./payment-tokens";
 
 // We hand-roll the wallet list (instead of getDefaultConfig) for two reasons:
-//   1. We want Base front-and-centre, and BOTH current Base entries explicit:
-//      `baseAccount` (Sign in with Base — passkey Smart Wallet via the Base
-//      Account SDK; the official successor connector, RainbowKit deprecated
-//      `coinbaseWallet` in 2.2.9) plus legacy `coinbaseWallet` for the old
-//      extension/app, per Base's migration guidance ("add a Base button next
-//      to Coinbase Wallet, don't replace it"). `okxWallet` is explicit too:
-//      with several extensions installed, the generic injected connector is a
-//      window.ethereum roulette — requests can land in a wallet whose popup
-//      the user never sees (reported as "pay popup never appears").
+//   1. Base front-and-centre via `baseAccount` (Sign in with Base — the
+//      passkey Smart Wallet, "the evolution of Coinbase Smart Wallet" per
+//      RainbowKit docs and the official successor; `coinbaseWallet` was
+//      DEPRECATED in 2.2.9 and we no longer list it — its legacy QR/install
+//      flow threw `invalid border=0` and broke Coinbase/Base connects). We do
+//      NOT need an explicit Coinbase entry: RainbowKit v2 auto-lists installed
+//      EIP-6963 extensions (incl. the Coinbase Wallet extension) under
+//      "Installed" — the same path that makes OKX work. `okxWallet`,
+//      `injectedWallet`, `walletConnectWallet` stay per RainbowKit's
+//      broad-support recommendation.
 //   2. getDefaultConfig instantiates connectors at module load. Some of them
 //      touch `window`/`localStorage` during construction, which crashes SSR
 //      with "ReferenceError: window is not defined" the moment any server
@@ -52,7 +52,7 @@ export function getWagmiConfig(): WagmiConfig {
       : ([baseSepolia, base] as const);
     const connectors = connectorsForWallets(
       [
-        { groupName: "Base", wallets: [baseAccount, coinbaseWallet] },
+        { groupName: "Base", wallets: [baseAccount] },
         { groupName: "Other wallets", wallets: [okxWallet, metaMaskWallet, rainbowWallet, walletConnectWallet, injectedWallet] },
       ],
       { appName: "aindrive", projectId },
