@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { basename } from "node:path";
 import { readDriveConfig, readGlobalCreds, writeDriveConfig } from "../config.js";
 import { runAgent } from "../agent.js";
+import { writePid, clearPid } from "../daemon.js";
 
 export async function cmdServe(args) {
   const dir = args.dir;
@@ -44,6 +45,12 @@ export async function cmdServe(args) {
     const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
     spawn(opener, [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
   }
+
+  // Record this serving process so `aindrive status/stop/logs` can find it —
+  // for foreground AND detached runs (the detached child is just a foreground
+  // serve under the hood). Cleared on graceful or any exit.
+  writePid(dir, process.pid);
+  process.on("exit", () => clearPid(dir));
 
   await runAgent({ root: dir, drive, server: drive.serverUrl || serverUrl });
 }

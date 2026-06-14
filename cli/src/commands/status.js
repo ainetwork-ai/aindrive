@@ -1,4 +1,5 @@
 import { readDriveConfig, readGlobalCreds } from "../config.js";
+import { runningPid } from "../daemon.js";
 import { resolve } from "node:path";
 
 export async function cmdStatus(args) {
@@ -16,6 +17,8 @@ export async function cmdStatus(args) {
   if (drive) {
     console.log(`  drive   : ${drive.driveId}  (${dir})`);
     console.log(`  url     : ${drive.url || "-"}`);
+    const pid = runningPid(dir);
+    console.log(`  agent   : ${pid ? `running (pid ${pid})` : "stopped — run `aindrive` or `aindrive -d`"}`);
   } else {
     console.log(`  drive   : (${dir} not linked yet — run \`aindrive\` here)`);
   }
