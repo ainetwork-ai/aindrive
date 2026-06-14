@@ -96,3 +96,19 @@ the product intent. Backend gates are the authoritative truth; the UI must not
 - PERMISSIONS.md: enumerate the **creator-only** surface (row immutability + payout + token policy + earnings + delete); reframe co-owner as "members + links + create/list/price shares".
 - Mark `2026-06-11-membership-ux-design.md` Manage layout **superseded** by the ux-overhaul.
 - `dochub.js` ↔ `access.ts` role duplication: note it / add a shared test.
+
+## Future: creator (drive-owner) transfer — NOT built
+
+"Creator" = the account that ran `aindrive` to pair the folder
+(`drives.owner_id`, set once in `createDrive`). It is the real host: the
+agent token + the machine holding the files + drive-deletion. There is no
+ownership transfer today (only `rotate-token` re-issues the agent token to
+the SAME owner). Co-ownership (a web `owner` grant) is the collaboration
+approximation; it deliberately does NOT convey the creator-only surface
+(payout/token-policy/earnings/delete — by design, blast-radius).
+
+If real transfer is ever needed it spans CLI + web (the host machine has to
+change hands, not just a DB column): re-pair the folder under the new
+owner's credentials and reassign `owner_id`, or an explicit "transfer
+ownership" flow that issues a fresh agent token to the new owner and
+flips `owner_id`. Out of scope until there's a concrete need.
