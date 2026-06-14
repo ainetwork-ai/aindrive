@@ -23,11 +23,22 @@ single-use and expires in 10 minutes.
 
 ```
 aindrive [folder]          serve a folder (default: current dir; logs in on first use)
+aindrive -d [folder]       serve in the BACKGROUND (returns your terminal)
 aindrive login             sign in and serve the current folder
-aindrive status [folder]   show drive id, server URL, connection state
+aindrive status [folder]   show drive id, server URL, and whether the agent is running
+aindrive logs [folder]     follow the background agent's output (tail -f; Ctrl+C to stop)
+aindrive stop [folder]     stop the background agent
 aindrive rotate-token      rotate the per-drive agent token
 aindrive mcp               run a Model Context Protocol stdio server
 ```
+
+The agent is a long-lived process — it's the live bridge between the web app
+and your files, so the drive is online only while it runs. Plain `aindrive`
+stays in the foreground (Ctrl+C to stop); `aindrive -d` runs it in the
+background and hands your terminal back. Background state (pid + log) lives in
+the folder's `.aindrive/`, so you can background several folders independently
+and reattach to any with `aindrive logs`. First-time pairing must run in the
+foreground once (it needs the browser sign-in); after that `-d` works.
 
 ### MCP integration
 
