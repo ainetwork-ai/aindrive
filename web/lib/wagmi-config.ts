@@ -62,9 +62,23 @@ export function getWagmiConfig(): WagmiConfig {
     const chains = paymentNetwork() === "mainnet"
       ? ([base] as const)
       : ([baseSepolia, base] as const);
+    // Clearer labels. Both connect Coinbase/Base infra but are DIFFERENT entry
+    // points (Base docs: keep both during the SDK transition): the passkey
+    // Smart Wallet — no app needed — vs the installed Coinbase Wallet / Base
+    // App. RainbowKit's defaults ("Base" / "Coinbase Wallet") read as
+    // duplicates to non-crypto buyers, so override ONLY the display name +
+    // shortName; connector logic, icon, and preferences are untouched. (The
+    // creators read their own static config off the original function, so
+    // wrapping the call is safe.)
+    const relabel = <W extends (...args: never[]) => { name: string; shortName?: string }>(
+      wallet: W, name: string, shortName: string,
+    ): W => ((...args: Parameters<W>) => ({ ...wallet(...args), name, shortName })) as W;
     const connectors = connectorsForWallets(
       [
-        { groupName: "Base", wallets: [baseAccount, coinbaseWallet] },
+        { groupName: "Base", wallets: [
+          relabel(baseAccount, "Base (passkey, no app)", "Base"),
+          relabel(coinbaseWallet, "Coinbase Wallet / Base App", "Base App"),
+        ] },
         { groupName: "Other wallets", wallets: [okxWallet, metaMaskWallet, rainbowWallet, walletConnectWallet, injectedWallet] },
       ],
       { appName: "aindrive", projectId },
