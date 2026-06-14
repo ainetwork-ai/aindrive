@@ -78,7 +78,7 @@ the product intent. Backend gates are the authoritative truth; the UI must not
 - **D3 [med]** PERMISSIONS.md overstates co-owner "sales/settings" — backend makes creator special in 4 ways (row immutability + payout + token policy + earnings). *(decision 2 → doc fix)*
 - **D4 [med]** Storefront hides same-path paid upgrades from lower-tier members (filter ==='none' vs backend's rank<share.role). *(decision 3)*
 - **D6 [med]** List endpoints gate at root, so a path-scoped editor can create a link but not list it. → path-aware list, or document drawer per-path list as the non-root audit surface. *(decision 4-adjacent)*
-- **D7 [low]** Whole-drive sale skips the agent existence probe (asymmetry). → document or gate on agent-online.
+- **D7 [low]** Whole-drive sale skips the agent existence probe. **RESOLVED = documented, NOT gated.** Briefly tried gating root sales on agent-online, but e2e #184 encodes the intended flow (create a drive → set up storefront/sales → pair/start the agent later), and the file/folder probe is path-EXISTENCE verification (typo protection), not a sell-time agent gate — root has no path to verify. So there is no real asymmetry to "fix"; root share creation is intentionally agent-independent.
 - **D8 [low]** No inline sale badge for editors managing files on sale. *(decision 3-adjacent)*
 
 ## Open questions (product decisions + recommendation)
