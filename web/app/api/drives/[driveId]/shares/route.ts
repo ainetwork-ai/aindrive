@@ -8,7 +8,7 @@ import { resolveRole, atLeast } from "@/lib/access";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
 import { env } from "@/lib/env";
 import { zPath } from "@/lib/zod-helpers";
-import { AgentError, callAgent, isOnline } from "@/lib/rpc";
+import { AgentError, callAgent } from "@/lib/rpc";
 
 const Body = z.object({
   path: zPath.default(""),
@@ -83,6 +83,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // token. Empty path ("") = drive root, no check needed; anything else
   // gets a stat probe so we don't hand out tokens for typo'd paths that
   // would 404 after the visitor pays.
+  // Non-root path: stat-probe verifies the path EXISTS (typo protection),
+  // which needs the agent. Root ("") has no path to verify, so it is NOT
+  // gated on the agent being online — a fresh, not-yet-paired drive can still
+  // set up free invites and storefront sales before/independent of the agent
+  // running (the drive just reads "offline" until the agent connects).
   if (body.data.path !== "") {
     try {
       const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path: body.data.path });
@@ -93,11 +98,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
       const err = e as AgentError;
       return NextResponse.json({ error: err.message || "agent unreachable" }, { status: err.status ?? 503 });
     }
-  } else if (!isOnline(driveId)) {
-    // Whole-drive share (root): root always exists so there's nothing to stat,
-    // but match the file/folder rule — don't mint a share while the agent is
-    // unreachable (otherwise the link can't be served).
-    return NextResponse.json({ error: "agent unreachable" }, { status: 503 });
   }
 
   const id = nanoid(12);
