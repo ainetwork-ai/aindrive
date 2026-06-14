@@ -8,7 +8,7 @@ import { resolveRole, atLeast } from "@/lib/access";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
 import { env } from "@/lib/env";
 import { zPath } from "@/lib/zod-helpers";
-import { AgentError, callAgent } from "@/lib/rpc";
+import { AgentError, callAgent, isOnline } from "@/lib/rpc";
 
 const Body = z.object({
   path: zPath.default(""),
@@ -50,6 +50,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     return NextResponse.json({ error: "only the owner can list a share" }, { status: 403 });
   }
 
+  // Granting EDITOR access via a link is owner-only — a non-owner editor must
+  // not be able to laterally escalate strangers to editor. Editors may still
+  // mint VIEWER links at paths they cover. (owner is whole-drive only → root.)
+  if (body.data.role === "editor" && !atLeast(resolveRole(driveId, user.id, ""), "owner")) {
+    return NextResponse.json({ error: "only an owner can grant editor access via a link" }, { status: 403 });
+  }
+
   // Paid share: currency must be one the drive's token policy allows.
   // Defaults to the policy's first token when the caller doesn't pick one.
   let currency: string | null = null;
@@ -86,6 +93,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
       const err = e as AgentError;
       return NextResponse.json({ error: err.message || "agent unreachable" }, { status: err.status ?? 503 });
     }
+  } else if (!isOnline(driveId)) {
+    // Whole-drive share (root): root always exists so there's nothing to stat,
+    // but match the file/folder rule — don't mint a share while the agent is
+    // unreachable (otherwise the link can't be served).
+    return NextResponse.json({ error: "agent unreachable" }, { status: 503 });
   }
 
   const id = nanoid(12);

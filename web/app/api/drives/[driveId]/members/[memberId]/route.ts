@@ -10,12 +10,12 @@ const PatchBody = z.object({
   role: z.enum(["viewer", "editor", "owner"]),
 });
 
-type MemberRow = { id: string; user_id: string; path: string };
+type MemberRow = { id: string; user_id: string; path: string; role: string };
 
 /** Load the target row, scoped to this drive so a foreign memberId 404s. */
 function getMemberRow(driveId: string, memberId: string): MemberRow | undefined {
   return db
-    .prepare("SELECT id, user_id, path FROM drive_members WHERE id = ? AND drive_id = ?")
+    .prepare("SELECT id, user_id, path, role FROM drive_members WHERE id = ? AND drive_id = ?")
     .get(memberId, driveId) as MemberRow | undefined;
 }
 
@@ -35,6 +35,11 @@ export async function DELETE(
   if (!member) return NextResponse.json({ error: "not found" }, { status: 404 });
   if (!canRemoveMember({ memberUserId: member.user_id, driveOwnerId: drive.owner_id })) {
     return NextResponse.json({ error: "cannot remove the drive creator" }, { status: 400 });
+  }
+  // Owner-level membership is creator-managed: a co-owner cannot remove another
+  // co-owner (only the creator manages owner grants).
+  if (member.role === "owner" && drive.owner_id !== user.id) {
+    return NextResponse.json({ error: "only the drive creator can remove an owner" }, { status: 403 });
   }
   db.prepare("DELETE FROM drive_members WHERE id = ? AND drive_id = ?").run(memberId, driveId);
   return NextResponse.json({ ok: true });
@@ -65,6 +70,11 @@ export async function PATCH(
   // grant to owner — it would be a dead concept (management gates resolve at root).
   if (body.data.role === "owner" && member.path !== "") {
     return NextResponse.json({ error: "the owner role can only be granted on the whole drive" }, { status: 400 });
+  }
+  // Owner-level membership is creator-managed: a co-owner can neither promote
+  // someone TO owner nor change an existing owner's role. Only the creator.
+  if ((body.data.role === "owner" || member.role === "owner") && drive.owner_id !== user.id) {
+    return NextResponse.json({ error: "only the drive creator can manage the owner role" }, { status: 403 });
   }
   // Explicit set (may downgrade) — distinct from CONSUME's upgrade-only merge.
   db.prepare("UPDATE drive_members SET role = ? WHERE id = ? AND drive_id = ?")
