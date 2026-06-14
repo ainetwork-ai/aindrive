@@ -139,11 +139,14 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     if (res.ok) setDrives(res.data.drives);
   }, []);
 
+  // Editors (not just owners) get the inline sale badges so someone editing a
+  // file knows it's monetized. GET /shares is editor-at-root; a purely
+  // path-scoped editor 403s → res.ok false → badges stay empty (tolerated).
   const loadShares = useCallback(async () => {
-    if (!isOwner) return;
+    if (role !== "editor" && role !== "owner") return;
     const res = await apiFetch<{ shares: ShareSummary[] }>(`/api/drives/${driveId}/shares`);
     if (res.ok) setShares(res.data.shares);
-  }, [driveId, isOwner]);
+  }, [driveId, role]);
 
   // Upsell surface for non-owners; the owner skips it (their own listings are
   // all "covered" server-side anyway). !ok (403/404) is an expected outcome

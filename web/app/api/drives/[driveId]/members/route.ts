@@ -47,6 +47,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
   // Co-owners (owner role via drive_members) may also invite — not just the creator.
   if (!atLeast(resolveRole(driveId, user.id, ""), "owner")) return NextResponse.json({ error: "only owner can invite" }, { status: 403 });
+  // Minting a co-owner is CREATOR-only: a co-owner must not be able to grant
+  // the owner role (which would let owners proliferate / mutually manage each
+  // other). Co-owners can still invite viewer/editor.
+  if (body.data.role === "owner" && drive.owner_id !== user.id) {
+    return NextResponse.json({ error: "only the drive creator can grant the owner role" }, { status: 403 });
+  }
   const invitee = db
     .prepare("SELECT id FROM users WHERE lower(email) = lower(?)")
     .get(body.data.email) as { id: string } | undefined;
