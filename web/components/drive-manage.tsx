@@ -224,20 +224,31 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
                         <Link href={`/d/${driveId}?path=${encodeURIComponent(g.path)}`} className="text-drive-muted hover:text-drive-accent hover:underline">
                           {prettyPath(g.path)}
                         </Link>
-                        <select
-                          value={g.role}
-                          disabled={busy}
-                          onChange={(e) => changeRole(g.id, e.target.value as Role)}
-                          className="bg-transparent text-drive-text font-medium focus:outline-none"
-                          aria-label={`Role at ${prettyPath(g.path)}`}
-                        >
-                          <option value="viewer">viewer</option>
-                          <option value="editor">editor</option>
-                          <option value="owner">owner</option>
-                        </select>
-                        <IconButton size="sm" variant="text" aria-label={`Remove access at ${prettyPath(g.path)}`} disabled={busy} onClick={() => removeGrant(g.id)}>
-                          <TrashIcon className="w-3 h-3" />
-                        </IconButton>
+                        {g.isCreator ? (
+                          // The creator's row can't be demoted/removed — show a
+                          // fixed label instead of dead controls that only 400.
+                          <span className="inline-flex items-center gap-1 font-medium text-drive-text">
+                            owner
+                            <Badge tone="neutral" className="ml-0.5">creator</Badge>
+                          </span>
+                        ) : (
+                          <>
+                            <select
+                              value={g.role}
+                              disabled={busy}
+                              onChange={(e) => changeRole(g.id, e.target.value as Role)}
+                              className="bg-transparent text-drive-text font-medium focus:outline-none"
+                              aria-label={`Role at ${prettyPath(g.path)}`}
+                            >
+                              <option value="viewer">viewer</option>
+                              <option value="editor">editor</option>
+                              <option value="owner">owner</option>
+                            </select>
+                            <IconButton size="sm" variant="text" aria-label={`Remove access at ${prettyPath(g.path)}`} disabled={busy} onClick={() => removeGrant(g.id)}>
+                              <TrashIcon className="w-3 h-3" />
+                            </IconButton>
+                          </>
+                        )}
                       </span>
                     ))}
                   </div>
