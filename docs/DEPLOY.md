@@ -17,8 +17,9 @@ git pull --rebase origin main
 $EDITOR web/.env.production   # mainnet, CDP keys, SESSION_SECRET, https URL, DEV_BYPASS=0,
                              # NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet, (optional) WC id
 
-# build — --env-file points Compose's ${...} interpolation at .env.production
-# (it defaults to .env). That one flag covers BOTH build args and runtime env_file.
+# build — --env-file points Compose's ${...} interpolation (the NEXT_PUBLIC_*
+# build args) at .env.production; it defaults to .env. (Runtime secrets load via
+# env_file: by literal path and need no flag — see "What runs where".)
 cd web
 flock /tmp/aindrive-build.lock sudo docker compose --env-file .env.production -f docker-compose.yml up -d --build
 
