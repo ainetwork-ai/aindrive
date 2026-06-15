@@ -3,6 +3,11 @@
 How access works in an aindrive drive. The canonical logic is `web/lib/access-core.js`
 (pure, tested) + `web/lib/access.ts` (DB-backed wrappers); this page is the map.
 
+> **The exhaustive case→behaviour table** (who may do/see what in every
+> situation, with requirement IDs + tests) is
+> [`PERMISSIONS_MATRIX.md`](PERMISSIONS_MATRIX.md). Consult & update it on every
+> permission change. This page explains the *why*; the matrix is the *spec*.
+
 ## Roles
 
 A four-rung ladder (`ROLE_RANK`): `none` < `viewer` < `editor` < `owner`.
