@@ -14,29 +14,41 @@ git pull --rebase origin main
 
 # ONE gitignored file holds everything — build vars + runtime secrets.
 # (see web/.env.example for the field reference)
-$EDITOR web/.env        # mainnet, CDP keys, SESSION_SECRET, https URL, DEV_BYPASS=0,
-                        # NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet, (optional) WC id
+$EDITOR web/.env.production   # mainnet, CDP keys, SESSION_SECRET, https URL, DEV_BYPASS=0,
+                             # NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet, (optional) WC id
 
-# build — no shell-prefix needed: compose reads NEXT_PUBLIC_* from web/.env
+# build — --env-file points Compose's ${...} interpolation at .env.production
+# (it defaults to .env). That one flag covers BOTH build args and runtime env_file.
 cd web
-flock /tmp/aindrive-build.lock sudo docker compose -f docker-compose.yml up -d --build
+flock /tmp/aindrive-build.lock sudo docker compose --env-file .env.production -f docker-compose.yml up -d --build
 
 # smoke: one SMALL real purchase, confirm it settles + shows in Settings → Sales
 ```
 
 ## What runs where
 
-The container uses **one** gitignored file, `web/.env`, for both stages:
-compose interpolates the `NEXT_PUBLIC_*` build args from it AND injects the
-runtime secrets (`env_file`) from it. Only `web/.env.example` (the field
-reference) is committed. Local dev that runs `node server.js` directly uses
-`web/.env.local` (via `@next/env`) — a separate path from the container.
-Host/container/nginx/volume layout: see DOCKER_PUBLISH_GUIDE.
+The container uses **one** gitignored file, `web/.env.production`, for both
+stages — but via two different Compose mechanisms:
 
-> **Migrating from the old two-file split:** on the server,
-> `mv web/.env.production web/.env` and add the `NEXT_PUBLIC_*` lines you used
-> to pass on the shell. (Forgetting fails loud — the SESSION_SECRET boot check
-> exits rather than running insecure.)
+- **Runtime secrets** (CDP keys, SESSION_SECRET, …) load through the service
+  `env_file: ./.env.production`. This is a literal path — it works with **no
+  flag**.
+- **Build args** (`NEXT_PUBLIC_*`, inlined into the client bundle) are filled by
+  Compose's `${...}` interpolation, which defaults to a file literally named
+  `.env`. To source them from `.env.production` you **must** pass
+  `--env-file .env.production` (or `export COMPOSE_ENV_FILES=.env.production`).
+  Skip it and the bundle silently bakes the testnet defaults.
+
+Only `web/.env.example` (the field reference) is committed. Local dev that runs
+`node server.js` directly uses `web/.env.local` (via `@next/env`) — a separate
+path from the container. Host/container/nginx/volume layout: see
+DOCKER_PUBLISH_GUIDE.
+
+> **If you already have a `web/.env.production`** from before: add the
+> `NEXT_PUBLIC_*` lines you used to pass on the shell into it, and start using
+> `--env-file .env.production` on the build command. Remove any stray bare
+> `web/.env`. (Forgetting the secrets fails loud — the SESSION_SECRET boot
+> check exits rather than running insecure.)
 
 ## Env that matters for payments
 
@@ -45,8 +57,8 @@ load-bearing ones:
 
 | Var | Mainnet value | Why it bites |
 |-----|---------------|-------------|
-| `NEXT_PUBLIC_WC_PROJECT_ID` | set (free, cloud.reown.com) | **Build-time inlined** (same rule as the network var below — must be in `.env` at build time). Empty = every WalletConnect relay flow breaks: mobile-browser visitors paying with a wallet APP get an infinite spinner. Desktop extensions and Base Account don't need it. |
-| `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK` | `mainnet` | **Build-time inlined.** A runtime-only change leaves the *browser bundle* on testnet while the server is on mainnet (split-brain). Put it in `web/.env` (compose interpolates the build arg from there) and rebuild — a restart alone is not enough. |
+| `NEXT_PUBLIC_WC_PROJECT_ID` | set (free, cloud.reown.com) | **Build-time inlined** (same rule as the network var below — lives in `.env.production`, read at build via `--env-file`). Empty = every WalletConnect relay flow breaks: mobile-browser visitors paying with a wallet APP get an infinite spinner. Desktop extensions and Base Account don't need it. |
+| `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK` | `mainnet` | **Build-time inlined.** A runtime-only change leaves the *browser bundle* on testnet while the server is on mainnet (split-brain). Put it in `web/.env.production` and rebuild **with `--env-file .env.production`** (Compose interpolates the build arg from there only with that flag) — a restart alone is not enough. |
 | `AINDRIVE_DEV_BYPASS_X402` | `0` (or unset) | `=1` skips on-chain verification — payments "succeed" without money moving. Never on mainnet. (Boot check refuses to start prod with it on.) |
 | `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` | set | The Coinbase CDP facilitator that settles mainnet payments. Without them mainnet refuses with 503 (no safe default). |
 | `AINDRIVE_X402_FACILITATOR` | **unset** | An explicit URL takes precedence over the CDP keys — setting it (e.g. to x402.org) makes CDP be ignored and mainnet settles fail. Leave unset when using CDP. |
@@ -79,12 +91,12 @@ Checked against a live `getSupported()` call with the prod CDP key:
 ## Go-live order (do NOT reorder)
 
 1. `git pull` — confirm the deploy host is at the intended commit.
-2. Fill `web/.env` (gitignored) — the one file for everything. Double-check
-   `DEV_BYPASS=0`, `AINDRIVE_X402_FACILITATOR` unset, https URL, CDP keys present,
-   and `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet`.
-3. Build under the build lock (see TL;DR) — compose reads the `NEXT_PUBLIC_*`
-   build args from `web/.env`. A restart alone is NOT enough; the client bundle
-   is baked at build.
+2. Fill `web/.env.production` (gitignored) — the one file for everything.
+   Double-check `DEV_BYPASS=0`, `AINDRIVE_X402_FACILITATOR` unset, https URL,
+   CDP keys present, and `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet`.
+3. Build under the build lock **with `--env-file .env.production`** (see TL;DR) —
+   that flag is what makes Compose read the `NEXT_PUBLIC_*` build args from it.
+   A restart alone is NOT enough; the client bundle is baked at build.
 4. Each selling drive's owner sets a payout wallet (Settings → Payments).
 5. **Smoke test**: a small real USDC purchase end-to-end → settles → appears in
    Settings → Sales. For a permit2 token you intend to sell, smoke that too

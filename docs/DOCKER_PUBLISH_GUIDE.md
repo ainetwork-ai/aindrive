@@ -33,6 +33,17 @@ first.
 > `no such file or directory`. When unsure, use the absolute path:
 > `-f /mnt/newdata/git/aindrive/web/docker-compose.yml`.
 
+> ⚠ **Set the env file for this shell before any build:**
+> ```bash
+> export COMPOSE_ENV_FILES=.env.production
+> ```
+> The prod config lives in `web/.env.production` (not `.env`). Compose's
+> `${...}` build-arg interpolation defaults to a file named `.env`, so without
+> this (or a per-command `--env-file .env.production`) every `--build` silently
+> bakes the **testnet** client bundle. All `docker compose` commands below
+> assume it is set. (Runtime secrets load via `env_file:` by literal path and
+> don't depend on it — only the build args do.) Details: `docs/DEPLOY.md`.
+
 ---
 
 ## Golden rules
@@ -186,17 +197,23 @@ on the previous commit until someone runs `docker compose ... up -d --build`.
 
 ---
 
-## Environment / secrets (`.env`)
+## Environment / secrets (`.env.production`)
 
-`docker-compose.yml` loads `web/.env` (`required: false` — the container starts
-without it, but **production must have it**). `.env` is gitignored and lives
-**only on the host** at `web/.env`; the committed template is `web/.env.example`.
-Back the live file up — it holds values that are expensive or impossible to
-re-create.
+`docker-compose.yml` loads `web/.env.production` (`required: false` — the
+container starts without it, but **production must have it**). It is gitignored
+and lives **only on the host** at `web/.env.production`; the committed template
+is `web/.env.example`. Back the live file up — it holds values that are
+expensive or impossible to re-create.
+
+> The runtime env loads here via `env_file: ./.env.production` (literal path, no
+> flag). The **build args** (`NEXT_PUBLIC_*`) are separate — they need
+> `COMPOSE_ENV_FILES=.env.production` / `--env-file .env.production` so Compose's
+> `${...}` interpolation reads this file instead of the default `.env` (see the
+> ⚠ callout under "Layout", and `docs/DEPLOY.md`).
 
 A production boot guard (`web/lib/boot-checks.js`, run once at startup) refuses
 to start the server and `process.exit(1)`s when any of these are wrong. So a
-misconfigured `.env` shows up as a container that exits right after `up -d` —
+misconfigured env file shows up as a container that exits right after `up -d` —
 check `logs` for `[aindrive] BOOT FAILED`.
 
 | Variable | Enforced in prod | Why it bites |
@@ -212,12 +229,13 @@ per-drive key stored as a BLOB in the SQLite DB on the `/data` volume (see
 unverifiable. Rebuilds keep `/data`; `down -v` **destroys** it (see Quick
 reference). Full launch checklist: `docs/PRODUCTION_TODO.md`.
 
-After editing `.env`, recreate the container so it re-reads the file (no rebuild
-needed):
+After editing a **runtime** value in `.env.production` (a secret — CDP keys,
+SESSION_SECRET, …), recreate the container so it re-reads the file; no rebuild
+needed. (A `NEXT_PUBLIC_*` change is build-time — it needs a full `--build`.)
 
 ```bash
 flock /tmp/aindrive-build.lock \
-  sudo docker compose -f web/docker-compose.yml up -d   # picks up new .env
+  sudo docker compose -f web/docker-compose.yml up -d   # re-reads .env.production
 ```
 
 ---

@@ -8,21 +8,27 @@ services:
       args:
         # NEXT_PUBLIC_* is inlined into the CLIENT bundle at `next build`, so it
         # must be a BUILD arg — a runtime-only value would leave the browser on
-        # the baked default while the server flips (split-brain). Compose reads
-        # ${...} from the project-dir `.env` (or the shell) — the SAME single
-        # `.env` used for runtime below, so one file drives everything.
+        # the baked default while the server flips (split-brain). These ${...}
+        # are interpolated by Compose from its env file. IMPORTANT: Compose's
+        # interpolation reads `.env` (or the shell) by DEFAULT — to source these
+        # build args from `.env.production` you MUST run with
+        # `--env-file .env.production` (or export COMPOSE_ENV_FILES=.env.production).
+        # Skipping it silently bakes the testnet defaults. (The runtime env_file
+        # below is separate — it loads `.env.production` by its literal path
+        # regardless of the flag.) See DEPLOY.md.
         NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK: ${NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK:-testnet}
         # Same build-time rule. Empty = WalletConnect relay flows (mobile-browser
         # visitors paying with a wallet APP) stay broken; everything else is fine.
         NEXT_PUBLIC_WC_PROJECT_ID: ${NEXT_PUBLIC_WC_PROJECT_ID:-}
     restart: unless-stopped
-    # ONE env file: a single gitignored `.env` holds BOTH the NEXT_PUBLIC build
-    # vars (read above for ${...} interpolation) AND the runtime secrets (CDP
-    # keys, SESSION_SECRET, …) injected here. `.env.example` is the committed
-    # template. (Local dev that runs `node server.js` directly uses `.env.local`
-    # via @next/env — a separate path from this container.)
+    # Runtime env: one gitignored `.env.production` holds the secrets (CDP keys,
+    # SESSION_SECRET, …) injected here AND the NEXT_PUBLIC build vars read above.
+    # `.env.example` is the committed template. (Local dev that runs
+    # `node server.js` directly uses `.env.local` via @next/env — a separate
+    # path from this container.) NOTE the `required: false` only means the
+    # container still starts without the file; prod MUST have it.
     env_file:
-      - path: ./.env
+      - path: ./.env.production
         required: false
     environment:
       NODE_ENV: production
