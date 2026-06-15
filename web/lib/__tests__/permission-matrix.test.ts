@@ -95,15 +95,15 @@ describe("§3 write ops ignore the paywall (R-ACC-PAID-004 / R-WRITE-003)", () =
 // These need code beyond the pure rule; convert each todo to a real test when
 // implemented. IDs match docs/PERMISSIONS_MATRIX.md.
 describe("TARGET — not yet implemented (see PERMISSIONS_MATRIX.md)", () => {
-  it.todo("R-WIRE-001: fs/{read,download,list,stream} + yjs-read call canReadContent (today they gate on role only — viewer wrongly reads paid)");
-  it.todo("R-WIRE-002: a nearest-ancestor `classify(path)` helper over `shares` (mirror payoutWalletFor) returns free|paid + gate path");
-  it.todo("R-ACC-NEST-001: entitlement must cover the nearest-ancestor gate path; buying a parent does not unlock a separately-priced child");
-  it.todo("R-PAY-ENT-001: the receipt (not the auto-written member row) is the access proof for a paid path");
+  // DONE (this change): R-WIRE-001/002, R-ACC-NEST-001, R-PAY-ENT-001, R-ACC-PAID-*.
+  // The carve-out is wired into the HTTP gate (require-access.ts) AND the WS hub
+  // (dochub.js) via the shared lib/sale-access.js; covered by sale-access.test.ts
+  // (unit) + e2e #190 (HTTP) and #121 (WS).
   it.todo("R-COMP-001: owner can comp a paid path to an account (free read, no edit rights), revocable + auditable");
   it.todo("R-COMP-002: comp entitlements in a separate comp_grants table (decided); paid read gate checks payment_receipts OR comp_grants, nearest-ancestor");
   it.todo("R-VIS-PAID-001: folder listings mark non-entitled paid children as locked (visible, not hidden)");
   it.todo("R-STORE-003: after the carve-out a whole-drive viewer sees the storefront for paid items");
-  it.todo("R-AGENT-WS-002: a shared test binds dochub.js role resolution to access.ts (no silent drift)");
+  it.todo("R-AGENT-WS-002: dochub.js still hand-rolls resolveRole (the paid carve-out is now shared via sale-access.js, but role resolution isn't) — bind it to access-core with a shared test");
   // DEFERRED, not planned (PERMISSIONS_MATRIX.md §10): private (free-but-restricted)
   // and public (anonymous) classifications. canReadContent intentionally rejects them.
 });

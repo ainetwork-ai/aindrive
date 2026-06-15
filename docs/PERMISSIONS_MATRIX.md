@@ -75,18 +75,19 @@ Gate: `min = viewer` at the target path. Rule (TARGET) =
 | ID | Requirement | Status |
 |----|-------------|--------|
 | `R-ACC-FREE-001` | Free path: `viewer+` may read/download; `none`/anon denied. | CURRENT (`require-access.ts:29`, `access.ts:66`) |
-| `R-ACC-PAID-001` | Paid path: a bare `viewer` grant **does NOT** grant read — purchase/comp required. *(Today it wrongly does — `fs/*` never consults `shares`.)* | **TARGET** |
-| `R-ACC-PAID-002` | Paid path: `editor+`/owner/creator read freely (they manage the content). | TARGET (free part CURRENT; the *distinction* from viewer is new) |
-| `R-ACC-PAID-003` | Paid path: an account with a covering receipt **or** comp may read, even with no role grant. | TARGET |
-| `R-ACC-PAID-004` | Write ops are **never** paywalled — they already require `editor+`, which bypasses (§3). The carve-out applies to *read* only. | TARGET (invariant to preserve) |
+| `R-ACC-PAID-001` | Paid path: a bare `viewer` grant **does NOT** grant read — purchase/comp required. | CURRENT (HTTP `require-access.ts` + WS `dochub.js`, via `sale-access.js`; e2e #190/#121) |
+| `R-ACC-PAID-002` | Paid path: `editor+`/owner/creator read freely (they manage the content). | CURRENT |
+| `R-ACC-PAID-003` | Paid path: an account with a covering receipt may read, even with no role grant. (Comp as a second entitlement source is pending `R-COMP-*`.) | CURRENT (receipt) |
+| `R-ACC-PAID-004` | Write ops are **never** paywalled — they already require `editor+`, which bypasses (§3). The carve-out applies to *read* only. | CURRENT |
 | `R-ACC-ANON-001` | No logged-out access to any non-public path (`resolveAccess` null→none). | CURRENT (`access.ts:71`) |
-| `R-ACC-NEST-001` | Nested sales: the gate is the **nearest-ancestor** priced share; entitlement must cover **that** path. Buying a parent does not unlock a more-specific (separately priced) child. | TARGET |
+| `R-ACC-NEST-001` | Nested sales: the gate is the **nearest-ancestor** priced share; entitlement must cover **that** path. Buying a parent does not unlock a more-specific (separately priced) child. | CURRENT (`sale-access.js`; e2e #190) |
 
-> **Implementation note (not a requirement):** `canReadContent` is the pure
-> rule and is tested now. Wiring it into the `fs/*` / `yjs` read routes (so they
-> compute `classification` via a nearest-ancestor `shares` lookup and
-> `hasEntitlement` via `payment_receipts`/comp) is the remaining work —
-> `R-WIRE-*` todos in the test.
+> **Implementation note:** the pure rule is `canReadContent` (access-core.js);
+> the DB-backed gate is `sale-access.js` (`paidAccessDenial` = nearest-ancestor
+> `shares` classify + `payment_receipts` entitlement). It is wired into BOTH the
+> HTTP gate (`require-access.ts` → 402) and the WS collab hub (`dochub.js` →
+> close 4402) from the one shared module, so the paywall can't be bypassed over
+> WebSocket. Comp as a second entitlement source is the remaining `R-COMP-*` work.
 
 ---
 
@@ -143,7 +144,7 @@ dropped — except `private`:
 | `R-PAY-RESOLVE-001` | `GET /s/:token` is public + login-aware: returns free metadata; the link owner and already-covered members bypass; paid + uncovered → `402`. | CURRENT (`s/[token]/route.ts:75`) |
 | `R-PAY-SETTLE-001` | A verified x402 payment settles, writes an **upgrade-only** `drive_members` grant at `share.path`/`share.role` **and** an append-only `payment_receipts` row; binds to the resolved account. | CURRENT (`s/[token]/route.ts:179`) |
 | `R-PAY-ACCEPT-001` | `POST /s/:token/accept` needs login; free → grant; paid → only if already covered (settled), else `402`; upgrade-only. | CURRENT (`s/[token]/accept/route.ts:22`) |
-| `R-PAY-ENT-001` | After `R-ACC-PAID-*` ships, the **receipt** (not the auto-written member row) is the access proof for a paid path; the member row remains for navigation/entry. | TARGET |
+| `R-PAY-ENT-001` | The **receipt** (not the auto-written member row) is the access proof for a paid path; the member row remains for navigation/entry. | CURRENT (`sale-access.js` `hasPaidEntitlement`) |
 
 ---
 
@@ -193,7 +194,7 @@ and create/price/list shares, but the following stay with the creator
 | ID | Requirement | Status |
 |----|-------------|--------|
 | `R-AGENT-WS-001` | Agent WS connect: bearer token verified against bcrypt `agent_token_hash`; close on mismatch. | CURRENT (`agents.js:69`) |
-| `R-AGENT-WS-002` | The WS handler (`dochub.js`) hand-duplicates `resolveRole`; it MUST stay in sync with `access.ts` (no machine binding today — covered by a shared test). | CURRENT/at-risk |
+| `R-AGENT-WS-002` | The WS handler (`dochub.js`) now shares the **paid carve-out** (`sale-access.js`, same as HTTP) — so a viewer can't siphon a priced doc's live frames over WS (e2e #121). It still hand-duplicates `resolveRole` (role resolution only); that MUST stay in sync with `access-core` (no machine binding yet). | CURRENT (carve-out shared); `resolveRole` dup at-risk |
 | `R-AGENT-ASK-001` | Ask agent: tier rate-limit + per-request policy evaluation. | CURRENT (`agents/[agentId]/ask/route.ts:38`) |
 
 ---

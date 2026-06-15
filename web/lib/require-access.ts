@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getUser } from "@/lib/session";
 import { getDrive, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role } from "@/lib/access";
+import { paidAccessDenial } from "./sale-access.js";
 
 export type DriveGate = { drive: DriveRow; role: Role };
 
@@ -37,6 +38,17 @@ export async function requireDriveRole(
   const role = await resolveAccess(driveId, targetPath, user?.id ?? null);
   if (!atLeast(role, opts.min)) {
     return NextResponse.json({ error: "forbidden" }, { status: user ? 403 : 401 });
+  }
+  // Paid carve-out (read gate): a priced subtree is removed from a bare viewer
+  // grant's reach — editor+ (managers) and entitled buyers pass; an unentitled
+  // viewer is sent to the paywall. Only viewers can be denied here ("none" was
+  // already 401/403 above). See docs/PERMISSIONS_MATRIX.md R-ACC-PAID-*.
+  const denial = paidAccessDenial(driveId, targetPath, role, user?.id ?? null);
+  if (denial) {
+    return NextResponse.json(
+      { error: "payment required", reason: "payment_required", ...denial },
+      { status: 402 },
+    );
   }
   // role >= opts.min >= "viewer", so it is a concrete Role, never "none".
   return { drive, role: role as Role };
