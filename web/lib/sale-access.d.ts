@@ -23,3 +23,13 @@ export declare function paidAccessDenial(
   role: RoleOrNone,
   accountId: string | null,
 ): PaidDenial | null;
+
+export type EntryLock = { price: number; currency: string | null; shareId: string; listed: boolean };
+
+export declare function paidLocksForListing(
+  driveId: string,
+  parentPath: string,
+  childNames: string[],
+  role: RoleOrNone,
+  accountId: string | null,
+): Record<string, EntryLock>;

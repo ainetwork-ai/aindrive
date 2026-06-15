@@ -15,8 +15,8 @@ import type { DriveEntry } from "@/lib/protocol";
 import type { SortKey, SortState } from "@/lib/sort-entries";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu, rowMenuItems, type Action } from "./row-menu";
-import { fileIcon, fileIconForName } from "./file-icons";
-import { Badge, Card, EmptyState, IconButton, Menu, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
+import { fileIcon, fileIconForName, FileBadge } from "./file-icons";
+import { Badge, Button, Card, EmptyState, IconButton, Menu, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
 
 // Shared grid track for FileGrid + its skeleton so the loading state matches.
 const GRID_CLASS = "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3";
@@ -528,7 +528,7 @@ export function FileTable({
         <tbody>
           {entries.map((e) => {
             const paid = paidByPath.get(e.path);
-            const { Icon, className: tone } = fileIcon(e);
+            const ic = fileIcon(e);
             const isSelected = selected?.path === e.path;
             return (
               <tr
@@ -537,16 +537,23 @@ export function FileTable({
                   "group h-11 cursor-pointer transition-colors",
                   isSelected ? "bg-drive-selected/60" : "hover:bg-drive-hover",
                 )}
-                onClick={() => { if (e.isDir) setPath(e.path); else setSelected(e); }}
+                // A locked (paid, unpaid-for) entry opens the locked preview, never
+                // navigates in — listing/reading it would 402 (R-VIS-PAID-001).
+                onClick={() => { if (!e.locked && e.isDir) setPath(e.path); else setSelected(e); }}
                 onContextMenu={(ev) => openCtx(ev, e)}
               >
                 <td className="px-3 first:rounded-l-lg align-middle">
                   <div className="flex items-center gap-3 min-w-0">
-                    <Icon className={clsx("w-5 h-5 shrink-0", tone)} />
+                    <FileBadge icon={ic} locked={!!e.locked} className="shrink-0" />
                     <span className="truncate">{e.name}</span>
                     {paid && (
                       <Badge tone="sale" className="shrink-0">
                         {paid.price_usdc!.toFixed(2)} {paid.currency ?? "USDC"}
+                      </Badge>
+                    )}
+                    {e.locked && (
+                      <Badge tone="sale" icon={<Lock />} className="shrink-0">
+                        {(e.price ?? 0).toFixed(2)} {e.currency ?? "USDC"}
                       </Badge>
                     )}
                   </div>
@@ -729,7 +736,8 @@ function FileGrid({
   isOwner: boolean;
   onContextMenuEntry: (ev: React.MouseEvent, entry: DriveEntry) => void;
 }) {
-  const activate = (e: DriveEntry) => { if (e.isDir) setPath(e.path); else setSelected(e); };
+  // Locked (paid, unpaid-for) entries open the locked preview, never navigate in.
+  const activate = (e: DriveEntry) => { if (!e.locked && e.isDir) setPath(e.path); else setSelected(e); };
   return (
     <div className={GRID_CLASS}>
       {entries.map((e) => {
@@ -771,12 +779,15 @@ function FileGrid({
             {/* Keyed by path+mtime so replacing the file remounts the visual —
                 otherwise a failed thumbnail's `broken` state would stick to the
                 reused instance and pin the icon fallback forever. */}
-            <GridVisual key={`${e.path}-${e.mtimeMs}`} driveId={driveId} entry={e} Icon={Icon} tone={tone} />
+            <GridVisual key={`${e.path}-${e.mtimeMs}`} driveId={driveId} entry={e} Icon={Icon} tone={tone} locked={!!e.locked} />
             <span className="w-full text-center text-caption text-drive-text line-clamp-2 break-words" title={e.name}>
               {e.name}
             </span>
             {paid && (
               <Badge tone="sale">{paid.price_usdc!.toFixed(2)} {paid.currency ?? "USDC"}</Badge>
+            )}
+            {e.locked && (
+              <Badge tone="sale" icon={<Lock />}>{(e.price ?? 0).toFixed(2)} {e.currency ?? "USDC"}</Badge>
             )}
           </Card>
         );
@@ -789,14 +800,17 @@ function FileGrid({
  *  mtime — the &v= param keys the browser's immutable cache); anything else,
  *  and any thumbnail that fails (agent offline, oversized, decode error),
  *  falls back to the type icon. */
-function GridVisual({ driveId, entry, Icon, tone }: {
+function GridVisual({ driveId, entry, Icon, tone, locked }: {
   driveId: string;
   entry: DriveEntry;
   Icon: ReturnType<typeof fileIcon>["Icon"];
   tone: string;
+  locked?: boolean;
 }) {
   const [broken, setBroken] = useState(false);
-  if (!entry.isDir && entry.mime.startsWith("image/") && !broken) {
+  // Skip the thumbnail for locked items: the carve-out 402s fs/thumbnail anyway,
+  // and we must not preview paid image content. Show the lock-overlay icon.
+  if (!entry.isDir && entry.mime.startsWith("image/") && !broken && !locked) {
     return (
       <img
         src={`/api/drives/${driveId}/fs/thumbnail?path=${encodeURIComponent(entry.path)}&v=${entry.mtimeMs}`}
@@ -808,7 +822,53 @@ function GridVisual({ driveId, entry, Icon, tone }: {
       />
     );
   }
-  return <Icon className={clsx("w-10 h-10 shrink-0", tone)} />;
+  return <FileBadge icon={{ Icon, className: tone }} locked={!!locked} size="lg" />;
+}
+
+/**
+ * Preview pane for a LOCKED (paid, not-yet-bought) entry — shown instead of the
+ * Viewer so a click never tries to read the content (which 402s). Makes the
+ * required token unmistakable: price + ticker, with a one-click purchase for
+ * listed sales (unlisted ones sell by the owner's private link). R-VIS-PAID-001.
+ */
+export function LockedPreview({ driveId, entry, onClose }: {
+  driveId: string;
+  entry: DriveEntry;
+  onClose: () => void;
+}) {
+  const ticker = entry.currency ?? "USDC";
+  const price = (entry.price ?? 0).toFixed(2);
+  const canBuy = !!(entry.listed && entry.shareId);
+  return (
+    <aside className="fixed inset-0 z-30 w-full sm:static sm:inset-auto sm:z-auto sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
+      <div className="flex h-12 items-center gap-2 border-b border-drive-border px-3">
+        <FileBadge icon={fileIcon(entry)} locked className="shrink-0" />
+        <span className="truncate text-body font-medium">{entry.name}</span>
+        <IconButton aria-label="Close" className="ml-auto" onClick={onClose}><X className="w-4 h-4" /></IconButton>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto">
+        <EmptyState
+          icon={<Lock />}
+          title="구매해야 볼 수 있어요"
+          description={`이 ${entry.isDir ? "폴더" : "파일"}는 판매 중이라 잠겨 있어요. 아래 금액을 결제하면 잠금이 해제됩니다.`}
+          action={
+            <div className="flex flex-col items-center gap-3">
+              <Badge tone="sale" icon={<Lock />} className="text-body">{price} {ticker}</Badge>
+              {canBuy ? (
+                <Button onClick={() => { window.location.href = `/api/drives/${driveId}/showcase/${entry.shareId}`; }}>
+                  {price} {ticker} 결제하고 잠금 해제
+                </Button>
+              ) : (
+                <p className="max-w-xs text-caption text-drive-muted">
+                  소유자가 공유한 구매 링크로만 결제할 수 있어요.
+                </p>
+              )}
+            </div>
+          }
+        />
+      </div>
+    </aside>
+  );
 }
 
 /** Loading placeholder for the grid view — cards shaped like FileGrid cards. */

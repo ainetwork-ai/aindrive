@@ -8,7 +8,7 @@ import type { ShowcaseItem } from "@/lib/showcase";
 import { apiFetch } from "@/lib/api-client";
 import { sortEntries, type SortKey, type SortState } from "@/lib/sort-entries";
 import {
-  DriveSidebar, DriveHeader, FileTable, ShowcaseSection,
+  DriveSidebar, DriveHeader, FileTable, ShowcaseSection, LockedPreview,
   type DriveSummary, type ShareSummary, type ViewMode,
 } from "./drive-shell-parts";
 
@@ -355,7 +355,13 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
                 showcase is a discovery surface, not deep-navigation chrome. */}
             {(path === rootPath || isSyntheticRoot) && <ShowcaseSection driveId={driveId} items={showcase} />}
           </div>
-          {selected && (
+          {selected && (selected.locked ? (
+            <LockedPreview
+              driveId={driveId}
+              entry={selected}
+              onClose={() => setSelected(null)}
+            />
+          ) : (
             <Viewer
               driveId={driveId}
               entry={selected}
@@ -363,7 +369,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
               onClose={() => setSelected(null)}
               onSaved={load}
             />
-          )}
+          ))}
           {chatOpen && (
             <FolderChat
               driveId={driveId}

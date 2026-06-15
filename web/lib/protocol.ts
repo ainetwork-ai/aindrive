@@ -35,6 +35,14 @@ export type DriveEntry = {
   mtimeMs: number;
   ext: string;
   mime: string;
+  // Paid carve-out (R-VIS-PAID-001): set by the fs/list route when the viewer
+  // can't yet read this priced child. The agent never sends these — they are
+  // server-annotated per requester. UI shows 🔒 + price + ticker.
+  locked?: boolean;
+  price?: number;
+  currency?: string | null;
+  shareId?: string;
+  listed?: boolean;
 };
 
 export type RpcResult =

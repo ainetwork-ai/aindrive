@@ -106,7 +106,7 @@ dropped — except `private`:
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| `R-VIS-PAID-001` | Paid children are shown to non-entitled viewers as **locked** (decided `O-VIS-PAID`: a drive of paid content advertises, not hides, what's for sale). Today: covered viewers see them as normal files; uncovered partial members get the separate showcase (`showcase.ts`). | TARGET |
+| `R-VIS-PAID-001` | Paid children are shown to non-entitled viewers as **locked** + price + ticker (decided `O-VIS-PAID`: advertise, don't hide, what's for sale). `fs/list` annotates each child (`paidLocksForListing`); the listing shows a 🔒 badge and clicking opens a `LockedPreview` (Buy → showcase for listed sales) instead of 402-ing. | CURRENT (`sale-access.js`; e2e #190) |
 | `R-VIS-PRIV-001` | Private children are **hidden** from listings for non-allowlisted users. | DEFERRED (§10) |
 
 ---
