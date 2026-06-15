@@ -9,6 +9,7 @@ import {
   bestMatchingRole,
   canReadContent,
   type Role,
+  type RoleOrNone,
 } from "../access-core.js";
 import { type NormalizedPath } from "../path";
 
@@ -19,7 +20,7 @@ const n = (s: string) => s as NormalizedPath;
 // canReadContent(role, classification, hasEntitlement) is the pure decision.
 // This truth table IS the §1 matrix; every cell is a requirement.
 describe("§1 canReadContent — read access by role × classification × entitlement", () => {
-  type Case = { role: Role; cls: "free" | "paid"; ent: boolean; want: boolean; req: string };
+  type Case = { role: RoleOrNone; cls: "free" | "paid"; ent: boolean; want: boolean; req: string };
   const cases: Case[] = [
     // free: viewer+ read; none denied (entitlement irrelevant on free).
     { role: "none", cls: "free", ent: false, want: false, req: "R-ACC-FREE-001" },
