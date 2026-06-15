@@ -7,7 +7,7 @@ import { join } from "node:path";
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-sale-"));
 
 const { db } = await import("../db.js");
-const { paidAccessDenial } = await import("../sale-access.js");
+const { paidAccessDenial, paidLocksForListing } = await import("../sale-access.js");
 
 // Integration coverage for the paid carve-out read gate (PERMISSIONS_MATRIX.md
 // §1, R-ACC-PAID-* / R-ACC-NEST-001). Drives real SQL over shares +
@@ -83,5 +83,29 @@ describe("paidAccessDenial — paid carve-out read gate (DB)", () => {
 
   it("an expired sale no longer gates — path falls back to free", () => {
     expect(paidAccessDenial(DRIVE, "old/x.pdf", "viewer", OTHER)).toBeNull();
+  });
+});
+
+describe("paidLocksForListing — per-entry lock annotations for a folder listing (R-VIS-PAID-001)", () => {
+  it("locks paid children for a non-entitled viewer; free children unlocked", () => {
+    const locks = paidLocksForListing(DRIVE, "", ["premium", "docs", "old"], "viewer", OTHER);
+    expect(locks.premium).toMatchObject({ price: 10, currency: "USDC", shareId: "s-premium", listed: true });
+    expect(locks.docs).toBeUndefined(); // free
+    expect(locks.old).toBeUndefined(); // expired sale → free
+  });
+
+  it("nested: buyer of the parent still sees a deeper, separately-priced child locked (R-NEST)", () => {
+    const locks = paidLocksForListing(DRIVE, "premium", ["secret", "a.txt"], "viewer", BUYER);
+    expect(locks.secret).toMatchObject({ price: 50, currency: "USDC", shareId: "s-secret" }); // deeper sale, not bought
+    expect(locks["a.txt"]).toBeUndefined(); // covered by the /premium receipt
+  });
+
+  it("editor+ sees no locks (managers)", () => {
+    expect(paidLocksForListing(DRIVE, "", ["premium"], "editor", OTHER)).toEqual({});
+  });
+
+  it("no account (anon) — paid children locked", () => {
+    const locks = paidLocksForListing(DRIVE, "", ["premium"], "viewer", null);
+    expect(locks.premium).toMatchObject({ price: 10, currency: "USDC", shareId: "s-premium", listed: true });
   });
 });

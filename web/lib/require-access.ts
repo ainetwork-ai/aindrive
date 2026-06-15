@@ -4,7 +4,7 @@ import { getDrive, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { paidAccessDenial } from "./sale-access.js";
 
-export type DriveGate = { drive: DriveRow; role: Role };
+export type DriveGate = { drive: DriveRow; role: Role; userId: string | null };
 
 /**
  * Shared authorization gate for drive-scoped API routes (fs/*, yjs).
@@ -51,5 +51,5 @@ export async function requireDriveRole(
     );
   }
   // role >= opts.min >= "viewer", so it is a concrete Role, never "none".
-  return { drive, role: role as Role };
+  return { drive, role: role as Role, userId: user?.id ?? null };
 }

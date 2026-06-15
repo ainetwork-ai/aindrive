@@ -87,3 +87,43 @@ export function paidAccessDenial(driveId, targetPath, role, accountId) {
   if (canReadContent(role, "paid", hasEnt)) return null;
   return { gatePath: gate.path, shareId: gate.id, price: gate.price_usdc, currency: gate.currency };
 }
+
+/**
+ * Per-entry lock map for a folder LISTING (R-VIS-PAID-001): which immediate
+ * children of `parentPath` are paid AND not entitled FOR THIS viewer, so the UI
+ * can show them as 🔒 + price + ticker (visible, not hidden). editor+ see no
+ * locks. Batched — one `shares` query + one `payment_receipts` query regardless
+ * of entry count (vs paidAccessDenial per child).
+ * @param {string} driveId
+ * @param {string} parentPath  normalized path of the folder being listed
+ * @param {string[]} childNames  immediate child names (entry.name)
+ * @param {"none"|"viewer"|"editor"|"owner"} role
+ * @param {string|null} accountId
+ * @returns {Record<string, { price:number, currency:string|null }>}  keyed by child name
+ */
+export function paidLocksForListing(driveId, parentPath, childNames, role, accountId) {
+  /** @type {Record<string, { price:number, currency:string|null }>} */
+  const locks = {};
+  if (atLeast(role, "editor")) return locks; // managers see everything
+  const rows = db
+    .prepare("SELECT id, path, price_usdc, currency, expires_at, listed FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
+    .all(driveId);
+  const active = rows.filter((r) => !r.expires_at || new Date(r.expires_at) >= new Date());
+  if (active.length === 0) return locks;
+  const owned = new Set(
+    accountId
+      ? db.prepare("SELECT DISTINCT path FROM payment_receipts WHERE drive_id = ? AND account_id = ?").all(driveId, accountId).map((r) => r.path)
+      : [],
+  );
+  for (const name of childNames) {
+    const childPath = parentPath ? `${parentPath}/${name}` : name;
+    const gate = nearestSale(active, childPath);
+    // shareId + listed let the UI offer a Buy button (only listed shares resolve
+    // through the showcase purchase route); unlisted sales show the lock+price
+    // but no in-app buy (owner sells those by private link).
+    if (gate && !owned.has(gate.path)) {
+      locks[name] = { price: gate.price_usdc, currency: gate.currency, shareId: gate.id, listed: !!gate.listed };
+    }
+  }
+  return locks;
+}

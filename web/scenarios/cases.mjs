@@ -2215,6 +2215,10 @@ add(190, "paid carve-out: whole-drive viewer 402 on a priced path; editor/owner 
     eq(vr.status, 402, "whole-drive viewer must hit the paywall on a priced path; got " + vr.status);
     const vfree = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: viewerCookie } });
     eq(vfree.status, 200, "whole-drive viewer still lists free root; got " + vfree.status);
+    // R-VIS-PAID-001: the priced child is annotated locked + price in the listing.
+    const lockedEntry = (vfree.body.entries ?? []).find((x) => x.name === "carveout-secret.txt");
+    assert(lockedEntry?.locked === true, "R-VIS: paid child must be annotated locked; got " + JSON.stringify(lockedEntry));
+    eq(lockedEntry.price, 7, "R-VIS: locked entry carries its price");
 
     // Whole-drive EDITOR (manager) → reads the priced path.
     const { cookie: editorCookie, email: eEmail } = await signupUser("c190editor");
