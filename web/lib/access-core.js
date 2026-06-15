@@ -95,4 +95,38 @@ export function mergeRoleUpgradeOnly(current, incoming) {
   return (ROLE_RANK[current] ?? 0) > (ROLE_RANK[incoming] ?? 0) ? current : incoming;
 }
 
+/**
+ * Read-access decision for a CLASSIFIED path — the paid carve-out rule
+ * (docs/PERMISSIONS_MATRIX.md §1, R-ACC-*).
+ *
+ * Today fs/* read routes gate purely on role (atLeast viewer). This pure rule
+ * adds the commerce dimension: a priced ("paid") path is *removed* from a bare
+ * viewer grant's reach — you need editor+ (you manage the content) or an
+ * entitlement (you bought it, or were comped). Free paths behave as before.
+ *
+ * Preconditions — the CALLER resolves these (see PERMISSIONS_MATRIX.md §0):
+ *  - role           bestMatchingRole at the path (ownership/creator ⇒ "owner")
+ *  - classification "free" | "paid" (nearest-ancestor priced share ⇒ "paid")
+ *  - hasEntitlement a receipt OR comp covering the gate path (paid paths only)
+ *
+ * NOT YET WIRED into the routes: the read routes must compute `classification`
+ * (nearest-ancestor `shares` lookup) and `hasEntitlement`
+ * (`payment_receipts`/comp) and call this. That wiring is the remaining work
+ * (R-WIRE-* in permission-matrix.test.ts). "private"/"public" classifications
+ * are future (PERMISSIONS_MATRIX.md §10) and intentionally rejected here so a
+ * miswired caller fails loud instead of silently allowing.
+ *
+ * @param {"none"|"viewer"|"editor"|"owner"} role
+ * @param {"free"|"paid"} classification
+ * @param {boolean} hasEntitlement  receipt|comp covering the gate path
+ * @returns {boolean} may the actor READ the path
+ */
+export function canReadContent(role, classification, hasEntitlement) {
+  // Managers (editor+/owner/creator) always read — they curate the content.
+  if (atLeast(role, "editor")) return true;
+  if (classification === "free") return atLeast(role, "viewer");
+  if (classification === "paid") return hasEntitlement === true;
+  throw new Error(`canReadContent: unsupported classification "${classification}"`);
+}
+
 export { normalizePath, isAncestorOrSelf };

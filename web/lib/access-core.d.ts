@@ -22,5 +22,11 @@ export declare function mergeRoleUpgradeOnly(
   incoming: Role
 ): Role;
 
+export declare function canReadContent(
+  role: RoleOrNone,
+  classification: "free" | "paid",
+  hasEntitlement: boolean
+): boolean;
+
 export { normalizePath, isAncestorOrSelf } from "./path";
 export type { PathError, NormalizedPath };
