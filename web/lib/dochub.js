@@ -7,6 +7,7 @@ import { jwtVerify } from "jose";
 import { trace } from "./trace.js";
 import { log } from "./logger.js";
 import { ROLE_RANK, bestMatchingRole, normalizePath } from "./access-core.js";
+import { paidAccessDenial } from "./sale-access.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -59,8 +60,8 @@ async function readUserFromCookie(cookieHeader) {
 // Mirrors lib/access.ts resolveRoleByUser: drive owner, else best-matching
 // drive_members row. Kept here (not imported) because access.ts depends on
 // next/headers, which is unavailable under raw `node server.js`. drive_members
-// is the single access source — paid (settle) and free (accept) shares both
-// write rows here, so the WS hub needs no wallet/share-cookie branch.
+// decides the ROLE; the paid carve-out (paidAccessDenial, shared with the HTTP
+// gate) then removes priced subtrees from a bare viewer's reach below.
 function resolveRole(driveId, userId, path) {
   if (!userId) return "none";
   const target = normalizePath(path);
@@ -82,6 +83,10 @@ export async function onDocConnect(ws, req, query) {
   const userId = await readUserFromCookie(cookie);
   const role = resolveRole(driveId, userId, path);
   if (ROLE_RANK[role] < ROLE_RANK.viewer) { ws.close(4401, "no access"); return; }
+  // Paid carve-out: a bare viewer must not siphon a priced doc's live frames over
+  // WS any more than they can read it over HTTP (same rule, shared module).
+  // editor+ and entitled buyers pass; an unentitled viewer is closed (paywall).
+  if (paidAccessDenial(driveId, path, role, userId)) { ws.close(4402, "payment required"); return; }
 
   const docId = docIdFor(driveId, path);
   const peer = { ws, role, userId, docId };

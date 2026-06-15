@@ -502,4 +502,40 @@ export function registerCollabCases(add, state, helpers) {
     assert(minSeen >= 1, "each peer should have at least its own state");
     peers.forEach((x) => x.close());
   }));
+
+  // Paid carve-out over WS (PERMISSIONS_MATRIX.md R-ACC-PAID-* via dochub.js):
+  // a bare whole-drive VIEWER must not siphon a priced doc's live frames over the
+  // collab socket any more than they can read it over HTTP. editor+ (managers)
+  // still subscribe. Same paidAccessDenial as the HTTP gate (shared module).
+  add(121, "paid carve-out: whole-drive viewer WS-denied on a priced doc; editor subscribes", wrap(async () => {
+    const cookie = state.ownerCookie;
+    const p = freshFile("121paid");
+    await ensureFresh(state, p, "secret-doc");
+    const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+      method: "POST", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ path: p, role: "viewer", price_usdc: 5 }),
+    });
+    eq(sr.status, 200, "paid share create: " + JSON.stringify(sr.body));
+    try {
+      // Whole-drive viewer (logged-in account — dochub WS auth reads aindrive_session).
+      const { cookie: viewerCookie, email: vEmail } = await helpers.signupUser("c121viewer");
+      await helpers.inviteMember(state.driveId, vEmail, "", "viewer", cookie);
+      const V = new Peer("V121", viewerCookie, state.driveId, p);
+      let denied = false;
+      try { await V.connect(2500); } catch { denied = true; }
+      assert(denied, "carve-out: whole-drive viewer WS sub to a priced doc must be denied");
+      assert(V.events.includes("close") && !V.subscribed, "viewer peer must be closed, not subscribed");
+      V.close();
+
+      // Whole-drive editor (manager) → subscribes fine.
+      const { cookie: editorCookie, email: eEmail } = await helpers.signupUser("c121editor");
+      await helpers.inviteMember(state.driveId, eEmail, "", "editor", cookie);
+      const E = new Peer("E121", editorCookie, state.driveId, p);
+      await E.connect();
+      eq(E.role, "editor", "carve-out: whole-drive editor (manager) subscribes to the priced doc");
+      E.close();
+    } finally {
+      await jget(`/api/drives/${state.driveId}/shares/${sr.body.id}`, { method: "DELETE", headers: { cookie } });
+    }
+  }));
 }

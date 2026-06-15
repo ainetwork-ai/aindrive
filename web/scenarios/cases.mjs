@@ -176,6 +176,10 @@ async function signupAndLogin(prefix = "mp") {
 
 // Creates a paid share (price_usdc > 0) on the current ensured drive.
 // Returns the share token.
+// NOTE: lingering paid shares would trip the paid carve-out
+// (PERMISSIONS_MATRIX.md R-ACC-PAID-*) for later viewer reads on this SHARED
+// test drive — all.test.mjs's afterEach revokes every share after each case
+// (resetSharesForTestDrive) so they never leak across scenarios.
 async function makePaidShare({ path = "", role = "viewer", price_usdc = 0.01 } = {}) {
   await ensureDrive();
   const cookie = await reEnsureOwner();
@@ -186,6 +190,31 @@ async function makePaidShare({ path = "", role = "viewer", price_usdc = 0.01 } =
   });
   if (r.status !== 200) throw new Error("makePaidShare failed: " + JSON.stringify(r.body));
   return r.body.token;
+}
+
+// Revoke every share on the drive. Scenarios that assert a VIEWER's free read
+// call this first, because the shared test drive accumulates paid shares from
+// earlier scenarios and the paid carve-out (PERMISSIONS_MATRIX.md R-ACC-PAID-*)
+// would otherwise gate the read (a stale root sale ⇒ every path reads as "paid").
+async function revokeAllShares(driveId, ownerCookie) {
+  const r = await jget(`/api/drives/${driveId}/shares`, { headers: { cookie: ownerCookie } });
+  for (const s of r.body?.shares ?? []) {
+    await jget(`/api/drives/${driveId}/shares/${s.id}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+  }
+}
+
+// Global per-case cleanup (called from all.test.mjs afterEach): the shared test
+// drive accumulates paid shares across scenarios; with the paid carve-out a
+// stale sale would 402 a later viewer's HTTP read OR close (4402) their WS
+// collab sub. Revoking all shares after every case keeps each scenario isolated.
+// Best-effort: receipts/grants are untouched, so the only cross-case dependency
+// (#162→#163, receipt-based) is unaffected.
+export async function cleanupTestDriveShares() {
+  if (!state.driveId) return;
+  try {
+    const cookie = await reEnsureOwner();
+    await revokeAllShares(state.driveId, cookie);
+  } catch {}
 }
 
 // Builds a minimal PAYMENT-SIGNATURE header value (x402 v2) accepted by
@@ -206,6 +235,7 @@ function buildPaymentSignature(from = "0xdemodemodemodemodemodemodemodemodemo000
 // so the cap only gets issued for an anonymous (non-owner) payer.
 // path defaults to "" (drive root) because the shares route requires non-empty
 // paths to already exist as files; root path bypasses the existence check.
+// (The root sale is cleaned per-case by resetSharesForTestDrive — see afterEach.)
 async function getPaidCap(driveId, path = "", ownerCookie) {
   const shareRes = await jget(`/api/drives/${driveId}/shares`, {
     method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
@@ -899,6 +929,7 @@ add(65, "paid-accept GET (DEV_BYPASS) returns Meadowcap cap", async () => {
 add(165, "path-scoped viewer reaches granted sub-path, not root", async () => {
   await ensureDrive();
   const ownerCookie = await reEnsureOwner();
+  await revokeAllShares(state.driveId, ownerCookie); // clear stale paid shares (carve-out)
   const { cookie: viewerCookie, email } = await signupUser("c165pathviewer");
   await inviteMember(state.driveId, email, "docs", "viewer", ownerCookie);
   // Ensure docs dir exists (sample fixture provides it, but guard anyway).
@@ -938,6 +969,7 @@ add(166, "path-scoped viewer denied on an un-granted sibling → 403", async () 
 add(167, "multi-grant viewer: dir + file grants, root stays denied", async () => {
   await ensureDrive();
   const ownerCookie = await reEnsureOwner();
+  await revokeAllShares(state.driveId, ownerCookie); // clear stale paid shares (carve-out)
   // Owner fixtures: docs + assets dirs (idempotent guard, like #165) + a file in assets.
   await jget(`/api/drives/${state.driveId}/fs/mkdir`, {
     method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
@@ -1812,7 +1844,7 @@ add(164, "mergeRoleUpgradeOnly: editor accepting a viewer share keeps editor", a
 
 // Append the 20 deeper collaborative-editing scenarios.
 import { registerCollabCases } from "./collab-cases.mjs";
-registerCollabCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
+registerCollabCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner, signupUser, inviteMember });
 
 // Append the 20 trace + observability scenarios.
 import { registerTraceCases } from "./trace-cases.mjs";
@@ -2155,6 +2187,48 @@ add(184, "paid share blocked until the drive has a payout wallet", async () => {
     body: JSON.stringify({ path: "", role: "viewer", price_usdc: 1, currency: "USDC" }),
   });
   eq(ok.status, 200, "paid share allowed after wallet set: " + JSON.stringify(ok.body));
+});
+
+// Paid carve-out (PERMISSIONS_MATRIX.md R-ACC-PAID-*): a whole-drive VIEWER is
+// blocked (402) from a priced path until entitled; an EDITOR (manager) and the
+// owner read it freely; free content stays readable for the viewer. Creates the
+// sale on a dedicated file and revokes it so it never gates later scenarios.
+add(190, "paid carve-out: whole-drive viewer 402 on a priced path; editor/owner 200", async () => {
+  await ensureDrive();
+  const ownerCookie = await reEnsureOwner();
+  await revokeAllShares(state.driveId, ownerCookie); // start from a clean slate (no stale root sale)
+  await jget(`/api/drives/${state.driveId}/fs/write`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "carveout-secret.txt", content: "secret", encoding: "utf8" }),
+  });
+  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+    method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+    body: JSON.stringify({ path: "carveout-secret.txt", role: "viewer", price_usdc: 7 }),
+  });
+  eq(sr.status, 200, "paid share create: " + JSON.stringify(sr.body));
+  try {
+    // Whole-drive VIEWER: covered by a "" viewer grant, but the priced path is
+    // carved out → 402 (paywall), while free content stays readable.
+    const { cookie: viewerCookie, email: vEmail } = await signupUser("c190viewer");
+    await inviteMember(state.driveId, vEmail, "", "viewer", ownerCookie);
+    const vr = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: viewerCookie } });
+    eq(vr.status, 402, "whole-drive viewer must hit the paywall on a priced path; got " + vr.status);
+    const vfree = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: viewerCookie } });
+    eq(vfree.status, 200, "whole-drive viewer still lists free root; got " + vfree.status);
+
+    // Whole-drive EDITOR (manager) → reads the priced path.
+    const { cookie: editorCookie, email: eEmail } = await signupUser("c190editor");
+    await inviteMember(state.driveId, eEmail, "", "editor", ownerCookie);
+    const er = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: editorCookie } });
+    eq(er.status, 200, "whole-drive editor (manager) reads the priced path; got " + er.status);
+
+    // Owner reads freely.
+    const or = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: ownerCookie } });
+    eq(or.status, 200, "owner reads the priced path; got " + or.status);
+  } finally {
+    // Revoke the sale so it doesn't carve out this path for later scenarios.
+    await jget(`/api/drives/${state.driveId}/shares/${sr.body.id}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+  }
 });
 
 import { registerEmergentCases } from "./emergent-cases.mjs";

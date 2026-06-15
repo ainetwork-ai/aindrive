@@ -1,12 +1,16 @@
 import { test, describe, afterEach } from "vitest";
 import { execSync } from "node:child_process";
-import { cases } from "./cases.mjs";
+import { cases, cleanupTestDriveShares } from "./cases.mjs";
 
 // After each case, sweep for any orphaned per-case agent processes: case #92
 // (boot.mjs), case #96 (start-agent.mjs), and collab #118 (start-agent.mjs).
 // Skip the harness global agent (HARNESS_AGENT_PID) — it is managed by
 // global-setup.mjs teardown, not by per-case cleanup.
 afterEach(async () => {
+  // Revoke any paid shares left on the shared test drive: with the paid carve-out
+  // a stale sale would 402 a later viewer's read / close (4402) their WS sub.
+  await cleanupTestDriveShares();
+
   // global-setup.mjs publishes the harness agent PID so we don't kill it here.
   // ensureDrive() in cases.mjs publishes the suite (test-drive) agent PID.
   // Only sweep agents spawned within individual cases (#92 boot.mjs, #96/#118 start-agent.mjs).
