@@ -100,9 +100,10 @@ describe("TARGET — not yet implemented (see PERMISSIONS_MATRIX.md)", () => {
   it.todo("R-ACC-NEST-001: entitlement must cover the nearest-ancestor gate path; buying a parent does not unlock a separately-priced child");
   it.todo("R-PAY-ENT-001: the receipt (not the auto-written member row) is the access proof for a paid path");
   it.todo("R-COMP-001: owner can comp a paid path to an account (free read, no edit rights), revocable + auditable");
-  it.todo("R-COMP-002 / O-COMP-STORE: comp storage decided (lean: separate comp_grants table) and covers nearest-ancestor like receipts");
+  it.todo("R-COMP-002: comp entitlements in a separate comp_grants table (decided); paid read gate checks payment_receipts OR comp_grants, nearest-ancestor");
   it.todo("R-VIS-PAID-001: folder listings mark non-entitled paid children as locked (visible, not hidden)");
   it.todo("R-STORE-003: after the carve-out a whole-drive viewer sees the storefront for paid items");
   it.todo("R-AGENT-WS-002: a shared test binds dochub.js role resolution to access.ts (no silent drift)");
-  it.todo("O-PRIV-SCOPE / O-PUBLIC-SCOPE: private (free-but-restricted) and public (anon) classifications — deferred (§10)");
+  // DEFERRED, not planned (PERMISSIONS_MATRIX.md §10): private (free-but-restricted)
+  // and public (anonymous) classifications. canReadContent intentionally rejects them.
 });

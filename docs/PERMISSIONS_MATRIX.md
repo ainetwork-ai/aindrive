@@ -23,7 +23,8 @@ for permission *behaviour*.
    check that no row describes.
 4. `CURRENT` = implemented and asserted today. `TARGET` = agreed required
    behaviour **not yet implemented** (tracked as `it.todo` in the test — the
-   build-this list). `OPEN` = decision still owed (see §10).
+   build-this list). `DEFERRED` = documented design, intentionally **not**
+   planned (§10). All formerly-`OPEN` decisions are now settled (§10).
 
 ---
 
@@ -41,9 +42,9 @@ who is asking:
   or any ancestor).
 - **paid** — the nearest-ancestor share covering P has `price_usdc>0`. That
   ancestor is the **gate path**.
-- **private** *(future, §10)* — explicitly restricted: excluded from inherited
+- **private** *(deferred, §10)* — explicitly restricted: excluded from inherited
   grants even when free.
-- **public** *(future, §10)* — anonymous-readable.
+- **public** *(deferred, §10)* — anonymous-readable.
 
 **Entitlement (paid paths only)** — does this account hold a right to the gate
 path, independent of role:
@@ -63,7 +64,7 @@ path, independent of role:
 Gate: `min = viewer` at the target path. Rule (TARGET) =
 `canReadContent(role, classification, hasEntitlement)`:
 
-| Actor role at P | free | paid · no entitlement | paid · purchased/comped | private *(future)* | public *(future)* |
+| Actor role at P | free | paid · no entitlement | paid · purchased/comped | private *(deferred)* | public *(deferred)* |
 |---|---|---|---|---|---|
 | logged-out (anon) | DENY | DENY | DENY (entitlement binds to an account ⇒ needs login) | DENY | ALLOW |
 | logged-in, role `none` | DENY | DENY | **ALLOW** (comp/receipt without any role) | DENY | ALLOW |
@@ -99,13 +100,13 @@ dropped — except `private`:
 | free | visible + openable | visible + openable |
 | paid (no entitlement) | **visible + LOCKED** (name + price + lock; click → paywall) | visible + openable |
 | paid (entitled) | visible + openable | visible + openable |
-| private *(future)* | **HIDDEN** | visible (OPEN: editor vs owner) |
+| private *(deferred)* | **HIDDEN** | visible (deferred: editor vs owner — §10) |
 | public *(future)* | visible + openable | visible + openable |
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| `R-VIS-PAID-001` | Paid children are shown to non-entitled viewers as **locked** (drive-of-paid-content should advertise, not hide, what's for sale). | TARGET (today: covered viewers see them as normal files; uncovered partial members get the separate showcase — `showcase.ts`) |
-| `R-VIS-PRIV-001` | Private children are **hidden** from listings for non-allowlisted users. | TARGET / OPEN (§10) |
+| `R-VIS-PAID-001` | Paid children are shown to non-entitled viewers as **locked** (decided `O-VIS-PAID`: a drive of paid content advertises, not hides, what's for sale). Today: covered viewers see them as normal files; uncovered partial members get the separate showcase (`showcase.ts`). | TARGET |
+| `R-VIS-PRIV-001` | Private children are **hidden** from listings for non-allowlisted users. | DEFERRED (§10) |
 
 ---
 
@@ -131,7 +132,7 @@ dropped — except `private`:
 | `R-SHARE-STORE-001` | `listed:true` (put on the drive storefront): `owner at root` only. | CURRENT (`shares/route.ts:49`) |
 | `R-SHARE-REVOKE-001` | Revoke a link: the link's `created_by` **or** `owner at root`. Revoking 404s the token but leaves already-accepted grants intact. | CURRENT (`shares/[shareId]/route.ts:36`) |
 | `R-COMP-001` | An owner may grant a specific account **free entitlement** to a paid path **without** edit rights (a "comp"). Behaves like a purchase for access (§1), binds to the account, is revocable, and is auditable distinctly from real sales. | **TARGET** |
-| `R-COMP-002` | A comp is path-scoped (covers the gate path and below, nearest-ancestor like receipts). | TARGET |
+| `R-COMP-002` | Comp entitlements live in a **separate `comp_grants` table** (decided `O-COMP-STORE`); path-scoped (covers the gate path and below, nearest-ancestor like receipts). The paid read gate checks `payment_receipts` **OR** `comp_grants`. | TARGET |
 
 ---
 
@@ -197,11 +198,14 @@ and create/price/list shares, but the following stay with the creator
 
 ---
 
-## 10. Open decisions (owed before the relevant rows leave TARGET)
+## 10. Settled decisions
 
-| ID | Decision | Options / lean |
-|----|----------|----------------|
-| `O-COMP-STORE` | Where comp entitlements live. | **A. separate `comp_grants` table** (keeps `payment_receipts` a pure money ledger) — *lean A*; B. a `kind` column on `payment_receipts` (one query, but synthetic `tx_hash`). |
-| `O-PRIV-SCOPE` | Should a general **private** (free-but-restricted) classification exist now, and does it exclude broad `editor` grants too, or only `viewer`? | Lean: **defer** — no concrete need yet; the paid carve-out + comp cover the stated cases. The §1/§2 2-axis layout is the extension point. |
-| `O-PUBLIC-SCOPE` | Anonymous **public** read as a first-class per-path flag. | Lean: **defer** — separate "web publishing" feature; free share links already approximate "anyone with the link". |
-| `O-VIS-PAID` | Locked-and-visible vs hidden for paid children in inline listings. | Lean: **locked + visible** (`R-VIS-PAID-001`) — matches storefront intent. |
+These were the open product calls; now decided. The rows above are updated to
+match.
+
+| ID | Decision | Outcome |
+|----|----------|---------|
+| `O-COMP-STORE` | Where comp entitlements live. | **DECIDED: a separate `comp_grants` table.** Keeps `payment_receipts` a pure append-only money ledger (clean earnings/audit, no synthetic `tx_hash` for non-payments). The paid read gate (`R-ACC-PAID-003`) checks `payment_receipts` **OR** `comp_grants` for the entitlement. |
+| `O-VIS-PAID` | Locked-and-visible vs hidden for paid children in listings. | **DECIDED: locked + visible** (`R-VIS-PAID-001`). A drive of paid content advertises what's for sale; a non-entitled viewer sees name + price + lock, click → paywall. |
+| `O-PRIV-SCOPE` | A general **private** (free-but-restricted) classification. | **DEFERRED — not planned.** No concrete need; the paid carve-out + comp cover the stated cases. The §1/§2 2-axis layout stays as the extension point if a real need appears (and would decide then whether `private` excludes broad `editor` grants or only `viewer`). |
+| `O-PUBLIC-SCOPE` | Anonymous **public** read as a per-path flag. | **DEFERRED — not planned.** A separate "web publishing" concern; free share links already approximate "anyone with the link". |
