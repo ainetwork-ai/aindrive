@@ -33,16 +33,15 @@ first.
 > `no such file or directory`. When unsure, use the absolute path:
 > `-f /mnt/newdata/git/aindrive/web/docker-compose.yml`.
 
-> ⚠ **Set the env file for this shell before any build:**
-> ```bash
-> export COMPOSE_ENV_FILES=.env.production
-> ```
-> The prod config lives in `web/.env.production` (not `.env`). Compose's
-> `${...}` build-arg interpolation defaults to a file named `.env`, so without
-> this (or a per-command `--env-file .env.production`) every `--build` silently
-> bakes the **testnet** client bundle. All `docker compose` commands below
-> assume it is set. (Runtime secrets load via `env_file:` by literal path and
-> don't depend on it — only the build args do.) Details: `docs/DEPLOY.md`.
+> ⚠ **Every build command below passes `--env-file .env.production`.** The prod
+> config lives in `web/.env.production` (not `.env`), and Compose's `${...}`
+> build-arg interpolation defaults to a file named `.env` — omit the flag on a
+> `--build` and it silently bakes the **testnet** client bundle. Runtime-only
+> commands (`up -d` with no `--build`, `logs`, `down`, `ps`) don't take it:
+> secrets load via `env_file:` by literal path, independent of the flag.
+> Prefer not to repeat the flag across a session? `export
+> COMPOSE_ENV_FILES=.env.production` once does the same thing for that shell.
+> Details: `docs/DEPLOY.md`.
 
 ---
 
@@ -57,7 +56,7 @@ flock-protected wrapper — first one in wins, others wait their turn:
 ```bash
 # acquire-or-wait, single shared lock at /tmp/aindrive-build.lock
 flock /tmp/aindrive-build.lock \
-  sudo docker compose -f web/docker-compose.yml up -d --build
+  sudo docker compose --env-file .env.production -f web/docker-compose.yml up -d --build
 ```
 
 If you absolutely cannot wait, use `flock -n` (non-blocking) and bail rather
@@ -65,7 +64,7 @@ than racing:
 
 ```bash
 flock -n /tmp/aindrive-build.lock \
-  sudo docker compose -f web/docker-compose.yml up -d --build \
+  sudo docker compose --env-file .env.production -f web/docker-compose.yml up -d --build \
   || { echo "another build in progress — try again in a minute"; exit 1; }
 ```
 
@@ -128,7 +127,7 @@ git pull --rebase origin main
 
 # 2. build (locked)
 flock /tmp/aindrive-build.lock \
-  sudo docker compose -f web/docker-compose.yml up -d --build
+  sudo docker compose --env-file .env.production -f web/docker-compose.yml up -d --build
 
 # 3. confirm container is fresh
 sudo docker compose -f web/docker-compose.yml ps
@@ -161,7 +160,7 @@ message:
 
 ```bash
 LOG=/tmp/aindrive-build.log
-sudo docker compose -f web/docker-compose.yml build web --progress=plain \
+sudo docker compose --env-file .env.production -f web/docker-compose.yml build web --progress=plain \
   > "$LOG" 2>&1
 
 sed 's/\x1b\[[0-9;]*m//g' "$LOG" \
@@ -268,7 +267,7 @@ git fetch origin
 git reset --hard <sha>     # ⚠ destructive — coordinate first
 
 flock /tmp/aindrive-build.lock \
-  sudo docker compose -f web/docker-compose.yml up -d --build
+  sudo docker compose --env-file .env.production -f web/docker-compose.yml up -d --build
 ```
 
 Tell your teammates in chat **before** running `git reset --hard` on the
@@ -299,7 +298,7 @@ List snapshots: `sudo docker images aindrive-web`. Prune old ones with
 ```bash
 # bring up (build + start)
 flock /tmp/aindrive-build.lock \
-  sudo docker compose -f web/docker-compose.yml up -d --build
+  sudo docker compose --env-file .env.production -f web/docker-compose.yml up -d --build
 
 # logs
 sudo docker compose -f web/docker-compose.yml logs -f web
