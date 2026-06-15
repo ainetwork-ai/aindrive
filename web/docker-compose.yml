@@ -6,26 +6,23 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        # Payment network must be a BUILD arg (NEXT_PUBLIC_* is inlined into the
-        # client bundle at `next build`). Putting it only in .env (runtime) would
-        # flip the server but leave the browser on the baked default — split-brain.
-        # Compose reads ${...} from the same .env, so one value drives both stages.
+        # NEXT_PUBLIC_* is inlined into the CLIENT bundle at `next build`, so it
+        # must be a BUILD arg — a runtime-only value would leave the browser on
+        # the baked default while the server flips (split-brain). Compose reads
+        # ${...} from the project-dir `.env` (or the shell) — the SAME single
+        # `.env` used for runtime below, so one file drives everything.
         NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK: ${NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK:-testnet}
-        # Same build-time rule as above. Empty = WalletConnect relay flows
-        # (mobile-browser visitors paying with a wallet APP) stay broken.
+        # Same build-time rule. Empty = WalletConnect relay flows (mobile-browser
+        # visitors paying with a wallet APP) stay broken; everything else is fine.
         NEXT_PUBLIC_WC_PROJECT_ID: ${NEXT_PUBLIC_WC_PROJECT_ID:-}
     restart: unless-stopped
-    # Runtime env. Both files are optional and later wins, so prod hosts can
-    # keep real values in `.env.production` (gitignored) without renaming to
-    # `.env`. NOTE: the NEXT_PUBLIC_* build arg above is read by compose from
-    # the HOST shell or `.env` only (compose does NOT read `.env.production`
-    # for ${...} interpolation) — so for a mainnet build, either put
-    # NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK in `.env`/the shell, or pass
-    # `--build-arg`. See .env.production.example go-live checklist.
+    # ONE env file: a single gitignored `.env` holds BOTH the NEXT_PUBLIC build
+    # vars (read above for ${...} interpolation) AND the runtime secrets (CDP
+    # keys, SESSION_SECRET, …) injected here. `.env.example` is the committed
+    # template. (Local dev that runs `node server.js` directly uses `.env.local`
+    # via @next/env — a separate path from this container.)
     env_file:
       - path: ./.env
-        required: false
-      - path: ./.env.production
         required: false
     environment:
       NODE_ENV: production
