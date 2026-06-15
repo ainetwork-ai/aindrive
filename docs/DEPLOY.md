@@ -12,23 +12,31 @@ this runbook is the release/payment layer on top of it.
 # on the deploy host, in the repo
 git pull --rebase origin main
 
-# fill secrets (gitignored; see web/.env.example for the field reference)
-$EDITOR web/.env.production        # CDP keys, SESSION_SECRET, https URL, mainnet, DEV_BYPASS=0
+# ONE gitignored file holds everything — build vars + runtime secrets.
+# (see web/.env.example for the field reference)
+$EDITOR web/.env        # mainnet, CDP keys, SESSION_SECRET, https URL, DEV_BYPASS=0,
+                        # NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet, (optional) WC id
 
-# build (NEXT_PUBLIC_* is build-time — must be on the shell, NOT just the env file)
+# build — no shell-prefix needed: compose reads NEXT_PUBLIC_* from web/.env
 cd web
-NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet \
-  flock /tmp/aindrive-build.lock sudo docker compose -f docker-compose.yml up -d --build
+flock /tmp/aindrive-build.lock sudo docker compose -f docker-compose.yml up -d --build
 
 # smoke: one SMALL real purchase, confirm it settles + shows in Settings → Sales
 ```
 
 ## What runs where
 
-The container reads env at runtime from `web/.env` and `web/.env.production`
-(compose `env_file`, later wins). `.env.production` holds the real prod
-values and is gitignored — only `web/.env.example` (the field reference) is
-committed. Host/container/nginx/volume layout: see DOCKER_PUBLISH_GUIDE.
+The container uses **one** gitignored file, `web/.env`, for both stages:
+compose interpolates the `NEXT_PUBLIC_*` build args from it AND injects the
+runtime secrets (`env_file`) from it. Only `web/.env.example` (the field
+reference) is committed. Local dev that runs `node server.js` directly uses
+`web/.env.local` (via `@next/env`) — a separate path from the container.
+Host/container/nginx/volume layout: see DOCKER_PUBLISH_GUIDE.
+
+> **Migrating from the old two-file split:** on the server,
+> `mv web/.env.production web/.env` and add the `NEXT_PUBLIC_*` lines you used
+> to pass on the shell. (Forgetting fails loud — the SESSION_SECRET boot check
+> exits rather than running insecure.)
 
 ## Env that matters for payments
 
@@ -37,8 +45,8 @@ load-bearing ones:
 
 | Var | Mainnet value | Why it bites |
 |-----|---------------|-------------|
-| `NEXT_PUBLIC_WC_PROJECT_ID` | set (free, cloud.reown.com) | **Build-time inlined** (same rule as the network var below — shell/`.env` at build time). Empty = every WalletConnect relay flow breaks: mobile-browser visitors paying with a wallet APP get an infinite spinner. Desktop extensions and Base Account don't need it. |
-| `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK` | `mainnet` | **Build-time inlined.** A runtime-only change leaves the *browser bundle* on testnet while the server is on mainnet (split-brain). Must be set on the **shell/`.env`** at `build` time — compose does NOT read `.env.production` for build-arg `${...}` interpolation. |
+| `NEXT_PUBLIC_WC_PROJECT_ID` | set (free, cloud.reown.com) | **Build-time inlined** (same rule as the network var below — must be in `.env` at build time). Empty = every WalletConnect relay flow breaks: mobile-browser visitors paying with a wallet APP get an infinite spinner. Desktop extensions and Base Account don't need it. |
+| `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK` | `mainnet` | **Build-time inlined.** A runtime-only change leaves the *browser bundle* on testnet while the server is on mainnet (split-brain). Put it in `web/.env` (compose interpolates the build arg from there) and rebuild — a restart alone is not enough. |
 | `AINDRIVE_DEV_BYPASS_X402` | `0` (or unset) | `=1` skips on-chain verification — payments "succeed" without money moving. Never on mainnet. (Boot check refuses to start prod with it on.) |
 | `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` | set | The Coinbase CDP facilitator that settles mainnet payments. Without them mainnet refuses with 503 (no safe default). |
 | `AINDRIVE_X402_FACILITATOR` | **unset** | An explicit URL takes precedence over the CDP keys — setting it (e.g. to x402.org) makes CDP be ignored and mainnet settles fail. Leave unset when using CDP. |
@@ -71,11 +79,12 @@ Checked against a live `getSupported()` call with the prod CDP key:
 ## Go-live order (do NOT reorder)
 
 1. `git pull` — confirm the deploy host is at the intended commit.
-2. Fill `web/.env.production` (gitignored). Double-check `DEV_BYPASS=0`,
-   `AINDRIVE_X402_FACILITATOR` unset, https URL, CDP keys present.
-3. Build **with `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet` on the shell**
-   (see TL;DR) under the build lock. A restart alone is NOT enough — the
-   client bundle is baked at build.
+2. Fill `web/.env` (gitignored) — the one file for everything. Double-check
+   `DEV_BYPASS=0`, `AINDRIVE_X402_FACILITATOR` unset, https URL, CDP keys present,
+   and `NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=mainnet`.
+3. Build under the build lock (see TL;DR) — compose reads the `NEXT_PUBLIC_*`
+   build args from `web/.env`. A restart alone is NOT enough; the client bundle
+   is baked at build.
 4. Each selling drive's owner sets a payout wallet (Settings → Payments).
 5. **Smoke test**: a small real USDC purchase end-to-end → settles → appears in
    Settings → Sales. For a permit2 token you intend to sell, smoke that too
