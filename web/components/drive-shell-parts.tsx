@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
-  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut,
+  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut, EyeOff,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { SortKey, SortState } from "@/lib/sort-entries";
@@ -32,6 +32,9 @@ export type ShareSummary = {
   // Token the sale is priced in (drive policy symbol); null = legacy USDC.
   // GET /shares already returns it — badges show "<amount> <symbol>".
   currency: string | null;
+  // 1 = advertised in the drive storefront (public); 0 = private (link-only)
+  // sale, hidden from non-entitled viewers. Drives the owner-side badge styling.
+  listed: number;
 };
 
 export type ViewMode = "list" | "grid";
@@ -536,6 +539,9 @@ export function FileTable({
                 className={clsx(
                   "group h-11 cursor-pointer transition-colors",
                   isSelected ? "bg-drive-selected/60" : "hover:bg-drive-hover",
+                  // Unlisted (private) sale → slightly translucent so the owner
+                  // sees at a glance it's hidden from buyers.
+                  paid && !paid.listed && "opacity-60",
                 )}
                 // A locked (paid, unpaid-for) entry opens the locked preview, never
                 // navigates in — listing/reading it would 402 (R-VIS-PAID-001).
@@ -547,9 +553,7 @@ export function FileTable({
                     <FileBadge icon={ic} locked={!!e.locked} className="shrink-0" />
                     <span className="truncate">{e.name}</span>
                     {paid && (
-                      <Badge tone="sale" className="shrink-0">
-                        {paid.price_usdc!.toFixed(2)} {paid.currency ?? "USDC"}
-                      </Badge>
+                      <SaleBadge price={paid.price_usdc!} currency={paid.currency} listed={!!paid.listed} />
                     )}
                     {e.locked && (
                       <Badge tone="sale" icon={<Lock />} className="shrink-0">
@@ -756,6 +760,8 @@ function FileGrid({
               "transition-shadow duration-150 hover:shadow-e2 active:shadow-e1",
               "focus-visible:ring-2 focus-visible:ring-drive-accent/40",
               isSelected && "ring-2 ring-drive-accent/50 bg-drive-selected/40",
+              // Unlisted (private) sale → slightly translucent (owner cue).
+              paid && !paid.listed && "opacity-60",
             )}
             onClick={() => activate(e)}
             onKeyDown={(ev) => {
@@ -784,7 +790,7 @@ function FileGrid({
               {e.name}
             </span>
             {paid && (
-              <Badge tone="sale">{paid.price_usdc!.toFixed(2)} {paid.currency ?? "USDC"}</Badge>
+              <SaleBadge price={paid.price_usdc!} currency={paid.currency} listed={!!paid.listed} />
             )}
             {e.locked && (
               <Badge tone="sale" icon={<Lock />}>{(e.price ?? 0).toFixed(2)} {e.currency ?? "USDC"}</Badge>
@@ -823,6 +829,21 @@ function GridVisual({ driveId, entry, Icon, tone, locked }: {
     );
   }
   return <FileBadge icon={{ Icon, className: tone }} locked={!!locked} size="lg" />;
+}
+
+/**
+ * Owner-side sale badge. Blue = LISTED (public, advertised in the storefront);
+ * muted + eye-off = UNLISTED (private, link-only — hidden from non-entitled
+ * viewers). Lets an owner tell a sale's visibility state at a glance.
+ */
+function SaleBadge({ price, currency, listed }: { price: number; currency: string | null; listed: boolean }) {
+  const amt = `${price.toFixed(2)} ${currency ?? "USDC"}`;
+  if (listed) return <Badge tone="sale" className="shrink-0">{amt}</Badge>;
+  return (
+    <span title="비공개 판매 — 스토어프론트에 안 보이고 링크로만 판매돼요" className="inline-flex shrink-0">
+      <Badge tone="neutral" icon={<EyeOff />}>{amt}</Badge>
+    </span>
+  );
 }
 
 /**

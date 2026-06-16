@@ -22,9 +22,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     // them open it and hit a 402. editor+ get no locks (paidLocksForListing).
     const entries: Entry[] = result.entries ?? [];
     const locks = paidLocksForListing(driveId, path, entries.map((e) => e.name), role, userId);
-    const annotated = entries.map((e) =>
-      locks[e.name] ? { ...e, locked: true, ...locks[e.name] } : e,
-    );
+    const annotated = entries
+      .map((e) => (locks[e.name] ? { ...e, locked: true, ...locks[e.name] } : e))
+      // Listed paid item → shown locked (advertise the sale). Unlisted paid item
+      // → HIDDEN: it's a private (link-only) sale, so a non-entitled viewer must
+      // not even learn it exists. editor+ have no locks, so they see everything.
+      .filter((e) => !(e.locked && e.listed === false));
     return NextResponse.json({ entries: annotated, role });
   } catch (e) {
     const err = e as AgentError;
