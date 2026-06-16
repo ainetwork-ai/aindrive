@@ -99,14 +99,15 @@ dropped — except `private`:
 | Child classification | viewer w/o entitlement sees | editor+/owner sees |
 |---|---|---|
 | free | visible + openable | visible + openable |
-| paid (no entitlement) | **visible + LOCKED** (name + price + lock; click → paywall) | visible + openable |
+| paid · **listed** · no entitlement | **visible + LOCKED** (name + price + lock; click → paywall) | visible + openable |
+| paid · **unlisted** · no entitlement | **HIDDEN** (private/link-only sale) | visible + openable |
 | paid (entitled) | visible + openable | visible + openable |
 | private *(deferred)* | **HIDDEN** | visible (deferred: editor vs owner — §10) |
 | public *(future)* | visible + openable | visible + openable |
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| `R-VIS-PAID-001` | Paid children are shown to non-entitled viewers as **locked** + price + ticker (decided `O-VIS-PAID`: advertise, don't hide, what's for sale). `fs/list` annotates each child (`paidLocksForListing`); the listing shows a 🔒 badge and clicking opens a `LockedPreview` (Buy → showcase for listed sales) instead of 402-ing. | CURRENT (`sale-access.js`; e2e #190) |
+| `R-VIS-PAID-001` | **Listed** paid children → shown **locked** + price + ticker to non-entitled viewers (🔒 badge; click → `LockedPreview` with Buy). **Unlisted** paid children → **hidden** entirely (private, link-only sale). `fs/list` annotates + filters per requester (`paidLocksForListing`); editor+ see everything. Owner-side listing dims unlisted sales (eye-off badge) so their private state is legible. | CURRENT (`sale-access.js` + fs/list; e2e #190) |
 | `R-VIS-PRIV-001` | Private children are **hidden** from listings for non-allowlisted users. | DEFERRED (§10) |
 
 ---
@@ -207,6 +208,6 @@ match.
 | ID | Decision | Outcome |
 |----|----------|---------|
 | `O-COMP-STORE` | Where comp entitlements live. | **DECIDED: a separate `comp_grants` table.** Keeps `payment_receipts` a pure append-only money ledger (clean earnings/audit, no synthetic `tx_hash` for non-payments). The paid read gate (`R-ACC-PAID-003`) checks `payment_receipts` **OR** `comp_grants` for the entitlement. |
-| `O-VIS-PAID` | Locked-and-visible vs hidden for paid children in listings. | **DECIDED: locked + visible** (`R-VIS-PAID-001`). A drive of paid content advertises what's for sale; a non-entitled viewer sees name + price + lock, click → paywall. |
+| `O-VIS-PAID` | Locked-and-visible vs hidden for paid children in listings. | **DECIDED by `listed`** (`R-VIS-PAID-001`): a **listed** sale is advertised → shown locked (name + price + lock, click → paywall); an **unlisted** sale is private → hidden from non-entitled viewers entirely. So `listed` is the single visibility switch. |
 | `O-PRIV-SCOPE` | A general **private** (free-but-restricted) classification. | **DEFERRED — not planned.** No concrete need; the paid carve-out + comp cover the stated cases. The §1/§2 2-axis layout stays as the extension point if a real need appears (and would decide then whether `private` excludes broad `editor` grants or only `viewer`). |
 | `O-PUBLIC-SCOPE` | Anonymous **public** read as a per-path flag. | **DEFERRED — not planned.** A separate "web publishing" concern; free share links already approximate "anyone with the link". |

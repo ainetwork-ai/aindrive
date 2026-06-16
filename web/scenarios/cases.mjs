@@ -2193,45 +2193,60 @@ add(184, "paid share blocked until the drive has a payout wallet", async () => {
 // blocked (402) from a priced path until entitled; an EDITOR (manager) and the
 // owner read it freely; free content stays readable for the viewer. Creates the
 // sale on a dedicated file and revokes it so it never gates later scenarios.
-add(190, "paid carve-out: whole-drive viewer 402 on a priced path; editor/owner 200", async () => {
+add(190, "paid carve-out: viewer 402; listed sale shown locked, unlisted sale hidden; editor/owner see all", async () => {
   await ensureDrive();
   const ownerCookie = await reEnsureOwner();
-  await revokeAllShares(state.driveId, ownerCookie); // start from a clean slate (no stale root sale)
-  await jget(`/api/drives/${state.driveId}/fs/write`, {
+  await revokeAllShares(state.driveId, ownerCookie); // start from a clean slate (no stale sale)
+  for (const name of ["carveout-secret.txt", "carveout-private.txt"]) {
+    await jget(`/api/drives/${state.driveId}/fs/write`, {
+      method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
+      body: JSON.stringify({ path: name, content: "secret", encoding: "utf8" }),
+    });
+  }
+  // One LISTED sale (advertised → shown locked) and one UNLISTED sale (private →
+  // hidden from non-entitled viewers).
+  const srListed = await jget(`/api/drives/${state.driveId}/shares`, {
     method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
-    body: JSON.stringify({ path: "carveout-secret.txt", content: "secret", encoding: "utf8" }),
+    body: JSON.stringify({ path: "carveout-secret.txt", role: "viewer", price_usdc: 7, listed: true }),
   });
-  const sr = await jget(`/api/drives/${state.driveId}/shares`, {
+  eq(srListed.status, 200, "listed sale create: " + JSON.stringify(srListed.body));
+  const srUnlisted = await jget(`/api/drives/${state.driveId}/shares`, {
     method: "POST", headers: { "content-type": "application/json", cookie: ownerCookie },
-    body: JSON.stringify({ path: "carveout-secret.txt", role: "viewer", price_usdc: 7 }),
+    body: JSON.stringify({ path: "carveout-private.txt", role: "viewer", price_usdc: 9 }),
   });
-  eq(sr.status, 200, "paid share create: " + JSON.stringify(sr.body));
+  eq(srUnlisted.status, 200, "unlisted sale create: " + JSON.stringify(srUnlisted.body));
   try {
-    // Whole-drive VIEWER: covered by a "" viewer grant, but the priced path is
-    // carved out → 402 (paywall), while free content stays readable.
+    // Whole-drive VIEWER: both priced paths are access-carved-out → 402.
     const { cookie: viewerCookie, email: vEmail } = await signupUser("c190viewer");
     await inviteMember(state.driveId, vEmail, "", "viewer", ownerCookie);
-    const vr = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: viewerCookie } });
-    eq(vr.status, 402, "whole-drive viewer must hit the paywall on a priced path; got " + vr.status);
-    const vfree = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: viewerCookie } });
-    eq(vfree.status, 200, "whole-drive viewer still lists free root; got " + vfree.status);
-    // R-VIS-PAID-001: the priced child is annotated locked + price in the listing.
-    const lockedEntry = (vfree.body.entries ?? []).find((x) => x.name === "carveout-secret.txt");
-    assert(lockedEntry?.locked === true, "R-VIS: paid child must be annotated locked; got " + JSON.stringify(lockedEntry));
-    eq(lockedEntry.price, 7, "R-VIS: locked entry carries its price");
+    const vrL = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: viewerCookie } });
+    eq(vrL.status, 402, "viewer must hit the paywall on the listed sale; got " + vrL.status);
+    const vrU = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-private.txt&encoding=utf8`, { headers: { cookie: viewerCookie } });
+    eq(vrU.status, 402, "viewer must hit the paywall on the unlisted sale; got " + vrU.status);
+    // Listing: listed sale shown LOCKED + price; unlisted sale HIDDEN entirely.
+    const vlist = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: viewerCookie } });
+    eq(vlist.status, 200, "viewer lists free root; got " + vlist.status);
+    const vNames = (vlist.body.entries ?? []).map((x) => x.name);
+    const listedEntry = (vlist.body.entries ?? []).find((x) => x.name === "carveout-secret.txt");
+    assert(listedEntry?.locked === true, "listed sale must show locked; got " + JSON.stringify(listedEntry));
+    eq(listedEntry.price, 7, "locked entry carries its price");
+    assert(!vNames.includes("carveout-private.txt"), "unlisted sale must be HIDDEN from the viewer's listing; got " + JSON.stringify(vNames));
 
-    // Whole-drive EDITOR (manager) → reads the priced path.
+    // Whole-drive EDITOR (manager) → reads both + sees both in the listing (no hide, no lock).
     const { cookie: editorCookie, email: eEmail } = await signupUser("c190editor");
     await inviteMember(state.driveId, eEmail, "", "editor", ownerCookie);
-    const er = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: editorCookie } });
-    eq(er.status, 200, "whole-drive editor (manager) reads the priced path; got " + er.status);
+    const er = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-private.txt&encoding=utf8`, { headers: { cookie: editorCookie } });
+    eq(er.status, 200, "editor (manager) reads a priced path; got " + er.status);
+    const elist = await jget(`/api/drives/${state.driveId}/fs/list?path=`, { headers: { cookie: editorCookie } });
+    const eNames = (elist.body.entries ?? []).map((x) => x.name);
+    assert(eNames.includes("carveout-private.txt") && eNames.includes("carveout-secret.txt"),
+      "editor must see BOTH sales (no hide for managers); got " + JSON.stringify(eNames));
 
     // Owner reads freely.
     const or = await jget(`/api/drives/${state.driveId}/fs/read?path=carveout-secret.txt&encoding=utf8`, { headers: { cookie: ownerCookie } });
     eq(or.status, 200, "owner reads the priced path; got " + or.status);
   } finally {
-    // Revoke the sale so it doesn't carve out this path for later scenarios.
-    await jget(`/api/drives/${state.driveId}/shares/${sr.body.id}`, { method: "DELETE", headers: { cookie: ownerCookie } });
+    await revokeAllShares(state.driveId, ownerCookie); // clean both sales for later scenarios
   }
 });
 
