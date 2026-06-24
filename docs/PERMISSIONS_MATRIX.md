@@ -184,9 +184,9 @@ and create/price/list shares, but the following stay with the creator
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| `R-STORE-001` | `GET /showcase`: creator **or** any member (≥1 row anywhere); lists only `listed:true` priced shares the viewer does not already cover. | CURRENT (`showcase/route.ts:17`; `showcase.ts`) |
+| `R-STORE-001` | `GET /showcase`: creator **or** any member (≥1 row anywhere); lists `listed:true` priced shares the viewer **can't read** (see `R-STORE-003`). | CURRENT (`showcase/route.ts:17`; `showcase.ts`) |
 | `R-STORE-002` | No public/anonymous storefront (explicit non-goal). | CURRENT |
-| `R-STORE-003` | Once `R-ACC-PAID-*` ships, a whole-drive viewer no longer "covers" paid paths ⇒ the storefront becomes meaningful for them (free content browsable, paid items surfaced to buy). | TARGET |
+| `R-STORE-003` | The showcase filters by **access, not role-coverage**: an item surfaces iff the caller is denied reading it (`paidAccessDenial`), so a whole-drive viewer now sees the paid items the carve-out locks (incl. paths they cover by role). Managers (editor+) bypass ⇒ empty showcase; entitled buyers excluded. | CURRENT (`showcase.ts`; tested in `showcase.test.ts`) |
 
 ---
 

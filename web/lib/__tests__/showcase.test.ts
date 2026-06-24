@@ -19,6 +19,16 @@ describe("listShowcase — leaf-DTO showcase of listed paid shares", () => {
     // member1's only coverage: viewer at "docs".
     db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES (?,?,?,?,?)")
       .run("dm1", "d1", "member1", "docs", "viewer");
+    // member2 = WHOLE-DRIVE viewer (covers every path by role) who has BOUGHT
+    // premium/inner (a receipt). Exercises R-STORE-003: the carve-out means
+    // role coverage ≠ access, so paid items they can't read still surface —
+    // except the one they're entitled to.
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)")
+      .run("member2", "m2@example.com", "M2", "x");
+    db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES (?,?,?,?,?)")
+      .run("dm2", "d1", "member2", "", "viewer");
+    db.prepare("INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, account_id) VALUES (?,?,?,?,?,?,?,?)")
+      .run("r_m2", "d1", "premium/inner", "0xwallet", "tx_m2", 5, "base", "member2");
 
     const insert = db.prepare(`
       INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency, listed, expires_at)
@@ -41,11 +51,27 @@ describe("listShowcase — leaf-DTO showcase of listed paid shares", () => {
     expect(items.some((i) => i.shareId === "sh_unlisted")).toBe(false);
   });
 
-  it("excludes shares whose path the caller already covers", () => {
+  it("shows paid items the caller can't access even where they have a role grant (carve-out)", () => {
+    // member1 covers "docs" by viewer role, but sh_covered prices "docs" — the
+    // paid carve-out locks them out, so it IS an upsell now (R-STORE-003).
     const items = listShowcase("d1", "member1");
-    expect(items.some((i) => i.shareId === "sh_covered")).toBe(false);
-    // sanity: an uncovered listed share IS present
+    expect(items.some((i) => i.shareId === "sh_covered")).toBe(true);
     expect(items.some((i) => i.shareId === "sh_nested")).toBe(true);
+  });
+
+  it("R-STORE-003: a whole-drive viewer sees the paid items they can't read; entitled (bought) ones are excluded", () => {
+    const ids = listShowcase("d1", "member2").map((i) => i.shareId);
+    // covers every path by role, but carved out of all paid → sees them all…
+    expect(ids).toContain("sh_covered");
+    expect(ids).toContain("sh_root");
+    // …except premium/inner, which member2 bought (receipt) → no upsell.
+    expect(ids).not.toContain("sh_nested");
+    expect(ids).not.toContain("sh_unlisted"); // private
+    expect(ids).not.toContain("sh_expired");
+  });
+
+  it("owner / manager sees an empty showcase (they curate sales, not buy them)", () => {
+    expect(listShowcase("d1", "owner1")).toEqual([]);
   });
 
   it("exposes only the leaf name — the full path never appears in the JSON", () => {

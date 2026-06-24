@@ -1,9 +1,10 @@
 // Showcase (commerce layer): read-only view of a drive's listed paid shares,
-// shown as an upsell to members who don't cover those paths yet. Depends on
-// lib/access for role lookups — never the reverse: access stays commerce-free
-// (drive_members alone decides access; listed/price/currency play no part).
+// shown as an upsell to anyone who can't yet READ them. Depends on lib/access
+// (role) + lib/sale-access (the paid carve-out) — never the reverse: those
+// layers stay commerce-blind / showcase-blind.
 import { db } from "./db";
 import { resolveRoleByUser } from "./access";
+import { paidAccessDenial } from "./sale-access.js";
 
 export type ShowcaseItem = {
   shareId: string;
@@ -39,9 +40,13 @@ export function listShowcase(driveId: string, userId: string): ShowcaseItem[] {
     // [rev2-E] Expiry filtered in JS: expires_at is ISO ('T'/'Z') text, so a
     // SQL string comparison against datetime('now') is unsafe at boundaries.
     .filter((s) => !s.expires_at || new Date(s.expires_at) >= new Date())
-    // A path the caller already covers is not an upsell — keep only what
-    // they can't reach yet.
-    .filter((s) => resolveRoleByUser(driveId, userId, s.path) === "none")
+    // An item is an upsell iff the caller can't currently READ it. Covered-by-
+    // role no longer implies access (the paid carve-out), so we show every
+    // listed paid item the caller is DENIED — which now includes a whole-drive
+    // viewer's locked items (R-STORE-003). Managers (editor+) bypass the
+    // carve-out → denial is null → they see an empty showcase; entitled buyers
+    // (receipt/comp) are likewise excluded.
+    .filter((s) => paidAccessDenial(driveId, s.path, resolveRoleByUser(driveId, userId, s.path), userId) !== null)
     .map((s) => ({
       shareId: s.id,
       leafName: s.path.split("/").pop() || "(drive)",
