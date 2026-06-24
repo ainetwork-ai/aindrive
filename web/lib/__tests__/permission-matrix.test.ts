@@ -97,11 +97,12 @@ describe("§3 write ops ignore the paywall (R-ACC-PAID-004 / R-WRITE-003)", () =
 describe("TARGET — not yet implemented (see PERMISSIONS_MATRIX.md)", () => {
   // DONE: R-WIRE-001/002, R-ACC-NEST-001, R-PAY-ENT-001, R-ACC-PAID-* (carve-out
   // wired into HTTP require-access.ts AND WS dochub.js via shared sale-access.js),
-  // and R-VIS-PAID-001 (fs/list annotates locked children → 🔒 listing + LockedPreview).
-  // Covered by sale-access.test.ts (unit) + e2e #190 (HTTP/listing) and #121 (WS).
+  // R-VIS-PAID-001 (fs/list annotates locked children + hides unlisted), and
+  // R-STORE-003 (showcase filters by access, not role — whole-drive viewer sees
+  // locked paid items; showcase.test.ts). Covered by sale-access.test.ts (unit)
+  // + e2e #190 (HTTP/listing) and #121 (WS).
   it.todo("R-COMP-001: owner can comp a paid path to an account (free read, no edit rights), revocable + auditable");
   it.todo("R-COMP-002: comp entitlements in a separate comp_grants table (decided); paid read gate checks payment_receipts OR comp_grants, nearest-ancestor");
-  it.todo("R-STORE-003: after the carve-out a whole-drive viewer sees the storefront for paid items");
   it.todo("R-AGENT-WS-002: dochub.js still hand-rolls resolveRole (the paid carve-out is now shared via sale-access.js, but role resolution isn't) — bind it to access-core with a shared test");
   // DEFERRED, not planned (PERMISSIONS_MATRIX.md §10): private (free-but-restricted)
   // and public (anonymous) classifications. canReadContent intentionally rejects them.
