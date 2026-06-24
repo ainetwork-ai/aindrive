@@ -4,6 +4,10 @@
 한 상태를 막기 위한 운영 가이드. **`cli/` 디렉터리 한정**.
 `web/`는 npm으로 배포하지 않습니다.
 
+> 두 릴리스 트랙(cli semver `vX.Y.Z` vs web calver `web-YYYY.MM.DD`)의 개요와
+> GitHub Release 관행은 [`docs/RELEASING.md`](../docs/RELEASING.md). 이 문서는
+> 그중 cli publish *메커니즘*을 담당합니다.
+
 ---
 
 ## TL;DR (한 줄 룰 3개)
