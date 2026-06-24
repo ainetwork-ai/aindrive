@@ -7,6 +7,7 @@ import {
   isX402Settleable,
   toCaip2Network,
   toAtomicAmount,
+  pickShareCurrency,
 } from "../payment-tokens";
 
 describe("resolveDriveTokens", () => {
@@ -78,6 +79,23 @@ describe("isX402Settleable (method-aware)", () => {
   it("eip3009 token still needs the full EIP-712 domain", () => {
     expect(isX402Settleable({ name: "T", version: null, asset: "0xB", transferMethod: "eip3009" })).toBe(false);
     expect(isX402Settleable({ name: "T", version: "1", asset: "0xB", transferMethod: "eip3009" })).toBe(true);
+  });
+});
+
+// Shared currency gate for share create + edit: requested symbol if allowed,
+// else the policy default (first), else null.
+describe("pickShareCurrency", () => {
+  it("returns the requested symbol when allowed", () => {
+    expect(pickShareCurrency(["USDC", "FANCO"], "FANCO")).toBe("FANCO");
+  });
+
+  it("defaults to the first policy token when none requested", () => {
+    expect(pickShareCurrency(["FANCO", "USDC"])).toBe("FANCO");
+    expect(pickShareCurrency(["FANCO", "USDC"], null)).toBe("FANCO");
+  });
+
+  it("returns null for a symbol outside the policy", () => {
+    expect(pickShareCurrency(["USDC"], "DOGE")).toBeNull();
   });
 });
 

@@ -165,3 +165,13 @@ export function toAtomicAmount(price: number, decimals: number): string {
   const cents = Math.round(price * 100); // safe: price < 1e13
   return (BigInt(cents) * 10n ** BigInt(decimals - 2)).toString();
 }
+
+// Pick the currency a paid share settles in, validated against a drive's token
+// policy. Pure over the policy's symbol list (first symbol = the default when
+// the caller doesn't pick one). Returns null when the requested symbol isn't in
+// the policy, so share CREATE and share EDIT reject an off-policy currency
+// through one shared gate instead of drifting apart.
+export function pickShareCurrency(allowedSymbols: string[], requested?: string | null): string | null {
+  const currency = requested ?? allowedSymbols[0];
+  return allowedSymbols.includes(currency) ? currency : null;
+}

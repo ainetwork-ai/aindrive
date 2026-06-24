@@ -86,7 +86,7 @@ export function SellSection({
   defaultPath, focusSection, sellOn, paidShare,
   payoutOwnWallet, payoutEffective, payoutInherited, payoutInput,
   setPayoutInput, savePayoutWallet, price, setPrice, currency, setCurrency,
-  currencyOptions, listed, setListed, isOwner, driveId, saveSell, busy,
+  currencyOptions, listed, setListed, isOwner, driveId, saveSell, saveShareEdit, busy,
   setEditingSell, copyLink,
 }: {
   defaultPath: string;
@@ -113,6 +113,7 @@ export function SellSection({
   setListed: (v: boolean) => void;
   isOwner: boolean;
   saveSell: () => void;
+  saveShareEdit: () => void;
   busy: boolean;
   setEditingSell: (v: boolean) => void;
   copyLink: (token: string) => void;
@@ -128,10 +129,11 @@ export function SellSection({
     >
       {!sellOn ? null : (
         <div className="space-y-3">
-          {/* Active state: existing paid share (read-only). */}
+          {/* Active state: the live share link to copy. The sale terms below are
+              editable — saving PATCHes THIS share, so the link is preserved and
+              prior buyers keep access; only NEW buyers see the changed terms. */}
           {paidShare && (
             <div className="rounded-lg border border-drive-border bg-drive-sidebar/50 p-3 space-y-2">
-              <Row label="Price" value={priceLabel(paidShare.price_usdc, paidShare.currency)} />
               <div className="flex items-center gap-2">
                 <span className="text-caption text-drive-muted w-16 shrink-0">Link</span>
                 <code className="flex-1 text-caption truncate font-mono text-drive-text">/s/{paidShare.token}</code>
@@ -140,7 +142,8 @@ export function SellSection({
                 </IconButton>
               </div>
               <p className="text-caption text-drive-muted">
-                Buyers pay once for permanent access. Send them this link.
+                Editing the price or currency only changes what NEW buyers pay —
+                people who already bought keep access.
               </p>
             </div>
           )}
@@ -177,9 +180,9 @@ export function SellSection({
             ) : null}
           </div>
 
-          {/* Editing state: no paid share yet — price + currency + list option. */}
-          {!paidShare && (
-            <div className="rounded-lg border border-drive-border p-3 space-y-3">
+          {/* Editable sale terms — create (no paid share yet) or edit (existing).
+              The Save button PATCHes when editing, POSTs a new link otherwise. */}
+          <div className="rounded-lg border border-drive-border p-3 space-y-3">
               <div className="flex gap-2 items-start">
                 <Input
                   wrapClassName="flex-1"
@@ -192,7 +195,7 @@ export function SellSection({
                   onChange={(e) => setPrice(e.target.value)}
                   placeholder="0.50"
                   helper="Buyers pay once for permanent access."
-                  autoFocus
+                  autoFocus={!paidShare}
                 />
                 <Select
                   wrapClassName="w-28"
@@ -225,12 +228,11 @@ export function SellSection({
                 className="w-full justify-center"
                 disabled={busy || !price}
                 loading={busy}
-                onClick={saveSell}
+                onClick={paidShare ? saveShareEdit : saveSell}
               >
-                Save as paid
+                {paidShare ? "Save changes" : "Save as paid"}
               </Button>
             </div>
-          )}
 
           {/* Read-only: the currencies this drive accepts (the per-sale Currency
               select above picks ONE). EDITING the policy lives in Settings →
@@ -655,21 +657,5 @@ export function FreeLinkSection({
         </ul>
       )}
     </SectionCard>
-  );
-}
-
-// "$5.00 USDC" / "5.00 FANCO" — $ prefix only for the dollar-pegged default.
-// null currency = legacy pre-policy share (USDC).
-function priceLabel(price: number | null, currency: string | null): string {
-  const sym = currency ?? "USDC";
-  return `${sym === "USDC" ? "$" : ""}${price?.toFixed(2)} ${sym}`;
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-caption text-drive-muted w-16 shrink-0">{label}</span>
-      <span className="text-body font-medium text-drive-text">{value}</span>
-    </div>
   );
 }
