@@ -60,7 +60,7 @@ repo:
 | `CLAUDE.md` (this file) | repo-wide conventions + architecture overview | product/UX principles, package layout, this table |
 | root `README.md` | what aindrive is, architecture, **pointers** to domain READMEs | — |
 | `<dir>/README.md` | that subsystem's responsibility, file map, contracts, gotchas | `web/app/api/`, `web/lib/`, `web/components/`, `web/shared/`, `cli/` |
-| `docs/*.md` | cross-cutting design not tied to one dir | `PERMISSIONS.md`, `DEPLOY.md`, `ARCHITECTURE.md`, `WILLOW_DESIGN.md`, `TRACE_CONTRACT.md`, `PRODUCTION_TODO.md` |
+| `docs/*.md` | cross-cutting design not tied to one dir | `PERMISSIONS.md`, `DEPLOY.md`, `RELEASING.md`, `ARCHITECTURE.md`, `WILLOW_DESIGN.md`, `TRACE_CONTRACT.md`, `PRODUCTION_TODO.md` |
 | `docs/superpowers/{specs,plans}/` | dated design history (brainstorm → plan), immutable record | per-feature `YYYY-MM-DD-*.md` |
 | code comments | invariants / intent / WHY (machine-checked where possible) | — |
 

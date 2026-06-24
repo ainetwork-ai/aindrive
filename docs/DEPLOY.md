@@ -4,7 +4,9 @@ How to ship a release of the web app, with a focus on the **mainnet payment
 go-live** (the part with real-money footguns). For the Docker/container
 mechanics and multi-engineer build coordination (the build lock, nginx
 front-door, volumes), see [`DOCKER_PUBLISH_GUIDE.md`](DOCKER_PUBLISH_GUIDE.md);
-this runbook is the release/payment layer on top of it.
+this runbook is the release/payment layer on top of it. For the tag + GitHub
+Release convention after a deploy (`web-YYYY.MM.DD`), see
+[`RELEASING.md`](RELEASING.md).
 
 ## TL;DR (mainnet release)
 
