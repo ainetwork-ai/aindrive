@@ -125,6 +125,17 @@ export function ShareDialog({
   // Toggle is derived: ON when an active paid share exists, OR user opened the form
   const sellOn = !!paidShare || editingSell;
 
+  // Seed the editable sell form from the existing paid share so its CURRENT
+  // terms are what you edit (not the blank create-defaults set above). Keyed on
+  // the share id so it re-seeds if the share changes; the create flow (no
+  // paidShare) keeps the blank defaults.
+  useEffect(() => {
+    if (!paidShare) return;
+    setPrice(paidShare.price_usdc != null ? String(paidShare.price_usdc) : "");
+    setCurrency(paidShare.currency ?? DEFAULT_TOKENS[0].symbol);
+    setListed(paidShare.listed === 1);
+  }, [paidShare?.id]);
+
   async function saveSell() {
     const num = Number(price);
     if (!num || num < 0.01 || num > 9999.99) {
@@ -155,6 +166,35 @@ export function ShareDialog({
     else toast.success(`Paid share link created: ${url}`, { duration: 8000 });
     setPrice("");
     setListed(false);
+    load();
+  }
+
+  // Edit an existing paid share's terms IN PLACE (same /s link). The owner-only
+  // `listed` field is sent only when owner — the API 403s listed:true otherwise
+  // (mirrors saveSell). Changing price/currency only affects NEW buyers.
+  async function saveShareEdit() {
+    if (!paidShare) return;
+    const num = Number(price);
+    if (!num || num < 0.01 || num > 9999.99) {
+      toast.error(`Price must be between 0.01 and 9999.99 ${currency}`);
+      return;
+    }
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}/shares/${paidShare.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        price_usdc: Math.round(num * 100) / 100,
+        currency,
+        ...(isOwner ? { listed } : {}),
+      }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      toast.error(res.error || "Failed to update sale");
+      return;
+    }
+    toast.success("Sale updated");
     load();
   }
 
@@ -276,6 +316,7 @@ export function ShareDialog({
           isOwner={isOwner}
           driveId={driveId}
           saveSell={saveSell}
+          saveShareEdit={saveShareEdit}
           busy={busy}
           setEditingSell={setEditingSell}
           copyLink={copyLink}

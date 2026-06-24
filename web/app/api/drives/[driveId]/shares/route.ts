@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive, payoutWalletFor } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
-import { resolveDriveTokens } from "@/lib/payment-tokens";
+import { resolveDriveTokens, pickShareCurrency } from "@/lib/payment-tokens";
 import { env } from "@/lib/env";
 import { zPath } from "@/lib/zod-helpers";
 import { AgentError, callAgent } from "@/lib/rpc";
@@ -72,9 +72,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
         { status: 400 },
       );
     }
-    const tokens = resolveDriveTokens(drive.allowed_tokens);
-    currency = body.data.currency ?? tokens[0].symbol;
-    if (!tokens.some((t) => t.symbol === currency)) {
+    const symbols = resolveDriveTokens(drive.allowed_tokens).map((t) => t.symbol);
+    currency = pickShareCurrency(symbols, body.data.currency);
+    if (currency === null) {
       return NextResponse.json({ error: "currency not allowed by drive policy" }, { status: 400 });
     }
   }
