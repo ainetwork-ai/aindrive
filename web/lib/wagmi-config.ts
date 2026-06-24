@@ -1,7 +1,6 @@
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import {
   baseAccount,
-  coinbaseWallet,
   injectedWallet,
   metaMaskWallet,
   okxWallet,
@@ -13,22 +12,15 @@ import { base, baseSepolia } from "wagmi/chains";
 import { paymentNetwork } from "./payment-tokens";
 
 // We hand-roll the wallet list (instead of getDefaultConfig) for two reasons:
-//   1. Base front-and-centre with BOTH Coinbase connectors, because they cover
-//      DIFFERENT transports (verified against Base's docs):
-//      - `baseAccount` (Sign in with Base) = passkey Smart Wallet via
-//        keys.coinbase.com. Great on desktop, but it does NOT deeplink to an
-//        installed mobile app — on mobile with no passkey it dead-ends at
-//        "try again".
-//      - `coinbaseWallet` (Coinbase Wallet SDK, Base's "legacy SDK access")
-//        IS the path that opens the installed Coinbase Wallet / Base mobile
-//        APP via a deeplink. Coinbase/Base wallets connect through this SDK,
-//        NOT WalletConnect, so they never appear in the WC list — without this
-//        connector a mobile Base-App user has no working path. (An earlier
-//        change dropped it as "deprecated"; that was right for desktop, where
-//        EIP-6963 auto-lists the extension, but wrong for mobile.)
-//      `okxWallet`, `injectedWallet`, `walletConnectWallet` stay per
-//      RainbowKit's broad-support recommendation; installed EIP-6963 extensions
-//      still auto-list under "Installed".
+//   1. Base front-and-centre via `baseAccount` (Sign in with Base) = the passkey
+//      Smart Wallet through keys.coinbase.com — no app install required. We
+//      deliberately DROPPED the separate `coinbaseWallet` connector (the
+//      Coinbase Wallet SDK that deeplinks to the installed Coinbase Wallet /
+//      Base App): keeping both read as confusing duplicates to buyers, so we
+//      keep only the passkey path here. Users who want an installed wallet app
+//      still reach it via `walletConnectWallet` (WC) or an EIP-6963 injected
+//      extension (auto-listed under "Installed"); `okxWallet`/`metaMaskWallet`/
+//      `rainbowWallet`/`injectedWallet` stay per RainbowKit's broad support.
 //   2. getDefaultConfig instantiates connectors at module load. Some of them
 //      touch `window`/`localStorage` during construction, which crashes SSR
 //      with "ReferenceError: window is not defined" the moment any server
@@ -62,22 +54,17 @@ export function getWagmiConfig(): WagmiConfig {
     const chains = paymentNetwork() === "mainnet"
       ? ([base] as const)
       : ([baseSepolia, base] as const);
-    // Clearer labels. Both connect Coinbase/Base infra but are DIFFERENT entry
-    // points (Base docs: keep both during the SDK transition): the passkey
-    // Smart Wallet — no app needed — vs the installed Coinbase Wallet / Base
-    // App. RainbowKit's defaults ("Base" / "Coinbase Wallet") read as
-    // duplicates to non-crypto buyers, so override ONLY the display name +
-    // shortName; connector logic, icon, and preferences are untouched. (The
-    // creators read their own static config off the original function, so
-    // wrapping the call is safe.)
+    // Clearer label: RainbowKit's default name for baseAccount reads opaque to
+    // non-crypto buyers, so override ONLY the display name + shortName (connector
+    // logic, icon, preferences untouched — the creator reads its own static
+    // config off the original function, so wrapping the call is safe).
     const relabel = <W extends (...args: never[]) => { name: string; shortName?: string }>(
       wallet: W, name: string, shortName: string,
     ): W => ((...args: Parameters<W>) => ({ ...wallet(...args), name, shortName })) as W;
     const connectors = connectorsForWallets(
       [
         { groupName: "Base", wallets: [
-          relabel(baseAccount, "Base (passkey, no app)", "Base"),
-          relabel(coinbaseWallet, "Coinbase Wallet / Base App", "Base App"),
+          relabel(baseAccount, "Sign in with Base (passkey)", "Base"),
         ] },
         { groupName: "Other wallets", wallets: [okxWallet, metaMaskWallet, rainbowWallet, walletConnectWallet, injectedWallet] },
       ],
