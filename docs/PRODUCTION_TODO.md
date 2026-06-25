@@ -14,6 +14,39 @@
 
 ---
 
+## Known bugs (surfaced by the cli agent-first audit, 2026-06)
+
+> Found while building characterization tests for `cli/src`. Tracked here, **not
+> fixed in the migration** (behaviour change ≠ structure change). The migration's
+> characterization tests snapshot the *current (broken)* behaviour and reference
+> this section, so a future fix is a deliberate, separately-reviewed change.
+
+- [ ] **P1 — `aindrive rotate-token` is dead end-to-end.** `cli/src/commands/rotate.js`
+  sends `creds.accessToken` (a field nothing ever writes) as a `Bearer` token, but
+  the web route (`web/app/api/drives/[driveId]/rotate/route.ts`) authenticates via
+  the `aindrive_session` **cookie**. Root cause: the credential field name drifts
+  across `login.js` (`sessionCookie`) / `serve.js` / `mcp/client.js` / `rotate.js`
+  (`accessToken`) with no shared type or test. Fix = unify the cred schema (one
+  source of truth) + send the session as a cookie; add a test.
+- [ ] **P2 / tech-debt — the `yjs_entries` SQLite mirror, not the Willow `Store`,
+  is the de-facto source of truth for reads.** Verified at runtime (not just by
+  reading): `willow-store.js` loads and `store.set` resolves without error — so the
+  Store is **not** "dead." (An earlier read-only audit mispredicted an
+  `ERR_PACKAGE_PATH_NOT_EXPORTED` from the willow 0.6.1 `exports` map, but
+  `kv-driver-sqlite.js` imports via a *relative* `../../node_modules/@earthstar/willow/src/*`
+  path that bypasses the exports map — characterization disproved the claim.) The
+  real smells: (a) that relative reach into `node_modules` is brittle — breaks if the
+  dep is hoisted/deduped/moved; (b) `compactToSnapshot` writes a fixed
+  `['yjs','snapshot']` Store path, so repeat compactions ingest as `no_op` and the
+  Store snapshot diverges from the mirror; (c) all reads (`listEntries`) come from
+  the mirror, so the Store is write-only decoration today. Locally correct; the
+  "Willow store" premise is aspirational. Decide: formalise the mirror as the store,
+  or make the Store authoritative (stable import + per-snapshot path). The migration's
+  characterization tests lock the mirror behaviour; the file header (which describes
+  the Store as the live backing) is corrected by the migration's docs pass.
+
+---
+
 ## 1. Security & Auth Hardening
 
 - [ ] **P0** Boot guard: `NODE_ENV=production && AINDRIVE_DEV_BYPASS_X402=1` → process.exit(1) with loud log
