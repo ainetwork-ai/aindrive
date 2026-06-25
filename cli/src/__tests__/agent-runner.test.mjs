@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runAgentAsk } from "../agent-runner.js";
+import { runAgentAsk, buildSystemPrompt } from "../agent-runner.js";
 
 let root;
 beforeEach(() => {
@@ -68,5 +68,31 @@ describe("runAgentAsk — agent.json load (runs after id + query pass)", () => {
     await expect(runAgentAsk({ root, agentId: "agt_corrupt1", query: "hi" }))
       // exact parse-error text is Node-version specific; lock only the prefix
       .rejects.toThrow(/^agent_load_failed:/);
+  });
+});
+
+// buildSystemPrompt is a pure helper (exported for this test). It shapes the LLM
+// system prompt from the agent config + retrieved chunks.
+describe("buildSystemPrompt", () => {
+  it("uses the DEFAULT persona and a no-docs placeholder when persona/chunks are empty", () => {
+    const p = buildSystemPrompt({}, []);
+    expect(p.startsWith("You are this drive's helpful guide")).toBe(true);
+    expect(p).toContain("no documents are currently available");
+    expect(p).toContain('Your name is "Drive guide".'); // default name
+  });
+
+  it("uses a trimmed custom persona, custom name, and renders chunks as [doc N] blocks", () => {
+    const p = buildSystemPrompt(
+      { persona: "  Custom!  ", name: "Bob" },
+      [{ path: "a.md", text: "hello" }],
+    );
+    expect(p.startsWith("Custom!")).toBe(true);
+    expect(p).toContain('Your name is "Bob".');
+    expect(p).toContain("[doc 1] a.md\nhello");
+    expect(p).not.toContain("no documents are currently available");
+  });
+
+  it("falls back to the DEFAULT persona when persona is whitespace-only", () => {
+    expect(buildSystemPrompt({ persona: "   " }, []).startsWith("You are this drive")).toBe(true);
   });
 });

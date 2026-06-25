@@ -75,7 +75,8 @@ const DEFAULT_PERSONA =
   "is. Speak like a knowledgeable teammate giving a tour — avoid " +
   "listing filenames or technical metadata in your reply.";
 
-function buildSystemPrompt(agent, chunks) {
+// Exported for characterization tests (pure helper, no IO). Used by runAgentAsk.
+export function buildSystemPrompt(agent, chunks) {
   const persona = (agent.persona || "").trim() || DEFAULT_PERSONA;
   const knowledgeBlock =
     chunks.length === 0

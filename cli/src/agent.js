@@ -80,7 +80,8 @@ export async function runAgent({ root, drive, server }) {
   }
 }
 
-function toWsUrl(server, driveId) {
+// Exported for characterization tests (pure helper, no IO). Used by runAgent.
+export function toWsUrl(server, driveId) {
   const u = new URL(`/api/agent/connect?driveId=${encodeURIComponent(driveId)}`, server);
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   return u.toString();
@@ -203,6 +204,8 @@ function connectOnce({ root, drive, wsUrl }) {
   });
 }
 
-function sanitize(msg) {
+// Exported for characterization tests (pure helper, no IO). Used in the RPC
+// error path to redact absolute paths from messages before they leave the agent.
+export function sanitize(msg) {
   return String(msg || "error").replace(/\/[A-Za-z0-9_./-]+/g, "<path>").slice(0, 300);
 }
