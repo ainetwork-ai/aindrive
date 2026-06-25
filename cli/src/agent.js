@@ -1,9 +1,9 @@
 import WebSocket from "ws";
 import { watch } from "node:fs";
 import { hostname as osHostname } from "node:os";
-import { join, relative, sep } from "node:path";
+import { join, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
-import { signPayload, verifyPayload, stripSig } from "./sig.js";
+import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
 import { log } from "./logger.js";
 
@@ -11,6 +11,8 @@ const PROTOCOL_VERSION = 1;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
 const FS_DEBOUNCE_MS = 500;
 const DRAIN_TIMEOUT_MS = 10_000;
+const DRAIN_POLL_MS = 50;        // poll cadence while waiting for in-flight RPCs to drain
+const CLOSE_HANDSHAKE_MS = 200;  // grace for the WS close handshake to flush before exit
 
 // Graceful shutdown state — module-level so signal handlers can reach it.
 let shuttingDown = false;
@@ -33,7 +35,7 @@ function installShutdownHandlers() {
     // Wait up to DRAIN_TIMEOUT_MS for in-flight RPCs to complete
     const deadline = Date.now() + DRAIN_TIMEOUT_MS;
     while (inFlightCount > 0 && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, DRAIN_POLL_MS));
     }
     if (inFlightCount > 0) {
       log.warn({ inFlightCount }, "drain timeout — forcing close with pending RPCs");
@@ -43,7 +45,7 @@ function installShutdownHandlers() {
     if (activeWs && activeWs.readyState === WebSocket.OPEN) {
       try { activeWs.close(1001, "agent shutting down"); } catch {}
       // Give the close handshake a moment
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, CLOSE_HANDSHAKE_MS));
     }
 
     // Flush pino logger if it exposes a flush method
