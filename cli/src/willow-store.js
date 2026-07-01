@@ -10,15 +10,18 @@ if (!Promise.withResolvers) {
 /**
  * Willow Store backing for the local agent — v2.
  *
- * Uses the official @earthstar/willow Store + EntryDriverKvStore wired to a
- * thin KvDriverSqlite (cli/src/willow/kv-driver-sqlite.js) so all entry
- * metadata is stored in a structured key-value table (willow_kv) inside the
- * same SQLite file. Payloads are held in-memory via PayloadDriverMemory.
+ * Reality (verified by characterization tests — willow-store.test.mjs): the
+ * `yjs_entries` SQLite table is the AUTHORITATIVE store for every read here —
+ * listEntries / statsForDoc / listDocs / maybeCompact all query it. The official
+ * @earthstar/willow Store (EntryDriverKvStore + a thin KvDriverSqlite over the
+ * same SQLite file, payloads in-memory via PayloadDriverMemory) is ALSO written
+ * on each append, but fire-and-forget (`.catch` logs) and never read back — so
+ * today it is write-only decoration. The "Willow store" design is aspirational;
+ * see docs/PRODUCTION_TODO.md "Known bugs" for the mirror-vs-Store tech-debt.
  *
- * Backwards-compatibility:
- *   The `yjs_entries` table is maintained as a mirror of each Store write so
- *   that existing scenario tests (87, 88, 92, 119) and willow-sync.js can
- *   continue querying it directly without change.
+ * The yjs_entries schema is the stable v1 shape because willow-sync.js and the
+ * e2e scenarios query it directly (web/scenarios: 87/88/92 in cases.mjs, 119 in
+ * collab-cases.mjs).
  *
  * Exported API (unchanged from v1):
  *   appendUpdate(root, docId, bytes, kind?)  → { seq, digest }
@@ -30,8 +33,8 @@ if (!Promise.withResolvers) {
  *
  * File layout: <root>/.aindrive/willow.db  (unchanged)
  * Tables:
- *   willow_kv    — generic packed KV store backing the official Store
- *   yjs_entries  — mirror / compatibility shim (same schema as v1)
+ *   yjs_entries  — authoritative entry store (v1 schema): one row per update/snapshot
+ *   willow_kv    — packed KV backing the official Store (written, not yet read)
  */
 
 import Database from "better-sqlite3";
