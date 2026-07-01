@@ -265,6 +265,27 @@ export function Viewer({
     else onSaved();
   }
 
+  // Download via a short-lived signed URL instead of a bare <a href> to
+  // fs/download. In-app mobile webviews (Base App) hand an attachment
+  // navigation to a separate OS downloader that drops the session cookie, so
+  // the cookie-gated endpoint 403s ("forbidden") even though this same viewer
+  // streams the file fine. This fetch carries the cookie, mints a token, and
+  // the token authorizes the cookieless download. See lib/download-token.ts.
+  async function onDownload() {
+    try {
+      const res = await fetch(`/api/drives/${driveId}/fs/download-token?path=${encodeURIComponent(entry.path)}`);
+      if (!res.ok) {
+        const msg = await res.json().then((j) => j.error).catch(() => null);
+        alert(msg || "Download failed");
+        return;
+      }
+      const { url } = await res.json();
+      window.location.assign(url);
+    } catch {
+      alert("Download failed");
+    }
+  }
+
   return (
     <aside className="fixed inset-0 z-30 w-full sm:static sm:inset-auto sm:z-auto sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
       <ViewerHeader
@@ -277,6 +298,7 @@ export function Viewer({
         saving={saving}
         onSave={save}
         downloadUrl={isText || isRichText ? null : downloadUrl}
+        onDownload={onDownload}
         onClose={onClose}
       />
       {isRichText ? (
