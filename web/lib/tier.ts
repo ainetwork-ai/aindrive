@@ -33,9 +33,12 @@ export const TIER_FILE_LIMIT: Record<Tier, number> = {
   pro: 100_000,
   max: Number.POSITIVE_INFINITY,
 };
+// Folder creation is unlimited on every tier: empty dirs are cheap and are not a
+// paid boundary. (The mkdir route only enforces a cap when this is finite, so
+// Infinity disables the check; the file-count cap + rate limits still apply.)
 export const TIER_FOLDER_LIMIT: Record<Tier, number> = {
-  free: 100,
-  pro: 10_000,
+  free: Number.POSITIVE_INFINITY,
+  pro: Number.POSITIVE_INFINITY,
   max: Number.POSITIVE_INFINITY,
 };
 
