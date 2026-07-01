@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireDriveRole } from "@/lib/require-access";
+import { getDrive, type DriveRow } from "@/lib/drives";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind, basenameForDownload } from "@/lib/mime";
 import { agentByteStream } from "@/lib/agent-stream";
+import { verifyDownloadToken } from "@/lib/download-token";
 
 /**
  * GET /api/drives/:driveId/fs/download?path=...
@@ -29,9 +31,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   try { path = normalizePath(rawPath); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
 
-  const gate = await requireDriveRole(driveId, path, { min: "viewer" });
-  if (gate instanceof NextResponse) return gate;
-  const { drive } = gate;
+  // Authorize by cookie (normal) OR a short-lived signed download token in the
+  // URL. The token path exists for byte fetches that can't carry the session
+  // cookie — an in-app mobile webview hands a Content-Disposition: attachment
+  // navigation to a separate OS downloader with no cookies, so the cookie gate
+  // would 403 a user who can otherwise stream/view the file. The token is minted
+  // by fs/download-token behind the SAME viewer+ cookie gate, so it never grants
+  // more than the minter already had. No token -> behaviour is unchanged.
+  const dt = url.searchParams.get("dt");
+  let drive: DriveRow;
+  if (dt && (await verifyDownloadToken(dt, driveId, path))) {
+    const d = getDrive(driveId);
+    if (!d) return NextResponse.json({ error: "not found" }, { status: 404 });
+    drive = d;
+  } else {
+    const gate = await requireDriveRole(driveId, path, { min: "viewer" });
+    if (gate instanceof NextResponse) return gate;
+    drive = gate.drive;
+  }
 
   try {
     const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as

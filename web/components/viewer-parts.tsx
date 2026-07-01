@@ -7,7 +7,7 @@ import { X, Save, Download, Wifi, WifiOff } from "lucide-react";
 type Presence = { id: number; name: string; color: string };
 
 export function ViewerHeader({
-  name, collaborative, showSave, status, presence, canEdit, saving, onSave, downloadUrl, onClose,
+  name, collaborative, showSave, status, presence, canEdit, saving, onSave, downloadUrl, onDownload, onClose,
 }: {
   name: string;
   /** Show collab chrome (status dot, presence avatars, view-only badge) — text + rich-text. */
@@ -19,8 +19,11 @@ export function ViewerHeader({
   canEdit: boolean;
   saving: boolean;
   onSave: () => void;
-  /** fs/download URL (attachment-streamed, no size cap) — null hides the button. */
+  /** Truthy shows the Download button; null hides it (text/rich-text). */
   downloadUrl: string | null;
+  /** Mints a signed download URL and navigates to it — works in webviews that
+      drop the session cookie on a bare attachment navigation. */
+  onDownload: () => void;
   onClose: () => void;
 }) {
   return (
@@ -63,9 +66,9 @@ export function ViewerHeader({
           </button>
         )}
         {downloadUrl && (
-          <a href={downloadUrl} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
+          <button type="button" onClick={onDownload} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
             <Download className="w-4 h-4" /> Download
-          </a>
+          </button>
         )}
         <button onClick={onClose} className="rounded p-1.5 hover:bg-drive-hover">
           <X className="w-4 h-4" />
