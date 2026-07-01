@@ -31,5 +31,9 @@ export async function GET(
     "SELECT token FROM shares WHERE id = ? AND drive_id = ? AND listed = 1 AND price_usdc IS NOT NULL"
   ).get(shareId, driveId) as { token: string } | undefined;
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.redirect(new URL("/s/" + row.token, req.url));
+  // Relative Location (mirrors app/api/auth/logout): the browser resolves it
+  // against the public URL it requested. NextResponse.redirect(new URL(..., req.url))
+  // would leak the container's internal bind host (localhost:3737) behind the
+  // reverse proxy, sending buyers to an unreachable host ("can't connect").
+  return new Response(null, { status: 303, headers: { Location: "/s/" + row.token } });
 }
