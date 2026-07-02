@@ -1,4 +1,7 @@
-import { verifySponsorGrant, validateSponsoredUserOp, paymasterEnabled } from "@/lib/paymaster";
+import {
+  verifySponsorGrant, validateSponsoredApprove, paymasterEnabled,
+  checkSponsorBudget, consumeSponsorGrant, releaseSponsorGrant, type UserOpLike,
+} from "@/lib/paymaster";
 import { tryConsume } from "@/lib/rate-limit.js";
 
 // ERC-7677 paymaster proxy. The buyer's smart wallet (Base Account popup at
@@ -60,15 +63,25 @@ export async function POST(req: Request) {
   if (chainId !== grant.chainId) {
     return rpcError(body.id, -32002, "chain does not match the sponsor grant");
   }
-  const op = userOp as { sender?: string; callData?: string } | undefined;
-  const check = validateSponsoredUserOp({
-    grant,
-    sender: op?.sender ?? "",
-    callData: op?.callData ?? "",
-  });
+  // getPaymasterData is the real-spend commitment (its op gets mined); its gas
+  // fields are final, so we enforce the GAS_CAPS + budget + one-time consume
+  // there. getPaymasterStubData is estimation-only (gas not final, no spend) →
+  // shape-validate but don't cap gas or consume.
+  const isFinal = body.method === "pm_getPaymasterData";
+  const op = (userOp ?? {}) as UserOpLike;
+  const check = validateSponsoredApprove({ grant, op, enforceGas: isFinal });
   if (!check.ok) {
     console.warn(`[paymaster] refused sponsorship for ${grant.wallet}: ${check.reason}`);
     return rpcError(body.id, -32003, `not sponsorable: ${check.reason}`);
+  }
+  if (isFinal) {
+    const budget = checkSponsorBudget(grant.sub);
+    if (!budget.ok) return rpcError(body.id, -32006, budget.reason);
+    // One-time claim of the grant BEFORE forwarding: a replayed grant loses the
+    // race here and never reaches the upstream paymaster.
+    if (!consumeSponsorGrant(grant)) {
+      return rpcError(body.id, -32007, "sponsor grant already used");
+    }
   }
 
   const ac = new AbortController();
@@ -81,9 +94,13 @@ export async function POST(req: Request) {
       signal: ac.signal,
     });
     const json = await upstream.json().catch(() => null);
-    if (!json) return rpcError(body.id, -32004, "paymaster returned a malformed response");
+    if (!json) {
+      if (isFinal) releaseSponsorGrant(grant.jti); // our upstream failed — don't burn the grant
+      return rpcError(body.id, -32004, "paymaster returned a malformed response");
+    }
     return Response.json(json, { status: 200, headers: CORS });
   } catch {
+    if (isFinal) releaseSponsorGrant(grant.jti);
     return rpcError(body.id, -32004, "paymaster unreachable");
   } finally {
     clearTimeout(timer);

@@ -184,6 +184,22 @@ function open() {
   handle.exec(`
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_account ON payment_receipts(account_id);
   `);
+  // Sponsored-gas accounting (lib/paymaster): one row per grant actually turned
+  // into sponsorship. `jti` PRIMARY KEY makes a grant one-time (replay = INSERT
+  // conflict); created_at (epoch ms) drives the rolling 24h global + per-user
+  // spend caps that bound paymaster-budget drain in-app (CDP portal cap is the
+  // out-of-band backstop).
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS sponsored_ops (
+      jti TEXT PRIMARY KEY,
+      user_id TEXT,
+      wallet TEXT NOT NULL,
+      token TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_sponsored_ops_created ON sponsored_ops(created_at);
+    CREATE INDEX IF NOT EXISTS idx_sponsored_ops_user ON sponsored_ops(user_id, created_at);
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

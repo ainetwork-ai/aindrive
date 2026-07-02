@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
-import { mintSponsorGrant, paymasterEnabled } from "@/lib/paymaster";
+import { mintSponsorGrant, paymasterEnabled, checkSponsorBudget } from "@/lib/paymaster";
 import { tryConsume } from "@/lib/rate-limit.js";
 import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, policyChainViolation } from "@/lib/payment-tokens";
 
@@ -31,6 +31,13 @@ export async function POST(req: Request) {
   const rl = tryConsume({ name: "paymaster-grant", key: user.id, limit: 30, windowMs: 60 * 60 * 1000 });
   if (!rl.ok) {
     return NextResponse.json({ error: "too many sponsorship requests, retry later" }, { status: 429 });
+  }
+  // Refuse to mint once the rolling-24h budget (global or this user's) is spent —
+  // fail here so the client degrades to self-pay before prompting the wallet,
+  // rather than minting a grant the proxy would later reject.
+  const budget = checkSponsorBudget(user.id);
+  if (!budget.ok) {
+    return NextResponse.json({ error: budget.reason }, { status: 429 });
   }
 
   const share = db.prepare(`
@@ -63,7 +70,9 @@ export async function POST(req: Request) {
 
   const chainId = Number(toCaip2Network(tok.chain).split(":")[1]);
   const amount = toAtomicAmount(share.price_usdc, tok.decimals);
-  const grant = mintSponsorGrant({ wallet: body.data.wallet, asset: tok.asset, chainId, amount });
+  const grant = mintSponsorGrant({
+    userId: user.id, token: body.data.token, wallet: body.data.wallet, asset: tok.asset, chainId, amount,
+  });
   // asset/amount/chainId are echoed so the client builds the approve from the
   // SAME values the proxy will enforce (a repriced share between page render
   // and approve would otherwise fail validation confusingly).

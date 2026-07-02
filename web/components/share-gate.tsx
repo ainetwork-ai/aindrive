@@ -9,7 +9,7 @@ import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
 import { toast } from "sonner";
 import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
-import { encodeFunctionData, type Account, type Chain, type Transport, type WalletClient } from "viem";
+import { encodeFunctionData, UserRejectedRequestError, type Account, type Chain, type Transport, type WalletClient } from "viem";
 import { getCapabilities, sendCalls, waitForCallsStatus } from "viem/actions";
 import { Button } from "@/components/ui";
 import { getWagmiConfig } from "@/lib/wagmi-config";
@@ -313,8 +313,11 @@ export function ShareGate({ token }: { token: string }) {
             toast.success(`${tokenSymbol} approved — gas covered by aindrive. You can pay now.`);
             return;
           }
-        } catch {
-          // fall through to the self-paid path
+        } catch (e) {
+          // A user who explicitly declined the sponsored (free) approve must NOT
+          // be immediately re-prompted for a gas-costing one — surface it and
+          // stop. Any other failure degrades to the self-paid path below.
+          if (e instanceof UserRejectedRequestError) throw e;
         }
         if (epoch !== walletEpoch.current) return;
         toast(`Sponsored approval unavailable right now — approving normally instead (needs a little ETH for gas).`);
