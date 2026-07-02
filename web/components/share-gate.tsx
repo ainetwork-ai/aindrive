@@ -9,7 +9,7 @@ import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
 import { toast } from "sonner";
 import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
-import { encodeFunctionData, UserRejectedRequestError, type Account, type Chain, type Transport, type WalletClient } from "viem";
+import { encodeFunctionData, maxUint256, UserRejectedRequestError, type Account, type Chain, type Transport, type WalletClient } from "viem";
 import { getCapabilities, sendCalls, waitForCallsStatus } from "viem/actions";
 import { Button } from "@/components/ui";
 import { getWagmiConfig } from "@/lib/wagmi-config";
@@ -322,15 +322,19 @@ export function ShareGate({ token }: { token: string }) {
         if (epoch !== walletEpoch.current) return;
         toast(`Sponsored approval unavailable right now — approving normally instead (needs a little ETH for gas).`);
       }
-      // Approve EXACTLY this sale's amount — not the SDK's MaxUint256, which
-      // makes wallets warn "this site can withdraw ALL your <token>" and
-      // leaves a standing unlimited allowance. aindrive grants are one-shot
-      // (buy once, keep forever), so re-approving per purchase costs the buyer
-      // nothing meaningful and keeps the wallet prompt honest ("approve N").
+      // Approve MaxUint256 to Permit2 (the x402 SDK default). Permit2 uses
+      // SignatureTransfer, so this ERC-20 allowance is DRAWN DOWN by each
+      // settle: an exact-amount approve hits 0 and forces a fresh approve tx
+      // (and gas) on EVERY purchase, whereas a max approve is a ONE-TIME step —
+      // every later purchase skips it (allowance pre-check above stays false).
+      // Safe despite the wallet's "can withdraw all" warning: Permit2 still
+      // requires the buyer's per-purchase EIP-712 signature (nonce+deadline+
+      // amount) for any actual transfer, so the standing allowance moves nothing
+      // on its own. This is the canonical Uniswap/Permit2 pattern.
       const data = encodeFunctionData({
         abi: ERC20_APPROVE_ABI,
         functionName: "approve",
-        args: [PERMIT2_ADDRESS, BigInt(requirement.amount)],
+        args: [PERMIT2_ADDRESS, maxUint256],
       });
       const hash = await wc.sendTransaction({
         to: requirement.asset as `0x${string}`, data, chain: requirementChain,
@@ -540,10 +544,10 @@ export function ShareGate({ token }: { token: string }) {
                 onClick={approve}
                 className="w-full justify-center"
               >
-                {approving ? "Approving…" : `Approve ${amountLabel}`}
+                {approving ? "Approving…" : `Approve ${tokenSymbol}`}
               </Button>
               <p className="text-caption text-drive-muted text-center">
-                Step 1 of 2 — approves exactly {amountLabel} for this purchase (not your whole balance). You’ll pay right after.
+                Step 1 of 2 — a one-time approval of {tokenSymbol} to Permit2 (the standard payment router). You’ll never approve again, and every purchase still needs your signature, so nothing moves without you.
                 {gasSponsored && (
                   <>
                     {" "}

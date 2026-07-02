@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { maxUint256 } from "viem";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { mintSponsorGrant, paymasterEnabled, checkSponsorBudget } from "@/lib/paymaster";
 import { tryConsume } from "@/lib/rate-limit.js";
-import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, policyChainViolation } from "@/lib/payment-tokens";
+import { TOKEN_PRESETS, resolveDriveTokens, toCaip2Network, policyChainViolation } from "@/lib/payment-tokens";
 
 // Mint a sponsor grant for one permit2 purchase: the signed voucher the
 // paymaster proxy (app/api/paymaster) demands before it will sponsor the
@@ -69,12 +70,18 @@ export async function POST(req: Request) {
   }
 
   const chainId = Number(toCaip2Network(tok.chain).split(":")[1]);
-  const amount = toAtomicAmount(share.price_usdc, tok.decimals);
+  // We sponsor a MaxUint256 (unlimited) approve to Permit2, matching the x402
+  // SDK default. Permit2's SignatureTransfer draws down this ERC-20 allowance
+  // per settle, so an exact-amount approve would force (and need sponsoring for)
+  // a fresh approve on EVERY purchase; a max approve is one-time per wallet, so
+  // the buyer never re-approves and we sponsor at most once per wallet. Safe:
+  // any actual transfer still needs the buyer's per-purchase Permit2 signature.
+  // `amount` here is the APPROVE amount the proxy will enforce (not the price).
+  const amount = maxUint256.toString();
   const grant = mintSponsorGrant({
     userId: user.id, token: body.data.token, wallet: body.data.wallet, asset: tok.asset, chainId, amount,
   });
   // asset/amount/chainId are echoed so the client builds the approve from the
-  // SAME values the proxy will enforce (a repriced share between page render
-  // and approve would otherwise fail validation confusingly).
+  // SAME values the proxy will enforce.
   return NextResponse.json({ grant, asset: tok.asset, amount, chainId });
 }

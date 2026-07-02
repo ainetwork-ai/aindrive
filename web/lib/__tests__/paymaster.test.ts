@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { encodeFunctionData, parseAbi } from "viem";
+import { encodeFunctionData, parseAbi, maxUint256 } from "viem";
 
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-paymaster-"));
 
@@ -109,6 +109,22 @@ describe("validateSponsoredApprove — shape", () => {
       { sender: WALLET, callData: "not-hex" },
     ];
     for (const op of bad) expect(ok(op).ok).toBe(false);
+  });
+});
+
+describe("validateSponsoredApprove — unlimited (MaxUint256) approve is the production shape", () => {
+  // grant/route mints amount = maxUint256, so the sponsored approve is unlimited
+  // (one-time per wallet). Validation still pins op.amount === grant.amount.
+  const grant = verifySponsorGrant(
+    mintSponsorGrant({ userId: USER, token: TOKEN, wallet: WALLET, asset: FANCO, chainId: 8453, amount: maxUint256.toString() }),
+  )!;
+  it("accepts a max-uint approve matching the grant", () => {
+    const callData = executeWrap(FANCO, 0n, approveData(PERMIT2_ADDRESS, maxUint256));
+    expect(validateSponsoredApprove({ grant, op: { sender: WALLET, callData }, enforceGas: false })).toEqual({ ok: true });
+  });
+  it("rejects any amount other than the granted max (can't downscale/upscale)", () => {
+    const callData = executeWrap(FANCO, 0n, approveData(PERMIT2_ADDRESS, maxUint256 - 1n));
+    expect(validateSponsoredApprove({ grant, op: { sender: WALLET, callData }, enforceGas: false }).ok).toBe(false);
   });
 });
 
