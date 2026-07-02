@@ -13,6 +13,7 @@ import { getDriveNamespace, payoutWalletFor } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
 import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork, policyChainViolation } from "@/lib/payment-tokens";
+import { paymasterEnabled } from "@/lib/paymaster";
 
 // Facilitator that verifies/settles the x402 payment, in priority order:
 // explicit AINDRIVE_X402_FACILITATOR URL (self-hosted or any third party),
@@ -145,6 +146,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // Display-only companion to `accepts`: share-gate reads symbol/decimals to
   // render the amount; the x402 client only consumes the PAYMENT-REQUIRED header.
   const payCurrency = { symbol: tok.symbol, decimals: tok.decimals };
+  // Flow hint for the gate UI (see paymentGate body): sponsored approves exist
+  // for permit2 sales when a paymaster is configured. Computed here where `tok`
+  // is narrowed — the hoisted paymentGate closure can't see the guard above.
+  const gasSponsorship = paymasterEnabled() && tok.transferMethod === "permit2";
 
   // 402/412 response: protocol payload travels in the v2 PAYMENT-REQUIRED
   // header; the JSON body is OUR gate UI's render data (v2 leaves bodies to
@@ -158,7 +163,16 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       accepts: [requirements],
     };
     return NextResponse.json(
-      { x402Version: 2, accepts: [requirements], currency: payCurrency, error },
+      // gasSponsorship: display/flow hint like `currency` — tells the gate UI a
+      // sponsored (buyer pays no gas) approve MAY be available for this permit2
+      // sale, if the buyer's wallet supports paymasterService (share-gate probes).
+      {
+        x402Version: 2,
+        accepts: [requirements],
+        currency: payCurrency,
+        gasSponsorship,
+        error,
+      },
       { status, headers: { "PAYMENT-REQUIRED": encodePaymentRequiredHeader(paymentRequired) } },
     );
   }

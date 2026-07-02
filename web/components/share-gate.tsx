@@ -9,7 +9,8 @@ import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme, getPermit2AllowanceReadParams } from "@x402/evm/exact/client";
 import { toast } from "sonner";
 import { Lock, Loader2, HardDrive, AlertTriangle, ShieldCheck, Wallet } from "lucide-react";
-import { encodeFunctionData, type Account, type Chain, type Transport, type WalletClient } from "viem";
+import { encodeFunctionData, UserRejectedRequestError, type Account, type Chain, type Transport, type WalletClient } from "viem";
+import { getCapabilities, sendCalls, waitForCallsStatus } from "viem/actions";
 import { Button } from "@/components/ui";
 import { getWagmiConfig } from "@/lib/wagmi-config";
 
@@ -76,6 +77,9 @@ type CheckResponse =
       // Display-only token info from the drive's policy; absent on legacy
       // servers → USDC/6 fallback below.
       currency?: { symbol: string; decimals: number };
+      // Server offers sponsored (buyer pays no gas) approves for this permit2
+      // sale — realized only if the wallet also supports paymasterService.
+      gasSponsorship?: boolean;
       error: string;
     };
 
@@ -89,6 +93,10 @@ export function ShareGate({ token }: { token: string }) {
   // signature can settle: null = unknown/checking, true = approve step shown.
   const [approvalNeeded, setApprovalNeeded] = useState<boolean | null>(null);
   const [approving, setApproving] = useState(false);
+  // Sponsored-approve availability: server offers it (402 gasSponsorship) AND
+  // the connected wallet supports ERC-7677 paymasterService (probed below).
+  // Drives both the sponsored send path and the "gas covered" UI copy.
+  const [gasSponsored, setGasSponsored] = useState(false);
   const router = useRouter();
   // `isReconnecting` covers the gap after a wallet redirect/deeplink returns
   // (e.g. Coinbase Wallet / Base App): wagmi rehydrates the connection over a
@@ -209,6 +217,70 @@ export function ShareGate({ token }: { token: string }) {
     return () => { cancelled = true; };
   }, [isPermit2, requirement, address, publicClient, requirementChain]);
 
+  // Wallet capability probe: does the connected wallet accept an app-provided
+  // ERC-7677 paymaster (Base Account passkey does; EOA extensions don't)? Only
+  // probed when the server offered sponsorship, so EOA users never see a
+  // capability request. Failure of any kind = not sponsored (self-paid path).
+  const sponsorshipOffered = !!(data && "accepts" in data && data.gasSponsorship);
+  useEffect(() => {
+    if (!isPermit2 || !sponsorshipOffered || !walletClient || !requirementChain) {
+      setGasSponsored(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const caps = await getCapabilities(walletClient, {
+          account: walletClient.account,
+          chainId: requirementChain.id,
+        });
+        const pm = (caps as { paymasterService?: { supported?: boolean } })?.paymasterService;
+        if (!cancelled) setGasSponsored(pm?.supported === true);
+      } catch {
+        if (!cancelled) setGasSponsored(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isPermit2, sponsorshipOffered, walletClient, requirementChain]);
+
+  // Sponsored approve: mint a sponsor grant for this sale, then send the
+  // approve as an EIP-5792 call bundle whose gas the app's paymaster pays
+  // (proxied through /api/paymaster, which enforces the grant). Returns true
+  // when the approval landed; false = fall back to the self-paid path.
+  async function approveSponsored(wc: ConnectedWalletClient, chain: Chain, epoch: number): Promise<boolean> {
+    const grantRes = await fetch("/api/paymaster/grant", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token, wallet: wc.account.address }),
+    });
+    if (!grantRes.ok) return false;
+    const g = (await grantRes.json()) as { grant: string; asset: string; amount: string; chainId: number };
+    // The grant reflects the sale's CURRENT server-side quote; if it no longer
+    // matches what this paywall displayed (owner repriced/re-tokened between
+    // render and click), don't silently approve something else.
+    if (
+      !requirement ||
+      g.asset.toLowerCase() !== requirement.asset.toLowerCase() ||
+      g.chainId !== chain.id
+    ) return false;
+    const data = encodeFunctionData({
+      abi: ERC20_APPROVE_ABI,
+      functionName: "approve",
+      args: [PERMIT2_ADDRESS, BigInt(g.amount)],
+    });
+    const { id } = await sendCalls(wc, {
+      account: wc.account,
+      chain,
+      calls: [{ to: g.asset as `0x${string}`, data }],
+      capabilities: {
+        paymasterService: { url: `${location.origin}/api/paymaster?g=${encodeURIComponent(g.grant)}` },
+      },
+    });
+    const status = await waitForCallsStatus(wc, { id });
+    if (epoch !== walletEpoch.current) return true; // cancelled — swallow, don't fall through to a second wallet prompt
+    return status.status === "success";
+  }
+
   // One-time on-chain approval that lets the Permit2 contract move this token
   // for the payer (the pay signature itself stays gasless).
   async function approve() {
@@ -229,6 +301,27 @@ export function ShareGate({ token }: { token: string }) {
       const wc = await freshWalletClient(requirementChain.id);
       if (!wc) { toast.error("Wallet connection lost — reconnect and retry"); return; }
       if (epoch !== walletEpoch.current) return; // cancelled during the switch
+      // Sponsored path first (wallet + server both said yes): buyer needs zero
+      // ETH. Any failure — grant refused, paymaster down/over budget, wallet
+      // balking — degrades to the self-paid approve below with an honest toast,
+      // never a dead button.
+      if (gasSponsored) {
+        try {
+          if (await approveSponsored(wc, requirementChain, epoch)) {
+            if (epoch !== walletEpoch.current) return;
+            setApprovalNeeded(false);
+            toast.success(`${tokenSymbol} approved — gas covered by aindrive. You can pay now.`);
+            return;
+          }
+        } catch (e) {
+          // A user who explicitly declined the sponsored (free) approve must NOT
+          // be immediately re-prompted for a gas-costing one — surface it and
+          // stop. Any other failure degrades to the self-paid path below.
+          if (e instanceof UserRejectedRequestError) throw e;
+        }
+        if (epoch !== walletEpoch.current) return;
+        toast(`Sponsored approval unavailable right now — approving normally instead (needs a little ETH for gas).`);
+      }
       // Approve EXACTLY this sale's amount — not the SDK's MaxUint256, which
       // makes wallets warn "this site can withdraw ALL your <token>" and
       // leaves a standing unlimited allowance. aindrive grants are one-shot
@@ -451,6 +544,14 @@ export function ShareGate({ token }: { token: string }) {
               </Button>
               <p className="text-caption text-drive-muted text-center">
                 Step 1 of 2 — approves exactly {amountLabel} for this purchase (not your whole balance). You’ll pay right after.
+                {gasSponsored && (
+                  <>
+                    {" "}
+                    <span className="text-drive-accent font-medium">
+                      Gas is covered by aindrive — you only need {tokenSymbol}.
+                    </span>
+                  </>
+                )}
               </p>
             </>
           ) : (
