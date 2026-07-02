@@ -60,7 +60,7 @@ Payments / capabilities:
 | `x402/lift` (GET) | pay an AIN micropayment to lift a scoped limit / unlock a tier (`scope=tier:pro` etc.). |
 | `cap/verify` (POST) | decode + describe a Meadowcap capability token. |
 | `token-lookup` (POST) | on-chain ERC-20 metadata for the token-policy editor. Login-gated (anti-amplification). |
-| `paymaster` (POST, CORS) | ERC-7677 proxy: sponsors a permit2 buyer's `approve(Permit2)` gas. Requires a `?g=` sponsor grant; validates the userOp is exactly the granted approve (lib/paymaster) before forwarding to `AINDRIVE_PAYMASTER_URL`. Called by the buyer's WALLET, not our pages. |
+| `paymaster` (POST, CORS) | ERC-7677 proxy: sponsors a permit2 buyer's `approve(Permit2)` gas. Requires a `?g=` sponsor grant; validates the userOp is exactly the granted approve (lib/paymaster) before forwarding to `CDP_PAYMASTER_URL`. Called by the buyer's WALLET, not our pages. |
 | `paymaster/grant` (POST) | mint the sponsor grant for one permit2 sale (asset/amount/chain from the share's current quote, wallet-bound, 10-min TTL). Login-gated + rate-limited. |
 
 Ops / dev:

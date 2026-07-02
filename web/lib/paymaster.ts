@@ -5,7 +5,7 @@
 // whole purchase where the buyer must own ETH. For smart-wallet buyers
 // (Base Account passkey) we sponsor that approve through an ERC-7677
 // paymaster (CDP): the wallet asks OUR proxy (app/api/paymaster) for
-// paymaster data, and the proxy forwards to AINDRIVE_PAYMASTER_URL only after
+// paymaster data, and the proxy forwards to CDP_PAYMASTER_URL only after
 // validating the user operation. The paymaster URL never reaches the client.
 //
 // A signed sponsor *grant* authorises ONE approve. It is not a blank cheque —
@@ -49,7 +49,7 @@ const GAS_CAPS: Record<string, bigint> = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function paymasterEnabled(): boolean {
-  return !!process.env.AINDRIVE_PAYMASTER_URL;
+  return !!process.env.CDP_PAYMASTER_URL;
 }
 function dailyCap(): number {
   return Number(process.env.AINDRIVE_PAYMASTER_DAILY_CAP || 500);

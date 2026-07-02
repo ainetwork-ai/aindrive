@@ -8,7 +8,7 @@ import { tryConsume } from "@/lib/rate-limit.js";
 // keys.coinbase.com) calls THIS url — carrying a sponsor grant in ?g= — with
 // pm_getPaymasterStubData / pm_getPaymasterData for the approve userOp; we
 // validate the op against the grant (lib/paymaster) and forward to the real
-// CDP Paymaster at AINDRIVE_PAYMASTER_URL, which stays server-side so its
+// CDP Paymaster at CDP_PAYMASTER_URL, which stays server-side so its
 // spend budget can't be driven from outside this gate.
 //
 // Responses are JSON-RPC: rejections are `error` objects with HTTP 200 (the
@@ -87,7 +87,7 @@ export async function POST(req: Request) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), UPSTREAM_TIMEOUT_MS);
   try {
-    const upstream = await fetch(process.env.AINDRIVE_PAYMASTER_URL!, {
+    const upstream = await fetch(process.env.CDP_PAYMASTER_URL!, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
