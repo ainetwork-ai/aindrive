@@ -65,6 +65,7 @@ load-bearing ones:
 | `AINDRIVE_DEV_BYPASS_X402` | `0` (or unset) | `=1` skips on-chain verification — payments "succeed" without money moving. Never on mainnet. (Boot check refuses to start prod with it on.) |
 | `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` | set | The Coinbase CDP facilitator that settles mainnet payments. Without them mainnet refuses with 503 (no safe default). |
 | `AINDRIVE_X402_FACILITATOR` | **unset** | An explicit URL takes precedence over the CDP keys — setting it (e.g. to x402.org) makes CDP be ignored and mainnet settles fail. Leave unset when using CDP. |
+| `AINDRIVE_PAYMASTER_URL` | set for gasless FANCO buys | ERC-7677 paymaster RPC (CDP Portal → Paymaster, Base endpoint). Sponsors smart-wallet buyers' permit2 `approve` gas so a buyer holding only the sale token can pay. **Configure the CDP-side contract allowlist (the token) + spend caps too** — the app's `/api/paymaster` proxy validates each op, the portal policy is the budget backstop. Unset = buyers pay their own approve gas (works, but needs ETH). |
 | `AINDRIVE_SESSION_SECRET` | 32+ random bytes | Required in prod (no file fallback). `openssl rand -hex 32`. |
 | `AINDRIVE_PUBLIC_URL` | `https://…` | Must be https; secure cookies refuse plain http. |
 
