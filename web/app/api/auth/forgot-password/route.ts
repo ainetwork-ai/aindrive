@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { issueOtpCode, OTP_EXPIRES_MINUTES } from "@/lib/otp";
 import { sendMail } from "@/lib/email";
-import { renderResetOtpEmail } from "@/lib/email/templates/reset-otp";
+import { renderOtpEmail } from "@/lib/email/templates/otp-code";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 
 const Body = z.object({ email: z.string().email() });
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   if (user && emailRl.ok) {
     try {
       const code = issueOtpCode(email, "reset_password");
-      const mail = renderResetOtpEmail({ code, expiresInMinutes: OTP_EXPIRES_MINUTES });
+      const mail = renderOtpEmail({ code, expiresInMinutes: OTP_EXPIRES_MINUTES, kind: "reset" });
       await sendMail({ to: email, subject: mail.subject, html: mail.html, text: mail.text });
     } catch (e) {
       // Don't leak delivery failure to the caller (still 200), but log it —
