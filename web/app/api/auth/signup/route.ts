@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { setCookie } from "@/lib/session";
 import { claimInvitesForEmail } from "@/lib/invites.js";
+import { verifyOtpCode } from "@/lib/otp";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 
 const Body = z.object({
@@ -15,6 +16,9 @@ const Body = z.object({
     (v) => !v.toLowerCase().endsWith("@wallet.aindrive.local"),
     "reserved address",
   ),
+  // Verify-before-create: the 6-digit code emailed by /signup/request-code
+  // proves the visitor controls this inbox, so every account has a real email.
+  code: z.string().regex(/^\d{6}$/),
   name: z.string().min(1).max(80),
   password: z.string().min(8).max(200),
 });
@@ -27,7 +31,17 @@ export async function POST(req: Request) {
   }
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  const { email, name, password } = body.data;
+  const { email, code, name, password } = body.data;
+
+  // Consume the emailed signup code before creating anything. A bad/expired
+  // code stops here — no account, no session.
+  const verdict = verifyOtpCode(email, code, "signup");
+  if (!verdict.ok) {
+    return NextResponse.json(
+      { error: verdict.reason, remainingAttempts: verdict.remainingAttempts },
+      { status: 400 },
+    );
+  }
 
   const exists = db.prepare("SELECT id FROM users WHERE lower(email) = lower(?)").get(email);
   if (exists) return NextResponse.json({ error: "email already registered" }, { status: 409 });
