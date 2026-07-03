@@ -32,6 +32,11 @@ function LoginForm() {
       <label className="block mt-3 text-sm">Password
         <input name="password" type="password" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
       </label>
+      <div className="mt-2 text-right">
+        <Link href="/forgot-password" className="text-xs text-drive-muted hover:text-drive-accent hover:underline">
+          Forgot your password?
+        </Link>
+      </div>
       {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
       <button disabled={loading} className="mt-5 w-full rounded-lg bg-drive-accent text-white py-2 hover:bg-drive-accentHover disabled:opacity-60">
         {loading ? "Signing in…" : "Sign in"}
