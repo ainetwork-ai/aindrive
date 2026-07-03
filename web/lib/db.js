@@ -184,6 +184,25 @@ function open() {
   handle.exec(`
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_account ON payment_receipts(account_id);
   `);
+  // Email OTP codes (lib/otp) — password reset now, reusable for signup/email
+  // verification later. code_hash = sha256(`${salt}:${code}`); times are epoch
+  // ms. One active (consumed=0, unexpired) row per (email, purpose) matters —
+  // issue invalidates prior ones.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS email_verification_codes (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      salt TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      consumed INTEGER NOT NULL DEFAULT 0,
+      expires_at INTEGER NOT NULL,
+      verified_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_evc_email_purpose ON email_verification_codes(email, purpose, created_at);
+  `);
   // Sponsored-gas accounting (lib/paymaster): one row per grant actually turned
   // into sponsorship. `jti` PRIMARY KEY makes a grant one-time (replay = INSERT
   // conflict); created_at (epoch ms) drives the rolling 24h global + per-user
