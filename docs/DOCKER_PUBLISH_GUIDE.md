@@ -200,9 +200,37 @@ on the previous commit until someone runs `docker compose ... up -d --build`.
 
 `docker-compose.yml` loads `web/.env.production` (`required: false` — the
 container starts without it, but **production must have it**). It is gitignored
-and lives **only on the host** at `web/.env.production`; the committed template
-is `web/.env.example`. Back the live file up — it holds values that are
-expensive or impossible to re-create.
+and lives **only on the host** at `web/.env.production`. Two committed templates:
+`web/.env.example` (field reference, empty) and `web/.env.production.tpl` (the
+1Password op-inject template — see below).
+
+### Managing it with 1Password (`op inject`)
+
+Instead of hand-editing secrets over SSH and backing the file up separately, the
+source of truth is a 1Password item and the deploy renders the file from a
+committed template. `web/.env.production.tpl` holds **no secrets** — secret
+values are `op://ainetwork/aindrive-prod/…` references; non-secret config stays
+as plain literals so the load-bearing prod flags (`mainnet`, `DEV_BYPASS=0`,
+https URL) are visible in git, not hidden in a vault.
+
+One-time on the host: install the `op` CLI and export a Service Account token
+(`OP_SERVICE_ACCOUNT_TOKEN`) so `op inject` runs non-interactively. Then create
+vault `ainetwork` → item `aindrive-prod` with fields `session_secret`,
+`smtp_password`, `cdp_api_key_id`, `cdp_api_key_secret`, `cdp_paymaster_url`.
+
+Deploy becomes (one line added before the build):
+
+```bash
+git pull --rebase origin main
+cd web
+op inject -i .env.production.tpl -o .env.production   # 1Password fills the secrets
+flock /tmp/aindrive-build.lock sudo docker compose --env-file .env.production -f docker-compose.yml up -d --build
+```
+
+Rotate a secret = edit it in 1Password, then re-run `op inject` + rebuild — no
+SSH file edits, and the template's git history is your change record. The
+rendered `.env.production` stays gitignored. (Prefer no SaaS? the same file
+works hand-written; `op inject` is optional sugar over it.)
 
 > The runtime env loads here via `env_file: ./.env.production` (literal path, no
 > flag). The **build args** (`NEXT_PUBLIC_*`) are separate — they need
