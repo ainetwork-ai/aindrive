@@ -257,6 +257,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       );
       if (r.ok) { verifyRes = r.value; break; }
       if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
+        console.error(`[x402-diag] verify-fail token=${tok.symbol} method=${tok.transferMethod} net=${requirements.network} timedOut=${r.timedOut} attempt=${attempt} name=${(r.error as Error)?.name} status=${(r.error as { status?: number })?.status ?? "-"} msg=${sanitizeSettleError(String((r.error as Error)?.message ?? r.error))}`);
         return paymentGate(402, "facilitator unavailable, please retry");
       }
     }
@@ -279,6 +280,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       );
       if (r.ok) { settleRes = r.value; break; }
       if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
+        console.error(`[x402-diag] settle-fail token=${tok.symbol} method=${tok.transferMethod} net=${requirements.network} timedOut=${r.timedOut} attempt=${attempt} name=${(r.error as Error)?.name} status=${(r.error as { status?: number })?.status ?? "-"} msg=${sanitizeSettleError(String((r.error as Error)?.message ?? r.error))}`);
         return paymentGate(402, "facilitator unavailable, please retry");
       }
     }
