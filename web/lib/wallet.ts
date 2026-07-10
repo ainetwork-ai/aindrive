@@ -136,10 +136,14 @@ export function linkWalletToAccount(accountId: string, wallet: string, verifiedV
  * Wallet-only accounts have no real email/password: we mint a deterministic
  * `<wallet>@wallet.aindrive.local` email (satisfies the UNIQUE NOT NULL email
  * column without colliding with human signups) and an unusable random-input
- * bcrypt hash for password_hash (NOT NULL). The user can later claim the
- * account by linking the same wallet through POST /api/wallet/link while
- * logged in to their real account — that path throws on the wallet UNIQUE,
- * so claiming is a future-phase concern; here we only need a stable id.
+ * bcrypt hash for password_hash (NOT NULL). The mint is transactional (the
+ * users + account_wallets INSERTs land together or not at all) and
+ * self-healing (a users row already sitting on the synthetic email — e.g. an
+ * orphan from a pre-fix crash between the two INSERTs — is adopted and
+ * linked instead of re-inserted). The user can later claim the account by
+ * linking the same wallet through POST /api/wallet/link while logged in to
+ * their real account — that path throws on the wallet UNIQUE, so claiming is
+ * a future-phase concern; here we only need a stable id.
  *
  * @returns the account id (never null)
  */
@@ -150,15 +154,28 @@ export function resolveAccountForWallet(wallet: string): string {
     .get(addr) as { account_id: string } | undefined;
   if (linked) return linked.account_id;
 
-  const id = "w_" + nanoid(10);
-  const email = `${addr}@wallet.aindrive.local`;
-  // Random input → resulting hash can never be reproduced by a login attempt.
-  const placeholderHash = bcrypt.hashSync(nanoid(24), 10);
-  db.prepare(
-    "INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)"
-  ).run(id, email, `wallet:${addr.slice(0, 10)}`, placeholderHash);
-  db.prepare(
-    "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via) VALUES (?, ?, ?, ?)"
-  ).run(nanoid(12), id, addr, "payment");
-  return id;
+  const synthEmail = `${addr}@wallet.aindrive.local`;
+  // Atomic: either both the users row and its link land, or neither.
+  // Self-healing: a crash between the two INSERTs (pre-fix) could orphan a
+  // users row on the deterministic synthetic email. Adopt that row instead of
+  // re-INSERTing and throwing email-UNIQUE — otherwise the wallet is locked
+  // out forever (every settle re-throws, swallowed at s/[token]/route.ts).
+  const mint = db.transaction(() => {
+    const orphan = db
+      .prepare("SELECT id FROM users WHERE email = ?")
+      .get(synthEmail) as { id: string } | undefined;
+    const id = orphan?.id ?? "w_" + nanoid(10);
+    if (!orphan) {
+      // Random input → the hash can never be reproduced by a login attempt.
+      const placeholderHash = bcrypt.hashSync(nanoid(24), 10);
+      db.prepare(
+        "INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)"
+      ).run(id, synthEmail, `wallet:${addr.slice(0, 10)}`, placeholderHash);
+    }
+    db.prepare(
+      "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via) VALUES (?, ?, ?, ?)"
+    ).run(nanoid(12), id, addr, "payment");
+    return id;
+  });
+  return mint();
 }
