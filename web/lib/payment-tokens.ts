@@ -32,6 +32,13 @@ export function activeChain(): "base" | "base-sepolia" {
   return paymentNetwork() === "mainnet" ? "base" : "base-sepolia";
 }
 
+// Numeric EVM/SIWE chain id for this deployment's active chain. Mirrors
+// activeChain() (which returns the wire string) for callers that need the
+// integer — e.g. the SIWE message chainId. Base mainnet 8453 / Sepolia 84532.
+export function activeChainId(): 8453 | 84532 {
+  return paymentNetwork() === "mainnet" ? 8453 : 84532;
+}
+
 /**
  * Mainnet-deployment chain guard: the first disallowed chain in `tokens`, or
  * null when the policy is fine. Enforced at every boundary a token can enter

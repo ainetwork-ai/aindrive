@@ -3,6 +3,11 @@ import { useState, useCallback } from "react";
 import { useAccount, useSignMessage } from "wagmi";
 import { SiweMessage } from "siwe";
 
+// Mirrors server activeChainId() (web/lib/payment-tokens.ts) — the client
+// reads the same NEXT_PUBLIC_ switch. Base mainnet 8453 / Sepolia 84532.
+const CHAIN_ID =
+  process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? 8453 : 84532;
+
 /**
  * Sign-In With Ethereum (SIWE) for an already-connected wallet.
  *
@@ -38,7 +43,7 @@ export function useWalletLogin() {
         statement: "aindrive wants you to sign in with your wallet.",
         uri: window.location.origin,
         version: "1",
-        chainId: 1,
+        chainId: CHAIN_ID,
         nonce,
       }).prepareMessage();
 

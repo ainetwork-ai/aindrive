@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { db } from "./db";
 import { env } from "./env";
 import { cookieOptions } from "./cookie-config";
+import { activeChainId } from "./payment-tokens";
 
 const COOKIE = "aindrive_wallet";
 const enc = new TextEncoder();
@@ -86,7 +87,7 @@ export function challengeMessage(nonce: string, address: string): string {
     statement: "aindrive wants you to sign in with your wallet.",
     uri: env.publicUrl,
     version: "1",
-    chainId: 1,
+    chainId: activeChainId(),
     nonce,
   });
   return msg.prepareMessage();
