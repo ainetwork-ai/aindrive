@@ -174,9 +174,24 @@ export function resolveAccountForWallet(wallet: string): string {
       ).run(id, synthEmail, `wallet:${addr.slice(0, 10)}`, placeholderHash);
     }
     db.prepare(
-      "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via) VALUES (?, ?, ?, ?)"
+      "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via, login_enabled) VALUES (?, ?, ?, ?, 1)"
     ).run(nanoid(12), id, addr, "payment");
     return id;
   });
   return mint();
+}
+
+/**
+ * Resolve a wallet's linked account for LOGIN, with the consent gate.
+ * loginEnabled reflects account_wallets.login_enabled: 1 for wallet-provisioned
+ * placeholders (the wallet is the account) and for links a user explicitly
+ * enabled login on; 0 for payment-attribution links (blocked from minting a
+ * session). Returns null for an unknown wallet.
+ */
+export function walletLoginAccount(wallet: string): { accountId: string; loginEnabled: boolean } | null {
+  const row = db
+    .prepare("SELECT account_id, login_enabled FROM account_wallets WHERE wallet_address = ?")
+    .get(wallet.toLowerCase()) as { account_id: string; login_enabled: number } | undefined;
+  if (!row) return null;
+  return { accountId: row.account_id, loginEnabled: row.login_enabled === 1 };
 }
