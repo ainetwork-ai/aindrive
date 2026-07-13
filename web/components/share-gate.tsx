@@ -13,6 +13,7 @@ import { encodeFunctionData, maxUint256, UserRejectedRequestError, type Account,
 import { getCapabilities, sendCalls, waitForCallsStatus } from "viem/actions";
 import { Button } from "@/components/ui";
 import { getWagmiConfig } from "@/lib/wagmi-config";
+import { useWalletSession } from "@/components/use-wallet-session";
 
 // Canonical Uniswap Permit2 contract — same address on every EVM chain.
 // (Mirrors @x402/evm's PERMIT2_ADDRESS, which isn't re-exported from the
@@ -106,6 +107,8 @@ export function ShareGate({ token }: { token: string }) {
   const walletConnecting = (isConnecting || isReconnecting) && !isConnected;
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
+  // Wallet-only sign-in for the login gate (SIWE → aindrive_session, no email).
+  const { login: walletLogin, busy: walletBusy, error: walletError } = useWalletSession();
   // A wallet request can hang forever (popup blocked, request landed in a
   // different extension, wallet closed). Each attempt gets an epoch; Cancel
   // bumps it so a late resolution is ignored instead of mutating UI state,
@@ -170,6 +173,13 @@ export function ShareGate({ token }: { token: string }) {
     }
   }
   useEffect(() => { check(); }, [token]);
+
+  // Wallet sign-in from the login gate: on success the session cookie is set,
+  // so re-running check() advances logged-out → paywall with no page hop.
+  async function signInWithWallet() {
+    const ok = await walletLogin();
+    if (ok) await check();
+  }
 
   const requirement = useMemo(() => {
     if (data && "accepts" in data && data.accepts?.[0]) return data.accepts[0];
@@ -472,15 +482,30 @@ export function ShareGate({ token }: { token: string }) {
           <div className="text-label uppercase text-drive-muted">Price</div>
           <div className="mt-1 text-display text-drive-text tabular-nums">{amountLabel}</div>
         </div>
-        <Button
-          variant="filled"
-          className="mt-6 w-full justify-center"
-          onClick={() => router.push(`/login?next=/s/${token}`)}
-        >
-          Sign in to continue
-        </Button>
+        <div className="mt-6 flex flex-col items-stretch gap-3">
+          <div className="flex justify-center">
+            <ConnectButton showBalance={false} chainStatus="none" />
+          </div>
+          <Button
+            variant="filled"
+            size="md"
+            loading={walletBusy}
+            disabled={!isConnected || walletBusy}
+            onClick={signInWithWallet}
+            className="w-full justify-center"
+          >
+            {walletBusy ? "Signing in…" : isConnected ? "Sign in with wallet" : "Connect a wallet to sign in"}
+          </Button>
+          {walletError && <p className="text-caption text-red-600 text-center">{walletError}</p>}
+          <button
+            onClick={() => router.push(`/login?next=/s/${token}`)}
+            className="text-caption text-drive-muted hover:text-drive-text underline underline-offset-2 self-center"
+          >
+            Use email instead
+          </button>
+        </div>
         <p className="mt-3 text-caption text-drive-muted text-center">
-          You’ll come right back here to pay after signing in.
+          No account needed — your wallet is your sign-in.
         </p>
       </GateShell>
     );
