@@ -11,7 +11,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto
 import { nanoid } from "nanoid";
 import { db } from "./db";
 
-export type OtpPurpose = "reset_password" | "signup";
+export type OtpPurpose = "reset_password" | "signup" | "attach_email";
 
 export const OTP_EXPIRES_MINUTES = 10;
 export const OTP_MAX_ATTEMPTS = 5;

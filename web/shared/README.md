@@ -45,6 +45,11 @@ Policy:
 - `domain/policy/path.ts` — `pathCovers(prefix, target)`, Willow path-prefix semantics.
 - `domain/policy/system-paths.ts` — `isSystemPath`; flags the reserved `.aindrive/` subtree.
 
+Display (pure, no I/O):
+- `wallet-display.ts` — `isWalletOnlyEmail` / `walletDisplayLabel`; de-leaks the
+  synthetic `<addr>@wallet.aindrive.local` email at any render site into a
+  truncated wallet address.
+
 ## Contracts & invariants
 
 - **Signing canonicalization**: payloads are signed as JSON with sorted keys, so
