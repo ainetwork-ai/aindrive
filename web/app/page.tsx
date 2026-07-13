@@ -4,6 +4,7 @@ import { listUserDrives } from "@/lib/drives";
 import { isOnline } from "@/lib/rpc";
 import { HardDrive, Terminal } from "lucide-react";
 import { LeaveDriveButton } from "@/components/leave-drive-button";
+import { AddEmailForm } from "@/components/add-email-form";
 import { isWalletOnlyEmail, walletDisplayLabel } from "@/shared/wallet-display";
 
 export default async function Home() {
@@ -51,7 +52,7 @@ aindrive`}
             You sign in with your wallet. There is no password recovery — lose the wallet
             and you lose access. Add an email to enable a second way in.
           </p>
-          {/* Task 5 mounts <AddEmailForm/> here */}
+          <AddEmailForm />
         </div>
       )}
 
