@@ -31,7 +31,11 @@ export async function POST(req: Request) {
   }
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  const { email, code, name, password } = body.data;
+  const { code, name, password } = body.data;
+  // Store email lowercased so the case-sensitive users.email UNIQUE actually
+  // catches case-variant duplicates (existence checks use lower(email), so a
+  // raw-case INSERT could otherwise race two rows like A@x and a@x).
+  const email = body.data.email.toLowerCase();
 
   // Consume the emailed signup code before creating anything. A bad/expired
   // code stops here — no account, no session.

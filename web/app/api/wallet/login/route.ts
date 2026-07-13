@@ -7,6 +7,7 @@ import { verifyWalletSignature } from "@/lib/siwe-verify";
 import { setCookie } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
+import { activeChainId } from "@/lib/payment-tokens";
 
 // The SIWE message must be signed FOR this origin; binding verify() to our
 // canonical host rejects a signature phished on another site.
@@ -52,6 +53,11 @@ export async function POST(req: Request) {
   }
   if (siweMsg.address.toLowerCase() !== address.toLowerCase()) {
     return NextResponse.json({ error: "address mismatch" }, { status: 400 });
+  }
+  // Bind the message to THIS deployment's Base chain — an ERC-1271 signature is
+  // chain/state-dependent, and a message built for another chainId must not pass.
+  if (siweMsg.chainId !== activeChainId()) {
+    return NextResponse.json({ error: "chain mismatch" }, { status: 400 });
   }
 
   const ok = await verifyWalletSignature({ message, signature, address, nonce, domain: EXPECTED_DOMAIN });
