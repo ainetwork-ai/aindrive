@@ -15,9 +15,13 @@ filesystem; the **web** app brokers between browsers and agents over WebSocket.
   sales/earnings, payment settings — lives on the Manage page (`/d/[id]/manage`).
   Rule: *create in context, audit in settings* — never split one concept
   (e.g. "links") across both a create surface and a separate list surface.
-- **Identity = email-login account.** Wallets are a payment instrument only,
-  never a login. A paid grant binds to the logged-in account. Details +
-  rationale: `docs/PERMISSIONS.md`.
+- **Identity = an account, reached by email+password OR a wallet (SIWE).**
+  A wallet-provisioned account is self-custodial (lose the wallet, lose the
+  account; aindrive never custodies/recovers keys). A wallet linked to an
+  existing email account is a login credential only after the owner opts in
+  while authenticated; a payment/attribution link never is. Payment (x402) is
+  not authentication (SIWE) — separate proofs. Details + rationale:
+  `docs/PERMISSIONS.md`.
 - **Payment tokens are a pricing menu.** A drive's allowed-tokens policy is the
   set of currencies an owner may price a sale in; each sale is priced in ONE
   token and the buyer pays only that one. It is not simultaneous/multi-charge.

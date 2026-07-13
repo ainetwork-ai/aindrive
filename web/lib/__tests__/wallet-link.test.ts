@@ -7,8 +7,7 @@ import { join } from "node:path";
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-walletlink-"));
 
 const { db } = await import("../db.js");
-const { linkWalletToAccount, WalletAlreadyLinkedError } = await import("../wallet.js");
-const { resolveAccountForWallet } = await import("../wallet.js");
+const { linkWalletToAccount, WalletAlreadyLinkedError, resolveAccountForWallet, walletLoginAccount } = await import("../wallet.js");
 
 const WALLET = "0xABCdef0000000000000000000000000000000001";
 
@@ -107,5 +106,26 @@ describe("resolveAccountForWallet atomicity + self-heal", () => {
       .get(fresh.toLowerCase()) as { account_id: string } | undefined;
     expect(user).toBeTruthy();
     expect(link?.account_id).toBe(id);
+  });
+});
+
+describe("login_enabled provenance", () => {
+  const NEWW = "0xD00d000000000000000000000000000000000011";
+
+  it("a freshly minted placeholder account is login-enabled", () => {
+    const id = resolveAccountForWallet(NEWW);
+    const acct = walletLoginAccount(NEWW);
+    expect(acct).toEqual({ accountId: id, loginEnabled: true });
+  });
+
+  it("returns null for an unknown wallet", () => {
+    expect(walletLoginAccount("0x0000000000000000000000000000000000009999")).toBeNull();
+  });
+
+  it("a wallet linked to a real account is NOT login-enabled by default", () => {
+    // u1 is a real (email) account seeded in the top-level beforeAll.
+    const realWallet = "0xEeee000000000000000000000000000000000012";
+    linkWalletToAccount("u1", realWallet, "siwe"); // authenticated link → verified_via siwe, login_enabled default 0
+    expect(walletLoginAccount(realWallet)).toEqual({ accountId: "u1", loginEnabled: false });
   });
 });

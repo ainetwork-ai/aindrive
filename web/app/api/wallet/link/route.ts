@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isAddress } from "viem";
 import { SiweMessage } from "siwe";
 import { consumeNonce, linkWalletToAccount, WalletAlreadyLinkedError } from "@/lib/wallet";
+import { verifyWalletSignature } from "@/lib/siwe-verify";
 import { getUser } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
@@ -49,10 +50,9 @@ export async function POST(req: Request) {
     if (siweMsg.address.toLowerCase() !== address.toLowerCase()) {
       return NextResponse.json({ error: "address mismatch" }, { status: 400 });
     }
-    // Pass domain + nonce so siwe enforces origin- and nonce-binding itself
-    // (defense in depth on top of the manual checks above).
-    const result = await siweMsg.verify({ signature, domain: EXPECTED_DOMAIN, nonce });
-    ok = result.success;
+    // Smart-wallet capable (EOA + ERC-1271 + ERC-6492) verification, binding
+    // origin + nonce (defense in depth on top of the manual checks above).
+    ok = await verifyWalletSignature({ message, signature, address, nonce, domain: EXPECTED_DOMAIN });
   } catch {
     ok = false;
   }

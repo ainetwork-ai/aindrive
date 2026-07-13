@@ -85,7 +85,18 @@ grants cover; the server re-checks every API call regardless of the UI.
 
 ## Identity note
 
-Identity is the **email-login account**. Wallets are a payment instrument only,
-never a login — a paid grant binds to the logged-in account (the share gate
-requires sign-in before payment), or to a wallet-provisioned account that a
-human can later reclaim by linking the wallet.
+Identity is an **account** (`users` row); its id is the root that every drive,
+grant, and receipt hangs off. An account is reached by **either** an
+email+password credential **or** a wallet via SIWE (`POST /api/wallet/login`).
+
+A **wallet-provisioned account** — minted for a wallet that paid or signed in
+(`resolveAccountForWallet`) — is **self-custodial**: losing the wallet loses the
+account, by design. aindrive does not custody or recover wallet keys (that is
+the wallet provider's job); a user may *optionally* attach a real email later
+for an alternative login. A wallet linked to an existing email account is a
+login credential **only** after the owner opts in while authenticated
+(`account_wallets.login_enabled`); a payment/attribution link never is. A
+verified wallet *payment* may still bootstrap/attribute an account (a trusted
+facilitator attests the payer controls the key), but **payment is not
+authentication** — login (SIWE, origin+nonce bound) and payment (x402) are
+separate proofs.

@@ -174,6 +174,7 @@ function open() {
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
     "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
     "ALTER TABLE payment_receipts ADD COLUMN account_id TEXT",
+    "ALTER TABLE account_wallets ADD COLUMN login_enabled INTEGER NOT NULL DEFAULT 0",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;
