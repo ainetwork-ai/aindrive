@@ -3,7 +3,12 @@ import { z } from "zod";
 import { isAddress } from "viem";
 import { SiweMessage } from "siwe";
 import { consumeNonce, setWalletCookie } from "@/lib/wallet";
+import { verifyWalletSignature } from "@/lib/siwe-verify";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { env } from "@/lib/env";
+
+// SIWE must be signed FOR this origin (anti-phishing); re-checked by the verifier.
+const EXPECTED_DOMAIN = new URL(env.publicUrl).host;
 
 const Body = z.object({
   address: z.string().refine((v) => isAddress(v), "invalid address"),
@@ -40,8 +45,9 @@ export async function POST(req: Request) {
     if (siweMsg.address.toLowerCase() !== address.toLowerCase()) {
       return NextResponse.json({ error: "address mismatch" }, { status: 400 });
     }
-    const result = await siweMsg.verify({ signature });
-    ok = result.success;
+    // Smart-wallet capable (EOA + ERC-1271 + ERC-6492) verification on the
+    // active Base chain — plain siwe.verify() was EOA-only.
+    ok = await verifyWalletSignature({ message, signature, address, nonce, domain: EXPECTED_DOMAIN });
   } catch {
     ok = false;
   }
