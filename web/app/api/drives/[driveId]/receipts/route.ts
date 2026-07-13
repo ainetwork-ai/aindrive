@@ -19,7 +19,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
   }
   const rows = db
     .prepare(
-      "SELECT id, path, wallet, tx_hash, amount_usdc, network, share_id, settled_at FROM payment_receipts WHERE drive_id = ? ORDER BY settled_at DESC",
+      "SELECT id, path, wallet, tx_hash, amount_usdc, currency, network, share_id, settled_at FROM payment_receipts WHERE drive_id = ? ORDER BY settled_at DESC",
     )
     .all(driveId);
   return NextResponse.json({ receipts: rows });

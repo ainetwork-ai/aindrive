@@ -82,6 +82,10 @@ function open() {
       -- from before Phase 4 don't carry the original amount). A real 0
       -- amount is a different signal from "we don't know."
       amount_usdc REAL,
+      -- Token symbol the sale was priced/paid in (mirrors shares.currency).
+      -- amount_usdc is in THIS unit, not USD. NULL only on legacy pre-currency
+      -- rows before the backfill below; the write path always records it.
+      currency TEXT,
       network TEXT NOT NULL,
       share_id TEXT,
       settled_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -174,6 +178,7 @@ function open() {
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
     "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
     "ALTER TABLE payment_receipts ADD COLUMN account_id TEXT",
+    "ALTER TABLE payment_receipts ADD COLUMN currency TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;
@@ -183,6 +188,15 @@ function open() {
   // the column (CREATE INDEX IF NOT EXISTS is safe to run every startup).
   handle.exec(`
     CREATE INDEX IF NOT EXISTS idx_payment_receipts_account ON payment_receipts(account_id);
+  `);
+  // Backfill currency on receipts predating the column: inherit the originating
+  // share's currency; fall back to 'USDC' when the share is gone or its currency
+  // is NULL (pre-policy sales were all USDC). WHERE currency IS NULL makes this
+  // a one-time migration — new receipts carry currency from the write path.
+  handle.exec(`
+    UPDATE payment_receipts
+    SET currency = COALESCE((SELECT s.currency FROM shares s WHERE s.id = share_id), 'USDC')
+    WHERE currency IS NULL;
   `);
   // Email OTP codes (lib/otp) — password reset now, reusable for signup/email
   // verification later. code_hash = sha256(`${salt}:${code}`); times are epoch

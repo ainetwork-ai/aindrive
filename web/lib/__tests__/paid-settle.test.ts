@@ -112,10 +112,12 @@ describe("paid share settle → drive_members", () => {
     });
     const res = await GET(req, { params: Promise.resolve({ token: "tok3" }) });
     expect(res.status).toBe(200);
-    const receipt = db.prepare("SELECT network FROM payment_receipts WHERE wallet = ?")
-      .get(PERMIT2_PAYER.toLowerCase()) as { network: string };
+    const receipt = db.prepare("SELECT network, currency FROM payment_receipts WHERE wallet = ?")
+      .get(PERMIT2_PAYER.toLowerCase()) as { network: string; currency: string };
     // Receipts keep the internal chain name, not the CAIP-2 wire form.
     expect(receipt.network).toBe("base");
+    // Currency is the sale token's symbol (sh3 priced in FANCO), NOT USD.
+    expect(receipt.currency).toBe("FANCO");
   });
 
   it("writes a drive_members grant for a placeholder account + receipt with account_id", async () => {
@@ -135,9 +137,11 @@ describe("paid share settle → drive_members", () => {
     ).get("d1", link.account_id, "docs") as { role: string };
     expect(member.role).toBe("editor");
 
-    const receipt = db.prepare("SELECT account_id FROM payment_receipts WHERE wallet = ?")
-      .get(PAYER.toLowerCase()) as { account_id: string };
+    const receipt = db.prepare("SELECT account_id, currency FROM payment_receipts WHERE wallet = ?")
+      .get(PAYER.toLowerCase()) as { account_id: string; currency: string };
     expect(receipt.account_id).toBe(link.account_id);
+    // sh1 has no explicit currency → USDC default token symbol.
+    expect(receipt.currency).toBe("USDC");
   });
 
   it("attributes the grant + receipt to the logged-in session account, not a placeholder", async () => {

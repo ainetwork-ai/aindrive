@@ -14,6 +14,7 @@ import { apiFetch } from "@/lib/api-client";
 import { Avatar, Badge, Button, IconButton, Input, Select, SectionCard, EmptyState } from "@/components/ui";
 import { TOKEN_PRESETS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import { type PayoutRow } from "@/lib/payout";
+import { sumByCurrency, formatCurrencyTotals } from "@/lib/receipt-totals";
 import { PaymentTokensEditor, type Member, type Share, type Receipt, type PendingInvite } from "./share-dialog-sections";
 
 type Section = "members" | "links" | "sales" | "payments";
@@ -387,7 +388,9 @@ function LinksSection({ driveId, shares, busy, setBusy, reload }: {
 // the door inventory; Sales is the storefront + ledger.
 
 function SalesSection({ shares, receipts, receiptsReadable }: { shares: Share[]; receipts: Receipt[]; receiptsReadable: boolean }) {
-  const totalEarned = receipts.reduce((s, r) => s + (r.amount_usdc ?? 0), 0);
+  // Group per currency: amount_usdc is in the sale's token unit, not USD, so a
+  // single $ sum across FANCO + USDC would be meaningless.
+  const totals = useMemo(() => sumByCurrency(receipts), [receipts]);
   const listed = useMemo(() => shares.filter((s) => s.price_usdc != null && !!s.listed), [shares]);
 
   return (
@@ -415,7 +418,7 @@ function SalesSection({ shares, receipts, receiptsReadable }: { shares: Share[];
         icon={<TrendingUp className="w-4 h-4" />}
         title="Earnings"
         description="Settled on-chain payments."
-        action={receiptsReadable ? <span className="text-body font-semibold text-green-600 tabular-nums">${totalEarned.toFixed(2)}</span> : undefined}
+        action={receiptsReadable && totals.length > 0 ? <span className="text-body font-semibold text-green-600 tabular-nums">{formatCurrencyTotals(totals)}</span> : undefined}
       >
         {!receiptsReadable ? (
           <EmptyState icon={<ShieldCheck />} title="Creator-only" description="Earnings are visible to the drive’s creator only." />
@@ -427,7 +430,8 @@ function SalesSection({ shares, receipts, receiptsReadable }: { shares: Share[];
               <li key={r.id} className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-caption">
                 <span className="font-mono text-drive-muted truncate w-28">{r.wallet.slice(0, 6)}…{r.wallet.slice(-4)}</span>
                 <span className="text-drive-muted truncate">{prettyPath(r.path)}</span>
-                <span className="ml-auto font-medium text-drive-text tabular-nums">${(r.amount_usdc ?? 0).toFixed(2)}</span>
+                <span className="ml-auto font-medium text-drive-text tabular-nums">{(r.amount_usdc ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                <Badge tone={(r.currency ?? "USDC") === "USDC" ? "neutral" : "accent"} className="shrink-0">{r.currency ?? "USDC"}</Badge>
                 {!r.tx_hash.startsWith("0xdev_bypass") && (
                   <a href={`https://${r.network === "base" ? "" : "sepolia."}basescan.org/tx/${r.tx_hash}`} target="_blank" rel="noreferrer" className="text-drive-muted hover:text-drive-accent" aria-label="View transaction">
                     <ExternalLink className="w-3 h-3" />

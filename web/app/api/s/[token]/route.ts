@@ -323,8 +323,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
 
   try {
     db.prepare(
-      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, network, share_id, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, tok.chain, share.id, settleAccountId);
+      "INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, currency, network, share_id, account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(nanoid(12), share.drive_id, share.path, payerWallet, txHash, share.price_usdc, tok.symbol, tok.chain, share.id, settleAccountId);
   } catch (e) {
     if (!/UNIQUE/i.test((e as Error).message)) throw e;
     // Same on-chain tx already recorded. Log so observability shows
@@ -339,6 +339,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     wallet: payerWallet,
     txHash,
     amountUsdc: share.price_usdc,
+    currency: tok.symbol,
     network: tok.chain,
   });
 

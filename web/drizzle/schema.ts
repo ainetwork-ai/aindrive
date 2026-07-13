@@ -125,6 +125,10 @@ export const payment_receipts = sqliteTable(
     // Nullable: NULL = "amount unknown" (legacy backfilled receipts from
     // before Phase 4). A real 0-amount is a different signal.
     amount_usdc: real("amount_usdc"),
+    // Token symbol the sale was priced/paid in (mirrors shares.currency).
+    // amount_usdc is denominated in THIS unit, not USD — so the Sales KPI sums
+    // per currency. NULL only on legacy rows before the db.js backfill.
+    currency: text("currency"),
     network: text("network").notNull(),
     // Nullable because the originating share may be deleted later.
     share_id: text("share_id"),
