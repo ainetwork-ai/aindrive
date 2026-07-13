@@ -526,7 +526,7 @@ export function MembersSection({
                   disabled={busy}
                   wrapClassName="w-24"
                   className="h-8"
-                  aria-label={`Role for ${m.email}`}
+                  aria-label={`Role for ${walletDisplayLabel(m.email, m.name)}`}
                   onChange={(e) => changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")}
                 >
                   <option value="viewer">Viewer</option>
@@ -540,7 +540,7 @@ export function MembersSection({
                 <IconButton
                   size="sm"
                   variant="text"
-                  aria-label={`Remove ${m.email}`}
+                  aria-label={`Remove ${walletDisplayLabel(m.email, m.name)}`}
                   disabled={busy}
                   onClick={() => removeMember(m.id)}
                 >

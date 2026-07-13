@@ -57,6 +57,22 @@ describe("POST /api/wallet/login provenance gate", () => {
     expect(setCookie).not.toHaveBeenCalled();
   });
 
+  it("rejects (400) a SIWE message built for the wrong chainId", async () => {
+    const address = mkAddr("5");
+    const { nonce } = wallet.issueNonce("anon");
+    const message = new SiweMessage({
+      domain: "drive.example.test", address, statement: "sign in",
+      uri: "https://drive.example.test", version: "1", chainId: 1, nonce, // not the active Base chain
+    }).prepareMessage();
+    const req = new Request("https://drive.example.test/api/wallet/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ address, signature: "0xsig", nonce, message }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    expect(setCookie).not.toHaveBeenCalled();
+  });
+
   it("mints a session for a placeholder wallet (login-enabled by construction)", async () => {
     const placeholder = mkAddr("2");
     wallet.resolveAccountForWallet(placeholder); // mints a login-enabled placeholder

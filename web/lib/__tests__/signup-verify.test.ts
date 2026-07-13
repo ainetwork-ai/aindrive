@@ -44,6 +44,15 @@ describe("signup verify-before-create", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("stores the email lowercased so a case-variant can't create a duplicate row", async () => {
+    await requestCode(req({ email: "Mixed@Example.COM" }, "2.2.2.2"));
+    const code = codeFromLastMail();
+    const res = await signup(req({ email: "Mixed@Example.COM", code, name: "Mixed", password: "hunter2hunter2" }, "2.2.2.2"));
+    expect(res.status).toBe(200);
+    const row = db.prepare("SELECT email FROM users WHERE lower(email) = ?").get("mixed@example.com") as { email: string };
+    expect(row.email).toBe("mixed@example.com");
+  });
+
   it("request-code returns alreadyRegistered (and sends nothing) for an existing email", async () => {
     db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)")
       .run("u0", "taken@example.com", "T", await bcrypt.hash("x".repeat(8), 10));
