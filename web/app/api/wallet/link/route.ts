@@ -18,6 +18,9 @@ const Body = z.object({
   signature: z.string().min(2),
   nonce: z.string().min(8),
   message: z.string().min(10),
+  // Opt-in: also enable signing in with this wallet (login_enabled=1). The
+  // authenticated session + SIWE signature here ARE the login-consent proof.
+  enableLogin: z.boolean().optional(),
 });
 
 export async function POST(req: Request) {
@@ -60,7 +63,7 @@ export async function POST(req: Request) {
 
   let reclaimed: number;
   try {
-    reclaimed = linkWalletToAccount(user.id, address, "siwe");
+    reclaimed = linkWalletToAccount(user.id, address, "siwe", body.data.enableLogin === true);
   } catch (e) {
     if (e instanceof WalletAlreadyLinkedError) {
       return NextResponse.json({ error: "wallet already linked" }, { status: 409 });

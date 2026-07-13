@@ -107,6 +107,14 @@ export async function setup() {
     PORT:                     String(port),
     AINDRIVE_DATA_DIR:        dataDir,
     AINDRIVE_DEV_BYPASS_X402: "1",
+    // Skip the verify-before-create email OTP: the harness can't read the
+    // hashed code, and mail isn't configured in CI. Prod-guarded in boot-checks.
+    AINDRIVE_DEV_BYPASS_OTP:  "1",
+    // publicUrl must match the host the tests connect on (127.0.0.1), else
+    // SIWE domain-binding in /api/wallet/{verify,link,login} rejects the tests'
+    // messages (which use `new URL(BASE).host`). Without this, env.publicUrl
+    // defaults to localhost:<port> and the 127.0.0.1 domain mismatches → 401.
+    AINDRIVE_PUBLIC_URL:      base,
     NODE_ENV:                 "development",
   };
 

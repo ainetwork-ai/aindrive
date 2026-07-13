@@ -129,3 +129,18 @@ describe("login_enabled provenance", () => {
     expect(walletLoginAccount(realWallet)).toEqual({ accountId: "u1", loginEnabled: false });
   });
 });
+
+describe("linkWalletToAccount loginEnabled opt-in", () => {
+  it("links with login_enabled=1 when opted in", () => {
+    const w = "0xAAaa000000000000000000000000000000000021";
+    linkWalletToAccount("u1", w, "siwe", true);
+    expect(walletLoginAccount(w)).toEqual({ accountId: "u1", loginEnabled: true });
+  });
+  it("defaults login_enabled=0 without opt-in; re-linking with opt-in flips it on", () => {
+    const w = "0xBBbb000000000000000000000000000000000022";
+    linkWalletToAccount("u1", w, "siwe");
+    expect(walletLoginAccount(w)).toEqual({ accountId: "u1", loginEnabled: false });
+    linkWalletToAccount("u1", w, "siwe", true);
+    expect(walletLoginAccount(w)).toEqual({ accountId: "u1", loginEnabled: true });
+  });
+});

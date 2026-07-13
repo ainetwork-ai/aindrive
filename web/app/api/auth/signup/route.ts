@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { setCookie } from "@/lib/session";
 import { claimInvitesForEmail } from "@/lib/invites.js";
-import { verifyOtpCode } from "@/lib/otp";
+import { verifyOtpCode, type OtpVerifyResult } from "@/lib/otp";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 
 const Body = z.object({
@@ -18,7 +18,9 @@ const Body = z.object({
   ),
   // Verify-before-create: the 6-digit code emailed by /signup/request-code
   // proves the visitor controls this inbox, so every account has a real email.
-  code: z.string().regex(/^\d{6}$/),
+  // Optional so the dev/e2e OTP bypass (AINDRIVE_DEV_BYPASS_OTP) can omit it;
+  // production still gates on verifyOtpCode below, which fails without a match.
+  code: z.string().regex(/^\d{6}$/).optional(),
   name: z.string().min(1).max(80),
   password: z.string().min(8).max(200),
 });
@@ -39,7 +41,11 @@ export async function POST(req: Request) {
 
   // Consume the emailed signup code before creating anything. A bad/expired
   // code stops here — no account, no session.
-  const verdict = verifyOtpCode(email, code, "signup");
+  // Dev/e2e only (rejected in production by boot-checks): skip the email OTP
+  // round-trip the harness can't complete (the code is stored hashed).
+  const verdict: OtpVerifyResult = process.env.AINDRIVE_DEV_BYPASS_OTP === "1"
+    ? { ok: true }
+    : verifyOtpCode(email, code ?? "", "signup");
   if (!verdict.ok) {
     return NextResponse.json(
       { error: verdict.reason, remainingAttempts: verdict.remainingAttempts },
