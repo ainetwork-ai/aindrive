@@ -49,3 +49,34 @@ describe("POST /api/account/email/start", () => {
     expect(row).toMatchObject({ purpose: "attach_email" });
   });
 });
+
+const { POST: VERIFY } = await import("../../app/api/account/email/verify/route.js");
+const { issueOtpCode } = await import("../otp.js");
+
+const vReq = (body: unknown) => new Request("http://localhost/api/account/email/verify", {
+  method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+});
+
+describe("POST /api/account/email/verify", () => {
+  beforeEach(() => { currentUser = null; });
+
+  it("attaches the email + password to the wallet-only account on a valid code", async () => {
+    currentUser = { id: "w1", email: "0xabc0000000000000000000000000000000000001@wallet.aindrive.local", name: "w" };
+    const code = issueOtpCode("attach@example.com", "attach_email");
+    const res = await VERIFY(vReq({ email: "attach@example.com", code, password: "hunter2hunter2" }));
+    expect(res.status).toBe(200);
+    const row = db.prepare("SELECT email, password_hash FROM users WHERE id = ?").get("w1") as { email: string; password_hash: string };
+    expect(row.email).toBe("attach@example.com");
+    expect(row.password_hash).not.toBe("x"); // real bcrypt hash now
+  });
+
+  it("422 on a wrong code", async () => {
+    currentUser = { id: "w1", email: "attach@example.com", name: "w" }; // note: now real after prior test — reseed a fresh wallet-only user
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)")
+      .run("w2", "0xdef0000000000000000000000000000000000002@wallet.aindrive.local", "wallet:0xdef", "x");
+    currentUser = { id: "w2", email: "0xdef0000000000000000000000000000000000002@wallet.aindrive.local", name: "w" };
+    issueOtpCode("attach2@example.com", "attach_email");
+    const res = await VERIFY(vReq({ email: "attach2@example.com", code: "000000", password: "hunter2hunter2" }));
+    expect(res.status).toBe(422);
+  });
+});
