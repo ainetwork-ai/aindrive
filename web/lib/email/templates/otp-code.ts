@@ -6,7 +6,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-type OtpKind = "reset" | "signup";
+type OtpKind = "reset" | "signup" | "attach";
 
 const COPY: Record<OtpKind, { subject: string; heading: string; intro: string; ignore: string }> = {
   reset: {
@@ -19,6 +19,12 @@ const COPY: Record<OtpKind, { subject: string; heading: string; intro: string; i
     subject: "aindrive 이메일 인증 코드",
     heading: "이메일 인증",
     intro: "아래 6자리 코드를 입력해 회원가입을 완료하세요.",
+    ignore: "본인이 요청하지 않았다면 이 이메일을 무시하세요.",
+  },
+  attach: {
+    subject: "aindrive 이메일 연결 인증 코드",
+    heading: "이메일 연결",
+    intro: "아래 6자리 코드를 입력해 지갑 계정에 이 이메일을 연결하세요.",
     ignore: "본인이 요청하지 않았다면 이 이메일을 무시하세요.",
   },
 };

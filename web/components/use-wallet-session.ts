@@ -9,17 +9,21 @@ const CHAIN_ID =
   process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? 8453 : 84532;
 
 /**
- * Sign-In With Ethereum (SIWE) for an already-connected wallet.
+ * Sign-In With Ethereum (SIWE) that establishes a real aindrive SESSION.
  *
- * Distinct from the x402 PAYMENT flow in share-gate.tsx: this proves
- * ownership of a wallet that ALREADY has access (paid earlier, or
- * owner-added), so the server can re-issue the `aindrive_wallet` cookie on
- * a new device/browser. No on-chain transaction, just a signature.
+ * Sibling of useWalletLogin (which only re-issues the wallet-ownership cookie
+ * via /api/wallet/verify). This one hits /api/wallet/login, which mints an
+ * aindrive_session for the wallet's account — the no-email login. Login is a
+ * separate proof from payment; the paywall's x402 signature never logs you in.
+ *
+ * A wallet linked to a real email account that hasn't opted into wallet-login
+ * gets 403 `wallet_login_not_enabled`; surfaced verbatim so the caller can show
+ * "sign in with email instead".
  *
  * Flow: POST /api/wallet/nonce → build SiweMessage → sign → POST
- * /api/wallet/verify (sets the cookie). Returns { login, busy, error }.
+ * /api/wallet/login (sets the session cookie). Returns { login, busy, error }.
  */
-export function useWalletLogin() {
+export function useWalletSession() {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
   const [busy, setBusy] = useState(false);
@@ -49,14 +53,17 @@ export function useWalletLogin() {
 
       const signature = await signMessageAsync({ message });
 
-      const verifyRes = await fetch("/api/wallet/verify", {
+      const res = await fetch("/api/wallet/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ address, signature, nonce, message }),
       });
-      if (!verifyRes.ok) {
-        const body = await verifyRes.json().catch(() => ({}));
-        throw new Error(body.error || "verification failed");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 403 && body.error === "wallet_login_not_enabled") {
+          throw new Error("This wallet is linked to an email account — sign in with email, or enable wallet login from settings.");
+        }
+        throw new Error(body.error || "login failed");
       }
       return true;
     } catch (e) {

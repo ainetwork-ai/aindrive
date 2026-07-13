@@ -14,6 +14,7 @@ import {
 import { useState, type ReactNode } from "react";
 import { Plus, Trash2 as TrashIcon, Loader2, CheckCircle2, Clock } from "lucide-react";
 import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
+import { walletDisplayLabel } from "@/shared/wallet-display";
 import { normalizePath, isAncestorOrSelf } from "@/lib/access-core.js";
 import { TOKEN_PRESETS, isX402Settleable, paymentNetwork, type PaymentToken } from "@/lib/payment-tokens";
 
@@ -519,14 +520,14 @@ export function MembersSection({
         <ul className="space-y-1.5 max-h-44 overflow-auto scrollbar-thin">
           {direct.map((m) => (
             <ListRow key={m.id}>
-              <span className="truncate flex-1 text-body text-drive-text">{m.name || m.email}</span>
+              <span className="truncate flex-1 text-body text-drive-text">{walletDisplayLabel(m.email, m.name)}</span>
               {isOwner ? (
                 <Select
                   value={m.role}
                   disabled={busy}
                   wrapClassName="w-24"
                   className="h-8"
-                  aria-label={`Role for ${m.email}`}
+                  aria-label={`Role for ${walletDisplayLabel(m.email, m.name)}`}
                   onChange={(e) => changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")}
                 >
                   <option value="viewer">Viewer</option>
@@ -540,7 +541,7 @@ export function MembersSection({
                 <IconButton
                   size="sm"
                   variant="text"
-                  aria-label={`Remove ${m.email}`}
+                  aria-label={`Remove ${walletDisplayLabel(m.email, m.name)}`}
                   disabled={busy}
                   onClick={() => removeMember(m.id)}
                 >
@@ -558,7 +559,7 @@ export function MembersSection({
           <ul className="space-y-1.5 max-h-32 overflow-auto scrollbar-thin">
             {inherited.map((m) => (
               <ListRow key={m.id}>
-                <span className="truncate flex-1 text-body text-drive-text">{m.name || m.email}</span>
+                <span className="truncate flex-1 text-body text-drive-text">{walletDisplayLabel(m.email, m.name)}</span>
                 <span className="text-caption text-drive-muted truncate shrink-0" title={`Granted at ${prettyPath(normalizePath(m.path))} — manage it there`}>
                   from {prettyPath(normalizePath(m.path))}
                 </span>
