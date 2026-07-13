@@ -35,11 +35,13 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   // WalletProvider (wagmi + RainbowKit + WalletConnect + MetaMask SDK) is
-  // intentionally NOT mounted here — only the routes that use wallet hooks own
-  // it via their own layout: app/s/[token]/layout.tsx (paywall) and
-  // app/login/wallet/layout.tsx (wallet sign-in). This keeps the ~300-600KB
-  // web3 bundle (and its Reown config fetch) off the landing page, the
-  // email /login and other auth pages, and the main drive workspace.
+  // intentionally NOT mounted here — only surfaces that use wallet hooks pull
+  // it in: app/s/[token]/layout.tsx (paywall) and app/account/wallet/layout.tsx
+  // (add wallet) own it via their layout, and /login code-splits it behind a
+  // dynamic import (components/wallet-auth-panel) that loads only when a visitor
+  // clicks "Continue with a wallet". This keeps the ~300-600KB web3 bundle (and
+  // its Reown config fetch) off the landing page, the email /login form on first
+  // paint, other auth pages, and the main drive workspace.
   // Toaster stays at the root: toast() is called app-wide and does not
   // depend on the wallet context.
   return (

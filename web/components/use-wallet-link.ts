@@ -9,9 +9,9 @@ const CHAIN_ID =
 
 /**
  * Link the connected wallet to the CURRENT (logged-in) account via SIWE, opting
- * into wallet-login (login_enabled=1). Sibling of useWalletSession — that one
- * establishes a session from a wallet; this one, run while already authenticated
- * (email account), attaches the wallet as an additional sign-in credential.
+ * into wallet-login (login_enabled=1). Run while already authenticated (email
+ * account), it attaches the wallet as an additional sign-in credential — the
+ * counterpart to the /login wallet flow, which mints a session FROM a wallet.
  *
  * The authenticated session + this SIWE signature ARE the login-consent proof
  * (a payment/attribution link never sets login_enabled on its own).
