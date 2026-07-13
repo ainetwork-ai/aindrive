@@ -4,7 +4,7 @@ import { listUserDrives } from "@/lib/drives";
 import { isOnline } from "@/lib/rpc";
 import { HardDrive, Terminal } from "lucide-react";
 import { LeaveDriveButton } from "@/components/leave-drive-button";
-import { walletDisplayLabel } from "@/shared/wallet-display";
+import { isWalletOnlyEmail, walletDisplayLabel } from "@/shared/wallet-display";
 
 export default async function Home() {
   const user = await getUser();
@@ -43,6 +43,17 @@ aindrive`}
           <button className="text-sm text-drive-muted hover:text-drive-text">Sign out ({walletDisplayLabel(user.email, user.name)})</button>
         </form>
       </header>
+
+      {isWalletOnlyEmail(user.email) && (
+        <div className="mb-6 rounded-xl border border-drive-border bg-drive-panel px-4 py-3 text-sm">
+          <p className="font-medium text-drive-text">This is a wallet account</p>
+          <p className="mt-0.5 text-drive-muted">
+            You sign in with your wallet. There is no password recovery — lose the wallet
+            and you lose access. Add an email to enable a second way in.
+          </p>
+          {/* Task 5 mounts <AddEmailForm/> here */}
+        </div>
+      )}
 
       {drives.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-drive-border p-10 text-center bg-white">
