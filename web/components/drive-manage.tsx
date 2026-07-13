@@ -215,7 +215,7 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
           <ul className="space-y-3">
             {people.map((p) => (
               <li key={p.email} className="flex gap-3">
-                <Avatar name={p.name || p.email} size="md" />
+                <Avatar name={walletDisplayLabel(p.email, p.name)} size="md" />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-drive-text truncate">{walletDisplayLabel(p.email, p.name)}</div>
                   {p.name && !isWalletOnlyEmail(p.email) && <div className="text-caption text-drive-muted truncate">{p.email}</div>}
