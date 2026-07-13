@@ -4,6 +4,9 @@ export type PaymentSettledContext = {
   wallet: string;
   txHash: string;
   amountUsdc: number;
+  // Token symbol the amount is denominated in (amountUsdc is in THIS unit, not
+  // USD). See payment_receipts.currency.
+  currency: string;
   network: string;
 };
 

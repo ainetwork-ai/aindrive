@@ -91,6 +91,10 @@ export const payment_receipts = sqliteTable(
     wallet: text("wallet").notNull(),
     tx_hash: text("tx_hash").notNull().unique(),
     amount_usdc: real("amount_usdc"),
+    // Token symbol the sale was priced/paid in (mirrors shares.currency).
+    // amount_usdc is denominated in THIS unit, not USD. NULL only on legacy
+    // rows before the db.js backfill.
+    currency: text("currency"),
     network: text("network").notNull(),
     share_id: text("share_id"),
     settled_at: text("settled_at")

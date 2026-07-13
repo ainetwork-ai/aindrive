@@ -33,7 +33,8 @@ export type Receipt = {
   path: string;
   wallet: string;
   tx_hash: string;
-  amount_usdc: number | null;
+  amount_usdc: number | null; // in `currency` units, not USD
+  currency: string | null; // token symbol; null = legacy USDC
   network: string;
   share_id: string | null;
   settled_at: string;
