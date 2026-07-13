@@ -112,7 +112,7 @@ export class WalletAlreadyLinkedError extends Error {
  *
  * @returns number of receipts reclaimed
  */
-export function linkWalletToAccount(accountId: string, wallet: string, verifiedVia: string): number {
+export function linkWalletToAccount(accountId: string, wallet: string, verifiedVia: string, loginEnabled = false): number {
   const addr = wallet.toLowerCase();
   const existing = db
     .prepare("SELECT account_id FROM account_wallets WHERE wallet_address = ?")
@@ -120,8 +120,13 @@ export function linkWalletToAccount(accountId: string, wallet: string, verifiedV
   if (existing && existing.account_id !== accountId) throw new WalletAlreadyLinkedError();
   if (!existing) {
     db.prepare(
-      "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via) VALUES (?, ?, ?, ?)"
-    ).run(nanoid(12), accountId, addr, verifiedVia);
+      "INSERT INTO account_wallets (id, account_id, wallet_address, verified_via, login_enabled) VALUES (?, ?, ?, ?, ?)"
+    ).run(nanoid(12), accountId, addr, verifiedVia, loginEnabled ? 1 : 0);
+  } else if (loginEnabled) {
+    // Re-linking the SAME wallet to opt into wallet-login: flip the consent flag
+    // on. (login_enabled starts 0 for a payment/attribution link — turning it on
+    // is an explicit, authenticated, SIWE-signed action.)
+    db.prepare("UPDATE account_wallets SET login_enabled = 1 WHERE wallet_address = ?").run(addr);
   }
   const res = db
     .prepare("UPDATE payment_receipts SET account_id = ? WHERE wallet = ? AND account_id IS NULL")

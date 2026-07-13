@@ -40,9 +40,16 @@ aindrive`}
     <main className="min-h-screen min-h-[100dvh] max-w-5xl mx-auto px-6 py-10">
       <header className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-semibold">My drives</h1>
-        <form action="/api/auth/logout" method="POST">
-          <button className="text-sm text-drive-muted hover:text-drive-text">Sign out ({walletDisplayLabel(user.email, user.name)})</button>
-        </form>
+        <div className="flex items-center gap-4">
+          {!isWalletOnlyEmail(user.email) && (
+            <Link href="/account/wallet" className="text-sm text-drive-muted hover:text-drive-accent hover:underline">
+              Add wallet sign-in
+            </Link>
+          )}
+          <form action="/api/auth/logout" method="POST">
+            <button className="text-sm text-drive-muted hover:text-drive-text">Sign out ({walletDisplayLabel(user.email, user.name)})</button>
+          </form>
+        </div>
       </header>
 
       {isWalletOnlyEmail(user.email) && (
