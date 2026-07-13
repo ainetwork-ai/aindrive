@@ -76,3 +76,36 @@ describe("resolveAccountForWallet", () => {
     expect(count.c).toBe(1);
   });
 });
+
+describe("resolveAccountForWallet atomicity + self-heal", () => {
+  const SYNTH_WALLET = "0xCafE000000000000000000000000000000000009";
+  const addr = SYNTH_WALLET.toLowerCase();
+
+  it("heals an orphan users row (synthetic email exists, no account_wallets link)", () => {
+    // Simulate a crash-orphaned users row: minted with the deterministic
+    // synthetic email but NO account_wallets link written.
+    const orphanId = "w_orphan01";
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)")
+      .run(orphanId, `${addr}@wallet.aindrive.local`, `wallet:${addr.slice(0, 10)}`, "x");
+
+    // Must NOT throw on email-UNIQUE; must adopt the orphan and link it.
+    const id = resolveAccountForWallet(SYNTH_WALLET);
+    expect(id).toBe(orphanId);
+
+    const link = db.prepare(
+      "SELECT account_id, verified_via FROM account_wallets WHERE wallet_address = ?"
+    ).get(addr) as { account_id: string; verified_via: string };
+    expect(link.account_id).toBe(orphanId);
+    expect(link.verified_via).toBe("payment");
+  });
+
+  it("is atomic: a fresh mint writes BOTH the users row and the link, or neither", () => {
+    const fresh = "0xBeeF000000000000000000000000000000000010";
+    const id = resolveAccountForWallet(fresh);
+    const user = db.prepare("SELECT id FROM users WHERE id = ?").get(id);
+    const link = db.prepare("SELECT account_id FROM account_wallets WHERE wallet_address = ?")
+      .get(fresh.toLowerCase()) as { account_id: string } | undefined;
+    expect(user).toBeTruthy();
+    expect(link?.account_id).toBe(id);
+  });
+});
