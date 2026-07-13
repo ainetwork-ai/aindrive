@@ -50,6 +50,14 @@ function LoginForm() {
           Create an account
         </Link>
       </p>
+      <p className="mt-2 text-sm text-drive-muted text-center">
+        <Link
+          className="text-drive-accent hover:underline"
+          href={next ? `/login/wallet?next=${encodeURIComponent(next)}` : "/login/wallet"}
+        >
+          Sign in with a wallet instead →
+        </Link>
+      </p>
     </form>
   );
 }
