@@ -9,10 +9,15 @@ export function runBootChecks() {
 
   const errors = [];
 
-  // 1. DEV bypass must never be on in production.
+  // 1. DEV bypasses must never be on in production.
   if (process.env.AINDRIVE_DEV_BYPASS_X402 === "1") {
     errors.push(
       "AINDRIVE_DEV_BYPASS_X402=1 is set in production — every paid share would be free. Unset it."
+    );
+  }
+  if (process.env.AINDRIVE_DEV_BYPASS_OTP === "1") {
+    errors.push(
+      "AINDRIVE_DEV_BYPASS_OTP=1 is set in production — signup would skip email verification. Unset it."
     );
   }
 

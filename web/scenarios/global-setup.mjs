@@ -107,6 +107,9 @@ export async function setup() {
     PORT:                     String(port),
     AINDRIVE_DATA_DIR:        dataDir,
     AINDRIVE_DEV_BYPASS_X402: "1",
+    // Skip the verify-before-create email OTP: the harness can't read the
+    // hashed code, and mail isn't configured in CI. Prod-guarded in boot-checks.
+    AINDRIVE_DEV_BYPASS_OTP:  "1",
     NODE_ENV:                 "development",
   };
 
