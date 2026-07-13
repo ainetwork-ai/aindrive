@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { Avatar, Badge, Button, IconButton, Input, Select, SectionCard, EmptyState } from "@/components/ui";
+import { isWalletOnlyEmail, walletDisplayLabel } from "@/shared/wallet-display";
 import { TOKEN_PRESETS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import { type PayoutRow } from "@/lib/payout";
 import { PaymentTokensEditor, type Member, type Share, type Receipt, type PendingInvite } from "./share-dialog-sections";
@@ -184,7 +185,7 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
           <ul className="space-y-1.5">
             {pending.map((p) => (
               <li key={p.id} className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-body">
-                <span className="truncate font-medium text-drive-text">{p.email}</span>
+                <span className="truncate font-medium text-drive-text">{walletDisplayLabel(p.email)}</span>
                 <Badge tone="neutral" className="shrink-0">{p.role}</Badge>
                 <span className="text-caption text-drive-muted truncate">{prettyPath(p.path)}</span>
                 <IconButton size="sm" variant="text" aria-label="Cancel invite" className="ml-auto" disabled={busy} onClick={() => cancelInvite(p.id)}>
@@ -216,8 +217,8 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
               <li key={p.email} className="flex gap-3">
                 <Avatar name={p.name || p.email} size="md" />
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium text-drive-text truncate">{p.name || p.email}</div>
-                  {p.name && <div className="text-caption text-drive-muted truncate">{p.email}</div>}
+                  <div className="font-medium text-drive-text truncate">{walletDisplayLabel(p.email, p.name)}</div>
+                  {p.name && !isWalletOnlyEmail(p.email) && <div className="text-caption text-drive-muted truncate">{p.email}</div>}
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {p.grants.map((g) => (
                       <span key={g.id} className="inline-flex items-center gap-1 rounded-full border border-drive-border bg-drive-sidebar pl-2 pr-1 py-0.5 text-caption">
