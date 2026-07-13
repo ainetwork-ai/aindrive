@@ -13,7 +13,7 @@ import { encodeFunctionData, maxUint256, UserRejectedRequestError, type Account,
 import { getCapabilities, sendCalls, waitForCallsStatus } from "viem/actions";
 import { Button } from "@/components/ui";
 import { getWagmiConfig } from "@/lib/wagmi-config";
-import { useWalletSession } from "@/components/use-wallet-session";
+import { walletDisplayLabel } from "@/shared/wallet-display";
 
 // Canonical Uniswap Permit2 contract — same address on every EVM chain.
 // (Mirrors @x402/evm's PERMIT2_ADDRESS, which isn't re-exported from the
@@ -84,7 +84,7 @@ type CheckResponse =
       error: string;
     };
 
-type State = "loading" | "login" | "paywall" | "error";
+type State = "loading" | "paywall" | "error";
 
 export function ShareGate({ token }: { token: string }) {
   const [state, setState] = useState<State>("loading");
@@ -107,8 +107,9 @@ export function ShareGate({ token }: { token: string }) {
   const walletConnecting = (isConnecting || isReconnecting) && !isConnected;
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
-  // Wallet-only sign-in for the login gate (SIWE → aindrive_session, no email).
-  const { login: walletLogin, busy: walletBusy, error: walletError } = useWalletSession();
+  // The signed-in account, shown on the paywall so the buyer knows which
+  // account this purchase will bind to (and can switch).
+  const [user, setUser] = useState<{ email: string; name: string } | null>(null);
   // A wallet request can hang forever (popup blocked, request landed in a
   // different extension, wallet closed). Each attempt gets an epoch; Cancel
   // bumps it so a late resolution is ignored instead of mutating UI state,
@@ -167,18 +168,25 @@ export function ShareGate({ token }: { token: string }) {
       // user.id (not the fragile wallet→account fallback). Logged-out → login
       // gate; logged-in → paywall.
       const me = await fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)).catch(() => null);
-      setState(me?.user ? "paywall" : "login");
+      if (me?.user) { setUser(me.user); setState("paywall"); }
+      // Logged out → the normal login page (email + password + "wallet
+      // instead" + create-account), then back to this exact share. A general
+      // drive buyer gets the consistent login experience; a wallet-only user
+      // still reaches SIWE via /login → "Sign in with a wallet instead".
+      else router.replace(`/login?next=/s/${token}`);
     } else {
       setState("error");
     }
   }
   useEffect(() => { check(); }, [token]);
 
-  // Wallet sign-in from the login gate: on success the session cookie is set,
-  // so re-running check() advances logged-out → paywall with no page hop.
-  async function signInWithWallet() {
-    const ok = await walletLogin();
-    if (ok) await check();
+  // "Use a different account" on the paywall: sign out, then to /login so the
+  // buyer can sign in as someone else and return to this exact share.
+  async function switchAccount() {
+    // Redirect even if the logout request errors — /login is a fresh page and a
+    // stale cookie there just lands the buyer back on the paywall as themselves.
+    try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* ignore */ }
+    router.replace(`/login?next=/s/${token}`);
   }
 
   const requirement = useMemo(() => {
@@ -186,7 +194,7 @@ export function ShareGate({ token }: { token: string }) {
     return null;
   }, [data]);
 
-  // Human price label, shared by the login gate + paywall. `$` prefix only for
+  // Human price label for the paywall. `$` prefix only for
   // the dollar-pegged USDC; other tokens (e.g. FANCO) show "<amount> <symbol>".
   const amountLabel = useMemo(() => {
     if (!requirement) return "";
@@ -464,53 +472,9 @@ export function ShareGate({ token }: { token: string }) {
     );
   }
 
-  // ── Login gate: paid content, visitor not signed in. Establish identity
-  //    BEFORE the wallet signature so the purchase binds to their account. ─────
-  if (state === "login" && requirement) {
-    return (
-      <GateShell>
-        <div className="flex flex-col items-center text-center">
-          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-drive-selected text-drive-accent">
-            <Lock className="w-7 h-7" />
-          </span>
-          <h1 className="mt-4 text-title text-drive-text">Sign in to purchase</h1>
-          <p className="mt-1 text-body text-drive-muted max-w-xs">
-            This content costs {amountLabel}. Sign in (or create an account) to continue — your purchase then unlocks permanent access.
-          </p>
-        </div>
-        <div className="mt-6 rounded-xl border border-drive-border bg-drive-panel px-5 py-4 text-center">
-          <div className="text-label uppercase text-drive-muted">Price</div>
-          <div className="mt-1 text-display text-drive-text tabular-nums">{amountLabel}</div>
-        </div>
-        <div className="mt-6 flex flex-col items-stretch gap-3">
-          <div className="flex justify-center">
-            <ConnectButton showBalance={false} chainStatus="none" />
-          </div>
-          <Button
-            variant="filled"
-            size="md"
-            loading={walletBusy}
-            disabled={!isConnected || walletBusy}
-            onClick={signInWithWallet}
-            className="w-full justify-center"
-          >
-            {walletBusy ? "Signing in…" : isConnected ? "Sign in with wallet" : "Connect a wallet to sign in"}
-          </Button>
-          {walletError && <p className="text-caption text-red-600 text-center">{walletError}</p>}
-          <button
-            onClick={() => router.push(`/login?next=/s/${token}`)}
-            className="text-caption text-drive-muted hover:text-drive-text underline underline-offset-2 self-center"
-          >
-            Use email instead
-          </button>
-        </div>
-        <p className="mt-3 text-caption text-drive-muted text-center">
-          No account needed — your wallet is your sign-in.
-        </p>
-      </GateShell>
-    );
-  }
-
+  // ── Paywall: paid content, visitor signed in. The purchase binds to the
+  //    session account (shown below, with a "use a different account" switch);
+  //    logged-out visitors are redirected to /login by check() before here. ───
   if (state === "paywall" && requirement) {
     const payTo = requirement.payTo;
     const payToShort = payTo.length > 14 ? `${payTo.slice(0, 6)}…${payTo.slice(-4)}` : payTo;
@@ -610,6 +574,14 @@ export function ShareGate({ token }: { token: string }) {
           <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
           Permanent access on your account. No refunds.
         </p>
+        {user && (
+          <p className="mt-2 text-caption text-drive-muted text-center">
+            Signed in as {walletDisplayLabel(user.email, user.name)}.{" "}
+            <button onClick={switchAccount} className="underline underline-offset-2 hover:text-drive-text">
+              Use a different account
+            </button>
+          </p>
+        )}
       </GateShell>
     );
   }
