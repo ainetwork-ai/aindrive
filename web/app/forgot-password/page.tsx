@@ -63,7 +63,7 @@ export default function ForgotPasswordPage() {
           <form onSubmit={requestCode}>
             <p className="mt-2 text-sm text-drive-muted">Enter your account email and we’ll send a code.</p>
             <label className="block mt-5 text-sm">Email
-              <input name="email" type="email" required autoFocus className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
+              <input name="email" type="email" autoComplete="email" required autoFocus className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
             </label>
             <button disabled={loading} className="mt-5 w-full rounded-lg bg-drive-accent text-white py-2 hover:bg-drive-accentHover disabled:opacity-60">
               {loading ? "Sending…" : "Send code"}
@@ -73,11 +73,12 @@ export default function ForgotPasswordPage() {
           <form onSubmit={submitReset}>
             {notice && <p className="mt-2 text-sm text-drive-muted">{notice}</p>}
             <label className="block mt-5 text-sm">6-digit code
-              <input name="code" inputMode="numeric" pattern="\d{6}" maxLength={6} required autoFocus
+              {/* one-time-code: without it the browser autofills a saved email/username here */}
+              <input name="code" inputMode="numeric" autoComplete="one-time-code" pattern="\d{6}" maxLength={6} required autoFocus
                 className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2 tracking-[0.4em] text-center font-mono" />
             </label>
             <label className="block mt-3 text-sm">New password
-              <input name="newPassword" type="password" minLength={8} required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
+              <input name="newPassword" type="password" autoComplete="new-password" minLength={8} required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
             </label>
             {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
             <button disabled={loading} className="mt-5 w-full rounded-lg bg-drive-accent text-white py-2 hover:bg-drive-accentHover disabled:opacity-60">

@@ -52,10 +52,10 @@ function LoginForm() {
     <form onSubmit={onSubmit} className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
       <h1 className="text-xl font-semibold">Sign in</h1>
       <label className="block mt-5 text-sm">Email
-        <input name="email" type="email" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
+        <input name="email" type="email" autoComplete="email" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
       </label>
       <label className="block mt-3 text-sm">Password
-        <input name="password" type="password" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
+        <input name="password" type="password" autoComplete="current-password" required className="mt-1 w-full rounded-lg border border-drive-border px-3 py-2" />
       </label>
       <div className="mt-2 text-right">
         <Link href="/forgot-password" className="text-xs text-drive-muted hover:text-drive-accent hover:underline">
