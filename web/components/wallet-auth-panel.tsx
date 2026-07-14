@@ -46,8 +46,15 @@ const CHAIN_ID =
 /** `next`: where to land after a successful sign-in (already same-origin-validated). */
 export default function WalletLoginButton({ next }: { next: string }) {
   const [queryClient] = useState(() => new QueryClient());
+  // reconnectOnMount={false}: this control mounts on page load (so the button's
+  // click can open the modal — RainbowKit only opens from a gesture). With the
+  // default auto-reconnect, wagmi would silently reconnect a previously-used
+  // wallet on load, and some connectors (Base Account passkey) pop their own UI
+  // on reconnect — an unprompted keys.coinbase.com popup just from landing on
+  // /login. A login page has no reason to restore wallet state before the user
+  // clicks; they initiate the connect.
   return (
-    <WagmiProvider config={getWagmiConfig()}>
+    <WagmiProvider config={getWagmiConfig()} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
           <WalletButton next={next} />
