@@ -5,14 +5,25 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Wallet } from "lucide-react";
 
+// Shared look for the wallet button so the dynamic-loading placeholder and the
+// live control are visually identical (no layout shift, no flash).
+const walletBtnClass =
+  "mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60";
+
 // The wallet stack (wagmi + RainbowKit, ~300-600KB) is code-split behind this
-// dynamic import and only fetched when a visitor clicks "Continue with a
-// wallet" — email sign-in stays on the light bundle. ssr:false because the
-// wagmi provider tree is client-only.
-const WalletAuthPanel = dynamic(() => import("@/components/wallet-auth-panel"), {
+// dynamic import (ssr:false — the provider tree is client-only) so it loads
+// AFTER first paint, off the email form's critical path. It mounts on page load
+// (not gated behind a click) because RainbowKit only opens its modal from a user
+// gesture: the button's own click must originate the open, so the provider has
+// to already be mounted when the visitor clicks. Until the chunk arrives we show
+// an identical disabled button.
+const WalletLoginButton = dynamic(() => import("@/components/wallet-auth-panel"), {
   ssr: false,
   loading: () => (
-    <p className="mt-4 text-center text-sm text-drive-muted">Loading wallet…</p>
+    <button type="button" disabled className={walletBtnClass}>
+      <Wallet className="w-4 h-4" />
+      Continue with a wallet
+    </button>
   ),
 });
 
@@ -23,10 +34,6 @@ function LoginForm() {
   const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Wallet sign-in is opt-in per visit: mounting WalletAuthPanel pulls the heavy
-  // web3 bundle and auto-opens the picker, so we only do it on an explicit click.
-  // The panel owns its own errors/retry; we just show or hide it.
-  const [walletMode, setWalletMode] = useState(false);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -67,18 +74,7 @@ function LoginForm() {
         <span className="h-px flex-1 bg-drive-border" />
       </div>
 
-      {walletMode ? (
-        <WalletAuthPanel next={safeNext} onCancel={() => setWalletMode(false)} />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setWalletMode(true)}
-          className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover"
-        >
-          <Wallet className="w-4 h-4" />
-          Continue with a wallet
-        </button>
-      )}
+      <WalletLoginButton next={safeNext} />
 
       <p className="mt-5 text-sm text-drive-muted text-center">
         New here?{" "}

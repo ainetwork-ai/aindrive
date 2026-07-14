@@ -1,39 +1,38 @@
 "use client";
 
 /**
- * The heavy wallet sign-in flow, isolated so it can be `next/dynamic`-imported
- * only when a visitor actually chooses "Continue with a wallet" — the wagmi +
- * RainbowKit + WalletConnect stack (~300-600KB) never ships to email-only
- * users on first paint (the whole reason wallet sign-in used to live on its
- * own /login/wallet route; now it's one prominent button on /login instead).
+ * The heavy wallet sign-in control, isolated so it can be `next/dynamic`-imported
+ * (ssr:false) off the email form: the wagmi + RainbowKit + WalletConnect stack
+ * (~300-600KB) loads after first paint, not on the critical path.
  *
- * One-intent flow (matches OpenSea/Privy/Dynamic): mounting auto-opens the
- * wallet picker, and RainbowKit's authentication adapter chains straight into
- * the SIWE "Sign message" step inside the same modal — there is NO separate
- * "sign in" button. `status` drives that gate: it holds on the signature step
- * while 'unauthenticated' and only lands the session once our backend `verify`
- * flips it to 'authenticated'.
+ * One-intent flow (matches OpenSea/Privy/Dynamic): our "Continue with a wallet"
+ * button IS RainbowKit's ConnectButton (via ConnectButton.Custom), so its click
+ * opens the wallet picker, and the authentication adapter chains straight into
+ * the SIWE "Sign message" step inside the same modal — no separate "sign in"
+ * button. `status` drives that gate: it holds on the signature step while
+ * 'unauthenticated' and only lands the session once our backend `verify` flips
+ * it to 'authenticated'.
  *
- * The panel owns the whole wallet interaction (errors, retry, cancel) because
- * the wagmi connection lives in a module-level singleton (lib/wagmi-config):
- * every teardown path must `disconnect()` first, or a re-open would silently
- * reuse the same wallet and skip the picker. So the parent only mounts/unmounts
- * us and gets an onCancel to restore its button.
+ * Why a real ConnectButton and not a programmatic openConnectModal(): RainbowKit
+ * only opens the modal from a user gesture — calling openConnectModal() from a
+ * mount effect is a silent no-op (connectModalOpen never flips). The click must
+ * originate the open, which is exactly what ConnectButton.Custom wires up.
  */
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { WagmiProvider, useAccount, useDisconnect } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RainbowKitProvider,
   RainbowKitAuthenticationProvider,
   createAuthenticationAdapter,
-  useConnectModal,
+  ConnectButton,
   type AuthenticationStatus,
 } from "@rainbow-me/rainbowkit";
 import "@rainbow-me/rainbowkit/styles.css";
 import { SiweMessage } from "siwe";
 import { useRouter } from "next/navigation";
+import { Wallet } from "lucide-react";
 import { getWagmiConfig } from "@/lib/wagmi-config";
 
 // Mirrors server activeChainId() (web/lib/payment-tokens.ts). We stamp the SIWE
@@ -43,14 +42,8 @@ import { getWagmiConfig } from "@/lib/wagmi-config";
 const CHAIN_ID =
   process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? 8453 : 84532;
 
-type PanelProps = {
-  /** Where to land after a successful sign-in (already same-origin-validated). */
-  next: string;
-  /** Visitor backed out without signing — parent restores the "wallet" button. */
-  onCancel: () => void;
-};
-
-export default function WalletAuthPanel({ next, onCancel }: PanelProps) {
+/** Where to land after a successful sign-in (already same-origin-validated). */
+export default function WalletLoginButton({ next }: { next: string }) {
   const [queryClient] = useState(() => new QueryClient());
   const [status, setStatus] = useState<AuthenticationStatus>("unauthenticated");
   const [error, setError] = useState<string | null>(null);
@@ -105,8 +98,7 @@ export default function WalletAuthPanel({ next, onCancel }: PanelProps) {
             return true;
           } catch {
             // Network/parse failure: without this catch the exception escapes
-            // before either setStatus branch, stranding status at "loading"
-            // (RainbowKit hides its modal, leaving the user stuck forever).
+            // before either setStatus branch, stranding status at "loading".
             setError("Couldn’t reach the server — check your connection and try again.");
             setStatus("unauthenticated");
             return false;
@@ -129,12 +121,7 @@ export default function WalletAuthPanel({ next, onCancel }: PanelProps) {
       <QueryClientProvider client={queryClient}>
         <RainbowKitAuthenticationProvider adapter={adapter} status={status}>
           <RainbowKitProvider>
-            <AuthFlow
-              status={status}
-              error={error}
-              clearError={() => setError(null)}
-              onCancel={onCancel}
-            />
+            <WalletButton error={error} clearError={() => setError(null)} />
           </RainbowKitProvider>
         </RainbowKitAuthenticationProvider>
       </QueryClientProvider>
@@ -142,105 +129,38 @@ export default function WalletAuthPanel({ next, onCancel }: PanelProps) {
   );
 }
 
-/**
- * Drives the modal from inside the provider tree: opens the wallet picker on
- * mount, detects a back-out, and gives explicit escapes for the two states the
- * modal alone leaves the user stuck in — a rejected wallet (offer a different
- * one) and a dismissed signature step (offer resume). Every escape disconnects
- * first so the shared wagmi client is clean for the next attempt.
- */
-function AuthFlow({
-  status,
-  error,
-  clearError,
-  onCancel,
-}: {
-  status: AuthenticationStatus;
-  error: string | null;
-  clearError: () => void;
-  onCancel: () => void;
-}) {
-  const { openConnectModal, connectModalOpen } = useConnectModal();
-  const { isConnected } = useAccount();
+/** The visible button, inside the provider tree so the click can open the modal. */
+function WalletButton({ error, clearError }: { error: string | null; clearError: () => void }) {
   const { disconnect } = useDisconnect();
-  const opened = useRef(false);
-  const sawOpen = useRef(false);
+  const { isConnected } = useAccount();
 
-  // Auto-open the picker as soon as RainbowKit is ready.
+  // A rejected sign-in (e.g. wallet linked to an email account) leaves the wallet
+  // connected in the module-level wagmi singleton; without dropping it, the next
+  // click would re-open straight on the same wallet's sign step and loop. Drop it
+  // so a retry genuinely re-shows the picker for a different wallet.
   useEffect(() => {
-    if (!opened.current && openConnectModal) {
-      opened.current = true;
-      openConnectModal();
-    }
-  }, [openConnectModal]);
-
-  // Back-out: the picker was open, is now closed, and no wallet ever connected
-  // (and no error is pending) → the visitor dismissed it. Restore the button.
-  useEffect(() => {
-    if (connectModalOpen) {
-      sawOpen.current = true;
-      return;
-    }
-    if (sawOpen.current && opened.current && !isConnected && status === "unauthenticated" && !error) {
-      onCancel();
-    }
-  }, [connectModalOpen, isConnected, status, error, onCancel]);
-
-  // Leave for good — drop the wallet so a fresh click re-opens the picker.
-  function cancel() {
-    disconnect();
-    onCancel();
-  }
-  // Rejected wallet → disconnect and reopen straight on the picker screen.
-  function tryAnotherWallet() {
-    disconnect();
-    clearError();
-    sawOpen.current = false;
-    openConnectModal?.();
-  }
-
-  if (error) {
-    return (
-      <div className="mt-4 text-center text-sm">
-        <p className="text-red-600">{error}</p>
-        <div className="mt-3 flex items-center justify-center gap-2">
-          <button
-            onClick={tryAnotherWallet}
-            className="rounded-lg border border-drive-border px-4 py-2 hover:bg-drive-hover"
-          >
-            Try a different wallet
-          </button>
-          <button onClick={cancel} className="px-4 py-2 text-drive-muted hover:text-drive-text">
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Connected but the signature step was dismissed: offer an explicit resume
-  // (re-opening the modal drops the still-unauthenticated wallet back on the
-  // "Sign message" step) rather than silently stalling.
-  if (isConnected && status !== "authenticated" && !connectModalOpen) {
-    return (
-      <div className="mt-4 text-center text-sm">
-        <p className="text-drive-muted">Almost there — approve the signature in your wallet.</p>
-        <div className="mt-3 flex items-center justify-center gap-2">
-          <button
-            onClick={() => openConnectModal?.()}
-            className="rounded-lg border border-drive-border px-4 py-2 hover:bg-drive-hover"
-          >
-            Resume sign-in
-          </button>
-          <button onClick={cancel} className="px-4 py-2 text-drive-muted hover:text-drive-text">
-            Cancel
-          </button>
-        </div>
-      </div>
-    );
-  }
+    if (error && isConnected) disconnect();
+  }, [error, isConnected, disconnect]);
 
   return (
-    <p className="mt-4 text-center text-sm text-drive-muted">Opening your wallet…</p>
+    <ConnectButton.Custom>
+      {({ openConnectModal, connectModalOpen, mounted }) => (
+        <>
+          <button
+            type="button"
+            disabled={!mounted || connectModalOpen}
+            onClick={() => {
+              clearError();
+              openConnectModal();
+            }}
+            className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60"
+          >
+            <Wallet className="w-4 h-4" />
+            {connectModalOpen ? "Opening wallet…" : "Continue with a wallet"}
+          </button>
+          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        </>
+      )}
+    </ConnectButton.Custom>
   );
 }
