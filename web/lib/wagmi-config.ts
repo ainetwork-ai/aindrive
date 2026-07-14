@@ -1,12 +1,5 @@
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
-import {
-  baseAccount,
-  injectedWallet,
-  metaMaskWallet,
-  okxWallet,
-  rainbowWallet,
-  walletConnectWallet,
-} from "@rainbow-me/rainbowkit/wallets";
+import { baseAccount, walletConnectWallet } from "@rainbow-me/rainbowkit/wallets";
 import { http, createConfig } from "wagmi";
 import { base, baseSepolia } from "wagmi/chains";
 import { paymentNetwork } from "./payment-tokens";
@@ -16,11 +9,16 @@ import { paymentNetwork } from "./payment-tokens";
 //      Smart Wallet through keys.coinbase.com — no app install required. We
 //      deliberately DROPPED the separate `coinbaseWallet` connector (the
 //      Coinbase Wallet SDK that deeplinks to the installed Coinbase Wallet /
-//      Base App): keeping both read as confusing duplicates to buyers, so we
-//      keep only the passkey path here. Users who want an installed wallet app
-//      still reach it via `walletConnectWallet` (WC) or an EIP-6963 injected
-//      extension (auto-listed under "Installed"); `okxWallet`/`metaMaskWallet`/
-//      `rainbowWallet`/`injectedWallet` stay per RainbowKit's broad support.
+//      Base App): keeping both read as confusing duplicates to buyers.
+//
+//      We list ONLY `baseAccount` + `walletConnectWallet` explicitly. Every
+//      INSTALLED browser wallet (MetaMask, OKX, Brave, Rainbow ext, …) is
+//      surfaced automatically under "Installed" via EIP-6963 discovery, so
+//      naming those wallets explicitly too (okxWallet/metaMaskWallet/
+//      injectedWallet/…) makes each show TWICE — once as the named connector,
+//      once as its 6963 announcement. baseAccount (a passkey, not a 6963
+//      extension) and walletConnectWallet (mobile QR, no 6963) are the only two
+//      6963 can't surface, so they're the only two we add by hand.
 //   2. getDefaultConfig instantiates connectors at module load. Some of them
 //      touch `window`/`localStorage` during construction, which crashes SSR
 //      with "ReferenceError: window is not defined" the moment any server
@@ -66,7 +64,9 @@ export function getWagmiConfig(): WagmiConfig {
         { groupName: "Base", wallets: [
           relabel(baseAccount, "Sign in with Base (passkey)", "Base"),
         ] },
-        { groupName: "Other wallets", wallets: [okxWallet, metaMaskWallet, rainbowWallet, walletConnectWallet, injectedWallet] },
+        // Installed extensions come from EIP-6963 automatically; only WalletConnect
+        // (mobile QR) needs listing here — see the header note on duplicates.
+        { groupName: "Other wallets", wallets: [walletConnectWallet] },
       ],
       { appName: "aindrive", projectId },
     );
