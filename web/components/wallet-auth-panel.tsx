@@ -5,29 +5,30 @@
  * (ssr:false) off the email form: the wagmi + RainbowKit + WalletConnect stack
  * (~300-600KB) loads after first paint, not on the critical path.
  *
- * One-intent flow (matches OpenSea/Privy/Dynamic): our "Continue with a wallet"
- * button IS RainbowKit's ConnectButton (via ConnectButton.Custom), so its click
- * opens the wallet picker, and the authentication adapter chains straight into
- * the SIWE "Sign message" step inside the same modal — no separate "sign in"
- * button. `status` drives that gate: it holds on the signature step while
- * 'unauthenticated' and only lands the session once our backend `verify` flips
- * it to 'authenticated'.
+ * Flow (matches OpenSea/Zora — no intermediate app screen): click "Continue
+ * with a wallet" → RainbowKit picker → on connect we IMMEDIATELY request the
+ * SIWE signature (the wallet's own prompt pops straight away) → POST it → land
+ * the session. We deliberately do NOT use RainbowKit's authentication adapter:
+ * that inserts a "Sign in / Send message" confirmation screen between connect
+ * and the wallet prompt — an extra click. Here the connect flows straight into
+ * the signature.
  *
- * Why a real ConnectButton and not a programmatic openConnectModal(): RainbowKit
- * only opens the modal from a user gesture — calling openConnectModal() from a
- * mount effect is a silent no-op (connectModalOpen never flips). The click must
- * originate the open, which is exactly what ConnectButton.Custom wires up.
+ * The signature is only auto-requested when the visitor CLICKED the button
+ * (`wantSign`): wagmi silently reconnects a previously-used wallet on page load,
+ * and firing a signature prompt unprompted would be hostile.
+ *
+ * Why the button is a real ConnectButton.Custom (not a plain button calling
+ * openConnectModal): RainbowKit only opens its modal from a user gesture — a
+ * programmatic openConnectModal() from an effect is a silent no-op.
  */
 
-import { useState, useMemo, useEffect } from "react";
-import { WagmiProvider, useAccount, useDisconnect } from "wagmi";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { WagmiProvider, useAccount, useSignMessage, useDisconnect } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RainbowKitProvider,
-  RainbowKitAuthenticationProvider,
-  createAuthenticationAdapter,
   ConnectButton,
-  type AuthenticationStatus,
+  useConnectModal,
 } from "@rainbow-me/rainbowkit";
 import "@rainbow-me/rainbowkit/styles.css";
 import { SiweMessage } from "siwe";
@@ -42,121 +43,119 @@ import { getWagmiConfig } from "@/lib/wagmi-config";
 const CHAIN_ID =
   process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? 8453 : 84532;
 
-/** Where to land after a successful sign-in (already same-origin-validated). */
+/** `next`: where to land after a successful sign-in (already same-origin-validated). */
 export default function WalletLoginButton({ next }: { next: string }) {
   const [queryClient] = useState(() => new QueryClient());
-  const [status, setStatus] = useState<AuthenticationStatus>("unauthenticated");
-  const [error, setError] = useState<string | null>(null);
-  const router = useRouter();
-
-  const adapter = useMemo(
-    () =>
-      createAuthenticationAdapter<string>({
-        getNonce: async () => {
-          const r = await fetch("/api/wallet/nonce", { method: "POST" });
-          if (!r.ok) throw new Error("could not get nonce");
-          return (await r.json()).nonce;
-        },
-        createMessage: ({ nonce, address }) =>
-          new SiweMessage({
-            domain: window.location.host,
-            address,
-            statement: "aindrive wants you to sign in with your wallet.",
-            uri: window.location.origin,
-            version: "1",
-            chainId: CHAIN_ID,
-            nonce,
-          }).prepareMessage(),
-        verify: async ({ message, signature }) => {
-          setStatus("loading");
-          setError(null);
-          try {
-            // verify() only receives {message, signature}; our endpoint also
-            // wants address + nonce, both carried inside the SIWE message.
-            const parsed = new SiweMessage(message);
-            const r = await fetch("/api/wallet/login", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                address: parsed.address,
-                signature,
-                nonce: parsed.nonce,
-                message,
-              }),
-            });
-            if (!r.ok) {
-              const body = await r.json().catch(() => ({}));
-              setError(
-                r.status === 403 && body.error === "wallet_login_not_enabled"
-                  ? "This wallet is linked to an email account — sign in with email, or enable wallet sign-in from settings."
-                  : body.error || "sign-in failed",
-              );
-              setStatus("unauthenticated");
-              return false;
-            }
-            setStatus("authenticated");
-            return true;
-          } catch {
-            // Network/parse failure: without this catch the exception escapes
-            // before either setStatus branch, stranding status at "loading".
-            setError("Couldn’t reach the server — check your connection and try again.");
-            setStatus("unauthenticated");
-            return false;
-          }
-        },
-        signOut: async () => {
-          await fetch("/api/auth/logout", { method: "POST" });
-        },
-      }),
-    [],
-  );
-
-  // Land the session once the backend confirmed the signature.
-  useEffect(() => {
-    if (status === "authenticated") router.push(next);
-  }, [status, next, router]);
-
   return (
     <WagmiProvider config={getWagmiConfig()}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitAuthenticationProvider adapter={adapter} status={status}>
-          <RainbowKitProvider>
-            <WalletButton error={error} clearError={() => setError(null)} />
-          </RainbowKitProvider>
-        </RainbowKitAuthenticationProvider>
+        <RainbowKitProvider>
+          <WalletButton next={next} />
+        </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );
 }
 
-/** The visible button, inside the provider tree so the click can open the modal. */
-function WalletButton({ error, clearError }: { error: string | null; clearError: () => void }) {
+function WalletButton({ next }: { next: string }) {
+  const { openConnectModal, connectModalOpen } = useConnectModal();
+  const { address, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
   const { disconnect } = useDisconnect();
-  const { isConnected } = useAccount();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // True only between a button click and the signature completing — gates the
+  // auto-sign effect so a page-load reconnect never pops a prompt on its own.
+  const wantSign = useRef(false);
 
-  // A rejected sign-in (e.g. wallet linked to an email account) leaves the wallet
-  // connected in the module-level wagmi singleton; without dropping it, the next
-  // click would re-open straight on the same wallet's sign step and loop. Drop it
-  // so a retry genuinely re-shows the picker for a different wallet.
+  const signIn = useCallback(
+    async (addr: string) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const nonceRes = await fetch("/api/wallet/nonce", { method: "POST" });
+        if (!nonceRes.ok) throw new Error("could not start sign-in");
+        const { nonce } = await nonceRes.json();
+
+        const message = new SiweMessage({
+          domain: window.location.host,
+          address: addr,
+          statement: "aindrive wants you to sign in with your wallet.",
+          uri: window.location.origin,
+          version: "1",
+          chainId: CHAIN_ID,
+          nonce,
+        }).prepareMessage();
+
+        // The wallet's own signature prompt — this is the one step the user sees.
+        const signature = await signMessageAsync({ message });
+
+        const r = await fetch("/api/wallet/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ address: addr, signature, nonce, message }),
+        });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          const msg =
+            r.status === 403 && body.error === "wallet_login_not_enabled"
+              ? "This wallet is linked to an email account — sign in with email, or enable wallet sign-in from settings."
+              : body.error || "sign-in failed";
+          setError(msg);
+          // Drop the wallet so a retry re-opens the picker (the wagmi config is a
+          // module singleton — a still-connected rejected wallet would otherwise
+          // be reused straight away).
+          disconnect();
+          return;
+        }
+        router.push(next);
+      } catch (e) {
+        // Covers a user-rejected signature and network failures alike.
+        const m = (e as Error)?.message || "";
+        setError(/reject|denied|cancel/i.test(m) ? "Signature canceled." : "Could not sign in — try again.");
+        disconnect();
+      } finally {
+        setBusy(false);
+        wantSign.current = false;
+      }
+    },
+    [signMessageAsync, disconnect, router, next],
+  );
+
+  // Auto-sign the moment an INTENTFUL connect lands (button was clicked). Never
+  // fires on a bare page-load reconnect, where wantSign stays false.
   useEffect(() => {
-    if (error && isConnected) disconnect();
-  }, [error, isConnected, disconnect]);
+    if (wantSign.current && isConnected && address && !busy) {
+      wantSign.current = false;
+      signIn(address);
+    }
+  }, [isConnected, address, busy, signIn]);
+
+  function onClick() {
+    setError(null);
+    if (busy) return;
+    if (isConnected && address) {
+      // Already connected (e.g. reconnected on load) → go straight to signing.
+      signIn(address);
+    } else {
+      wantSign.current = true;
+      openConnectModal?.();
+    }
+  }
 
   return (
     <ConnectButton.Custom>
-      {({ openConnectModal, connectModalOpen, mounted }) => (
+      {({ mounted }) => (
         <>
           <button
             type="button"
-            disabled={!mounted || connectModalOpen}
-            onClick={() => {
-              clearError();
-              openConnectModal();
-            }}
+            disabled={!mounted || busy || connectModalOpen}
+            onClick={onClick}
             className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60"
           >
             <Wallet className="w-4 h-4" />
-            {connectModalOpen ? "Opening wallet…" : "Continue with a wallet"}
+            {busy ? "Signing in…" : "Continue with a wallet"}
           </button>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         </>
