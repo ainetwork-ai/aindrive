@@ -5,16 +5,19 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Cool-neutral surface hierarchy. The page bg sits a clear step below
+        // white so cards separate by CONTRAST + soft elevation, not by a mushy
+        // hairline border on near-white (the old #f8fafd/#fff pairing).
         drive: {
-          bg: "#f8fafd",
-          panel: "#ffffff",
-          sidebar: "#f0f4f9",
-          hover: "#e2e6ea",
-          selected: "#c2e7ff",
-          border: "#e2e8f0",
-          text: "#1f1f1f",
-          muted: "#5f6368",
-          accent: "#0b57d0",
+          bg: "#eaeef4",        // page — cool light gray, clearly below white
+          panel: "#ffffff",     // cards float on bg
+          sidebar: "#f2f5f9",   // distinct rail, between bg and panel
+          hover: "#e2e8f1",     // hover feedback on light surfaces
+          selected: "#d8e6ff",  // soft blue selection (was a harsh #c2e7ff)
+          border: "#dce3ec",    // quiet cool hairline — separation comes from bg+shadow
+          text: "#0f1319",      // near-black, high contrast
+          muted: "#54607a",     // cool gray, darker than #5f6368 for legibility
+          accent: "#0b57d0",    // confident, accessible blue
           accentHover: "#0842a0",
         },
       },
@@ -31,10 +34,12 @@ const config: Config = {
       },
       borderRadius: { sm: "6px", md: "8px", lg: "12px", xl: "16px" },
       boxShadow: {
-        drive: "0 1px 2px 0 rgb(60 64 67 / 0.302), 0 2px 6px 2px rgb(60 64 67 / 0.149)",
-        e1: "0 1px 2px 0 rgb(60 64 67 / 0.20)",
-        e2: "0 1px 3px 0 rgb(60 64 67 / 0.24), 0 4px 8px 3px rgb(60 64 67 / 0.10)",
-        e3: "0 4px 8px 3px rgb(60 64 67 / 0.16), 0 8px 24px 6px rgb(60 64 67 / 0.10)",
+        // Cool slate-toned, soft elevation — cards float on the gray bg without
+        // the heavy warm-gray drop shadow of the old Drive look.
+        drive: "0 1px 2px -1px rgb(15 23 42 / 0.08), 0 6px 16px -6px rgb(15 23 42 / 0.12)",
+        e1: "0 1px 2px 0 rgb(15 23 42 / 0.06)",
+        e2: "0 2px 4px -1px rgb(15 23 42 / 0.08), 0 6px 16px -6px rgb(15 23 42 / 0.10)",
+        e3: "0 8px 24px -8px rgb(15 23 42 / 0.16), 0 16px 40px -12px rgb(15 23 42 / 0.12)",
       },
     },
   },

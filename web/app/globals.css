@@ -4,6 +4,14 @@
 
 html, body { height: 100%; }
 
+/* Keyboard focus: a clear accent ring, shown only on keyboard nav (:focus-visible
+   never fires on mouse click), so it aids legibility without annoying pointer users. */
+a:focus-visible, button:focus-visible, input:focus-visible,
+textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid #0b57d0;
+  outline-offset: 2px;
+}
+
 .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
 .scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(0 0 0 / 0.15); border-radius: 4px; }
 
