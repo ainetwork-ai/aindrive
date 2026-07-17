@@ -116,6 +116,10 @@ export function Menu({ trigger, items, align = "start", className }: MenuProps) 
           role="menu"
           tabIndex={-1}
           onKeyDown={onMenuKeyDown}
+          // Not portaled — the popover is a DOM child of whatever clickable
+          // row/card hosts the trigger, so item clicks must not bubble into the
+          // host's navigate handler (folder row onClick would also fire).
+          onClick={(e) => e.stopPropagation()}
           className={clsx(
             "absolute z-50 mt-1 min-w-[12rem] py-1",
             "bg-drive-panel rounded-md shadow-e2 border border-drive-border",
