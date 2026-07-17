@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
-  ArrowLeft, Users, Link2, Wallet, TrendingUp, Search, UserPlus, Clock,
+  ArrowLeft, Users, Link2, Wallet, TrendingUp, Search,
   TrashIcon, ShieldCheck, ExternalLink, Copy, Ban, Store,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
@@ -177,13 +177,28 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
     toast.success("Invite cancelled"); reload();
   }
 
+  // One card for the whole tab: invite row on top (create), pending + roster
+  // below (audit) — stacking three cards made the tab read as three topics.
   return (
-    <>
-      <InviteCard driveId={driveId} busy={busy} setBusy={setBusy} reload={reload} />
+    <SectionCard
+      icon={<Users className="w-4 h-4" />}
+      title="Members"
+      description="Who has access, and where."
+      action={
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-drive-muted" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search"
+            className="w-32 rounded-full border border-drive-border bg-white pl-7 pr-2 py-1 text-caption focus:outline-none focus:ring-2 focus:ring-drive-accent/40" />
+        </div>
+      }
+    >
+      <InviteRow driveId={driveId} busy={busy} setBusy={setBusy} reload={reload} />
 
       {pending.length > 0 && (
-        <SectionCard icon={<Clock className="w-4 h-4" />} title="Pending invites" description="They’ll get access automatically when they sign up with this email.">
-          <ul className="space-y-1.5">
+        <div className="mt-4 border-t border-drive-border pt-3">
+          <div className="text-label uppercase text-drive-muted">Pending invites</div>
+          <p className="text-caption text-drive-muted">They’ll get access automatically when they sign up with this email.</p>
+          <ul className="mt-2 space-y-1.5">
             {pending.map((p) => (
               <li key={p.id} className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-body">
                 <span className="truncate font-medium text-drive-text">{walletDisplayLabel(p.email)}</span>
@@ -195,25 +210,17 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
               </li>
             ))}
           </ul>
-        </SectionCard>
+        </div>
       )}
 
-      <SectionCard
-        icon={<Users className="w-4 h-4" />}
-        title="People with access"
-        description={`${members.length} grant${members.length === 1 ? "" : "s"}`}
-        action={
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-drive-muted" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search"
-              className="w-32 rounded-full border border-drive-border bg-white pl-7 pr-2 py-1 text-caption focus:outline-none focus:ring-2 focus:ring-drive-accent/40" />
-          </div>
-        }
-      >
+      <div className="mt-4 border-t border-drive-border pt-3">
+        <div className="text-label uppercase text-drive-muted">
+          {members.length} grant{members.length === 1 ? "" : "s"}
+        </div>
         {people.length === 0 ? (
           <EmptyState icon={<Users />} title={q ? "No matches" : "No members yet"} description={q ? "Try a different name or email." : "Invite someone above to get started."} />
         ) : (
-          <ul className="space-y-3">
+          <ul className="mt-2 space-y-3">
             {people.map((p) => (
               <li key={p.email} className="flex gap-3">
                 <Avatar name={walletDisplayLabel(p.email, p.name)} size="md" />
@@ -259,12 +266,12 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
             ))}
           </ul>
         )}
-      </SectionCard>
-    </>
+      </div>
+    </SectionCard>
   );
 }
 
-function InviteCard({ driveId, busy, setBusy, reload }: { driveId: string; busy: boolean; setBusy: (b: boolean) => void; reload: () => void }) {
+function InviteRow({ driveId, busy, setBusy, reload }: { driveId: string; busy: boolean; setBusy: (b: boolean) => void; reload: () => void }) {
   const [email, setEmail] = useState("");
   const [path, setPath] = useState("");
   const [role, setRole] = useState<Role>("viewer");
@@ -283,9 +290,9 @@ function InviteCard({ driveId, busy, setBusy, reload }: { driveId: string; busy:
   }
 
   return (
-    <SectionCard icon={<UserPlus className="w-4 h-4" />} title="Invite people" description="Invite by email. No account yet? The invite waits for them to sign up.">
+    <div>
       <div className="flex flex-col sm:flex-row gap-2">
-        <Input wrapClassName="flex-1" placeholder="name@email.com" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <Input wrapClassName="flex-1" placeholder="Invite by email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
         <Input wrapClassName="sm:w-40" placeholder="folder (blank = all)" value={path} onChange={(e) => setPath(e.target.value)} />
         <Select wrapClassName="sm:w-32" value={role} onChange={(e) => setRole(e.target.value as Role)}>
           <option value="viewer">Viewer</option>
@@ -298,7 +305,7 @@ function InviteCard({ driveId, busy, setBusy, reload }: { driveId: string; busy:
         <span className="font-medium text-drive-text">{role[0].toUpperCase() + role.slice(1)}:</span> {ROLE_HELP[role]}
         {!path.trim() && role !== "viewer" && " · applies to the whole drive"}
       </p>
-    </SectionCard>
+    </div>
   );
 }
 

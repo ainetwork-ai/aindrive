@@ -1,19 +1,15 @@
 "use client";
 // Presentational sections for ShareDialog. State + actions stay in the shell
 // (share-dialog.tsx); these are pure render functions that receive data and
-// handlers as props. Extracting markup only — behavior is unchanged because
-// state ownership is unchanged.
+// handlers as props.
 //
-// Each section is a SectionCard: an icon-badged header (title + optional
-// description) over the section body, so the dialog reads as a stack of
-// labelled cards instead of one long form. Controls use the design-system
-// primitives (Input/Select/Toggle/Button/Badge).
-import {
-  Copy, LinkIcon, UserPlus, Trash2, DollarSign, Users,
-} from "lucide-react";
-import { useState, type ReactNode } from "react";
-import { Plus, Trash2 as TrashIcon, Loader2, CheckCircle2, Clock } from "lucide-react";
-import { Input, Select, Toggle, Button, Badge, IconButton, SectionCard } from "@/components/ui";
+// The drawer reads as ONE flat sheet: DrawerSection blocks separated by the
+// shell's divide-y, list rows flush to the panel. Card chrome (SectionCard)
+// belongs to wide audit surfaces like drive-manage — in a ~448px drawer,
+// nested boxes read as noise.
+import { Copy, Trash2, Plus, CheckCircle2, Clock } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { Input, Select, Toggle, Button, Badge, IconButton, Avatar } from "@/components/ui";
 import { walletDisplayLabel } from "@/shared/wallet-display";
 import { normalizePath, isAncestorOrSelf } from "@/lib/access-core.js";
 import { TOKEN_PRESETS, isX402Settleable, paymentNetwork, type PaymentToken } from "@/lib/payment-tokens";
@@ -60,20 +56,59 @@ export type PendingInvite = {
   role: "viewer" | "editor" | "owner";
 };
 
-/** Compact list row used by Earnings / Members / Free-links. */
-function ListRow({ children }: { children: ReactNode }) {
+/** One flat section of the Share drawer: title row (+ optional right-aligned
+ *  action) over the body. The shell separates sections with divide-y. */
+function DrawerSection({
+  title, description, action, children, sectionRef,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  children?: ReactNode;
+  /** For scroll-into-view deep links (e.g. row menu "Sell…"). */
+  sectionRef?: Ref<HTMLElement>;
+}) {
   return (
-    <li className="flex items-center gap-2 rounded-lg bg-drive-sidebar px-2.5 py-1.5 text-caption">
-      {children}
-    </li>
+    <section ref={sectionRef} className="py-4 first:pt-1 last:pb-1">
+      <header className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-subtitle text-drive-text leading-tight">{title}</h3>
+          {description && <p className="mt-0.5 text-caption text-drive-muted">{description}</p>}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
+      </header>
+      {children && <div className="mt-3">{children}</div>}
+    </section>
   );
 }
 
-// (Earnings ledger lives in drive-manage.tsx SalesSection — "audit in
-// settings". The Receipt type below is still imported there.)
+/** Borderless inline role select (same pattern as drive-manage's roster) — a
+ *  bordered Select on every row reads as chrome in a flat list. */
+function InlineRoleSelect({
+  value, disabled, ariaLabel, onChange,
+}: {
+  value: "viewer" | "editor" | "owner";
+  disabled: boolean;
+  ariaLabel: string;
+  onChange: (role: "viewer" | "editor" | "owner") => void;
+}) {
+  return (
+    <select
+      value={value}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      onChange={(e) => onChange(e.target.value as "viewer" | "editor" | "owner")}
+      className="shrink-0 rounded bg-transparent text-body text-drive-text focus:outline-none disabled:opacity-50"
+    >
+      <option value="viewer">Viewer</option>
+      <option value="editor">Editor</option>
+      <option value="owner">Owner</option>
+    </select>
+  );
+}
 
-// Token-policy mini-editor state + handlers, grouped to keep SellSection's
-// prop list readable. `sel` is keyed by fixed-preset symbol; custom tokens are
+// Token-policy mini-editor state + handlers, grouped to keep the editor's prop
+// list readable. `sel` is keyed by fixed-preset symbol; custom tokens are
 // added by contract-address lookup.
 export type TokenEditorProps = {
   sel: Record<string, boolean>;
@@ -121,12 +156,18 @@ export function SellSection({
   copyLink: (token: string) => void;
 }) {
   const itemWord = defaultPath ? "item" : "drive";
+  // "Sell…" in the row menu deep-links here; the section sits last in the
+  // drawer, so bring it into view (the form is already open via editingSell).
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (focusSection === "sell") ref.current?.scrollIntoView({ block: "nearest" });
+  }, [focusSection]);
+
   return (
-    <SectionCard
-      icon={<DollarSign className="w-4 h-4" />}
+    <DrawerSection
+      sectionRef={ref}
       title={`Sell this ${itemWord}`}
       description="One payment grants a buyer permanent access"
-      highlight={focusSection === "sell"}
       action={<Toggle on={sellOn} disabled={!!paidShare} onChange={setEditingSell} aria-label={`Sell this ${itemWord}`} />}
     >
       {!sellOn ? null : (
@@ -135,17 +176,16 @@ export function SellSection({
               editable — saving PATCHes THIS share, so the link is preserved and
               prior buyers keep access; only NEW buyers see the changed terms. */}
           {paidShare && (
-            <div className="rounded-lg border border-drive-border bg-drive-sidebar/50 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-caption text-drive-muted w-16 shrink-0">Link</span>
-                <code className="flex-1 text-caption truncate font-mono text-drive-text">/s/{paidShare.token}</code>
+            <div>
+              <div className="flex items-center gap-2 rounded-lg bg-drive-sidebar/60 px-3 py-2">
+                <code className="flex-1 truncate font-mono text-caption text-drive-text">/s/{paidShare.token}</code>
                 <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(paidShare.token)}>
                   <Copy className="w-3.5 h-3.5" />
                 </IconButton>
               </div>
-              <p className="text-caption text-drive-muted">
-                Editing the price or currency only changes what NEW buyers pay —
-                people who already bought keep access.
+              <p className="mt-1.5 text-caption text-drive-muted">
+                Changing the price or currency affects new buyers only — people
+                who already bought keep access.
               </p>
             </div>
           )}
@@ -184,77 +224,71 @@ export function SellSection({
 
           {/* Editable sale terms — create (no paid share yet) or edit (existing).
               The Save button PATCHes when editing, POSTs a new link otherwise. */}
-          <div className="rounded-lg border border-drive-border p-3 space-y-3">
-              <div className="flex gap-2 items-start">
-                <Input
-                  wrapClassName="flex-1"
-                  label="Price"
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  max="9999.99"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  placeholder="0.50"
-                  helper="Buyers pay once for permanent access."
-                  autoFocus={!paidShare}
-                />
-                <Select
-                  wrapClassName="w-28"
-                  label="Currency"
-                  value={currency}
-                  onChange={(e) => setCurrency(e.target.value)}
-                >
-                  {currencyOptions.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </Select>
-              </div>
-              {/* [rev2-D] Listing is owner-only (API 403s listed:true otherwise) */}
-              {isOwner && (
-                <label className="flex items-start gap-2.5 rounded-lg bg-drive-sidebar/60 p-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={listed}
-                    onChange={(e) => setListed(e.target.checked)}
-                    className="mt-0.5 accent-drive-accent"
-                  />
-                  <span className="text-caption text-drive-text">
-                    List on storefront
-                    <span className="block text-drive-muted">Members without access see it for sale.</span>
-                  </span>
-                </label>
-              )}
-              <Button
-                variant="filled"
-                className="w-full justify-center"
-                disabled={busy || !price}
-                loading={busy}
-                onClick={paidShare ? saveShareEdit : saveSell}
-              >
-                {paidShare ? "Save changes" : "Save as paid"}
-              </Button>
-            </div>
-
-          {/* Read-only: the currencies this drive accepts (the per-sale Currency
-              select above picks ONE). EDITING the policy lives in Settings →
-              Payments — "create in context, audit in settings". */}
-          <div className="rounded-lg border border-drive-border bg-drive-sidebar/40 p-2.5">
-            <div className="text-caption text-drive-muted">Accepted in this drive</div>
-            <div className="mt-1 flex flex-wrap gap-1.5">
+          <div className="flex gap-2 items-start">
+            <Input
+              wrapClassName="flex-1"
+              label="Price"
+              type="number"
+              step="0.01"
+              min="0.01"
+              max="9999.99"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              placeholder="0.50"
+              helper="Buyers pay once for permanent access."
+              autoFocus={!paidShare}
+            />
+            <Select
+              wrapClassName="w-28"
+              label="Currency"
+              value={currency}
+              onChange={(e) => setCurrency(e.target.value)}
+            >
               {currencyOptions.map((c) => (
-                <Badge key={c} tone="neutral">{c}</Badge>
+                <option key={c} value={c}>{c}</option>
               ))}
-            </div>
-            {isOwner && (
-              <a href={`/d/${driveId}/manage`} className="mt-2 inline-block text-caption text-drive-accent hover:underline">
-                Manage payment tokens in Settings →
-              </a>
-            )}
+            </Select>
+          </div>
+          {/* [rev2-D] Listing is owner-only (API 403s listed:true otherwise) */}
+          {isOwner && (
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={listed}
+                onChange={(e) => setListed(e.target.checked)}
+                className="mt-0.5 accent-drive-accent"
+              />
+              <span className="text-caption text-drive-text">
+                List on storefront
+                <span className="block text-drive-muted">Members without access see it for sale.</span>
+              </span>
+            </label>
+          )}
+          {/* Per-sale currency is picked from the drive's accepted set above;
+              EDITING that set lives in Settings → Payments ("create in context,
+              audit in settings"). */}
+          <div className="flex items-center justify-between gap-3">
+            <p className="min-w-0 truncate text-caption text-drive-muted" title={currencyOptions.join(", ")}>
+              Accepted here: {currencyOptions.join(" · ")}
+              {isOwner && (
+                <>
+                  {" · "}
+                  <a href={`/d/${driveId}/manage`} className="text-drive-accent hover:underline">Settings</a>
+                </>
+              )}
+            </p>
+            <Button
+              variant="filled"
+              disabled={busy || !price}
+              loading={busy}
+              onClick={paidShare ? saveShareEdit : saveSell}
+            >
+              {paidShare ? "Save changes" : "Save as paid"}
+            </Button>
           </div>
         </div>
       )}
-    </SectionCard>
+    </DrawerSection>
   );
 }
 
@@ -306,7 +340,7 @@ function TokenPolicyRow({
       </div>
       {onRemove && (
         <IconButton size="sm" variant="text" aria-label={`Remove ${token.symbol}`} disabled={busy} onClick={onRemove}>
-          <TrashIcon className="w-3.5 h-3.5" />
+          <Trash2 className="w-3.5 h-3.5" />
         </IconButton>
       )}
       <Toggle on={on} onChange={onToggle} disabled={busy} aria-label={`Accept ${token.symbol}`} />
@@ -480,16 +514,25 @@ function prettyPath(p: string): string {
   return p ? `/${p}` : "drive root";
 }
 
-export function MembersSection({
-  members, isOwner, currentUserEmail, currentPath, changeMemberRole, removeMember, busy,
+/** Invite + who-can-access for THIS path as one flat "People" section — the
+ *  invite row creates, the list right below shows the result, so the two read
+ *  as a single concept instead of two stacked cards. */
+export function PeopleSection({
+  members, isOwner, currentUserEmail, currentPath, changeMemberRole, removeMember,
+  email, setEmail, inviteRole, setInviteRole, invite, busy,
 }: {
   members: Member[];
   isOwner: boolean;
   currentUserEmail: string;
-  /** Folder the dialog is scoped to — members are shown relative to THIS path. */
+  /** Folder the drawer is scoped to — members + invites are relative to THIS path. */
   currentPath: string;
   changeMemberRole: (id: string, role: "viewer" | "editor" | "owner") => void;
   removeMember: (id: string) => void;
+  email: string;
+  setEmail: (v: string) => void;
+  inviteRole: "viewer" | "editor";
+  setInviteRole: (v: "viewer" | "editor") => void;
+  invite: () => void;
   busy: boolean;
 }) {
   // Scope the list to who can actually see THIS folder, split into:
@@ -507,127 +550,125 @@ export function MembersSection({
     if (p === cur) direct.push(m);
     else if (isAncestorOrSelf(p, cur)) inherited.push(m);
   }
-  if (direct.length === 0 && inherited.length === 0) return null;
-
   const total = direct.length + inherited.length;
+  // Non-owners can't invite (POST /members 403s); with nobody to list either,
+  // there is nothing to render.
+  if (!isOwner && total === 0) return null;
+  const isRoot = cur === "";
+
+  function memberRow(m: Member, opts: { editable: boolean }) {
+    const label = walletDisplayLabel(m.email, m.name);
+    return (
+      <li key={m.id} className="flex items-center gap-2.5 py-1.5">
+        <Avatar name={label} size="sm" />
+        <span className="min-w-0 flex-1 truncate text-body text-drive-text">
+          {label}
+          {m.email === currentUserEmail && <span className="text-drive-muted"> (you)</span>}
+        </span>
+        {!opts.editable ? (
+          <>
+            <span
+              className="max-w-32 shrink-0 truncate text-caption text-drive-muted"
+              title={`Granted at ${prettyPath(normalizePath(m.path))} — manage it there`}
+            >
+              from {prettyPath(normalizePath(m.path))}
+            </span>
+            <Badge tone="neutral">{m.role}</Badge>
+          </>
+        ) : m.isCreator ? (
+          // The creator's grant can't be demoted/removed (API 400s) — show a
+          // fixed label instead of dead controls.
+          <span className="flex shrink-0 items-center gap-1.5 text-body text-drive-text">
+            owner <Badge tone="neutral">creator</Badge>
+          </span>
+        ) : isOwner ? (
+          <>
+            <InlineRoleSelect
+              value={m.role}
+              disabled={busy}
+              ariaLabel={`Role for ${label}`}
+              onChange={(r) => changeMemberRole(m.id, r)}
+            />
+            {m.email !== currentUserEmail && (
+              <IconButton size="sm" variant="text" aria-label={`Remove ${label}`} disabled={busy} onClick={() => removeMember(m.id)}>
+                <Trash2 className="w-3.5 h-3.5" />
+              </IconButton>
+            )}
+          </>
+        ) : (
+          <Badge tone="neutral">{m.role}</Badge>
+        )}
+      </li>
+    );
+  }
+
   return (
-    <SectionCard
-      icon={<Users className="w-4 h-4" />}
-      title="Members"
-      description={`${total} ${total === 1 ? "person" : "people"} can access ${prettyPath(cur)}`}
+    <DrawerSection
+      title="People"
+      description={
+        total > 0
+          ? `${total} ${total === 1 ? "person" : "people"} can access ${prettyPath(cur)}`
+          : `No one else can access ${prettyPath(cur)} yet`
+      }
     >
+      {isOwner && (
+        <div>
+          <div className="flex gap-2">
+            <Input
+              wrapClassName="flex-1"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Invite by email"
+            />
+            <Select
+              wrapClassName="w-28"
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as "viewer" | "editor")}
+              aria-label="Invite role"
+            >
+              <option value="viewer">Viewer</option>
+              <option value="editor">Editor</option>
+            </Select>
+            <Button variant="tonal" disabled={busy || !email} loading={busy} onClick={invite}>
+              Invite
+            </Button>
+          </div>
+          {isRoot && (
+            <p className="mt-1.5 text-caption text-amber-700">
+              This is the drive root — invited people see every folder. Open a subfolder’s Share to scope access to just that folder.
+            </p>
+          )}
+        </div>
+      )}
+
       {direct.length > 0 && (
-        <ul className="space-y-1.5 max-h-44 overflow-auto scrollbar-thin">
-          {direct.map((m) => (
-            <ListRow key={m.id}>
-              <span className="truncate flex-1 text-body text-drive-text">{walletDisplayLabel(m.email, m.name)}</span>
-              {isOwner ? (
-                <Select
-                  value={m.role}
-                  disabled={busy}
-                  wrapClassName="w-24"
-                  className="h-8"
-                  aria-label={`Role for ${walletDisplayLabel(m.email, m.name)}`}
-                  onChange={(e) => changeMemberRole(m.id, e.target.value as "viewer" | "editor" | "owner")}
-                >
-                  <option value="viewer">Viewer</option>
-                  <option value="editor">Editor</option>
-                  <option value="owner">Owner</option>
-                </Select>
-              ) : (
-                <Badge tone="neutral">{m.role}</Badge>
-              )}
-              {isOwner && m.email !== currentUserEmail && (
-                <IconButton
-                  size="sm"
-                  variant="text"
-                  aria-label={`Remove ${walletDisplayLabel(m.email, m.name)}`}
-                  disabled={busy}
-                  onClick={() => removeMember(m.id)}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </IconButton>
-              )}
-            </ListRow>
-          ))}
+        <ul className={`${isOwner ? "mt-2 " : ""}max-h-56 overflow-auto scrollbar-thin`}>
+          {direct.map((m) => memberRow(m, { editable: true }))}
         </ul>
       )}
 
       {inherited.length > 0 && (
-        <div className={direct.length > 0 ? "mt-3" : ""}>
-          <div className="text-label uppercase text-drive-muted mb-1.5">Inherited access</div>
-          <ul className="space-y-1.5 max-h-32 overflow-auto scrollbar-thin">
-            {inherited.map((m) => (
-              <ListRow key={m.id}>
-                <span className="truncate flex-1 text-body text-drive-text">{walletDisplayLabel(m.email, m.name)}</span>
-                <span className="text-caption text-drive-muted truncate shrink-0" title={`Granted at ${prettyPath(normalizePath(m.path))} — manage it there`}>
-                  from {prettyPath(normalizePath(m.path))}
-                </span>
-                <Badge tone="neutral">{m.role}</Badge>
-              </ListRow>
-            ))}
+        <div className="mt-2">
+          <div className="text-label uppercase text-drive-muted">Inherited access</div>
+          <ul className="max-h-40 overflow-auto scrollbar-thin">
+            {inherited.map((m) => memberRow(m, { editable: false }))}
           </ul>
         </div>
       )}
-    </SectionCard>
-  );
-}
-
-export function EmailInviteSection({
-  email, setEmail, role, setRole, invite, busy, currentPath,
-}: {
-  email: string;
-  setEmail: (v: string) => void;
-  role: "viewer" | "editor";
-  setRole: (v: "viewer" | "editor") => void;
-  invite: () => void;
-  busy: boolean;
-  /** Path the grant lands on — invites are scoped here. */
-  currentPath: string;
-}) {
-  const cur = normalizePath(currentPath);
-  const isRoot = cur === "";
-  return (
-    <SectionCard
-      icon={<UserPlus className="w-4 h-4" />}
-      title="Invite by email"
-      description={<>Grants access to <span className="font-medium text-drive-text">{prettyPath(cur)}</span>{!isRoot && " only"}</>}
-    >
-      <div className="flex gap-2 items-end">
-        <Input
-          wrapClassName="flex-1"
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="colleague@example.com"
-        />
-        <Select
-          wrapClassName="w-28"
-          value={role}
-          onChange={(e) => setRole(e.target.value as "viewer" | "editor")}
-          aria-label="Invite role"
-        >
-          <option value="viewer">Viewer</option>
-          <option value="editor">Editor</option>
-        </Select>
-        <Button variant="filled" disabled={busy || !email} loading={busy} onClick={invite}>
-          Invite
-        </Button>
-      </div>
-      {isRoot && (
-        <p className="mt-2 text-caption text-amber-700">
-          This is the drive root — the collaborator will see every folder. Open a subfolder’s Share to scope access to just that folder.
-        </p>
-      )}
-    </SectionCard>
+    </DrawerSection>
   );
 }
 
 export function FreeLinkSection({
-  shares, currentPath, createFreeLink, busy, copyLink,
+  shares, currentPath, linkRole, setLinkRole, createFreeLink, busy, copyLink,
 }: {
   shares: Share[];
   currentPath: string;
+  /** Role a NEW link grants — deliberately its own state, not shared with the
+   *  invite form (a hidden coupling that made link roles change by accident). */
+  linkRole: "viewer" | "editor";
+  setLinkRole: (v: "viewer" | "editor") => void;
   createFreeLink: () => void;
   busy: boolean;
   copyLink: (token: string) => void;
@@ -637,27 +678,40 @@ export function FreeLinkSection({
   const cur = normalizePath(currentPath);
   const freeShares = shares.filter((s) => !s.price_usdc && normalizePath(s.path) === cur);
   return (
-    <SectionCard
-      icon={<LinkIcon className="w-4 h-4" />}
-      title="Free share link"
-      description="Anyone with the link gets access — no payment"
+    <DrawerSection
+      title="Link sharing"
+      description="Anyone with a link gets access — no payment"
+      action={
+        <div className="flex items-center gap-1.5">
+          <Select
+            wrapClassName="w-24"
+            className="h-8"
+            value={linkRole}
+            onChange={(e) => setLinkRole(e.target.value as "viewer" | "editor")}
+            aria-label="New link role"
+          >
+            <option value="viewer">Viewer</option>
+            <option value="editor">Editor</option>
+          </Select>
+          <Button variant="tonal" size="sm" disabled={busy} loading={busy} onClick={createFreeLink}>
+            New link
+          </Button>
+        </div>
+      }
     >
-      <Button variant="outline" className="w-full justify-center" disabled={busy} loading={busy} onClick={createFreeLink}>
-        Create free share link
-      </Button>
       {freeShares.length > 0 && (
-        <ul className="mt-3 space-y-1.5 max-h-40 overflow-auto scrollbar-thin">
+        <ul className="max-h-40 overflow-auto scrollbar-thin">
           {freeShares.map((s) => (
-            <ListRow key={s.id}>
+            <li key={s.id} className="flex items-center gap-2 py-1.5">
               <Badge tone="neutral">{s.role}</Badge>
-              <code className="flex-1 text-caption truncate font-mono text-drive-text">/s/{s.token}</code>
+              <code className="flex-1 truncate font-mono text-caption text-drive-text">/s/{s.token}</code>
               <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(s.token)}>
                 <Copy className="w-3.5 h-3.5" />
               </IconButton>
-            </ListRow>
+            </li>
           ))}
         </ul>
       )}
-    </SectionCard>
+    </DrawerSection>
   );
 }
