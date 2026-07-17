@@ -36,10 +36,11 @@ Viewer / editors:
 - `editors/rich-text-editor` — collaborative WYSIWYG Markdown (TipTap + Yjs).
 
 Sharing / payments:
-- `share-dialog(.tsx/-sections)` — the Share **drawer**: per-path invite, sell,
-  free link, members. Shows the drive token policy READ-ONLY (accepted-currency
-  chips + a Settings link) — editing is in manage (create in context, audit in
-  settings). Still exports `PaymentTokensEditor`, which `drive-manage` renders.
+- `share-dialog(.tsx/-sections)` — the Share **drawer**, one flat sheet of
+  sections (people, link sharing, sell) — card chrome is for wide surfaces.
+  Shows the drive token policy READ-ONLY (accepted-currency line + Settings
+  link) — editing is in manage (create in context, audit in settings). Still
+  exports `PaymentTokensEditor`, which `drive-manage` renders.
 - `drive-manage` — owner Settings page, Members/Links/Sales/Payments left-rail.
   Owns the editable drive token-policy editor (`PaymentTokensEditor`) + payout.
 - `share-gate(.tsx/-client)` — the `/s/[token]` paywall: x402 pay + Permit2

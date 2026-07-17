@@ -9,8 +9,7 @@ import { atLeast } from "@/lib/access-core.js";
 import { DEFAULT_TOKENS, resolveDriveTokens, type PaymentToken } from "@/lib/payment-tokens";
 import { resolvePayoutWallet, type PayoutRow } from "@/lib/payout";
 import {
-  SellSection, EmailInviteSection, FreeLinkSection,
-  MembersSection,
+  SellSection, PeopleSection, FreeLinkSection,
   type Share, type Member,
 } from "./share-dialog-sections";
 
@@ -26,7 +25,10 @@ export function ShareDialog({
 }) {
   const [shares, setShares] = useState<Share[]>([]);
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"viewer" | "editor">("viewer");
+  const [inviteRole, setInviteRole] = useState<"viewer" | "editor">("viewer");
+  // Separate from inviteRole on purpose — a new link's role must not silently
+  // follow whatever the invite form was last set to.
+  const [linkRole, setLinkRole] = useState<"viewer" | "editor">("viewer");
   const [busy, setBusy] = useState(false);
   const [editingSell, setEditingSell] = useState(focusSection === "sell");
   const [price, setPrice] = useState("");
@@ -203,7 +205,7 @@ export function ShareDialog({
     const res = await apiFetch<{ url: string }>(`/api/drives/${driveId}/shares`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: defaultPath, role }),
+      body: JSON.stringify({ path: defaultPath, role: linkRole }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -223,7 +225,7 @@ export function ShareDialog({
     const res = await apiFetch(`/api/drives/${driveId}/members`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, role, path: defaultPath }),
+      body: JSON.stringify({ email, role: inviteRole, path: defaultPath }),
     });
     setBusy(false);
     if (!res.ok) {
@@ -276,21 +278,34 @@ export function ShareDialog({
         </div>
       }
     >
-      <div className="space-y-3">
-        {/* Contextual share panel for THIS path: invite, sell, link, and who
-            can access here. The drive-wide ledger — full roster, all links,
-            earnings, storefront, payment settings — lives on the Manage page. */}
-        {isOwner && (
-          <a
-            href={`/d/${driveId}/manage`}
-            className="flex items-center justify-between gap-2 rounded-lg border border-drive-border bg-drive-sidebar px-3 py-2 text-body hover:bg-drive-hover"
-          >
-            <span className="flex items-center gap-2 text-drive-text">
-              <Users className="w-4 h-4 text-drive-muted" /> Members, links &amp; settings
-            </span>
-            <ArrowRight className="w-4 h-4 text-drive-muted" />
-          </a>
-        )}
+      {/* Contextual share panel for THIS path, as ONE flat sheet (divide-y
+          sections, no card chrome): people → link sharing → selling, then a
+          quiet pointer to the drive-wide ledger (Manage page) at the end. */}
+      <div className="divide-y divide-drive-border">
+        <PeopleSection
+          members={members}
+          isOwner={isOwner}
+          currentUserEmail={me.email}
+          currentPath={defaultPath}
+          changeMemberRole={changeMemberRole}
+          removeMember={removeMember}
+          email={email}
+          setEmail={setEmail}
+          inviteRole={inviteRole}
+          setInviteRole={setInviteRole}
+          invite={invite}
+          busy={busy}
+        />
+
+        <FreeLinkSection
+          shares={shares}
+          currentPath={defaultPath}
+          linkRole={linkRole}
+          setLinkRole={setLinkRole}
+          createFreeLink={createFreeLink}
+          busy={busy}
+          copyLink={copyLink}
+        />
 
         <SellSection
           defaultPath={defaultPath}
@@ -322,37 +337,19 @@ export function ShareDialog({
           copyLink={copyLink}
         />
 
-        <MembersSection
-          members={members}
-          isOwner={isOwner}
-          currentUserEmail={me.email}
-          currentPath={defaultPath}
-          changeMemberRole={changeMemberRole}
-          removeMember={removeMember}
-          busy={busy}
-        />
-
-        {/* Inviting by email POSTs to owner-only /members (403s otherwise),
-            so only owners see the control. */}
+        {/* Audit lives in Settings — the drawer only points there ("create in
+            context, audit in settings"). */}
         {isOwner && (
-          <EmailInviteSection
-            email={email}
-            setEmail={setEmail}
-            role={role}
-            setRole={setRole}
-            invite={invite}
-            busy={busy}
-            currentPath={defaultPath}
-          />
+          <a
+            href={`/d/${driveId}/manage`}
+            className="flex items-center justify-between gap-2 py-3 text-body text-drive-muted hover:text-drive-accent"
+          >
+            <span className="flex items-center gap-2">
+              <Users className="w-4 h-4" /> All members, links &amp; sales
+            </span>
+            <ArrowRight className="w-4 h-4" />
+          </a>
         )}
-
-        <FreeLinkSection
-          shares={shares}
-          currentPath={defaultPath}
-          createFreeLink={createFreeLink}
-          busy={busy}
-          copyLink={copyLink}
-        />
       </div>
     </Modal>
   );
