@@ -3,12 +3,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Wallet } from "lucide-react";
-
-// Shared look for the wallet button so the dynamic-loading placeholder and the
-// live control are visually identical (no layout shift, no flash).
-const walletBtnClass =
-  "mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60";
+import { Wallet, KeyRound } from "lucide-react";
 
 // The wallet stack (wagmi + RainbowKit, ~300-600KB) is code-split behind this
 // dynamic import (ssr:false — the provider tree is client-only) so it loads
@@ -16,14 +11,29 @@ const walletBtnClass =
 // (not gated behind a click) because RainbowKit only opens its modal from a user
 // gesture: the button's own click must originate the open, so the provider has
 // to already be mounted when the visitor clicks. Until the chunk arrives we show
-// an identical disabled button.
+// disabled buttons identical to the live control (no layout shift, no flash) —
+// keep the markup in sync with wallet-auth-panel's rendered buttons.
 const WalletLoginButton = dynamic(() => import("@/components/wallet-auth-panel"), {
   ssr: false,
   loading: () => (
-    <button type="button" disabled className={walletBtnClass}>
-      <Wallet className="w-4 h-4" />
-      Continue with a wallet
-    </button>
+    <>
+      <button
+        type="button"
+        disabled
+        className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium disabled:opacity-60"
+      >
+        <KeyRound className="w-4 h-4" />
+        Sign in with Base (passkey)
+      </button>
+      <button
+        type="button"
+        disabled
+        className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg py-2 text-sm text-drive-muted disabled:opacity-60"
+      >
+        <Wallet className="w-4 h-4" />
+        Other wallets
+      </button>
+    </>
   ),
 });
 

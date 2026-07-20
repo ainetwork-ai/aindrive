@@ -31,6 +31,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `paid-lifts.js` — `paid_lifts` table: quota/tier lifts bought with AIN + tx-hash anti-replay (`txHashUsed`).
 - `tier.ts` — free/pro/max tiers from active lifts; rate-limit + storage-cap multipliers.
 - `wallet.ts` — SIWE nonce/cookie, `linkWalletToAccount`, `resolveAccountForWallet` (wallet→durable account bridge).
+- `base-siwe.ts` — client helpers for Base Account `wallet_connect` + `signInWithEthereum` (single-popup passkey + SIWE; the popup-blocker rationale lives in its header).
 - `payment-hooks.ts` — `onPaymentSettled` extension point (Phase 2 stub).
 
 **Agent bridge / RPC**

@@ -5,25 +5,39 @@
  * (ssr:false) off the email form: the wagmi + RainbowKit + WalletConnect stack
  * (~300-600KB) loads after first paint, not on the critical path.
  *
- * Flow (matches OpenSea/Zora — no intermediate app screen): click "Continue
- * with a wallet" → RainbowKit picker → on connect we IMMEDIATELY request the
- * SIWE signature (the wallet's own prompt pops straight away) → POST it → land
- * the session. We deliberately do NOT use RainbowKit's authentication adapter:
- * that inserts a "Sign in / Send message" confirmation screen between connect
- * and the wallet prompt — an extra click. Here the connect flows straight into
- * the signature.
+ * Two entry points, one session:
  *
- * The signature is only auto-requested when the visitor CLICKED the button
+ * 1. "Sign in with Base" — drives the Base Account (passkey) connector
+ *    DIRECTLY with `wallet_connect` + the `signInWithEthereum` capability:
+ *    passkey auth AND the SIWE signature happen in ONE keys.coinbase.com
+ *    popup, opened inside the click's user activation. This is the only
+ *    popup-safe shape: the previous connect→(effect)→personal_sign flow
+ *    needed a second popup with no gesture left, which desktop browsers
+ *    degrade to the SDK's "Try again" dialog and mobile Safari kills
+ *    outright. See lib/base-siwe.ts for the request/response mapping.
+ *    The nonce and the SDK provider are prefetched on mount so the click
+ *    path has no await before the popup opens (mobile Safari drops the
+ *    gesture across slow awaits).
+ *
+ * 2. "Other wallets" — RainbowKit picker for extensions (EIP-6963) and
+ *    WalletConnect. On connect we immediately request the SIWE signature
+ *    (extensions prompt in-page; no popup involved). If the visitor picks
+ *    Base inside THIS picker too, we reuse the capability request right
+ *    after connect — it rides the SDK popup's 200ms linger window, and at
+ *    worst falls back to the SDK's own retry dialog (never worse than the
+ *    old flow).
+ *
+ * The signature is only auto-requested when the visitor CLICKED a button
  * (`wantSign`): wagmi silently reconnects a previously-used wallet on page load,
  * and firing a signature prompt unprompted would be hostile.
  *
- * Why the button is a real ConnectButton.Custom (not a plain button calling
- * openConnectModal): RainbowKit only opens its modal from a user gesture — a
- * programmatic openConnectModal() from an effect is a silent no-op.
+ * Why the buttons live inside a real ConnectButton.Custom (not plain buttons
+ * calling openConnectModal): RainbowKit only opens its modal from a user
+ * gesture — a programmatic openConnectModal() from an effect is a silent no-op.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { WagmiProvider, useAccount, useSignMessage, useDisconnect } from "wagmi";
+import { WagmiProvider, useAccount, useSignMessage, useDisconnect, useConnect } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   RainbowKitProvider,
@@ -33,8 +47,9 @@ import {
 import "@rainbow-me/rainbowkit/styles.css";
 import { SiweMessage } from "siwe";
 import { useRouter } from "next/navigation";
-import { Wallet } from "lucide-react";
+import { Wallet, KeyRound } from "lucide-react";
 import { getWagmiConfig } from "@/lib/wagmi-config";
+import { walletConnectSiweRequest, extractSiweAuth } from "@/lib/base-siwe";
 
 // Mirrors server activeChainId() (web/lib/payment-tokens.ts). We stamp the SIWE
 // message with the APP's chain, not the wallet's connected chain, so it always
@@ -42,6 +57,10 @@ import { getWagmiConfig } from "@/lib/wagmi-config";
 // signed-over network binding). Base mainnet 8453 / Sepolia 84532.
 const CHAIN_ID =
   process.env.NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK === "mainnet" ? 8453 : 84532;
+
+// Refuse a prefetched nonce this close to expiry (server TTL 5 min): the popup
+// round-trip + verify POST must complete before the server GCs it.
+const NONCE_STALE_MARGIN_MS = 60_000;
 
 /** `next`: where to land after a successful sign-in (already same-origin-validated). */
 export default function WalletLoginButton({ next }: { next: string }) {
@@ -57,16 +76,17 @@ export default function WalletLoginButton({ next }: { next: string }) {
     <WagmiProvider config={getWagmiConfig()} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider>
-          <WalletButton next={next} />
+          <WalletButtons next={next} />
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );
 }
 
-function WalletButton({ next }: { next: string }) {
+function WalletButtons({ next }: { next: string }) {
   const { openConnectModal, connectModalOpen } = useConnectModal();
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, connector: activeConnector } = useAccount();
+  const { connectors } = useConnect();
   const { signMessageAsync } = useSignMessage();
   const { disconnect } = useDisconnect();
   const router = useRouter();
@@ -75,16 +95,117 @@ function WalletButton({ next }: { next: string }) {
   // True only between a button click and the signature completing — gates the
   // auto-sign effect so a page-load reconnect never pops a prompt on its own.
   const wantSign = useRef(false);
+  // Server-issued SIWE nonce, prefetched so the Base click path reaches the
+  // popup with zero network awaits (mobile Safari drops the click's user
+  // activation across slow awaits, and the popup then gets blocked).
+  const nonceRef = useRef<{ nonce: string; expiresAt: number } | null>(null);
 
-  const signIn = useCallback(
+  const fetchNonce = useCallback(async () => {
+    const res = await fetch("/api/wallet/nonce", { method: "POST" });
+    if (!res.ok) throw new Error("could not start sign-in");
+    return (await res.json()) as { nonce: string; expiresAt: number };
+  }, []);
+
+  // Consume the prefetched nonce if still fresh, else fetch inline (rare —
+  // only when the visitor sat on /login past the TTL). Refill in the
+  // background either way so a retry is fast again.
+  const takeNonce = useCallback(async (): Promise<string> => {
+    const held = nonceRef.current;
+    nonceRef.current = null;
+    const refill = () => {
+      fetchNonce().then((n) => { nonceRef.current = n; }).catch(() => {});
+    };
+    if (held && held.expiresAt - Date.now() > NONCE_STALE_MARGIN_MS) {
+      refill();
+      return held.nonce;
+    }
+    const fresh = await fetchNonce();
+    refill();
+    return fresh.nonce;
+  }, [fetchNonce]);
+
+  // Prefetch the nonce and warm the Base SDK (its provider is created via a
+  // dynamic import — loading that chunk during the click would also burn the
+  // gesture). Fire-and-forget: failures fall back to inline fetch on click.
+  useEffect(() => {
+    fetchNonce().then((n) => { nonceRef.current = n; }).catch(() => {});
+    connectors.find((c) => c.id === "baseAccount")?.getProvider().catch(() => {});
+  }, [fetchNonce, connectors]);
+
+  /** POST the SIWE proof; on success land the session, on failure explain. */
+  const submitLogin = useCallback(
+    async (body: { address: string; signature: string; nonce: string; message: string }): Promise<boolean> => {
+      const r = await fetch("/api/wallet/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const resBody = await r.json().catch(() => ({}));
+        const msg =
+          r.status === 403 && resBody.error === "wallet_login_not_enabled"
+            ? "This wallet is linked to an email account — sign in with email, or enable wallet sign-in from settings."
+            : resBody.error || "sign-in failed";
+        setError(msg);
+        return false;
+      }
+      router.push(next);
+      return true;
+    },
+    [router, next],
+  );
+
+  // Base Account sign-in: ONE wallet_connect request carries the
+  // signInWithEthereum capability, so the single popup this click is allowed
+  // to open covers passkey auth + SIWE signature. Works both cold (no wagmi
+  // connection — the SDK handles wallet_connect pre-connect) and right after
+  // a modal connect (rides the popup's 200ms linger window).
+  const baseSiweLogin = useCallback(async () => {
+    const baseConnector = connectors.find((c) => c.id === "baseAccount");
+    if (!baseConnector) {
+      setError("Base sign-in is unavailable — try another wallet.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const nonce = await takeNonce();
+      const provider = (await baseConnector.getProvider()) as {
+        request: (args: unknown) => Promise<unknown>;
+      };
+      const result = await provider.request(walletConnectSiweRequest(nonce, CHAIN_ID));
+      const auth = extractSiweAuth(result);
+      const ok = await submitLogin({ ...auth, nonce });
+      // Mirror personalSignLogin: drop a modal-connected Base wallet on failure
+      // so the next "Other wallets" click re-opens the picker instead of being
+      // routed straight back to Base. (The direct-button cold path never
+      // connects wagmi, so this is a no-op there.)
+      if (!ok) disconnect();
+    } catch (e) {
+      const m = (e as Error)?.message || "";
+      if (/blocked/i.test(m)) {
+        setError("Your browser blocked the sign-in window — tap the button again.");
+      } else if (/reject|denied|cancel|closed/i.test(m)) {
+        setError("Sign-in canceled.");
+      } else {
+        setError("Could not sign in — try again.");
+      }
+      disconnect();
+    } finally {
+      setBusy(false);
+      wantSign.current = false;
+    }
+  }, [connectors, takeNonce, submitLogin, disconnect]);
+
+  // Non-Base wallets (extensions, WalletConnect): classic SIWE personal_sign.
+  // Extensions prompt in-page and WalletConnect deep-links, so the no-gesture
+  // effect context is fine here — only the Base popup needs the capability path.
+  const personalSignLogin = useCallback(
     async (addr: string) => {
       setBusy(true);
       setError(null);
       try {
-        const nonceRes = await fetch("/api/wallet/nonce", { method: "POST" });
-        if (!nonceRes.ok) throw new Error("could not start sign-in");
-        const { nonce } = await nonceRes.json();
-
+        const nonce = await takeNonce();
         const message = new SiweMessage({
           domain: window.location.host,
           address: addr,
@@ -98,25 +219,11 @@ function WalletButton({ next }: { next: string }) {
         // The wallet's own signature prompt — this is the one step the user sees.
         const signature = await signMessageAsync({ message });
 
-        const r = await fetch("/api/wallet/login", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ address: addr, signature, nonce, message }),
-        });
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          const msg =
-            r.status === 403 && body.error === "wallet_login_not_enabled"
-              ? "This wallet is linked to an email account — sign in with email, or enable wallet sign-in from settings."
-              : body.error || "sign-in failed";
-          setError(msg);
-          // Drop the wallet so a retry re-opens the picker (the wagmi config is a
-          // module singleton — a still-connected rejected wallet would otherwise
-          // be reused straight away).
-          disconnect();
-          return;
-        }
-        router.push(next);
+        const ok = await submitLogin({ address: addr, signature, nonce, message });
+        // Drop the wallet so a retry re-opens the picker (the wagmi config is a
+        // module singleton — a still-connected rejected wallet would otherwise
+        // be reused straight away).
+        if (!ok) disconnect();
       } catch (e) {
         // Covers a user-rejected signature and network failures alike.
         const m = (e as Error)?.message || "";
@@ -127,7 +234,7 @@ function WalletButton({ next }: { next: string }) {
         wantSign.current = false;
       }
     },
-    [signMessageAsync, disconnect, router, next],
+    [takeNonce, signMessageAsync, submitLogin, disconnect],
   );
 
   // Auto-sign the moment an INTENTFUL connect lands (button was clicked). Never
@@ -135,16 +242,25 @@ function WalletButton({ next }: { next: string }) {
   useEffect(() => {
     if (wantSign.current && isConnected && address && !busy) {
       wantSign.current = false;
-      signIn(address);
+      if (activeConnector?.id === "baseAccount") baseSiweLogin();
+      else personalSignLogin(address);
     }
-  }, [isConnected, address, busy, signIn]);
+  }, [isConnected, address, busy, activeConnector, baseSiweLogin, personalSignLogin]);
 
-  function onClick() {
+  function onBaseClick() {
+    setError(null);
+    if (busy) return;
+    baseSiweLogin();
+  }
+
+  function onOtherWalletsClick() {
     setError(null);
     if (busy) return;
     if (isConnected && address) {
-      // Already connected (e.g. reconnected on load) → go straight to signing.
-      signIn(address);
+      // Already connected (e.g. picked a wallet, then canceled the signature)
+      // → go straight to signing with that wallet.
+      if (activeConnector?.id === "baseAccount") baseSiweLogin();
+      else personalSignLogin(address);
     } else {
       wantSign.current = true;
       openConnectModal?.();
@@ -158,11 +274,20 @@ function WalletButton({ next }: { next: string }) {
           <button
             type="button"
             disabled={!mounted || busy || connectModalOpen}
-            onClick={onClick}
+            onClick={onBaseClick}
             className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60"
           >
+            <KeyRound className="w-4 h-4" />
+            {busy ? "Signing in…" : "Sign in with Base (passkey)"}
+          </button>
+          <button
+            type="button"
+            disabled={!mounted || busy || connectModalOpen}
+            onClick={onOtherWalletsClick}
+            className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg py-2 text-sm text-drive-muted hover:text-drive-accent hover:underline disabled:opacity-60"
+          >
             <Wallet className="w-4 h-4" />
-            {busy ? "Signing in…" : "Continue with a wallet"}
+            Other wallets
           </button>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         </>

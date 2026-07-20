@@ -49,9 +49,12 @@ Sharing / payments:
 - `wallet-provider` — wagmi + RainbowKit + react-query provider tree (used by
   the `/s/[token]` and `/account/wallet` layouts).
 - `wallet-auth-panel` — the `/login` wallet sign-in flow, `dynamic({ ssr:false })`
-  so the web3 bundle loads only on "Continue with a wallet". Uses RainbowKit's
-  `authenticationAdapter` so connect chains straight into the SIWE signature
-  (POST /api/wallet/login) — one modal, no separate sign-in button.
+  to keep the web3 bundle off the email form's critical path. Two paths:
+  "Sign in with Base" drives the Base connector directly with `wallet_connect`
+  + `signInWithEthereum` (one popup does passkey + SIWE — see `lib/base-siwe.ts`
+  for why two popups can't work); "Other wallets" opens the RainbowKit picker
+  and chains connect straight into a `personal_sign` SIWE. Both POST
+  /api/wallet/login.
 - `use-wallet-link` — SIWE-link the connected wallet to the logged-in account,
   opting into wallet-login (POST /api/wallet/link); powers `/account/wallet`.
 - `use-wallet-login` — SIWE re-login for a wallet that already has access
