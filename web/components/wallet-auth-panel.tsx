@@ -175,7 +175,12 @@ function WalletButtons({ next }: { next: string }) {
       };
       const result = await provider.request(walletConnectSiweRequest(nonce, CHAIN_ID));
       const auth = extractSiweAuth(result);
-      await submitLogin({ ...auth, nonce });
+      const ok = await submitLogin({ ...auth, nonce });
+      // Mirror personalSignLogin: drop a modal-connected Base wallet on failure
+      // so the next "Other wallets" click re-opens the picker instead of being
+      // routed straight back to Base. (The direct-button cold path never
+      // connects wagmi, so this is a no-op there.)
+      if (!ok) disconnect();
     } catch (e) {
       const m = (e as Error)?.message || "";
       if (/blocked/i.test(m)) {
@@ -185,11 +190,12 @@ function WalletButtons({ next }: { next: string }) {
       } else {
         setError("Could not sign in — try again.");
       }
+      disconnect();
     } finally {
       setBusy(false);
       wantSign.current = false;
     }
-  }, [connectors, takeNonce, submitLogin]);
+  }, [connectors, takeNonce, submitLogin, disconnect]);
 
   // Non-Base wallets (extensions, WalletConnect): classic SIWE personal_sign.
   // Extensions prompt in-page and WalletConnect deep-links, so the no-gesture
@@ -267,7 +273,7 @@ function WalletButtons({ next }: { next: string }) {
         <>
           <button
             type="button"
-            disabled={!mounted || busy}
+            disabled={!mounted || busy || connectModalOpen}
             onClick={onBaseClick}
             className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60"
           >
