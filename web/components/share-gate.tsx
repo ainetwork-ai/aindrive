@@ -506,15 +506,14 @@ export function ShareGate({ token }: { token: string }) {
           <span className="font-mono text-drive-text truncate" title={payTo}>{payToShort}</span>
         </div>
 
-        {/* Wallet connect + pay — clear primary action hierarchy. Permit2
-            tokens insert a one-time approve step before the pay signature. */}
+        {/* Wallet connect + pay — ONE primary CTA at a time: disconnected shows
+            a connect button (opens the picker), connected shows approve/pay.
+            Never both — two live buttons read as two competing actions.
+            Permit2 tokens insert a one-time approve step before the pay
+            signature. No chain switcher: the paywall pins on-chain work to the
+            sale's chain (pay/approve switch before signing) and shows the
+            network in the price card. */}
         <div className="mt-6 flex flex-col items-stretch gap-3">
-          <div className="flex justify-center">
-            {/* No chain switcher: the paywall pins on-chain work to the sale's
-                chain (pay/approve switch before signing) and shows the network
-                in the price card, so a chooser here is an inert no-op. */}
-            <ConnectButton showBalance={false} chainStatus="none" />
-          </div>
           {walletConnecting ? (
             // Post-redirect rehydration gap (wallet app → back to aindrive):
             // an explicit "connecting" state so the ~seconds before the
@@ -522,7 +521,22 @@ export function ShareGate({ token }: { token: string }) {
             <Button variant="filled" size="md" loading disabled className="w-full justify-center">
               Connecting your wallet…
             </Button>
-          ) : isConnected && isPermit2 && approvalNeeded ? (
+          ) : !isConnected ? (
+            <ConnectButton.Custom>
+              {({ openConnectModal, mounted }) => (
+                <Button
+                  variant="filled"
+                  size="md"
+                  disabled={!mounted}
+                  icon={<Wallet className="w-4 h-4" />}
+                  onClick={openConnectModal}
+                  className="w-full justify-center"
+                >
+                  Connect wallet to pay
+                </Button>
+              )}
+            </ConnectButton.Custom>
+          ) : isPermit2 && approvalNeeded ? (
             <>
               <Button
                 variant="filled"
@@ -552,13 +566,27 @@ export function ShareGate({ token }: { token: string }) {
               variant="filled"
               size="md"
               loading={paying}
-              disabled={!isConnected || paying}
-              icon={isConnected ? <Wallet className="w-4 h-4" /> : undefined}
+              disabled={paying}
+              icon={<Wallet className="w-4 h-4" />}
               onClick={pay}
               className="w-full justify-center"
             >
-              {paying ? "Signing & settling…" : isConnected ? `Pay ${amountLabel}` : "Connect wallet to pay"}
+              {paying ? "Signing & settling…" : `Pay ${amountLabel}`}
             </Button>
+          )}
+          {/* The connected wallet, with the switch-wallet entry point the old
+              standalone ConnectButton chip used to provide. */}
+          {isConnected && address && !walletConnecting && (
+            <ConnectButton.Custom>
+              {({ openAccountModal }) => (
+                <p className="text-caption text-drive-muted text-center">
+                  Paying with <span className="font-mono">{address.slice(0, 6)}…{address.slice(-4)}</span>{" "}
+                  <button onClick={openAccountModal} className="underline underline-offset-2 hover:text-drive-text">
+                    Change
+                  </button>
+                </p>
+              )}
+            </ConnectButton.Custom>
           )}
           {(paying || approving) && (
             <button
