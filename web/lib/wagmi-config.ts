@@ -3,6 +3,7 @@ import { baseAccount, walletConnectWallet } from "@rainbow-me/rainbowkit/wallets
 import { http, createConfig } from "wagmi";
 import { base, baseSepolia } from "wagmi/chains";
 import { paymentNetwork } from "./payment-tokens";
+import { installEip6963UuidGuard } from "./eip6963-uuid-guard";
 
 // We hand-roll the wallet list (instead of getDefaultConfig) for two reasons:
 //   1. Base front-and-centre via `baseAccount` (Sign in with Base) = the passkey
@@ -33,6 +34,9 @@ let _config: WagmiConfig | null = null;
 
 export function getWagmiConfig(): WagmiConfig {
   if (!_config) {
+    // Must run before createConfig(): rewrites misbehaving EIP-6963 announces
+    // (per-announce uuids -> duplicate "Installed" entries) — see eip6963-uuid-guard.ts.
+    installEip6963UuidGuard();
     const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID || "aindrive-dev";
     if (!process.env.NEXT_PUBLIC_WC_PROJECT_ID) {
       // The placeholder keeps extension flows working, but WalletConnect
