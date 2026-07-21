@@ -90,6 +90,7 @@
     "ws": "$ws",
     "postcss": "$postcss",
     "dompurify": "^3.4.10",
-    "@base-org/account": "^2.5.7"
+    "@base-org/account": "^2.5.7",
+    "axios": "^1.18.1"
   }
 }
