@@ -37,15 +37,17 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      # `npm install` not `npm ci`: the committed lockfile was generated on
-      # macOS and omits linux-only optional dep nodes (@emnapi/runtime|core),
-      # which `npm ci` strict-mode rejects on the linux runner. install
-      # resolves the host's optional deps from the lock without failing on
-      # the platform delta. (Regenerating a cross-platform lock would need a
-      # linux host we don't have.)
-      - run: npm install --no-audit --no-fund
+      # `npm ci` (strict) is the lockfile gate: both lockfiles are relocked on
+      # linux and carry the linux @emnapi optional-dep nodes, so ci installs the
+      # exact locked tree and FAILS on any package.json ↔ lock drift — blocking
+      # it at PR time. (`npm install` used to be needed because the lock was
+      # mac-generated and omitted those nodes; install also auto-heals drift,
+      # which let broken locks reach main and only blow up at the Docker `npm ci`
+      # build. Relocking on linux removed that need. If you must regenerate a
+      # lock, do it on linux — a mac `npm install` drops @emnapi and reds CI.)
+      - run: npm ci --no-audit --no-fund
       - name: Install cli deps (needed for in-process vitest worker dynamic imports)
-        run: npm --prefix ../cli install --no-audit --no-fund
+        run: npm --prefix ../cli ci --no-audit --no-fund
       - name: Smoke — better-sqlite3 ABI (both packages must load the same native addon)
         run: |
           node -e "require('better-sqlite3'); console.log('web bsqlite3 ok')"
@@ -80,8 +82,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: cli/package-lock.json
-      # npm install (not ci) — same cross-platform optional-dep reason as web.
-      - run: npm install --no-audit --no-fund
+      # npm ci (strict) — same lockfile gate as web; cli lock relocked on linux.
+      - run: npm ci --no-audit --no-fund
       - name: Smoke — cli better-sqlite3 prebuild available
         run: node -e "require('better-sqlite3'); console.log('cli bsqlite3 ok')"
       - name: Build (esbuild bundle)
@@ -132,10 +134,10 @@ jobs:
       #       cli/src/rpc.js in-process (cases.mjs), and
       #   (b) global-setup.mjs spawns the cli agent via fixtures/sample/start-agent.mjs.
       - name: Install web deps
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
         working-directory: web
       - name: Install cli deps
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
         working-directory: cli
 
       # Fail fast if a native addon prebuild is missing before the suite starts.
