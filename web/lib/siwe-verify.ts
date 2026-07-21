@@ -1,5 +1,22 @@
-import { verifySiweMessage } from "viem/siwe";
+import { parseSiweMessage, verifySiweMessage } from "viem/siwe";
 import { basePublicClient } from "./evm";
+
+export type SiweLoginFields = { address: string; nonce: string; chainId: number };
+
+/**
+ * Extract the SIWE fields the wallet routes pre-check, using the SAME parser
+ * the signature verifier uses (viem). The routes previously parsed with
+ * spruceid `siwe`, which is stricter than the verifier — e.g. it throws on a
+ * non-EIP-55 (lowercase) address, which Base App's native signInWithEthereum
+ * builder emits — so messages that verify fine were rejected up front
+ * ("bad message" 400s, 2026-07 report). One parser for pre-check and verify
+ * means they can never disagree about what a message says.
+ */
+export function parseSiweLoginFields(message: string): SiweLoginFields | null {
+  const parsed = parseSiweMessage(message);
+  if (!parsed.address || !parsed.nonce || parsed.chainId === undefined) return null;
+  return { address: parsed.address, nonce: parsed.nonce, chainId: parsed.chainId };
+}
 
 /**
  * Verify a SIWE (EIP-4361) login signature against the active Base chain.
@@ -26,7 +43,10 @@ export async function verifyWalletSignature(args: {
       nonce: args.nonce,
       domain: args.domain,
     });
-  } catch {
+  } catch (e) {
+    // Deliberately still `false` (→ 401), but never silently: an RPC outage
+    // and a forged signature must at least be distinguishable in the logs.
+    console.error("[siwe-verify] verifySiweMessage threw:", e);
     return false;
   }
 }

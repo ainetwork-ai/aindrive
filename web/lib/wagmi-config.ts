@@ -6,11 +6,13 @@ import { paymentNetwork } from "./payment-tokens";
 import { installEip6963UuidGuard } from "./eip6963-uuid-guard";
 
 // We hand-roll the wallet list (instead of getDefaultConfig) for two reasons:
-//   1. Base front-and-centre via `baseAccount` (Sign in with Base) = the passkey
-//      Smart Wallet through keys.coinbase.com — no app install required. We
-//      deliberately DROPPED the separate `coinbaseWallet` connector (the
-//      Coinbase Wallet SDK that deeplinks to the installed Coinbase Wallet /
-//      Base App): keeping both read as confusing duplicates to buyers.
+//   1. ONE flat, wallet-neutral group (product rule: wallet login must not
+//      weight any vendor — no dedicated group or promotional label for Base;
+//      see wallet-auth-panel.tsx). `baseAccount` keeps RainbowKit's default
+//      "Base" name; the separate `coinbaseWallet` connector (deeplink to the
+//      installed Coinbase Wallet / Base App) stays DROPPED as a confusing
+//      duplicate. Payment gas sponsorship does not depend on connector
+//      listing — it's capability-probed at pay time (share-gate).
 //
 //      We list ONLY `baseAccount` + `walletConnectWallet` explicitly. Every
 //      INSTALLED browser wallet (MetaMask, OKX, Brave, Rainbow ext, …) is
@@ -56,21 +58,11 @@ export function getWagmiConfig(): WagmiConfig {
     const chains = paymentNetwork() === "mainnet"
       ? ([base] as const)
       : ([baseSepolia, base] as const);
-    // Clearer label: RainbowKit's default name for baseAccount reads opaque to
-    // non-crypto buyers, so override ONLY the display name + shortName (connector
-    // logic, icon, preferences untouched — the creator reads its own static
-    // config off the original function, so wrapping the call is safe).
-    const relabel = <W extends (...args: never[]) => { name: string; shortName?: string }>(
-      wallet: W, name: string, shortName: string,
-    ): W => ((...args: Parameters<W>) => ({ ...wallet(...args), name, shortName })) as W;
+    // Installed extensions come from EIP-6963 automatically; only the two
+    // wallets 6963 can't surface are listed — see the header note on duplicates.
     const connectors = connectorsForWallets(
       [
-        { groupName: "Base", wallets: [
-          relabel(baseAccount, "Sign in with Base (passkey)", "Base"),
-        ] },
-        // Installed extensions come from EIP-6963 automatically; only WalletConnect
-        // (mobile QR) needs listing here — see the header note on duplicates.
-        { groupName: "Other wallets", wallets: [walletConnectWallet] },
+        { groupName: "Wallets", wallets: [baseAccount, walletConnectWallet] },
       ],
       { appName: "aindrive", projectId },
     );

@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAddress } from "viem";
-import { SiweMessage } from "siwe";
 import { consumeNonce, linkWalletToAccount, WalletAlreadyLinkedError } from "@/lib/wallet";
-import { verifyWalletSignature } from "@/lib/siwe-verify";
+import { parseSiweLoginFields, verifyWalletSignature } from "@/lib/siwe-verify";
 import { getUser } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
@@ -44,21 +43,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unknown or expired nonce" }, { status: 400 });
   }
 
-  let ok = false;
-  try {
-    const siweMsg = new SiweMessage(message);
-    if (siweMsg.nonce !== nonce) {
-      return NextResponse.json({ error: "nonce mismatch" }, { status: 400 });
-    }
-    if (siweMsg.address.toLowerCase() !== address.toLowerCase()) {
-      return NextResponse.json({ error: "address mismatch" }, { status: 400 });
-    }
-    // Smart-wallet capable (EOA + ERC-1271 + ERC-6492) verification, binding
-    // origin + nonce (defense in depth on top of the manual checks above).
-    ok = await verifyWalletSignature({ message, signature, address, nonce, domain: EXPECTED_DOMAIN });
-  } catch {
-    ok = false;
+  // Same parser as the verifier (viem) — see parseSiweLoginFields for why the
+  // stricter spruceid parse rejected messages the verifier accepts.
+  const siweMsg = parseSiweLoginFields(message);
+  if (!siweMsg) {
+    console.error("[wallet-link] unparseable SIWE message:", JSON.stringify(message.slice(0, 300)));
+    return NextResponse.json({ error: "bad message" }, { status: 400 });
   }
+  if (siweMsg.nonce !== nonce) {
+    return NextResponse.json({ error: "nonce mismatch" }, { status: 400 });
+  }
+  if (siweMsg.address.toLowerCase() !== address.toLowerCase()) {
+    return NextResponse.json({ error: "address mismatch" }, { status: 400 });
+  }
+  // Smart-wallet capable (EOA + ERC-1271 + ERC-6492) verification, binding
+  // origin + nonce (defense in depth on top of the manual checks above).
+  const ok = await verifyWalletSignature({ message, signature, address, nonce, domain: EXPECTED_DOMAIN });
   if (!ok) return NextResponse.json({ error: "bad signature" }, { status: 401 });
 
   let reclaimed: number;
