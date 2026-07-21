@@ -5,27 +5,25 @@
  * (ssr:false) off the email form: the wagmi + RainbowKit + WalletConnect stack
  * (~300-600KB) loads after first paint, not on the critical path.
  *
- * Two entry points, one session:
+ * ONE wallet-neutral entry point (product rule: wallet login must not weight
+ * any vendor — Base is a market-share fact today, not a UI privilege): a
+ * single "Sign in with a wallet" button opens the RainbowKit picker, and the
+ * signing path is chosen by the CONNECTED connector, not by which button was
+ * pressed:
  *
- * 1. "Sign in with Base" — drives the Base Account (passkey) connector
- *    DIRECTLY with `wallet_connect` + the `signInWithEthereum` capability:
- *    passkey auth AND the SIWE signature happen in ONE keys.coinbase.com
- *    popup, opened inside the click's user activation. This is the only
- *    popup-safe shape: the previous connect→(effect)→personal_sign flow
- *    needed a second popup with no gesture left, which desktop browsers
- *    degrade to the SDK's "Try again" dialog and mobile Safari kills
- *    outright. See lib/base-siwe.ts for the request/response mapping.
- *    The nonce and the SDK provider are prefetched on mount so the click
- *    path has no await before the popup opens (mobile Safari drops the
- *    gesture across slow awaits).
+ * - Base Account (passkey) connector → `wallet_connect` + the
+ *   `signInWithEthereum` capability: passkey auth AND the SIWE signature in
+ *   ONE keys.coinbase.com popup. Requested right after connect, it rides the
+ *   SDK popup's 200ms linger window; at worst the SDK shows its own retry
+ *   dialog. (A connect→personal_sign flow would need a second popup with no
+ *   user gesture left — desktop degrades, mobile Safari kills it.) See
+ *   lib/base-siwe.ts for the request/response mapping. The nonce and the SDK
+ *   provider are prefetched on mount so the post-connect path has no await
+ *   before the capability request.
  *
- * 2. "Other wallets" — RainbowKit picker for extensions (EIP-6963) and
- *    WalletConnect. On connect we immediately request the SIWE signature
- *    (extensions prompt in-page; no popup involved). If the visitor picks
- *    Base inside THIS picker too, we reuse the capability request right
- *    after connect — it rides the SDK popup's 200ms linger window, and at
- *    worst falls back to the SDK's own retry dialog (never worse than the
- *    old flow).
+ * - Everything else (EIP-6963 extensions, WalletConnect) → classic SIWE
+ *   personal_sign; extensions prompt in-page, WC deep-links — no popup
+ *   constraints.
  *
  * The signature is only auto-requested when the visitor CLICKED a button
  * (`wantSign`): wagmi silently reconnects a previously-used wallet on page load,
@@ -47,7 +45,7 @@ import {
 import "@rainbow-me/rainbowkit/styles.css";
 import { SiweMessage } from "siwe";
 import { useRouter } from "next/navigation";
-import { Wallet, KeyRound } from "lucide-react";
+import { Wallet } from "lucide-react";
 import { getWagmiConfig } from "@/lib/wagmi-config";
 import { walletConnectSiweRequest, extractSiweAuth } from "@/lib/base-siwe";
 
@@ -156,10 +154,9 @@ function WalletButtons({ next }: { next: string }) {
   );
 
   // Base Account sign-in: ONE wallet_connect request carries the
-  // signInWithEthereum capability, so the single popup this click is allowed
-  // to open covers passkey auth + SIWE signature. Works both cold (no wagmi
-  // connection — the SDK handles wallet_connect pre-connect) and right after
-  // a modal connect (rides the popup's 200ms linger window).
+  // signInWithEthereum capability, so a single SDK popup covers passkey auth
+  // + SIWE signature. Invoked right after a picker connect (rides the popup's
+  // 200ms linger window) or on a retry click while still connected.
   const baseSiweLogin = useCallback(async () => {
     const baseConnector = connectors.find((c) => c.id === "baseAccount");
     if (!baseConnector) {
@@ -177,9 +174,8 @@ function WalletButtons({ next }: { next: string }) {
       const auth = extractSiweAuth(result);
       const ok = await submitLogin({ ...auth, nonce });
       // Mirror personalSignLogin: drop a modal-connected Base wallet on failure
-      // so the next "Other wallets" click re-opens the picker instead of being
-      // routed straight back to Base. (The direct-button cold path never
-      // connects wagmi, so this is a no-op there.)
+      // so the next button click re-opens the picker instead of being routed
+      // straight back to Base.
       if (!ok) disconnect();
     } catch (e) {
       const m = (e as Error)?.message || "";
@@ -247,13 +243,7 @@ function WalletButtons({ next }: { next: string }) {
     }
   }, [isConnected, address, busy, activeConnector, baseSiweLogin, personalSignLogin]);
 
-  function onBaseClick() {
-    setError(null);
-    if (busy) return;
-    baseSiweLogin();
-  }
-
-  function onOtherWalletsClick() {
+  function onWalletClick() {
     setError(null);
     if (busy) return;
     if (isConnected && address) {
@@ -274,20 +264,11 @@ function WalletButtons({ next }: { next: string }) {
           <button
             type="button"
             disabled={!mounted || busy || connectModalOpen}
-            onClick={onBaseClick}
+            onClick={onWalletClick}
             className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover disabled:opacity-60"
           >
-            <KeyRound className="w-4 h-4" />
-            {busy ? "Signing in…" : "Sign in with Base (passkey)"}
-          </button>
-          <button
-            type="button"
-            disabled={!mounted || busy || connectModalOpen}
-            onClick={onOtherWalletsClick}
-            className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg py-2 text-sm text-drive-muted hover:text-drive-accent hover:underline disabled:opacity-60"
-          >
             <Wallet className="w-4 h-4" />
-            Other wallets
+            {busy ? "Signing in…" : "Sign in with a wallet"}
           </button>
           {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         </>
