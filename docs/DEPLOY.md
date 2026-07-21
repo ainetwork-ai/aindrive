@@ -8,6 +8,21 @@ this runbook is the release/payment layer on top of it. For the tag + GitHub
 Release convention after a deploy (`web-YYYY.MM.DD`), see
 [`RELEASING.md`](RELEASING.md).
 
+## One command (recommended)
+
+```bash
+scripts/deploy.sh            # pull origin/main → gated build → swap → tag + Release
+DRY_RUN=1 scripts/deploy.sh  # build + verify only (no swap, no tag)
+scripts/deploy.sh --no-pull  # deploy the current checkout as-is
+```
+
+`scripts/deploy.sh` encodes the manual recipe below as **fail-fast gates** — it
+refuses to deploy on lockfile drift, a non-mainnet / non-https / DEV_BYPASS-on
+`.env.production`, an empty WalletConnect id, or an image that didn't actually
+bake `mainnet`; it snapshots the old image for rollback, health-checks through
+the recreate 502, and cuts the `web-YYYY.MM.DD` tag + Release. The manual steps
+below are what it runs — reach for them to debug or to deploy by hand.
+
 ## TL;DR (mainnet release)
 
 ```bash

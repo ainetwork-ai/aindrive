@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAccount, usePublicClient, useSwitchChain, useWalletClient } from "wagmi";
+import { useAccount, useDisconnect, usePublicClient, useSwitchChain, useWalletClient } from "wagmi";
 import { getWalletClient } from "wagmi/actions";
 import { base, baseSepolia } from "viem/chains";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
@@ -107,6 +107,7 @@ export function ShareGate({ token }: { token: string }) {
   const walletConnecting = (isConnecting || isReconnecting) && !isConnected;
   const { data: walletClient } = useWalletClient();
   const { switchChainAsync } = useSwitchChain();
+  const { disconnect } = useDisconnect();
   // The signed-in account, shown on the paywall so the buyer knows which
   // account this purchase will bind to (and can switch).
   const [user, setUser] = useState<{ email: string; name: string } | null>(null);
@@ -121,14 +122,24 @@ export function ShareGate({ token }: { token: string }) {
     setApproving(false);
     toast("Stopped waiting. If a request is open in your wallet, dismiss it there.");
   }
-  // The chain-switch invalidates the closure-captured wallet client (it stays
-  // bound to the previous chain — some wallets then queue the next request
-  // without ever showing a popup). Always sign with a freshly resolved client.
+  // The single arbiter of "can we sign": resolve a FRESH client for the target
+  // chain instead of trusting the useWalletClient hook value. The hook lags
+  // `isConnected` on reconnect and stays undefined on an unsupported chain, so
+  // guarding approve/pay on it made a rendered Pay button toast "connect your
+  // wallet first" (2026-07 report). It also goes stale across a chain switch —
+  // the closure-captured client stays bound to the previous chain, and some
+  // wallets then queue the next request without ever showing a popup. Returns
+  // null only when the connection is truly unusable (caller disconnects, so
+  // the CTA honestly falls back to "Connect wallet to pay").
   async function freshWalletClient(chainId: number) {
     if (walletClient && walletClient.chain?.id !== chainId) {
       await switchChainAsync({ chainId });
     }
-    return (await getWalletClient(getWagmiConfig(), { chainId })) ?? walletClient ?? null;
+    try {
+      return (await getWalletClient(getWagmiConfig(), { chainId })) ?? walletClient ?? null;
+    } catch {
+      return walletClient ?? null;
+    }
   }
 
   // Consume the share into a persistent drive_members grant, then hand the
@@ -302,7 +313,9 @@ export function ShareGate({ token }: { token: string }) {
   // One-time on-chain approval that lets the Permit2 contract move this token
   // for the payer (the pay signature itself stays gasless).
   async function approve() {
-    if (!walletClient || !publicClient || !requirement) { toast.error("Connect your wallet first"); return; }
+    // No walletClient guard here — the hook value can lag a live connection
+    // (see freshWalletClient); the fresh resolve below is the real check.
+    if (!publicClient || !requirement) { toast.error("Payment isn't ready yet — try again in a moment"); return; }
     if (!requirementChain) { toast.error("Unsupported payment network"); return; }
     const epoch = ++walletEpoch.current;
     const hint = setTimeout(() => {
@@ -317,7 +330,7 @@ export function ShareGate({ token }: { token: string }) {
       // fresh client (see freshWalletClient) and pass `chain` so viem refuses
       // to send if the wallet still disagrees.
       const wc = await freshWalletClient(requirementChain.id);
-      if (!wc) { toast.error("Wallet connection lost — reconnect and retry"); return; }
+      if (!wc) { disconnect(); toast.error("Wallet connection lost — reconnect and retry"); return; }
       if (epoch !== walletEpoch.current) return; // cancelled during the switch
       // Sponsored path first (wallet + server both said yes): buyer needs zero
       // ETH. Any failure — grant refused, paymaster down/over budget, wallet
@@ -370,7 +383,7 @@ export function ShareGate({ token }: { token: string }) {
   }
 
   async function pay() {
-    if (!walletClient) { toast.error("Connect your wallet first"); return; }
+    // No walletClient guard — see approve()/freshWalletClient.
     if (!requirement) return;
     const epoch = ++walletEpoch.current;
     const hint = setTimeout(() => {
@@ -389,8 +402,8 @@ export function ShareGate({ token }: { token: string }) {
       // honest, and signing happens on a FRESH client — the closure-captured
       // one stays bound to the pre-switch chain, which some wallets handle by
       // silently queueing the request (reported as "pay popup never shows").
-      const wc = requirementChain ? await freshWalletClient(requirementChain.id) : walletClient;
-      if (!wc) { toast.error("Wallet connection lost — reconnect and retry"); return; }
+      const wc = requirementChain ? await freshWalletClient(requirementChain.id) : (walletClient ?? null);
+      if (!wc) { disconnect(); toast.error("Wallet connection lost — reconnect and retry"); return; }
       if (epoch !== walletEpoch.current) return; // cancelled during the switch
       const displayed = requirement;
       const displayedMax = BigInt(displayed.amount);
@@ -509,6 +522,10 @@ export function ShareGate({ token }: { token: string }) {
         {/* Wallet connect + pay — ONE primary CTA at a time: disconnected shows
             a connect button (opens the picker), connected shows approve/pay.
             Never both — two live buttons read as two competing actions.
+            The branch reads `isConnected` ALONE on purpose: approve/pay resolve
+            their signing client imperatively (freshWalletClient), so a lagging
+            useWalletClient can't turn the rendered button into a dead click —
+            and a truly dead connection disconnects back to this connect state.
             Permit2 tokens insert a one-time approve step before the pay
             signature. No chain switcher: the paywall pins on-chain work to the
             sale's chain (pay/approve switch before signing) and shows the
