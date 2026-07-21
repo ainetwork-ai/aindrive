@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAddress } from "viem";
-import { SiweMessage } from "siwe";
 import { consumeNonce, resolveAccountForWallet, walletLoginAccount } from "@/lib/wallet";
-import { verifyWalletSignature } from "@/lib/siwe-verify";
+import { parseSiweLoginFields, verifyWalletSignature } from "@/lib/siwe-verify";
 import { setCookie } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
@@ -42,10 +41,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unknown or expired nonce" }, { status: 400 });
   }
 
-  let siweMsg: SiweMessage;
-  try {
-    siweMsg = new SiweMessage(message);
-  } catch {
+  const siweMsg = parseSiweLoginFields(message);
+  if (!siweMsg) {
+    // The nonce is already consumed and every field here is client-supplied,
+    // so the raw message is safe to log — and it's the ONLY way to diagnose
+    // the next wallet whose message shape we didn't anticipate.
+    console.error("[wallet-login] unparseable SIWE message:", JSON.stringify(message.slice(0, 300)));
     return NextResponse.json({ error: "bad message" }, { status: 400 });
   }
   if (siweMsg.nonce !== nonce) {

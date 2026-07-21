@@ -10,7 +10,12 @@ process.env.AINDRIVE_PUBLIC_URL = "https://drive.example.test";
 
 // Isolate the route's account/gate logic: the SIWE crypto is siwe-verify's
 // concern (its own test), so stub it true here; stub cookie + rate-limit too.
-vi.mock("@/lib/siwe-verify", () => ({ verifyWalletSignature: vi.fn(async () => true) }));
+// The message PARSER stays real (partial mock) — the route's field checks
+// should run against actual parses, not a stub.
+vi.mock("@/lib/siwe-verify", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/siwe-verify")>()),
+  verifyWalletSignature: vi.fn(async () => true),
+}));
 const setCookie = vi.fn(async () => {});
 vi.mock("@/lib/session", () => ({ setCookie }));
 vi.mock("@/lib/rate-limit", () => ({ tryConsume: () => ({ ok: true }), clientKey: () => "k" }));
