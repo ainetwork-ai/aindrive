@@ -18,7 +18,7 @@ import clsx from "clsx";
 
 // Monaco self-host: load the editor runtime from our own origin (/monaco/vs)
 // instead of @monaco-editor/loader's default jsdelivr CDN, which the app CSP
-// (script-src 'self', see middleware.ts) blocks. Assets are copied from
+// (script-src 'self', see proxy.ts) blocks. Assets are copied from
 // node_modules/monaco-editor/min/vs by scripts/copy-monaco.mjs (predev/prebuild).
 loader.config({ paths: { vs: "/monaco/vs" } });
 

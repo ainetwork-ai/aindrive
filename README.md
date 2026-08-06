@@ -1021,7 +1021,7 @@ the trace" and `diagnose.mjs` prints the file:line to fix.
 
 ```
 aindrive/
-├── web/                   # Next.js 15 + custom Node server
+├── web/                   # Next.js 16 + custom Node server
 │   ├── server.js          # http + ws upgrade + Next handler
 │   ├── lib/
 │   │   ├── agents.js      # CLI ↔ server WS map + RPC dispatch

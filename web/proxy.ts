@@ -20,7 +20,7 @@ const CSP = [
   "base-uri 'self'",
 ].join("; ");
 
-export default async function middleware(
+export default async function proxy(
   req: NextRequest
 ): Promise<NextResponse> {
   const res = NextResponse.next();
@@ -56,8 +56,8 @@ export default async function middleware(
 
 // Exclude /api from the matcher. These security response headers (CSP,
 // X-Frame-Options, …) protect *rendered documents*; they do nothing for JSON
-// API responses. More importantly, when middleware matches a route, Next.js
-// buffers the request body up to middlewareClientMaxBodySize (10 MB) — which
+// API responses. More importantly, when proxy matches a route, Next.js
+// buffers the request body up to proxyClientMaxBodySize (10 MB) — which
 // truncated large uploads to /api/.../fs/write and /yjs mid-JSON, 500-ing every
 // file over ~7.5 MB (a base64 body > 10 MB). Not matching /api avoids the
 // buffering entirely; the route handlers stream their own bodies and enforce
