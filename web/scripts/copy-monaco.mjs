@@ -1,6 +1,6 @@
 // Copy the Monaco editor runtime into public/ so the browser loads it from our
 // own origin (/monaco/vs) instead of @monaco-editor/loader's default jsdelivr CDN.
-// The app CSP (middleware.ts: script-src 'self') blocks external CDN scripts, so
+// The app CSP (proxy.ts: script-src 'self') blocks external CDN scripts, so
 // self-hosting is required for the file viewer's editor to initialize.
 //
 // Runs on predev/prebuild (package.json). The copied tree is a build artifact —

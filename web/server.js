@@ -18,7 +18,12 @@ const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOSTNAME || "0.0.0.0";
 const port = Number(process.env.PORT || 3737);
 
-const app = next({ dev, hostname, port });
+// `turbopack` is only accepted from a custom server, and omitting it leaves the
+// bundler at TURBOPACK='auto' — a mode that silently falls back to webpack the
+// moment anything injects a webpack config. Pinning it on keeps dev on the
+// Turbopack cache whose memory eviction is why we're on 16.3 at all; the flag
+// is inert under `next build`/production, which pick their bundler themselves.
+const app = next({ dev, hostname, port, turbopack: true });
 const handle = app.getRequestHandler();
 
 await app.prepare();

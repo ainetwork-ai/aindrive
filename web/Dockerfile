@@ -59,7 +59,7 @@ COPY --from=builder --chown=app:app /app/drizzle ./drizzle
 COPY --from=builder --chown=app:app /app/src ./src
 COPY --from=builder --chown=app:app /app/shared ./shared
 COPY --from=builder --chown=app:app /app/package.json ./package.json
-COPY --from=builder --chown=app:app /app/next.config.ts ./next.config.ts
+COPY --from=builder --chown=app:app /app/next.config.mjs ./next.config.mjs
 
 USER app
 EXPOSE 3737
