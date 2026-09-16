@@ -36,6 +36,11 @@ Packages live exclusively under their own directory. Each is independent:
 
 - `web/` — Next.js + WebSocket server. Owns `web/shared/` for code reused inside web (contracts, domain types, crypto helpers).
 - `cli/` — local agent. Plain ESM JS, no TS build pipeline. Mirrors any web/shared types it needs by hand.
+- `mobile/` — installable Android/iOS app. Capacitor shell + a **native** agent
+  (Java on Android, Swift on iOS) that serves a folder on the phone.
+  It is not a WebView wrapper: it plays `cli/`'s role on a phone, so it mirrors
+  the RPC methods of `cli/src/rpc.js` and the frame signing of `web/lib/sig.js`
+  by hand, in each native language.
 
 **Do not create directories at the repo root that hold code shared between packages** (e.g. no top-level `shared/`, `common/`, `lib/`, etc.). Each package must be self-contained so it can be packaged, dockerized, and deployed without pulling in siblings.
 
@@ -63,7 +68,7 @@ repo:
 |-------|-------|----------|
 | `CLAUDE.md` (this file) | repo-wide conventions + architecture overview | product/UX principles, package layout, this table |
 | root `README.md` | what aindrive is, architecture, **pointers** to domain READMEs | — |
-| `<dir>/README.md` | that subsystem's responsibility, file map, contracts, gotchas | `web/app/api/`, `web/lib/`, `web/components/`, `web/shared/`, `cli/` |
+| `<dir>/README.md` | that subsystem's responsibility, file map, contracts, gotchas | `web/app/api/`, `web/lib/`, `web/components/`, `web/shared/`, `cli/`, `mobile/` |
 | `docs/*.md` | cross-cutting design not tied to one dir | `PERMISSIONS.md`, `DEPLOY.md`, `RELEASING.md`, `ARCHITECTURE.md`, `WILLOW_DESIGN.md`, `TRACE_CONTRACT.md`, `PRODUCTION_TODO.md` |
 | `docs/superpowers/{specs,plans}/` | dated design history (brainstorm → plan), immutable record | per-feature `YYYY-MM-DD-*.md` |
 | code comments | invariants / intent / WHY (machine-checked where possible) | — |
