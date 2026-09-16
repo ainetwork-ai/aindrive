@@ -43,6 +43,11 @@ Sharing / payments:
   exports `PaymentTokensEditor`, which `drive-manage` renders.
 - `drive-manage` — owner Settings page, Members/Links/Sales/Payments left-rail.
   Owns the editable drive token-policy editor (`PaymentTokensEditor`) + payout.
+- `share-qr` — inline QR panel for one share link, expanded under its row in
+  the drawer. Inline, not a modal: `ui/Modal` installs a focus trap, Escape
+  handler and scroll-lock, and the drawer is already one — two would fight over
+  the same keystroke. Encodes an ABSOLUTE URL (the scanning device has no page
+  context) and bundles `qrcode`, since the CSP allows scripts from 'self' only.
 - `share-gate(.tsx/-client)` — the `/s/[token]` paywall: x402 pay + Permit2
   approve. `-client` is the SSR-skipping wrapper.
 - `x402-badges` / `x402-logo` — price badge + brand mark.
