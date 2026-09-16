@@ -1,0 +1,162 @@
+import Foundation
+
+/// Dispatches one signed RPC onto the picked device folder.
+///
+/// Method set and result shapes mirror cli/src/rpc.js exactly — the server
+/// cannot tell a phone drive from a laptop drive, so any divergence shows up
+/// as a broken file browser rather than a clean error.
+///
+/// Two deliberate differences, same as on Android:
+///  - `yjs-*` keeps only the latest snapshot (no Y.js in this process), which
+///    is the legacy fallback the desktop agent still honours. Collaboration
+///    still converges through the server; local edit history is what is lost.
+///  - `agent-ask` is refused: running a drive's AI agent means holding the
+///    owner's LLM key and walking the whole folder, neither of which belongs
+///    on a phone yet.
+///
+/// Yjs snapshots live in the app's own Application Support directory, never in
+/// the user's folder — a phone's Documents should not sprout a control
+/// directory the user never asked for.
+struct RpcHandler {
+    enum RpcError: LocalizedError {
+        case unknownMethod, invalidDocId, chunkTooLarge, blobTooLarge, agentAskUnsupported
+        var errorDescription: String? {
+            switch self {
+            case .unknownMethod: return "unknown method"
+            case .invalidDocId: return "invalid docId"
+            case .chunkTooLarge: return "chunk too large"
+            case .blobTooLarge: return "yjs blob too large"
+            case .agentAskUnsupported: return "agent_ask_unsupported_on_mobile"
+            }
+        }
+    }
+
+    private static let methods: Set<String> = [
+        "list", "stat", "read", "write", "mkdir", "rename", "delete",
+        "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
+        "agent-ask",
+    ]
+
+    let fs: DriveFs
+    let yjsDir: URL
+
+    init(fs: DriveFs, driveId: String) {
+        self.fs = fs
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        self.yjsDir = base.appendingPathComponent("yjs/\(driveId.replacingOccurrences(of: "/", with: "_"))")
+    }
+
+    func handle(_ params: [String: Any]) throws -> [String: Any] {
+        let method = params["method"] as? String ?? ""
+        guard Self.methods.contains(method) else { throw RpcError.unknownMethod }
+
+        switch method {
+        case "list":
+            let entries = try fs.list(params["path"] as? String ?? "")
+            return ["method": method, "entries": entries.map(Self.entryJson)]
+
+        case "stat":
+            guard let e = fs.stat(params["path"] as? String ?? "") else {
+                return ["method": method, "entry": NSNull()]
+            }
+            return ["method": method, "entry": Self.entryJson(e)]
+
+        case "read":
+            let path = params["path"] as? String ?? ""
+            guard let e = fs.stat(path) else { throw DriveFs.FsError.notFound(path) }
+            guard !e.isDir else { throw DriveFs.FsError.isDirectory }
+            let data = try fs.read(path, maxBytes: params["maxBytes"] as? Int ?? DriveFs.maxReadBytes)
+            let base64 = (params["encoding"] as? String) == "base64"
+            return [
+                "method": method,
+                "content": base64 ? data.base64EncodedString() : (String(data: data, encoding: .utf8) ?? ""),
+                "encoding": base64 ? "base64" : "utf8",
+                "truncated": e.size > data.count,
+            ]
+
+        case "write":
+            let data = Self.decodeBody(params["content"] as? String ?? "", params["encoding"] as? String)
+            try fs.write(params["path"] as? String ?? "", data: data, append: false)
+            return ["method": method, "ok": true, "bytes": data.count]
+
+        case "mkdir":
+            try fs.mkdir(params["path"] as? String ?? "")
+            return ["method": method, "ok": true]
+
+        case "rename":
+            try fs.rename(from: params["from"] as? String ?? "", to: params["to"] as? String ?? "")
+            return ["method": method, "ok": true]
+
+        case "delete":
+            try fs.delete(params["path"] as? String ?? "")
+            return ["method": method, "ok": true]
+
+        case "upload-chunk":
+            let data = Data(base64Encoded: params["data"] as? String ?? "") ?? Data()
+            guard data.count <= DriveFs.maxChunkBytes else { throw RpcError.chunkTooLarge }
+            // chunkId 0 truncates, later chunks append — same contract as desktop.
+            let append = (params["chunkId"] as? Int ?? 0) != 0
+            try fs.write(params["path"] as? String ?? "", data: data, append: append)
+            return ["method": method, "ok": true, "receivedBytes": data.count]
+
+        case "download-chunk":
+            let path = params["path"] as? String ?? ""
+            let offset = UInt64(params["offset"] as? Int ?? 0)
+            let data = try fs.readChunk(path, offset: offset, length: params["length"] as? Int ?? DriveFs.maxChunkBytes)
+            let size = fs.stat(path)?.size ?? 0
+            return [
+                "method": method,
+                "data": data.base64EncodedString(),
+                "eof": Int(offset) + data.count >= size,
+            ]
+
+        case "yjs-write":
+            let docId = try Self.requireDocId(params["docId"] as? String ?? "")
+            let data = Data(base64Encoded: params["data"] as? String ?? "") ?? Data()
+            guard data.count <= 4 * DriveFs.maxChunkBytes else { throw RpcError.blobTooLarge }
+            try FileManager.default.createDirectory(at: yjsDir, withIntermediateDirectories: true)
+            try data.write(to: yjsDir.appendingPathComponent("\(docId).bin"), options: .atomic)
+            return ["method": method, "ok": true, "bytes": data.count, "seq": 1, "digest": ""]
+
+        case "yjs-read":
+            let docId = try Self.requireDocId(params["docId"] as? String ?? "")
+            guard let data = try? Data(contentsOf: yjsDir.appendingPathComponent("\(docId).bin")) else {
+                return ["method": method, "data": "", "bytes": 0]
+            }
+            return ["method": method, "data": data.base64EncodedString(), "bytes": data.count]
+
+        case "yjs-stats":
+            let docId = try Self.requireDocId(params["docId"] as? String ?? "")
+            let bytes = (try? Data(contentsOf: yjsDir.appendingPathComponent("\(docId).bin")).count) ?? 0
+            return ["method": method, "entries": bytes > 0 ? 1 : 0, "totalBytes": bytes, "snapshotBytes": bytes]
+
+        case "agent-ask":
+            throw RpcError.agentAskUnsupported
+
+        default:
+            throw RpcError.unknownMethod
+        }
+    }
+
+    // MARK: - helpers
+
+    private static func entryJson(_ e: DriveFs.Entry) -> [String: Any] {
+        [
+            "name": e.name, "path": e.path, "isDir": e.isDir,
+            "size": e.size, "mtimeMs": e.mtimeMs, "ext": e.ext, "mime": e.mime,
+        ]
+    }
+
+    private static func decodeBody(_ content: String, _ encoding: String?) -> Data {
+        encoding == "base64"
+            ? (Data(base64Encoded: content) ?? Data())
+            : Data(content.utf8)
+    }
+
+    /// Same docId shape the desktop agent enforces before touching disk.
+    private static func requireDocId(_ docId: String) throws -> String {
+        let ok = docId.range(of: "^[A-Za-z0-9_-]{8,64}$", options: .regularExpression) != nil
+        guard ok else { throw RpcError.invalidDocId }
+        return docId
+    }
+}

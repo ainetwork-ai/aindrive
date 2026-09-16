@@ -7,7 +7,8 @@
 // shell's divide-y, list rows flush to the panel. Card chrome (SectionCard)
 // belongs to wide audit surfaces like drive-manage — in a ~448px drawer,
 // nested boxes read as noise.
-import { Copy, Trash2, Plus, CheckCircle2, Clock } from "lucide-react";
+import { Copy, Trash2, Plus, CheckCircle2, Clock, QrCode } from "lucide-react";
+import { ShareQrPanel } from "./share-qr";
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Input, Select, Toggle, Button, Badge, IconButton, Avatar } from "@/components/ui";
 import { walletDisplayLabel } from "@/shared/wallet-display";
@@ -124,7 +125,7 @@ export function SellSection({
   payoutOwnWallet, payoutEffective, payoutInherited, payoutInput,
   setPayoutInput, savePayoutWallet, price, setPrice, currency, setCurrency,
   currencyOptions, listed, setListed, isOwner, driveId, saveSell, saveShareEdit, busy,
-  setEditingSell, copyLink,
+  setEditingSell, copyLink, showQr, qrToken, shareUrl,
 }: {
   defaultPath: string;
   driveId: string;
@@ -154,6 +155,11 @@ export function SellSection({
   busy: boolean;
   setEditingSell: (v: boolean) => void;
   copyLink: (token: string) => void;
+  /** Toggles the QR panel for a token. */
+  showQr: (token: string) => void;
+  /** Token whose QR panel is open, or null. */
+  qrToken: string | null;
+  shareUrl: (token: string) => string;
 }) {
   const itemWord = defaultPath ? "item" : "drive";
   // "Sell…" in the row menu deep-links here; the section sits last in the
@@ -182,7 +188,23 @@ export function SellSection({
                 <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(paidShare.token)}>
                   <Copy className="w-3.5 h-3.5" />
                 </IconButton>
+                <IconButton
+                  size="sm"
+                  variant="text"
+                  aria-label={qrToken === paidShare.token ? "Hide QR code" : "Show QR code"}
+                  aria-expanded={qrToken === paidShare.token}
+                  onClick={() => showQr(paidShare.token)}
+                >
+                  <QrCode className="w-3.5 h-3.5" />
+                </IconButton>
               </div>
+              {qrToken === paidShare.token && (
+                <ShareQrPanel
+                  url={shareUrl(paidShare.token)}
+                  label={paidShare.token}
+                  onClose={() => showQr(paidShare.token)}
+                />
+              )}
               <p className="mt-1.5 text-caption text-drive-muted">
                 Changing the price or currency affects new buyers only — people
                 who already bought keep access.
@@ -651,7 +673,7 @@ export function PeopleSection({
       {inherited.length > 0 && (
         <div className="mt-2">
           <div className="text-label uppercase text-drive-muted">Inherited access</div>
-          <ul className="max-h-40 overflow-auto scrollbar-thin">
+          <ul className="max-h-80 overflow-auto scrollbar-thin">
             {inherited.map((m) => memberRow(m, { editable: false }))}
           </ul>
         </div>
@@ -661,7 +683,8 @@ export function PeopleSection({
 }
 
 export function FreeLinkSection({
-  shares, currentPath, linkRole, setLinkRole, createFreeLink, busy, copyLink,
+  shares, currentPath, linkRole, setLinkRole, createFreeLink, busy, copyLink, showQr,
+  qrToken, shareUrl,
 }: {
   shares: Share[];
   currentPath: string;
@@ -672,6 +695,11 @@ export function FreeLinkSection({
   createFreeLink: () => void;
   busy: boolean;
   copyLink: (token: string) => void;
+  /** Toggles the QR panel for a token. */
+  showQr: (token: string) => void;
+  /** Token whose QR panel is open, or null. */
+  qrToken: string | null;
+  shareUrl: (token: string) => string;
 }) {
   // Scope to THIS item, like every other drawer section (create in context).
   // The drive-wide link ledger lives in Manage → Links.
@@ -700,14 +728,32 @@ export function FreeLinkSection({
       }
     >
       {freeShares.length > 0 && (
-        <ul className="max-h-40 overflow-auto scrollbar-thin">
+        <ul className="max-h-80 overflow-auto scrollbar-thin">
           {freeShares.map((s) => (
-            <li key={s.id} className="flex items-center gap-2 py-1.5">
+            <li key={s.id}>
+              <div className="flex items-center gap-2 py-1.5">
               <Badge tone="neutral">{s.role}</Badge>
               <code className="flex-1 truncate font-mono text-caption text-drive-text">/s/{s.token}</code>
               <IconButton size="sm" variant="text" aria-label="Copy link" onClick={() => copyLink(s.token)}>
                 <Copy className="w-3.5 h-3.5" />
               </IconButton>
+              <IconButton
+                size="sm"
+                variant="text"
+                aria-label={qrToken === s.token ? "Hide QR code" : "Show QR code"}
+                aria-expanded={qrToken === s.token}
+                onClick={() => showQr(s.token)}
+              >
+                <QrCode className="w-3.5 h-3.5" />
+              </IconButton>
+              </div>
+              {qrToken === s.token && (
+                <ShareQrPanel
+                  url={shareUrl(s.token)}
+                  label={s.token}
+                  onClose={() => showQr(s.token)}
+                />
+              )}
             </li>
           ))}
         </ul>

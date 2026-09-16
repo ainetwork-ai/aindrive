@@ -24,6 +24,8 @@ export function ShareDialog({
   focusSection?: FocusSection;
 }) {
   const [shares, setShares] = useState<Share[]>([]);
+  // Token of the share whose QR is open; null = no QR modal.
+  const [qrToken, setQrToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"viewer" | "editor">("viewer");
   // Separate from inviteRole on purpose — a new link's role must not silently
@@ -258,9 +260,18 @@ export function ShareDialog({
   }
 
   function copyLink(token: string) {
-    const url = `${window.location.origin}/s/${token}`;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(shareUrl(token));
     toast.success("Link copied");
+  }
+
+  /** Absolute URL, because a QR is scanned by a device that has no page context. */
+  function shareUrl(token: string) {
+    return `${window.location.origin}/s/${token}`;
+  }
+
+  /** Toggle: the same button opens and closes the panel. */
+  function showQr(token: string) {
+    setQrToken((cur) => (cur === token ? null : token));
   }
 
   return (
@@ -305,6 +316,9 @@ export function ShareDialog({
           createFreeLink={createFreeLink}
           busy={busy}
           copyLink={copyLink}
+          showQr={showQr}
+          qrToken={qrToken}
+          shareUrl={shareUrl}
         />
 
         <SellSection
@@ -335,6 +349,9 @@ export function ShareDialog({
           busy={busy}
           setEditingSell={setEditingSell}
           copyLink={copyLink}
+          showQr={showQr}
+          qrToken={qrToken}
+          shareUrl={shareUrl}
         />
 
         {/* Audit lives in Settings — the drawer only points there ("create in
