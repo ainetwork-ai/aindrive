@@ -6,10 +6,12 @@ import UniformTypeIdentifiers
 /// Bridge between the shell UI (src/main.ts) and the native agent.
 ///
 /// Folder access goes through the document picker rather than a broad
-/// photo/files entitlement: the user picks exactly one folder, we persist a
+/// photo/files entitlement: the user picks a folder per drive, we persist a
 /// security-scoped bookmark so the drive survives relaunches, and we can never
-/// read anything they did not hand over. That is the mobile equivalent of
-/// running `aindrive` inside one directory.
+/// read anything they did not hand over. Each picked folder becomes its own
+/// drive with its own socket — the mobile equivalent of running one `aindrive`
+/// per directory. `start` adds a drive, `stop({driveId})` removes one, and
+/// `stop()` with no id takes everything offline.
 @objc(AindriveAgentPlugin)
 public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "AindriveAgentPlugin"
@@ -65,7 +67,11 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func stop(_ call: CAPPluginCall) {
-        AgentCore.shared.stop()
+        if let driveId = call.getString("driveId") {
+            AgentCore.shared.stop(driveId: driveId)
+        } else {
+            AgentCore.shared.stopAll()
+        }
         call.resolve(AgentCore.shared.status.dictionary)
     }
 

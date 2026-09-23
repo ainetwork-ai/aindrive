@@ -24,30 +24,46 @@ export interface PickedFolder {
   label: string;
 }
 
+/** One drive = one picked folder + its own credentials and socket. */
 export interface AgentConfig {
   serverUrl: string;
   driveId: string;
   agentToken: string;
   driveSecret: string;
   folderUri: string;
+  folderLabel?: string;
 }
 
-export interface AgentStatus {
+export interface DriveStatus {
+  driveId: string;
+  folderLabel: string | null;
   running: boolean;
   connected: boolean;
-  driveId: string | null;
-  folderLabel: string | null;
   rpcCount: number;
   lastError: string | null;
 }
 
+export interface AgentStatus {
+  /** True while at least one drive is being served. */
+  running: boolean;
+  /** True while at least one drive's socket is up. */
+  connected: boolean;
+  drives: DriveStatus[];
+}
+
+export const IDLE_STATUS: AgentStatus = { running: false, connected: false, drives: [] };
+
 export interface AindriveAgentPlugin {
   /** Opens the system folder picker and takes a persistable read/write grant. */
   pickFolder(): Promise<PickedFolder>;
-  /** Starts the foreground agent service and connects to the server. */
+  /**
+   * Adds a drive to the running agent (starting the foreground service on
+   * Android if needed) and connects it. Calling again with the same driveId
+   * replaces that drive's connection.
+   */
   start(config: AgentConfig): Promise<AgentStatus>;
-  /** Stops the agent and takes the drive offline. */
-  stop(): Promise<AgentStatus>;
+  /** Takes one drive offline, or every drive when no driveId is given. */
+  stop(opts?: { driveId?: string }): Promise<AgentStatus>;
   status(): Promise<AgentStatus>;
   addListener(
     event: "statusChanged",

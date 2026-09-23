@@ -22,10 +22,12 @@ import org.json.JSONObject;
  * Bridge between the shell UI (src/main.ts) and the native agent.
  *
  * Folder access goes through the Storage Access Framework rather than
- * READ_EXTERNAL_STORAGE: the user picks exactly one tree, we take a
+ * READ_EXTERNAL_STORAGE: the user picks a tree per drive, we take a
  * *persistable* grant on it so the drive survives reboots, and we can never
- * read anything they did not hand over. That is the mobile equivalent of
- * running `aindrive` inside one directory.
+ * read anything they did not hand over. Each picked folder becomes its own
+ * drive with its own socket — the mobile equivalent of running one `aindrive`
+ * per directory. `start` adds a drive, `stop({driveId})` removes one, and
+ * `stop()` with no id takes everything offline.
  */
 @CapacitorPlugin(
         name = "AindriveAgent",
@@ -138,15 +140,34 @@ public class AindriveAgentPlugin extends Plugin {
 
     @PluginMethod
     public void stop(PluginCall call) {
-        getContext().startService(new Intent(getContext(), AgentService.class).setAction(AgentService.ACTION_STOP));
-        JSObject offline = new JSObject();
-        offline.put("running", false);
-        offline.put("connected", false);
-        offline.put("driveId", null);
-        offline.put("folderLabel", null);
-        offline.put("rpcCount", 0);
-        offline.put("lastError", null);
-        call.resolve(offline);
+        Intent svc = new Intent(getContext(), AgentService.class).setAction(AgentService.ACTION_STOP);
+        String driveId = call.getString("driveId");
+        if (driveId != null) svc.putExtra(AgentService.EXTRA_DRIVE_ID, driveId);
+        getContext().startService(svc);
+        if (driveId == null) {
+            call.resolve(idleStatus());
+            return;
+        }
+        // The service removes the drive on the main looper after we return —
+        // report the expected shape rather than the stale one.
+        AgentService agent = AgentService.get();
+        JSONObject src = agent == null ? null : agent.statusJson();
+        JSONObject out = new JSONObject();
+        org.json.JSONArray kept = new org.json.JSONArray();
+        boolean anyConnected = false;
+        try {
+            org.json.JSONArray drives = src == null ? null : src.optJSONArray("drives");
+            for (int i = 0; drives != null && i < drives.length(); i++) {
+                JSONObject d = drives.getJSONObject(i);
+                if (driveId.equals(d.optString("driveId"))) continue;
+                kept.put(d);
+                anyConnected |= d.optBoolean("connected");
+            }
+            out.put("running", kept.length() > 0);
+            out.put("connected", anyConnected);
+            out.put("drives", kept);
+        } catch (org.json.JSONException ignored) { }
+        call.resolve(toJs(out));
     }
 
     @PluginMethod
@@ -168,18 +189,17 @@ public class AindriveAgentPlugin extends Plugin {
         }
     }
 
+    private static JSObject idleStatus() {
+        JSObject idle = new JSObject();
+        idle.put("running", false);
+        idle.put("connected", false);
+        idle.put("drives", new com.getcapacitor.JSArray());
+        return idle;
+    }
+
     private JSObject currentStatus() {
         AgentService svc = AgentService.get();
-        if (svc == null) {
-            JSObject idle = new JSObject();
-            idle.put("running", false);
-            idle.put("connected", false);
-            idle.put("driveId", null);
-            idle.put("folderLabel", null);
-            idle.put("rpcCount", 0);
-            idle.put("lastError", null);
-            return idle;
-        }
+        if (svc == null) return idleStatus();
         return toJs(svc.statusJson());
     }
 }

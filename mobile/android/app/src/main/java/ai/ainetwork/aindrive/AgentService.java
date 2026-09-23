@@ -16,8 +16,11 @@ import android.util.Log;
 
 import androidx.annotation.Nullable;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +40,12 @@ import okhttp3.WebSocketListener;
  * HMAC on every inbound frame, run the RPC against the user's folder, sign the
  * response. No inbound port is ever opened on the phone.
  *
+ * One service hosts MANY drives: each picked folder is its own drive with its
+ * own credentials and its own socket (a {@link Conn}), exactly as running one
+ * desktop agent per directory would be. Drives are keyed by driveId; START
+ * adds or replaces one, STOP removes one (or all, without a driveId), and the
+ * service exits once no drive is left.
+ *
  * It has to be a foreground service, not a WebView timer: Android suspends
  * WebViews and background threads within seconds of leaving the app, which
  * would take the drive offline every time the user switches apps. The
@@ -51,6 +60,7 @@ public class AgentService extends Service {
 
     public static final String ACTION_START = "ai.ainetwork.aindrive.START";
     public static final String ACTION_STOP = "ai.ainetwork.aindrive.STOP";
+    public static final String EXTRA_DRIVE_ID = "driveId";
 
     /** Backoff schedule copied from cli/src/agent.js so reconnects feel the same. */
     private static final long[] BACKOFF_MS = {1000, 2000, 4000, 8000, 15000};
@@ -65,18 +75,11 @@ public class AgentService extends Service {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService rpcPool = Executors.newFixedThreadPool(4);
-    private final AtomicInteger rpcCount = new AtomicInteger();
+    /** driveId → live connection. Insertion order = the order the user started them. */
+    private final Map<String, Conn> conns = new LinkedHashMap<>();
 
     private OkHttpClient http;
-    private WebSocket ws;
-    private boolean connected;
     private boolean stopping;
-    private int attempt;
-    private String lastError;
-
-    private String serverUrl, driveId, agentToken, driveSecret, folderLabel;
-    private SafFs fs;
-    private RpcHandler rpc;
 
     @Override
     public void onCreate() {
@@ -90,74 +93,190 @@ public class AgentService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent == null || ACTION_STOP.equals(intent.getAction())) {
-            shutdown();
+        if (intent == null) {
+            // Restarted by the system after a kill: we have no credentials in
+            // hand, so all we can do is exit cleanly; the app re-adds drives on
+            // its next launch.
+            shutdownAll();
             return START_NOT_STICKY;
         }
-        serverUrl = intent.getStringExtra("serverUrl");
-        driveId = intent.getStringExtra("driveId");
-        agentToken = intent.getStringExtra("agentToken");
-        driveSecret = intent.getStringExtra("driveSecret");
-        String folderUri = intent.getStringExtra("folderUri");
-        folderLabel = intent.getStringExtra("folderLabel");
+        if (ACTION_STOP.equals(intent.getAction())) {
+            String id = intent.getStringExtra(EXTRA_DRIVE_ID);
+            if (id == null) shutdownAll(); else stopDrive(id);
+            return START_NOT_STICKY;
+        }
 
+        String driveId = intent.getStringExtra("driveId");
+        // Called on every START so Android 12+ never sees a started-but-not-
+        // foregrounded service; re-calling with the same id is a no-op update.
         startForeground(NOTIFICATION_ID, buildNotification("Connecting…"));
+        stopping = false;
 
+        Conn conn = new Conn(
+                intent.getStringExtra("serverUrl"),
+                driveId,
+                intent.getStringExtra("agentToken"),
+                intent.getStringExtra("driveSecret"),
+                intent.getStringExtra("folderLabel"));
         try {
-            Uri tree = Uri.parse(folderUri);
-            fs = new SafFs(this, tree);
-            rpc = new RpcHandler(this, fs, driveId);
+            Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
+            conn.fs = new SafFs(this, tree);
+            conn.rpc = new RpcHandler(this, conn.fs, driveId);
         } catch (Exception e) {
-            fail("Could not open folder: " + e.getMessage());
-            return START_NOT_STICKY;
+            conn.lastError = "Could not open folder: " + e.getMessage();
+            synchronized (conns) { conns.put(driveId, conn); }
+            notifyStatus();
+            return START_STICKY;
         }
 
-        stopping = false;
-        attempt = 0;
-        connect();
+        Conn previous;
+        synchronized (conns) { previous = conns.put(driveId, conn); }
+        if (previous != null) previous.close();
+        conn.connect();
         // START_STICKY: if Android reclaims us under memory pressure, come back
         // and reconnect rather than leaving the drive silently offline.
         return START_STICKY;
     }
 
-    // ------------------------------------------------------------ socket
+    // ------------------------------------------------------------ one drive
 
-    private void connect() {
-        if (stopping) return;
-        String wsUrl = toWsUrl(serverUrl, driveId);
-        Request req = new Request.Builder()
-                .url(wsUrl)
-                .addHeader("authorization", "Bearer " + agentToken)
-                .build();
-        ws = http.newWebSocket(req, new WebSocketListener() {
-            @Override public void onOpen(WebSocket socket, Response response) {
-                connected = true;
-                attempt = 0;
-                lastError = null;
-                Log.i(TAG, "connected to " + wsUrl);
+    /** Everything that belongs to ONE drive: credentials, folder, socket, counters. */
+    private final class Conn {
+        final String serverUrl, driveId, agentToken, driveSecret, folderLabel;
+        final AtomicInteger rpcCount = new AtomicInteger();
+        SafFs fs;
+        RpcHandler rpc;
+        WebSocket ws;
+        volatile boolean connected;
+        volatile boolean closed;
+        int attempt;
+        String lastError;
+
+        Conn(String serverUrl, String driveId, String agentToken, String driveSecret, String folderLabel) {
+            this.serverUrl = serverUrl;
+            this.driveId = driveId;
+            this.agentToken = agentToken;
+            this.driveSecret = driveSecret;
+            this.folderLabel = folderLabel;
+        }
+
+        void connect() {
+            if (closed || stopping) return;
+            String wsUrl = toWsUrl(serverUrl, driveId);
+            Request req = new Request.Builder()
+                    .url(wsUrl)
+                    .addHeader("authorization", "Bearer " + agentToken)
+                    .build();
+            ws = http.newWebSocket(req, new WebSocketListener() {
+                @Override public void onOpen(WebSocket socket, Response response) {
+                    connected = true;
+                    attempt = 0;
+                    lastError = null;
+                    Log.i(TAG, "connected to " + wsUrl);
+                    try {
+                        socket.send(new JSONObject()
+                                .put("type", "agent-hello")
+                                .put("hostname", Build.MODEL != null ? Build.MODEL : "android")
+                                .toString());
+                    } catch (Exception ignored) { }
+                    notifyStatus();
+                }
+
+                @Override public void onMessage(WebSocket socket, String text) {
+                    rpcPool.execute(() -> onFrame(socket, text));
+                }
+
+                @Override public void onClosed(WebSocket socket, int code, String reason) {
+                    connected = false;
+                    scheduleReconnect("Connection closed (" + code + ")");
+                }
+
+                @Override public void onFailure(WebSocket socket, Throwable t, @Nullable Response response) {
+                    connected = false;
+                    scheduleReconnect(t.getMessage() != null ? t.getMessage() : "Connection failed");
+                }
+            });
+        }
+
+        void scheduleReconnect(String why) {
+            if (closed || stopping) return;
+            lastError = why;
+            notifyStatus();
+            long wait = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)];
+            attempt++;
+            main.postDelayed(this::connect, wait);
+        }
+
+        void close() {
+            closed = true;
+            connected = false;
+            if (ws != null) {
+                try { ws.close(1001, "agent shutting down"); } catch (Exception ignored) { }
+                ws = null;
+            }
+        }
+
+        void onFrame(WebSocket socket, String text) {
+            if (closed) return;
+            JSONObject frame;
+            try { frame = new JSONObject(text); }
+            catch (Exception e) { Log.w(TAG, "frame parse failed (" + text.length() + " chars)", e); return; }
+
+            String type = frame.optString("type", "");
+            JSONObject p0 = frame.optJSONObject("params");
+            Log.d(TAG, "[" + driveId + "] frame type=" + type + " method=" + (p0 == null ? "-" : p0.optString("method", "?"))
+                    + " chars=" + text.length());
+            if ("hello".equals(type)) return;
+            if (type.startsWith("sync-")) return; // multi-device gossip: desktop-only for now
+            if (!"request".equals(type) || frame.optString("reqId", "").isEmpty()) { Log.w(TAG, "dropped non-request frame"); return; }
+            if (frame.optInt("v", -1) != PROTOCOL_VERSION) { Log.w(TAG, "dropped frame: protocol v=" + frame.optInt("v", -1)); return; }
+
+            String sig = frame.optString("sig", null);
+            JSONObject signed = copyWithout(frame, "sig", "type");
+            if (!Sig.verify(driveSecret, signed, sig)) {
+                Log.w(TAG, "dropped forged request");
+                return;
+            }
+
+            String reqId = frame.optString("reqId");
+            JSONObject response = new JSONObject();
+            try {
+                JSONObject params = frame.optJSONObject("params");
+                if (params == null) throw new IllegalArgumentException("missing params");
+                JSONObject result = rpc.handle(params);
+                response.put("reqId", reqId).put("ok", true).put("result", result);
+                rpcCount.incrementAndGet();
+            } catch (Exception e) {
+                Log.w(TAG, "rpc " + (p0 == null ? "?" : p0.optString("method", "?")) + " failed", e);
                 try {
-                    socket.send(new JSONObject()
-                            .put("type", "agent-hello")
-                            .put("hostname", Build.MODEL != null ? Build.MODEL : "android")
-                            .toString());
-                } catch (Exception ignored) { }
-                notifyStatus("Online · " + safeLabel());
+                    response.put("reqId", reqId).put("ok", false).put("error", sanitize(e.getMessage()));
+                } catch (Exception ignored) { return; }
             }
 
-            @Override public void onMessage(WebSocket socket, String text) {
-                rpcPool.execute(() -> onFrame(socket, text));
+            try {
+                // Sign the payload WITHOUT `type`, then add `type` — exactly what the
+                // desktop agent does, and what the server strips before verifying.
+                String responseSig = Sig.sign(driveSecret, response);
+                response.put("type", "response").put("sig", responseSig);
+                socket.send(response.toString());
+            } catch (Exception e) {
+                Log.e(TAG, "send failed", e);
             }
+            notifyStatus();
+        }
 
-            @Override public void onClosed(WebSocket socket, int code, String reason) {
-                connected = false;
-                scheduleReconnect("Connection closed (" + code + ")");
-            }
-
-            @Override public void onFailure(WebSocket socket, Throwable t, @Nullable Response response) {
-                connected = false;
-                scheduleReconnect(t.getMessage() != null ? t.getMessage() : "Connection failed");
-            }
-        });
+        JSONObject statusJson() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("driveId", driveId);
+                o.put("folderLabel", folderLabel == null ? JSONObject.NULL : folderLabel);
+                o.put("running", !closed && !stopping);
+                o.put("connected", connected);
+                o.put("rpcCount", rpcCount.get());
+                o.put("lastError", lastError == null ? JSONObject.NULL : lastError);
+            } catch (Exception ignored) { }
+            return o;
+        }
     }
 
     /** Mirrors toWsUrl in cli/src/agent.js. */
@@ -166,65 +285,6 @@ public class AgentService extends Service {
         String scheme = base.startsWith("https://") ? "wss://" : "ws://";
         String host = base.replaceFirst("^https?://", "");
         return scheme + host + "/api/agent/connect?driveId=" + Uri.encode(driveId);
-    }
-
-    private void scheduleReconnect(String why) {
-        if (stopping) return;
-        lastError = why;
-        notifyStatus("Reconnecting… (" + why + ")");
-        long wait = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)];
-        attempt++;
-        main.postDelayed(this::connect, wait);
-    }
-
-    // ------------------------------------------------------------ frames
-
-    private void onFrame(WebSocket socket, String text) {
-        JSONObject frame;
-        try { frame = new JSONObject(text); }
-        catch (Exception e) { Log.w(TAG, "frame parse failed (" + text.length() + " chars)", e); return; }
-
-        String type = frame.optString("type", "");
-        JSONObject p0 = frame.optJSONObject("params");
-        Log.d(TAG, "frame type=" + type + " method=" + (p0 == null ? "-" : p0.optString("method", "?"))
-                + " chars=" + text.length());
-        if ("hello".equals(type)) return;
-        if (type.startsWith("sync-")) return; // multi-device gossip: desktop-only for now
-        if (!"request".equals(type) || frame.optString("reqId", "").isEmpty()) { Log.w(TAG, "dropped non-request frame"); return; }
-        if (frame.optInt("v", -1) != PROTOCOL_VERSION) { Log.w(TAG, "dropped frame: protocol v=" + frame.optInt("v", -1)); return; }
-
-        String sig = frame.optString("sig", null);
-        JSONObject signed = copyWithout(frame, "sig", "type");
-        if (!Sig.verify(driveSecret, signed, sig)) {
-            Log.w(TAG, "dropped forged request");
-            return;
-        }
-
-        String reqId = frame.optString("reqId");
-        JSONObject response = new JSONObject();
-        try {
-            JSONObject params = frame.optJSONObject("params");
-            if (params == null) throw new IllegalArgumentException("missing params");
-            JSONObject result = rpc.handle(params);
-            response.put("reqId", reqId).put("ok", true).put("result", result);
-            rpcCount.incrementAndGet();
-        } catch (Exception e) {
-            Log.w(TAG, "rpc " + (frame.optJSONObject("params") == null ? "?" : frame.optJSONObject("params").optString("method", "?")) + " failed", e);
-            try {
-                response.put("reqId", reqId).put("ok", false).put("error", sanitize(e.getMessage()));
-            } catch (Exception ignored) { return; }
-        }
-
-        try {
-            // Sign the payload WITHOUT `type`, then add `type` — exactly what the
-            // desktop agent does, and what the server strips before verifying.
-            String responseSig = Sig.sign(driveSecret, response);
-            response.put("type", "response").put("sig", responseSig);
-            socket.send(response.toString());
-        } catch (Exception e) {
-            Log.e(TAG, "send failed", e);
-        }
-        notifyStatus(connected ? "Online · " + safeLabel() : "Offline");
     }
 
     private static JSONObject copyWithout(JSONObject src, String... drop) {
@@ -247,44 +307,71 @@ public class AgentService extends Service {
 
     // ------------------------------------------------------------ status
 
+    /**
+     * Shape mirrored by src/plugin.ts `AgentStatus`: `drives[]` carries one row
+     * per drive; the top-level `running`/`connected` are aggregates.
+     */
     JSONObject statusJson() {
         JSONObject o = new JSONObject();
+        JSONArray drives = new JSONArray();
+        boolean anyConnected = false;
+        synchronized (conns) {
+            for (Conn c : conns.values()) {
+                drives.put(c.statusJson());
+                anyConnected |= c.connected;
+            }
+        }
         try {
-            o.put("running", !stopping && ws != null);
-            o.put("connected", connected);
-            o.put("driveId", driveId == null ? JSONObject.NULL : driveId);
-            o.put("folderLabel", folderLabel == null ? JSONObject.NULL : folderLabel);
-            o.put("rpcCount", rpcCount.get());
-            o.put("lastError", lastError == null ? JSONObject.NULL : lastError);
+            o.put("running", !stopping && drives.length() > 0);
+            o.put("connected", anyConnected);
+            o.put("drives", drives);
         } catch (Exception ignored) { }
         return o;
     }
 
-    private void notifyStatus(String text) {
+    private String notificationText() {
+        int total, online;
+        StringBuilder labels = new StringBuilder();
+        synchronized (conns) {
+            total = conns.size();
+            online = 0;
+            for (Conn c : conns.values()) {
+                if (c.connected) online++;
+                if (labels.length() > 0) labels.append(", ");
+                labels.append(c.folderLabel == null ? "Folder" : c.folderLabel);
+            }
+        }
+        if (total == 0) return "Stopped";
+        if (online == total) return "Online · " + labels;
+        if (online == 0) return "Reconnecting… · " + labels;
+        return "Online " + online + "/" + total + " · " + labels;
+    }
+
+    private void notifyStatus() {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification(text));
+        if (nm != null && !stopping) nm.notify(NOTIFICATION_ID, buildNotification(notificationText()));
         StatusListener l = statusListener;
         if (l != null) main.post(() -> l.onStatus(statusJson()));
     }
 
-    private void fail(String why) {
-        lastError = why;
-        notifyStatus(why);
-        stopSelf();
-    }
-
-    private String safeLabel() {
-        return folderLabel == null ? "Folder" : folderLabel;
-    }
-
-    private void shutdown() {
-        stopping = true;
-        connected = false;
-        if (ws != null) {
-            try { ws.close(1001, "agent shutting down"); } catch (Exception ignored) { }
-            ws = null;
+    private void stopDrive(String driveId) {
+        Conn c;
+        boolean empty;
+        synchronized (conns) {
+            c = conns.remove(driveId);
+            empty = conns.isEmpty();
         }
-        notifyStatus("Stopped");
+        if (c != null) c.close();
+        if (empty) shutdownAll(); else notifyStatus();
+    }
+
+    private void shutdownAll() {
+        stopping = true;
+        synchronized (conns) {
+            for (Conn c : conns.values()) c.close();
+            conns.clear();
+        }
+        notifyStatus();
         stopForeground(true);
         stopSelf();
     }
@@ -308,7 +395,7 @@ public class AgentService extends Service {
             if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
                 NotificationChannel ch = new NotificationChannel(
                         CHANNEL_ID, "aindrive agent", NotificationManager.IMPORTANCE_LOW);
-                ch.setDescription("Shown while this phone's folder is being shared as a drive");
+                ch.setDescription("Shown while this phone's folders are being shared as drives");
                 ch.setShowBadge(false);
                 nm.createNotificationChannel(ch);
             }
@@ -328,7 +415,7 @@ public class AgentService extends Service {
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentIntent(openPi)
-                .addAction(new Notification.Action.Builder(null, "Stop", stopPi).build())
+                .addAction(new Notification.Action.Builder(null, "Stop all", stopPi).build())
                 .setOngoing(true)
                 .build();
     }

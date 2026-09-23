@@ -1,8 +1,8 @@
 # aindrive mobile
 
-Installable Android/iOS app that turns a **folder on the phone** into an
-aindrive drive. The phone plays the role `cli/` plays on a laptop: it runs the
-agent, holds the files, and answers signed RPCs. It is not a web wrapper — the
+Installable Android/iOS app that turns **folders on the phone** into aindrive
+drives — one drive per picked folder. The phone plays the role `cli/` plays on
+a laptop: it runs the agent, holds the files, and answers signed RPCs. It is not a web wrapper — the
 WebView here is only the pairing/control screen.
 
 ```
@@ -13,23 +13,23 @@ npm run ios              # opens Xcode (macOS only)
 
 ## Responsibility
 
-Serve a user-picked device folder to an aindrive server over an **outbound**
-WebSocket, so the drive's files live on the phone and no inbound port is opened
-on it. Pairing reuses the desktop CLI's single-use browser link, so a phone
+Serve user-picked device folders to an aindrive server over **outbound**
+WebSockets (one socket per drive), so the drives' files live on the phone and
+no inbound port is opened on it. Pairing reuses the desktop CLI's single-use browser link, so a phone
 drive and a laptop drive are the same thing to the server.
 
 ## Files
 
 | Path | Role |
 |------|------|
-| `src/main.ts` | shell UI: pick server + folder, pair, start/stop, status. Touches no files. |
+| `src/main.ts` | shell UI: log in, add folders, pair/start/stop each one, status. Touches no files. |
 | `src/api.ts` | pairing calls — `/api/auth/cli/start`, `/poll`, `/api/drives` |
 | `src/plugin.ts` | typed face of the native `AindriveAgent` plugin |
-| `android/…/AgentService.java` | the agent: WSS socket + reconnect, as a foreground service |
+| `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
 | `android/…/SafFs.java` | filesystem over the picked SAF tree (real device storage) |
 | `android/…/RpcHandler.java` | RPC method dispatch, mirroring `cli/src/rpc.js` |
 | `android/…/Sig.java` | HMAC frame signing, byte-compatible with `web/lib/sig.js` |
-| `ios/App/App/AgentCore.swift` | same agent, `URLSessionWebSocketTask` |
+| `ios/App/App/AgentCore.swift` | same agent, one `DriveConn` (`URLSessionWebSocketTask`) per drive |
 | `ios/App/App/DriveFs.swift` | filesystem over a security-scoped folder bookmark |
 | `ios/App/App/{RpcHandler,Sig}.swift` | iOS counterparts of the above |
 
@@ -44,12 +44,20 @@ drive and a laptop drive are the same thing to the server.
 - **RPC results must match `cli/src/rpc.js`.** The server cannot tell which
   kind of agent it is talking to, so a shape difference surfaces as a broken
   file browser, not an error.
-- **Folder access is scoped to one tree.** Android takes a persistable SAF
-  grant; iOS stores a security-scoped bookmark. Neither can read outside the
-  folder the user picked.
+- **One folder = one drive = one socket.** Every shared folder is paired as its
+  own drive (own driveId/token/secret) exactly as a separate desktop agent
+  would be; the native side keys connections by driveId. Plugin API:
+  `start(config)` adds/replaces a drive, `stop({driveId})` removes one,
+  `stop()` removes all, `status()` returns `{running, connected, drives[]}`.
+- **Folder access is scoped per tree.** Android takes a persistable SAF grant
+  per folder; iOS stores a security-scoped bookmark per folder. Neither can
+  read outside the folders the user picked.
 
 ## Gotchas
 
+- **Shell state is `aindrive.mobile.state.v2`** (a `shares[]` list). The v1
+  single-folder layout is migrated once on load and then deleted, so an
+  existing pairing keeps working without re-pairing.
 - **Android needs the foreground service.** WebViews and background threads are
   suspended seconds after leaving the app, which would take the drive offline on
   every app switch. The persistent notification is the honest signal that the
