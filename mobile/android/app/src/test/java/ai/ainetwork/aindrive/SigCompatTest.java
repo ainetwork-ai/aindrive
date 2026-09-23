@@ -52,6 +52,23 @@ public class SigCompatTest {
         assertEquals("LN31xM-UJbePhnyb4dDADxnhuQ-qT-Uy7-i5UFmWSRA", sign(p));
     }
 
+    /**
+     * The allowlist recurses: a result object keeps the keys it shares with the
+     * top level (`ok`), so mutating RPCs (write/rename/upload-chunk …) do not
+     * canonicalize to "result":{} — the bug that made every upload's response
+     * fail server-side verification.
+     */
+    @Test
+    public void nestedResultKeepsAllowlistedKeys() throws Exception {
+        JSONObject p = new JSONObject()
+                .put("reqId", "req_up1")
+                .put("ok", true)
+                .put("result", new JSONObject()
+                        .put("method", "upload-chunk").put("ok", true).put("receivedBytes", 1024));
+        assertEquals("{\"ok\":true,\"reqId\":\"req_up1\",\"result\":{\"ok\":true}}", Sig.canonicalize(p));
+        assertEquals("dAfkeXY87aYeIqZgab41QFtj36Cdh1jRjBLHbXh5c1U", sign(p));
+    }
+
     @Test
     public void okResponseMatchesNode() throws Exception {
         JSONObject p = new JSONObject()

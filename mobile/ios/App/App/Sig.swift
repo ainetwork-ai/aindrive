@@ -11,13 +11,23 @@ import Foundation
 /// recursive canonicaliser — it would stop matching the server.
 enum Sig {
     static func canonicalize(_ payload: [String: Any]) -> String {
+        // JSON.stringify(payload, keys) treats `keys` as a property allowlist that
+        // applies to EVERY object in the tree, emitted in allowlist order. So a
+        // nested object keeps only the top-level key names it happens to share
+        // (e.g. result.ok inside an {ok, reqId, result} response) and drops the
+        // rest — it is not simply "{}".
+        let allow = payload.keys.sorted()
+        return jsonObject(payload, allow: allow)
+    }
+
+    private static func jsonObject(_ obj: [String: Any], allow: [String]) -> String {
         var out = "{"
         var first = true
-        for key in payload.keys.sorted() {
-            guard let value = payload[key] else { continue }
+        for key in allow {
+            guard let value = obj[key] else { continue }
             if !first { out += "," }
             first = false
-            out += jsonString(key) + ":" + jsonValue(value)
+            out += jsonString(key) + ":" + jsonValue(value, allow: allow)
         }
         return out + "}"
     }
@@ -42,7 +52,7 @@ enum Sig {
 
     // MARK: - JS-compatible value rendering
 
-    private static func jsonValue(_ value: Any) -> String {
+    private static func jsonValue(_ value: Any, allow: [String]) -> String {
         if value is NSNull { return "null" }
         if let s = value as? String { return jsonString(s) }
         if let n = value as? NSNumber {
@@ -51,9 +61,8 @@ enum Sig {
             return jsNumber(n.doubleValue)
         }
         if let b = value as? Bool { return b ? "true" : "false" }
-        // Nested objects collapse to {} — see the note above.
-        if value is [String: Any] { return "{}" }
-        if let arr = value as? [Any] { return "[" + arr.map(jsonValue).joined(separator: ",") + "]" }
+        if let o = value as? [String: Any] { return jsonObject(o, allow: allow) }
+        if let arr = value as? [Any] { return "[" + arr.map { jsonValue($0, allow: allow) }.joined(separator: ",") + "]" }
         return "null"
     }
 

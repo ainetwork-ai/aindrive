@@ -101,14 +101,14 @@ public class AgentService extends Service {
         String folderUri = intent.getStringExtra("folderUri");
         folderLabel = intent.getStringExtra("folderLabel");
 
-        startForeground(NOTIFICATION_ID, buildNotification("연결 중…"));
+        startForeground(NOTIFICATION_ID, buildNotification("Connecting…"));
 
         try {
             Uri tree = Uri.parse(folderUri);
             fs = new SafFs(this, tree);
             rpc = new RpcHandler(this, fs, driveId);
         } catch (Exception e) {
-            fail("폴더를 열 수 없습니다: " + e.getMessage());
+            fail("Could not open folder: " + e.getMessage());
             return START_NOT_STICKY;
         }
 
@@ -141,7 +141,7 @@ public class AgentService extends Service {
                             .put("hostname", Build.MODEL != null ? Build.MODEL : "android")
                             .toString());
                 } catch (Exception ignored) { }
-                notifyStatus("온라인 · " + safeLabel());
+                notifyStatus("Online · " + safeLabel());
             }
 
             @Override public void onMessage(WebSocket socket, String text) {
@@ -150,12 +150,12 @@ public class AgentService extends Service {
 
             @Override public void onClosed(WebSocket socket, int code, String reason) {
                 connected = false;
-                scheduleReconnect("연결 종료 (" + code + ")");
+                scheduleReconnect("Connection closed (" + code + ")");
             }
 
             @Override public void onFailure(WebSocket socket, Throwable t, @Nullable Response response) {
                 connected = false;
-                scheduleReconnect(t.getMessage() != null ? t.getMessage() : "연결 실패");
+                scheduleReconnect(t.getMessage() != null ? t.getMessage() : "Connection failed");
             }
         });
     }
@@ -171,7 +171,7 @@ public class AgentService extends Service {
     private void scheduleReconnect(String why) {
         if (stopping) return;
         lastError = why;
-        notifyStatus("재연결 중… (" + why + ")");
+        notifyStatus("Reconnecting… (" + why + ")");
         long wait = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)];
         attempt++;
         main.postDelayed(this::connect, wait);
@@ -181,13 +181,17 @@ public class AgentService extends Service {
 
     private void onFrame(WebSocket socket, String text) {
         JSONObject frame;
-        try { frame = new JSONObject(text); } catch (Exception e) { return; }
+        try { frame = new JSONObject(text); }
+        catch (Exception e) { Log.w(TAG, "frame parse failed (" + text.length() + " chars)", e); return; }
 
         String type = frame.optString("type", "");
+        JSONObject p0 = frame.optJSONObject("params");
+        Log.d(TAG, "frame type=" + type + " method=" + (p0 == null ? "-" : p0.optString("method", "?"))
+                + " chars=" + text.length());
         if ("hello".equals(type)) return;
         if (type.startsWith("sync-")) return; // multi-device gossip: desktop-only for now
-        if (!"request".equals(type) || frame.optString("reqId", "").isEmpty()) return;
-        if (frame.optInt("v", -1) != PROTOCOL_VERSION) return;
+        if (!"request".equals(type) || frame.optString("reqId", "").isEmpty()) { Log.w(TAG, "dropped non-request frame"); return; }
+        if (frame.optInt("v", -1) != PROTOCOL_VERSION) { Log.w(TAG, "dropped frame: protocol v=" + frame.optInt("v", -1)); return; }
 
         String sig = frame.optString("sig", null);
         JSONObject signed = copyWithout(frame, "sig", "type");
@@ -205,6 +209,7 @@ public class AgentService extends Service {
             response.put("reqId", reqId).put("ok", true).put("result", result);
             rpcCount.incrementAndGet();
         } catch (Exception e) {
+            Log.w(TAG, "rpc " + (frame.optJSONObject("params") == null ? "?" : frame.optJSONObject("params").optString("method", "?")) + " failed", e);
             try {
                 response.put("reqId", reqId).put("ok", false).put("error", sanitize(e.getMessage()));
             } catch (Exception ignored) { return; }
@@ -219,7 +224,7 @@ public class AgentService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "send failed", e);
         }
-        notifyStatus(connected ? "온라인 · " + safeLabel() : "오프라인");
+        notifyStatus(connected ? "Online · " + safeLabel() : "Offline");
     }
 
     private static JSONObject copyWithout(JSONObject src, String... drop) {
@@ -269,7 +274,7 @@ public class AgentService extends Service {
     }
 
     private String safeLabel() {
-        return folderLabel == null ? "폴더" : folderLabel;
+        return folderLabel == null ? "Folder" : folderLabel;
     }
 
     private void shutdown() {
@@ -279,7 +284,7 @@ public class AgentService extends Service {
             try { ws.close(1001, "agent shutting down"); } catch (Exception ignored) { }
             ws = null;
         }
-        notifyStatus("중지됨");
+        notifyStatus("Stopped");
         stopForeground(true);
         stopSelf();
     }
@@ -302,8 +307,8 @@ public class AgentService extends Service {
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
                 NotificationChannel ch = new NotificationChannel(
-                        CHANNEL_ID, "aindrive 에이전트", NotificationManager.IMPORTANCE_LOW);
-                ch.setDescription("이 폰의 폴더를 드라이브로 공유하는 동안 표시됩니다");
+                        CHANNEL_ID, "aindrive agent", NotificationManager.IMPORTANCE_LOW);
+                ch.setDescription("Shown while this phone's folder is being shared as a drive");
                 ch.setShowBadge(false);
                 nm.createNotificationChannel(ch);
             }
@@ -323,7 +328,7 @@ public class AgentService extends Service {
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentIntent(openPi)
-                .addAction(new Notification.Action.Builder(null, "중지", stopPi).build())
+                .addAction(new Notification.Action.Builder(null, "Stop", stopPi).build())
                 .setOngoing(true)
                 .build();
     }

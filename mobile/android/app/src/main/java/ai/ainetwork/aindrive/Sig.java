@@ -59,34 +59,45 @@ final class Sig {
         List<String> keys = new ArrayList<>();
         for (Iterator<String> it = payload.keys(); it.hasNext(); ) keys.add(it.next());
         Collections.sort(keys); // JS sort() on ASCII key names == Java natural order
-        StringBuilder sb = new StringBuilder("{");
+        // JSON.stringify(payload, keys) treats `keys` as a property allowlist that
+        // applies to EVERY object in the tree, emitted in allowlist order. So a
+        // nested object keeps only the top-level key names it happens to share
+        // (e.g. result.ok inside an {ok, reqId, result} response) and drops the
+        // rest — it is not simply "{}".
+        StringBuilder sb = new StringBuilder();
+        writeObject(sb, payload, keys);
+        return sb.toString();
+    }
+
+    private static void writeObject(StringBuilder sb, JSONObject obj, List<String> allow) {
+        sb.append('{');
         boolean first = true;
-        for (String k : keys) {
-            Object v = payload.opt(k);
+        for (String k : allow) {
+            if (!obj.has(k)) continue;
+            Object v = obj.opt(k);
             if (v == null) continue; // JSON.stringify omits undefined-valued keys
             if (!first) sb.append(',');
             first = false;
             writeString(sb, k);
             sb.append(':');
-            writeValue(sb, v);
+            writeValue(sb, v, allow);
         }
-        return sb.append('}').toString();
+        sb.append('}');
     }
 
-    private static void writeValue(StringBuilder sb, Object v) {
+    private static void writeValue(StringBuilder sb, Object v, List<String> allow) {
         if (v == JSONObject.NULL) { sb.append("null"); return; }
         if (v instanceof String) { writeString(sb, (String) v); return; }
         if (v instanceof Boolean) { sb.append(((Boolean) v) ? "true" : "false"); return; }
         if (v instanceof Number) { sb.append(numberToJs((Number) v)); return; }
-        // Nested objects collapse to {} because the key allowlist excludes their keys.
-        if (v instanceof JSONObject) { sb.append("{}"); return; }
+        if (v instanceof JSONObject) { writeObject(sb, (JSONObject) v, allow); return; }
         if (v instanceof JSONArray) {
             JSONArray arr = (JSONArray) v;
             sb.append('[');
             for (int i = 0; i < arr.length(); i++) {
                 if (i > 0) sb.append(',');
                 Object e = arr.opt(i);
-                if (e == null) sb.append("null"); else writeValue(sb, e);
+                if (e == null) sb.append("null"); else writeValue(sb, e, allow);
             }
             sb.append(']');
             return;

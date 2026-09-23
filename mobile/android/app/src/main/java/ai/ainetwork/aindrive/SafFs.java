@@ -320,6 +320,17 @@ final class SafFs {
         String toParent = parentOf(String.join("/", toSegs));
         String toName = toSegs.get(toSegs.size() - 1);
 
+        // Desktop fs.rename replaces an existing target file; SAF move/rename
+        // refuse a name collision (or silently produce "name (1)"). Match the
+        // desktop contract — this is how uploads overwrite an existing file.
+        String existing = resolve(toRel);
+        if (existing != null && !existing.equals(fromId)) {
+            Entry target = stat(toRel);
+            if (target != null && target.isDir) throw new IOException("target is a directory");
+            DocumentsContract.deleteDocument(cr, docUri(existing));
+            invalidate(toRel);
+        }
+
         String currentId = fromId;
         if (!fromParent.equals(toParent)) {
             String sourceParentId = requireDoc(fromParent);
