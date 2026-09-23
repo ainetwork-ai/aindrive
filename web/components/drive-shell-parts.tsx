@@ -184,8 +184,80 @@ function AccountFooter() {
   );
 }
 
+// ---------------------------------------------------------------- drag-move
+//
+// In-drive drag-and-drop: an entry row/card is the drag source, a folder
+// row/card or a breadcrumb is the drop target, and the drop calls onMove.
+// The payload travels under a private MIME type so the file-upload drop zone
+// (which keys on the "Files" type) ignores it, and vice versa.
+
+const ENTRY_MIME = "application/x-aindrive-entry";
+
+type DragEntry = Pick<DriveEntry, "path" | "name" | "isDir">;
+
+function isEntryDrag(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes(ENTRY_MIME);
+}
+
+/** Props for a draggable entry. Locked (unpaid) entries can’t be moved. */
+function dragSourceProps(entry: DriveEntry, canEdit: boolean) {
+  if (!canEdit || entry.locked) return { draggable: false };
+  return {
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      const payload: DragEntry = { path: entry.path, name: entry.name, isDir: entry.isDir };
+      e.dataTransfer.setData(ENTRY_MIME, JSON.stringify(payload));
+      e.dataTransfer.effectAllowed = "move";
+    },
+  };
+}
+
+/**
+ * Props for a drop target that receives entries into `destDir`. `onOver`
+ * toggles the caller’s highlight; the target itself stays stateless so a
+ * table of rows doesn’t need one hook each.
+ */
+function dropTargetProps(
+  destDir: string,
+  onMove: ((entry: DriveEntry, destDir: string) => void) | undefined,
+  onOver: (over: boolean) => void,
+) {
+  if (!onMove) return {};
+  return {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!isEntryDrag(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!isEntryDrag(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!isEntryDrag(e)) return;
+      // Leaving for a child element is not leaving the target.
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      onOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!isEntryDrag(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onOver(false);
+      let entry: DragEntry | null = null;
+      try { entry = JSON.parse(e.dataTransfer.getData(ENTRY_MIME)); } catch { /* foreign payload */ }
+      if (!entry?.path) return;
+      // The move only needs path/name/isDir; the rest of DriveEntry is display state.
+      onMove({ ...entry, size: 0, mtimeMs: 0, mime: "" } as DriveEntry, destDir);
+    },
+  };
+}
+
 export function DriveHeader({
-  setSidebarOpen, crumbs, setPath, canEdit, onUpload, setShareOpen, path, role,
+  setSidebarOpen, crumbs, setPath, canEdit, onUpload, onNewFolder, onMove, setShareOpen, path, role,
   setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery,
 }: {
   setSidebarOpen: (v: boolean) => void;
@@ -193,6 +265,8 @@ export function DriveHeader({
   setPath: (next: string) => void;
   canEdit: boolean;
   onUpload: (files: FileList | null) => void;
+  onNewFolder: () => void;
+  onMove: (entry: DriveEntry, destDir: string) => void;
   setShareOpen: (v: { path: string; focus?: "sell" } | null) => void;
   path: string;
   role: string;
@@ -204,6 +278,8 @@ export function DriveHeader({
   query: string;
   onQuery: (q: string) => void;
 }) {
+  // Breadcrumb currently hovered by an in-drive drag (drop = move up the tree).
+  const [dropCrumb, setDropCrumb] = useState<string | null>(null);
   return (
     <header className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
       <div className="flex items-center gap-1 min-w-0 text-sm">
@@ -247,9 +323,13 @@ export function DriveHeader({
               <button
                 onClick={() => setPath(c.path)}
                 className={clsx(
-                  "truncate hover:underline",
+                  "truncate hover:underline rounded px-1 -mx-1",
                   hideOnMobile && "hidden sm:inline",
+                  dropCrumb === c.path && "bg-drive-selected ring-2 ring-drive-accent/50",
                 )}
+                {...(canEdit && !isLast
+                  ? dropTargetProps(c.path, onMove, (over) => setDropCrumb(over ? c.path : null))
+                  : {})}
               >
                 {c.label}
               </button>
@@ -281,6 +361,16 @@ export function DriveHeader({
           )}
         </div>
         <ViewToggle viewMode={viewMode} setViewMode={setViewMode} />
+        {canEdit && (
+          <button
+            aria-label="New folder"
+            title="New folder"
+            onClick={onNewFolder}
+            className="flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover"
+          >
+            <FolderPlus className="w-4 h-4" /> <span className="hidden sm:inline">New folder</span>
+          </button>
+        )}
         <label
           aria-label="Upload"
           className={clsx(
@@ -371,7 +461,7 @@ function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode
 }
 
 export function FileTable({
-  loading, err, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onUpload, viewMode,
+  loading, err, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, onMove, isOwner, onUpload, viewMode,
   onNewFolder, ctxMenu, setCtxMenu,
 }: {
   loading: boolean;
@@ -388,6 +478,7 @@ export function FileTable({
   setPath: (next: string) => void;
   canEdit: boolean;
   onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
+  onMove: (entry: DriveEntry, destDir: string) => void;
   isOwner: boolean;
   onUpload: (files: FileList | null) => void;
   viewMode: ViewMode;
@@ -404,6 +495,12 @@ export function FileTable({
   // only when the count returns to 0 (left the area entirely).
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
+  // Folder row/card currently hovered by an in-drive entry drag.
+  const [dropOver, setDropOver] = useState<string | null>(null);
+  const folderDrop = (e: DriveEntry) =>
+    canEdit && e.isDir && !e.locked
+      ? dropTargetProps(e.path, onMove, (over) => setDropOver(over ? e.path : null))
+      : {};
   const dndProps = canEdit ? {
     onDragEnter: (e: React.DragEvent) => {
       if (!Array.from(e.dataTransfer.types).includes("Files")) return;
@@ -515,6 +612,8 @@ export function FileTable({
         onRowAction={onRowAction}
         isOwner={isOwner}
         onContextMenuEntry={openCtx}
+        dragProps={(e) => ({ ...dragSourceProps(e, canEdit), ...folderDrop(e) })}
+        dropOver={dropOver}
       />
     );
   } else {
@@ -542,7 +641,10 @@ export function FileTable({
                   // Unlisted (private) sale → slightly translucent so the owner
                   // sees at a glance it's hidden from buyers.
                   paid && !paid.listed && "opacity-60",
+                  dropOver === e.path && "bg-drive-selected ring-2 ring-inset ring-drive-accent/50",
                 )}
+                {...dragSourceProps(e, canEdit)}
+                {...folderDrop(e)}
                 // A locked (paid, unpaid-for) entry opens the locked preview, never
                 // navigates in — listing/reading it would 402 (R-VIS-PAID-001).
                 onClick={() => { if (!e.locked && e.isDir) setPath(e.path); else setSelected(e); }}
@@ -728,6 +830,7 @@ function ContextMenu({
  */
 function FileGrid({
   driveId, entries, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, isOwner, onContextMenuEntry,
+  dragProps, dropOver,
 }: {
   driveId: string;
   entries: DriveEntry[];
@@ -739,6 +842,9 @@ function FileGrid({
   onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
   isOwner: boolean;
   onContextMenuEntry: (ev: React.MouseEvent, entry: DriveEntry) => void;
+  /** Drag-source + folder drop-target handlers for a card (see drag-move above). */
+  dragProps: (e: DriveEntry) => Record<string, unknown>;
+  dropOver: string | null;
 }) {
   // Locked (paid, unpaid-for) entries open the locked preview, never navigate in.
   const activate = (e: DriveEntry) => { if (!e.locked && e.isDir) setPath(e.path); else setSelected(e); };
@@ -762,7 +868,9 @@ function FileGrid({
               isSelected && "ring-2 ring-drive-accent/50 bg-drive-selected/40",
               // Unlisted (private) sale → slightly translucent (owner cue).
               paid && !paid.listed && "opacity-60",
+              dropOver === e.path && "ring-2 ring-drive-accent bg-drive-selected",
             )}
+            {...dragProps(e)}
             onClick={() => activate(e)}
             onKeyDown={(ev) => {
               // Enter/Space activate the card the way clicking it would. Ignore

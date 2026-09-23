@@ -25,7 +25,7 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 | Route | Gate |
 |-------|------|
 | `drives` (GET/POST) | list user's drives / create (per-user drive limit). Auth. |
-| `drives/[driveId]` (GET/PATCH) | drive settings: `payout_wallet`, `allowed_tokens` policy. Owner only. |
+| `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy. Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
 | `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. |
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |

@@ -83,6 +83,7 @@ load-bearing ones:
 | `CDP_PAYMASTER_URL` | set for gasless FANCO buys | ERC-7677 paymaster RPC (CDP Portal → Paymaster, Base endpoint). Sponsors smart-wallet buyers' permit2 `approve` gas so a buyer holding only the sale token can pay. **Configure the CDP-side contract allowlist (the token) + spend caps too** — the app's `/api/paymaster` proxy validates each op, the portal policy is the budget backstop. Unset = buyers pay their own approve gas (works, but needs ETH). |
 | `AINDRIVE_SESSION_SECRET` | 32+ random bytes | Required in prod (no file fallback). `openssl rand -hex 32`. |
 | `AINDRIVE_PUBLIC_URL` | `https://…` | Must be https; secure cookies refuse plain http. |
+| `AINDRIVE_DEFAULT_DRIVE_LIMIT` | **unset** (unlimited) | Positive integer caps drives per account (`POST /api/drives` → 429 `drive_limit_reached`). Every shared folder is a drive, so a low cap bites phone users first. |
 
 **Payout wallets are NOT an env var.** Each drive owner sets their own payout
 wallet in Settings → Payments; a paid share can't be created until they do.

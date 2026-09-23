@@ -18,7 +18,6 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "AindriveAgent"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pickFolder", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "createFolder", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "addFiles", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
@@ -28,7 +27,7 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     private static let bookmarkKey = "ai.ainetwork.aindrive.folderBookmark"
     private var pickCall: CAPPluginCall?
     /// What the pending document picker is for; its delegate is shared.
-    private enum PickMode { case folder, parentForNewFolder(String), filesInto(URL) }
+    private enum PickMode { case folder, filesInto(URL) }
     private var pickMode: PickMode = .folder
 
     public override func load() {
@@ -41,17 +40,6 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func pickFolder(_ call: CAPPluginCall) {
         pickMode = .folder
-        present(call, types: [.folder], multiple: false)
-    }
-
-    /// "Share a NEW folder": pick where it lives, create `name` inside, bookmark it.
-    @objc func createFolder(_ call: CAPPluginCall) {
-        let name = (call.getString("name") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !name.contains("/"), !name.hasPrefix(".") else {
-            call.reject("Enter a folder name without slashes")
-            return
-        }
-        pickMode = .parentForNewFolder(name)
         present(call, types: [.folder], multiple: false)
     }
 
@@ -149,17 +137,6 @@ extension AindriveAgentPlugin: UIDocumentPickerDelegate {
                 call.resolve(["uri": key, "label": url.lastPathComponent])
             } catch {
                 call.reject("Could not persist folder access permission: \(error.localizedDescription)")
-            }
-        case .parentForNewFolder(let name):
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let child = url.appendingPathComponent(name, isDirectory: true)
-            do {
-                try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
-                let key = try Self.storeBookmark(child)
-                call.resolve(["uri": key, "label": child.lastPathComponent])
-            } catch {
-                call.reject("Could not create folder: \(error.localizedDescription)")
             }
         case .filesInto(let folder):
             DispatchQueue.global(qos: .userInitiated).async {

@@ -12,7 +12,7 @@ import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
-import { normalizeServer, startCliLogin, pollCliLogin, pairDrive } from "./api";
+import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive } from "./api";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
 const STORE_KEY = "aindrive.mobile.state.v2";
@@ -125,25 +125,6 @@ async function addFolder() {
     errorMsg = msgOf(e);
   }
   render();
-}
-
-/** Make a brand-new folder to share (pick where, name it), then it can be filled. */
-async function createFolder() {
-  errorMsg = null;
-  const name = prompt("Name for the new shared folder");
-  if (!name || !name.trim()) return;
-  try {
-    busy = "Choose where to create the folder…"; render();
-    const folder = await AindriveAgent.createFolder({ name: name.trim() });
-    state.shares.push({ folder });
-    await save();
-    log(`Folder created: ${folder.label}`);
-  } catch (e) {
-    errorMsg = msgOf(e);
-  } finally {
-    busy = null;
-    render();
-  }
 }
 
 /** Copy files picked in the system picker into a shared folder. */
@@ -286,13 +267,36 @@ async function openDrive(share: SharedFolder) {
   if (url) await Browser.open({ url });
 }
 
-/** Forget a folder: takes its drive offline and drops its credentials. */
+/**
+ * Forget a folder: takes its drive offline, deletes the drive on the server
+ * (so the account gets its drive-limit slot back), and drops the credentials.
+ * Files in the folder are untouched.
+ */
 async function removeShare(share: SharedFolder) {
-  if (share.drive) await AindriveAgent.stop({ driveId: share.drive.driveId }).catch(() => {});
+  errorMsg = null;
+  const what = share.drive
+    ? `Remove "${share.folder.label}"?\n\nIts drive is deleted from the server: members lose access and share links stop working. Files on this phone are not deleted.`
+    : `Remove "${share.folder.label}" from the list?`;
+  if (!confirm(what)) return;
+  if (share.drive) {
+    await AindriveAgent.stop({ driveId: share.drive.driveId }).catch(() => {});
+    if (state.sessionCookie) {
+      try {
+        busy = `Deleting drive for ${share.folder.label}…`; render();
+        await deleteDrive(state.server, state.sessionCookie, share.drive.driveId);
+        log(`Deleted drive ${share.drive.driveId}`);
+      } catch (e) {
+        errorMsg = `Drive could not be deleted on the server (${msgOf(e)}). It still counts toward your drive limit — delete it from Manage on the web.`;
+        log(`Error: ${errorMsg}`);
+      } finally {
+        busy = null;
+      }
+    }
+  }
   state.shares = state.shares.filter((s) => s !== share);
   await save();
   try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
-  log(`Removed ${share.folder.label}${share.drive ? " — drive credentials deleted" : ""}`);
+  log(`Removed ${share.folder.label}`);
   render();
 }
 
@@ -408,12 +412,11 @@ function render() {
 
     <div class="card">
       <h2>Add</h2>
-      <button id="create" ${busy ? "disabled" : ""}>Create a new folder to share</button>
-      <button class="ghost" id="add" ${busy ? "disabled" : ""}>Share an existing folder</button>
+      <button class="ghost" id="add" ${busy ? "disabled" : ""}>Add a folder to share</button>
       ${state.shares.length > 1 ? `
         <button id="start-all" ${busy || !idle ? "disabled" : ""}>Turn all on</button>
         <button class="danger" id="stop-all" ${running === 0 ? "disabled" : ""}>Turn all off</button>` : ""}
-      <p class="note">A new folder is created where you choose (e.g. Documents); use "Add files" on it to fill it from this phone. Sharing works only while the agent is running. It keeps running as a foreground service even when the app is in the background.</p>
+      <p class="note">Need a new folder? Create it in the system folder picker, then use "Add files" to fill it from this phone. Sharing works only while the agent is running. It keeps running as a foreground service even when the app is in the background.</p>
     </div>
 
     ${activity}
@@ -425,7 +428,6 @@ function render() {
   `;
 
   bind("add", addFolder);
-  bind("create", createFolder);
   bind("reindex", reindex);
   bind("ask", ask);
   const askInput = document.getElementById("ask-input") as HTMLInputElement | null;

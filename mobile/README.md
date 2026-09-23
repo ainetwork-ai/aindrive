@@ -22,7 +22,7 @@ drive and a laptop drive are the same thing to the server.
 
 | Path | Role |
 |------|------|
-| `src/main.ts` | shell UI: log in, add/create folders, add files to them, pair/start/stop each one, status. |
+| `src/main.ts` | shell UI: log in, add folders, add files to them, pair/start/stop each one, status. |
 | `src/api.ts` | pairing calls — `/api/auth/cli/start`, `/poll`, `/api/drives` |
 | `src/plugin.ts` | typed face of the native `AindriveAgent` plugin |
 | `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
@@ -52,19 +52,9 @@ drive and a laptop drive are the same thing to the server.
   would be; the native side keys connections by driveId. Plugin API:
   `start(config)` adds/replaces a drive, `stop({driveId})` removes one,
   `stop()` removes all, `status()` returns `{running, connected, drives[]}`.
-- **A share can be created from scratch.** `createFolder({name})` asks where
-  (a granted tree) and creates the sub-folder there; the handle is
-  `tree#docId` on Android (`SafFs.subfolderUri` — the *parent* grant is what
-  the permission covers) and a bookmark of the sub-folder on iOS.
-  `addFiles({folderUri})` is the phone's drag-and-drop: the system file picker,
-  copied into the folder root, same-name files replaced.
-- **`agent-ask` is answered on the phone, offline.** Same `{answer, sources:
-  [{path, snippet}]}` as the desktop agent, produced by `agent/AskRunner` over
-  this drive's photo index; `agent.json` is never read (the phone has one kind
-  of agent) and no LLM key exists on the device. Plugin API: `reindex()` builds
-  the index (asks for `ACCESS_MEDIA_LOCATION` first), `ask({query})` runs the
-  same runner across every running drive. Design + roadmap (LLM planner, CLIP):
-  `docs/superpowers/specs/2026-09-23-mobile-on-device-agent-design.md`.
+- **`addFiles({folderUri})` is the phone's drag-and-drop**: the system file
+  picker, copied into the folder root, same-name files replaced. New folders
+  are made in the system folder picker itself, not by the app.
 - **Folder access is scoped per tree.** Android takes a persistable SAF grant
   per folder; iOS stores a security-scoped bookmark per folder. Neither can
   read outside the folders the user picked.

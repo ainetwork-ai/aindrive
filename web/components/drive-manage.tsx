@@ -5,6 +5,7 @@
 // Share panel on a file/folder), not here; each section points there.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ArrowLeft, Users, Link2, Wallet, TrendingUp, Search,
@@ -123,12 +124,50 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
           )}
           {section === "payments" && (
             settingsReadable
-              ? <PaymentsSection driveId={driveId} payoutWallets={payoutWallets} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
+              ? <>
+                  <PaymentsSection driveId={driveId} payoutWallets={payoutWallets} allowedTokens={allowedTokens} busy={busy} setBusy={setBusy} reload={load} />
+                  <DangerSection driveId={driveId} driveName={driveName} busy={busy} setBusy={setBusy} />
+                </>
               : <EmptyState icon={<Wallet />} title="Creator-only" description="Payout wallet and payment tokens can only be changed by the drive’s creator." />
           )}
         </div>
       </div>
     </main>
+  );
+}
+
+// ── Danger zone ──────────────────────────────────────────────────────────────
+
+/**
+ * Delete the drive (creator only — gated by the same settingsReadable flag as
+ * payments, since GET /api/drives/:id 403s co-owners). Files stay on the
+ * agent's machine; what goes is the server-side drive: members, links, sales
+ * history. It is also how a limit-bound account frees a drive slot.
+ */
+function DangerSection({ driveId, driveName, busy, setBusy }: {
+  driveId: string; driveName: string; busy: boolean; setBusy: (b: boolean) => void;
+}) {
+  const router = useRouter();
+  async function del() {
+    const typed = prompt(
+      `Delete "${driveName}"?\n\nEvery member loses access and all share links, sales history and payout settings are removed. Files on the agent's device are NOT deleted.\n\nType the drive name to confirm:`,
+    );
+    if (typed === null) return;
+    if (typed.trim() !== driveName.trim()) { toast.error("Name did not match — nothing deleted"); return; }
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}`, { method: "DELETE" });
+    setBusy(false);
+    if (!res.ok) { toast.error(res.error || "Failed to delete drive"); return; }
+    toast.success(`Deleted "${driveName}"`);
+    router.push("/");
+    router.refresh();
+  }
+  return (
+    <SectionCard icon={<TrashIcon className="w-4 h-4" />} title="Delete drive" description="Permanently remove this drive from aindrive. Files on the device that serves it are not touched.">
+      <Button variant="tonal" className="text-red-600" icon={<TrashIcon className="w-4 h-4" />} disabled={busy} onClick={del}>
+        Delete this drive
+      </Button>
+    </SectionCard>
   );
 }
 

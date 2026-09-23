@@ -77,11 +77,6 @@ export interface AindriveAgentPlugin {
   /** Opens the system folder picker and takes a persistable read/write grant. */
   pickFolder(): Promise<PickedFolder>;
   /**
-   * Creates a new folder to share: the user picks WHERE (a granted location),
-   * the plugin creates `name` inside it and returns a handle rooted there.
-   */
-  createFolder(opts: { name: string }): Promise<PickedFolder>;
-  /**
    * Opens the system file picker (multi-select) and copies the chosen files
    * into the folder — the phone's stand-in for dragging files into a share.
    */
