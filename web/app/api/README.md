@@ -75,7 +75,9 @@ Ops / dev:
 
 - **Every drive route resolves access before touching the agent.** Mutations
   require editor+, reads viewer+; `requireDriveRole` returns a `NextResponse`
-  on failure (handlers early-return it). Member/share/owner-scoped routes use
+  on failure (handlers early-return it). It also 403s the reserved `.aindrive/`
+  subtree for every role. `zPath` rejects it in JSON bodies, and `rename` gates
+  both `from` and `to`. Member/share/owner-scoped routes use
   `resolveRole`/`getDrive.owner_id` directly.
 - **Grants are upgrade-only** on paid-settle, share-accept, and re-invite
   (`mergeRoleUpgradeOnly`); the drive creator's member row is immutable.

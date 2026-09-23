@@ -1,9 +1,9 @@
 // Unit tests for safeResolve traversal guard and isSelfWrite TTL.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { tmpdir } from "node:os";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { safeResolve, isSelfWrite, handleRpc } from "../rpc.js";
+import { safeResolve, isSelfWrite, handleRpc, isReservedRpcPath } from "../rpc.js";
 
 const ROOT = "/tmp/drive-root-test";
 
@@ -82,5 +82,40 @@ describe("isSelfWrite", () => {
       vi.useRealTimers();
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+// ── reserved .aindrive paths ─────────────────────────────────────────────
+describe("reserved .aindrive paths over RPC", () => {
+  it("classifies system paths, allowing only agents/ and uploads/", () => {
+    for (const p of [".aindrive", ".aindrive/config.json", ".aindrive/agent.pid", ".aindrive/willow.db", ".aindrive/yjs/x.bin"]) {
+      expect(isReservedRpcPath(p), p).toBe(true);
+    }
+    for (const p of ["", "docs/.aindrive/config.json", ".aindrive-notes", ".aindrive/agents", ".aindrive/agents/a.json", ".aindrive/uploads/x.part"]) {
+      expect(isReservedRpcPath(p), p).toBe(false);
+    }
+  });
+
+  it("refuses every path-bearing method on config.json, however the path is spelled", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "rpc-reserved-"));
+    mkdirSync(path.join(root, ".aindrive", "agents"), { recursive: true });
+    writeFileSync(path.join(root, ".aindrive", "config.json"), '{"agentToken":"secret"}');
+    writeFileSync(path.join(root, "a.txt"), "x");
+    for (const spelled of [".aindrive/config.json", "./.aindrive//config.json", "x/../.aindrive/config.json"]) {
+      await expect(handleRpc({ method: "read", path: spelled }, root), spelled).rejects.toThrow(/reserved path/);
+      await expect(handleRpc({ method: "download-chunk", path: spelled, offset: 0 }, root)).rejects.toThrow(/reserved path/);
+      await expect(handleRpc({ method: "write", path: spelled, content: "{}" }, root)).rejects.toThrow(/reserved path/);
+      await expect(handleRpc({ method: "delete", path: spelled }, root)).rejects.toThrow(/reserved path/);
+    }
+    await expect(handleRpc({ method: "list", path: ".aindrive" }, root)).rejects.toThrow(/reserved path/);
+    await expect(handleRpc({ method: "rename", from: "a.txt", to: ".aindrive/config.json" }, root)).rejects.toThrow(/reserved path/);
+    await expect(handleRpc({ method: "rename", from: ".aindrive/config.json", to: "leak.json" }, root)).rejects.toThrow(/reserved path/);
+    expect(readFileSync(path.join(root, ".aindrive", "config.json"), "utf8")).toContain("secret");
+    expect(existsSync(path.join(root, "leak.json"))).toBe(false);
+    // Server-internal areas keep working.
+    await handleRpc({ method: "write", path: ".aindrive/agents/a.json", content: "{}" }, root);
+    expect((await handleRpc({ method: "list", path: ".aindrive/agents" }, root)).entries.map((e) => e.name)).toEqual(["a.json"]);
+    await handleRpc({ method: "upload-chunk", path: ".aindrive/uploads/u.part", data: Buffer.from("hi").toString("base64"), chunkId: 0 }, root);
+    rmSync(root, { recursive: true, force: true });
   });
 });

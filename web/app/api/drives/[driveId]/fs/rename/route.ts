@@ -12,6 +12,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const gate = await requireDriveRole(driveId, body.data.from, { min: "editor" });
   if (gate instanceof NextResponse) return gate;
+  // The destination is a write too: a path-scoped editor must not move a file
+  // out of (or into) a subtree they can't edit.
+  const dest = await requireDriveRole(driveId, body.data.to, { min: "editor" });
+  if (dest instanceof NextResponse) return dest;
   const { drive } = gate;
   try {
     const result = await callAgent(driveId, drive.drive_secret, {

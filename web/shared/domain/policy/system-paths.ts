@@ -7,10 +7,13 @@
  * y.js binaries, the agent token & drive secret). If a cap-bearer
  * could read this they could exfiltrate API keys and forge requests.
  *
- * Enforcement points (every cap-bearer-initiated drive read MUST
- * go through one of these):
- *   - web/src/adapters/http/middleware/cap.ts (planned)
- *   - web/app/api/drives/[driveId]/fs/{read,list}/route.ts
+ * Enforcement points (every user-initiated drive path MUST go through one):
+ *   - lib/require-access.ts requireDriveRole — every fs/* and yjs route
+ *   - lib/zod-helpers.ts zPath — every JSON-body path (fs ops, shares,
+ *     members, payout)
+ *   - shared/agent-skills.ts runSkill — MCP + A2A skills
+ *   - cli/src/rpc.js safeResolve — agent-side second layer (allows only
+ *     .aindrive/agents + .aindrive/uploads, which the server drives itself)
  *
  * Server-internal callers (e.g. FsAgentRepo loading an agent JSON) do
  * NOT route through cap-bearer middleware, so they bypass this check.

@@ -22,6 +22,8 @@ import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { drizzleDb } from "@/lib/db";
 import { drives as drivesTable } from "../drizzle/schema";
 import { callAgent, AgentError } from "@/lib/rpc";
+import { normalizePath } from "@/lib/path";
+import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
 export type SkillCtx = { userId: string };
 
@@ -161,7 +163,14 @@ export async function runSkill(
   if (!drive) return { kind: "err", code: "not_found", message: "drive_not_found" };
   const driveSecret: string = drive.drive_secret;
 
-  const path = typeof arg(args, "path") === "string" ? (arg(args, "path") as string) : "";
+  let path: string;
+  try {
+    path = normalizePath(typeof arg(args, "path") === "string" ? (arg(args, "path") as string) : "");
+  } catch (e) {
+    return { kind: "err", code: "invalid_params", message: `invalid path: ${(e as Error).message}` };
+  }
+  // `.aindrive/` (agent token, drive secret, agent API keys) is off-limits to every role.
+  if (isSystemPath(path)) return { kind: "err", code: "forbidden", message: "reserved path" };
   const need: Role = name === "write_file" ? "editor" : "viewer";
   const role = await resolveAccess(driveId, path, ctx.userId);
   if (!atLeast(role, need)) {
