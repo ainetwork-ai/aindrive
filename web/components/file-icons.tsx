@@ -9,10 +9,11 @@
 import {
   Folder, FileText, FileCode, FileImage, FileType, FileSpreadsheet,
   FileBarChart, FileArchive, FileAudio, FileVideo, File as FileGeneric,
-  Lock,
+  FileType2, FileAxis3d, Lock,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import clsx from "clsx";
+import { previewKindFor, type PreviewKind } from "@/lib/preview-kind";
 
 export interface FileIcon {
   Icon: LucideIcon;
@@ -22,7 +23,7 @@ export interface FileIcon {
 
 type Kind =
   | "folder" | "image" | "pdf" | "code" | "doc"
-  | "sheet" | "slide" | "archive" | "audio" | "video" | "default";
+  | "sheet" | "slide" | "archive" | "audio" | "video" | "font" | "drawing" | "default";
 
 const ICON: Record<Kind, FileIcon> = {
   folder: { Icon: Folder, className: "text-drive-accent" },
@@ -35,28 +36,36 @@ const ICON: Record<Kind, FileIcon> = {
   archive: { Icon: FileArchive, className: "text-amber-600" },
   audio: { Icon: FileAudio, className: "text-pink-500" },
   video: { Icon: FileVideo, className: "text-rose-500" },
+  font: { Icon: FileType2, className: "text-slate-600" },
+  drawing: { Icon: FileAxis3d, className: "text-indigo-500" },
   default: { Icon: FileGeneric, className: "text-drive-muted" },
 };
 
-// Extension groups. mime checks (image/* etc.) take precedence for robustness,
-// extension fills the gaps (code/sheet/slide have no single mime convention).
+// Extension overrides where the icon taxonomy is finer than the preview
+// renderer (e.g. .doc and .ppt both "convert", but read as doc vs slide).
 const EXT: Record<string, Kind> = {};
 const add = (kind: Kind, exts: string[]) => exts.forEach((e) => (EXT[e] = kind));
-add("code", ["ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "go", "java",
-  "rb", "php", "c", "h", "cpp", "cs", "swift", "kt", "json", "yaml", "yml",
-  "toml", "html", "htm", "css", "scss", "sh", "bash", "sql"]);
-add("doc", ["md", "markdown", "txt", "rtf", "doc", "docx", "odt"]);
-add("sheet", ["csv", "tsv", "xls", "xlsx", "ods"]);
-add("slide", ["ppt", "pptx", "odp", "key"]);
+add("doc", ["md", "markdown", "txt", "rtf", "doc", "dot", "docx", "odt", "ott", "pages", "wpd", "xps", "oxps"]);
+add("sheet", ["csv", "tsv", "numbers"]);
+add("slide", ["ppt", "pps", "pot", "odp", "key"]);
 add("pdf", ["pdf"]);
-add("archive", ["zip", "tar", "gz", "tgz", "rar", "7z", "bz2", "xz"]);
-add("audio", ["mp3", "wav", "flac", "aac", "ogg", "m4a"]);
-add("video", ["mp4", "mov", "avi", "mkv", "webm", "m4v"]);
-add("image", ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
+add("image", ["ai", "eps", "ps"]);
+
+// Everything else follows the preview renderer (lib/preview-kind), so a type
+// that previews also gets a matching icon without a second table to update.
+const BY_PREVIEW: Partial<Record<PreviewKind, Kind>> = {
+  text: "code", markdown: "doc", image: "image", tiff: "image", psd: "image",
+  pdf: "pdf", video: "video", audio: "audio", docx: "doc", sheet: "sheet",
+  pptx: "slide", archive: "archive", font: "font", dxf: "drawing", converted: "doc",
+};
 
 function ext(name: string): string {
   const i = name.lastIndexOf(".");
   return i > 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+function kindForName(name: string): Kind | undefined {
+  return EXT[ext(name)] ?? BY_PREVIEW[previewKindFor(name)];
 }
 
 /** Resolve a file/folder entry to its type icon + color. */
@@ -67,8 +76,8 @@ export function fileIcon(entry: { name: string; isDir: boolean; mime?: string })
   if (mime === "application/pdf") return ICON.pdf;
   if (mime.startsWith("audio/")) return ICON.audio;
   if (mime.startsWith("video/")) return ICON.video;
-  const byExt = EXT[ext(entry.name)];
-  if (byExt) return ICON[byExt];
+  const byName = kindForName(entry.name);
+  if (byName) return ICON[byName];
   if (mime.startsWith("text/")) return ICON.doc;
   return ICON.default;
 }
@@ -78,8 +87,8 @@ export function fileIcon(entry: { name: string; isDir: boolean; mime?: string })
  * the leaf) to a type icon by extension. Defaults to a generic file.
  */
 export function fileIconForName(leafName: string): FileIcon {
-  const byExt = EXT[ext(leafName)];
-  return byExt ? ICON[byExt] : ICON.default;
+  const byName = kindForName(leafName);
+  return byName ? ICON[byName] : ICON.default;
 }
 
 // Static so Tailwind's JIT scanner sees the full class strings (dynamic
