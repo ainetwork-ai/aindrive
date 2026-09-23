@@ -57,11 +57,39 @@ password-protected Office · key numbers.
    proxy timeouts. Without `AINDRIVE_CONVERTER_URL` it returns 501 and the
    Viewer shows "download to open".
 
-4. **Rendered documents live in a sandboxed frame.** docx/sheet/pptx output is
+4. **Rendered documents live in a sandboxed frame.** docx/pptx output is
    HTML built from untrusted XML (hyperlinks, embedded content). It is rendered
    into an `<iframe sandbox="allow-same-origin">` (no `allow-scripts`), so a
    `javascript:` link or injected markup cannot execute on the app origin.
+   Sheets don't need the frame: SheetJS cell values are rendered by our own
+   grid as React text nodes, never as library HTML.
 
 5. **Out of scope**: grid thumbnails for the new types; HEIC (not on Google's
    list); editing any of the new types (preview only); decrypting legacy
    (RC4/binary) password-protected Office — reported as protected instead.
+
+## Security review follow-ups (2026-09-23)
+
+Fixed after the branch review:
+
+- **Cache-path traversal** (critical): the agent's stat reply is validated
+  (finite numeric mtime/size) before it names a cache file; keys use
+  `trunc(mtime)` + size and the resolved path must stay inside the drive's
+  cache dir. Same fix on fs/thumbnail.
+- **Unbounded cache / memory**: LRU size cap on `previews/`
+  (`AINDRIVE_PREVIEW_CACHE_MAX_BYTES`, 5 GiB); the failure map is swept and
+  capped at 1000.
+- **Slot starvation**: per-drive job cap (`AINDRIVE_PREVIEW_MAX_JOBS_PER_DRIVE`,
+  2); the client stops after ~1 min of 503s and offers Retry.
+- **Content-sniffing engines**: magic-byte check in the web route (before any
+  bytes reach the sidecar or the cache) and again in the sidecar; ffmpeg runs
+  with `-protocol_whitelist file` after an ffprobe format check that rejects
+  playlist/concat/pattern demuxers (415). `.key`/`.dot` text files are no
+  longer converted.
+- **CSP**: `media-src 'self' blob:` and `blob:` in `connect-src` so archive
+  members (video/audio/PDF) play; member blobs are typed
+  `application/octet-stream`.
+- Smaller: preview remounts when the file's mtime changes; text/* files with
+  unlisted extensions open in Monaco again; agile-encryption spinCount capped
+  at 10M; WebGL viewer freed on the no-WebGL path; pptx chart strings verified
+  inert (rendered as SVG text).

@@ -43,6 +43,8 @@ export default function DxfPreview({ src }: PreviewProps) {
       antialias: true,
     });
     if (!viewer.HasRenderer()) {
+      viewer.Destroy(); // still owns a canvas + worker pool even without WebGL
+      host.replaceChildren();
       setStatus({ state: "error", message: "This drawing needs WebGL, which isn't available in this browser. Download it to open it." });
       return;
     }

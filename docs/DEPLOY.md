@@ -78,7 +78,12 @@ ports, `internal` network only (no egress), read-only root, cap_drop ALL,
 mem/pid/cpu limits — so never add secrets, mounts or ports to it. `web` reaches
 it at `AINDRIVE_CONVERTER_URL=http://converter:8080` (set in compose).
 Converted output is cached under the data volume (`/data/previews/`, keyed by
-path+mtime; old entries are not GC'd yet — prune it if it grows).
+path+mtime+size) and capped by `AINDRIVE_PREVIEW_CACHE_MAX_BYTES` (default
+5 GiB, least-recently-used evicted after each write). It shares the volume with
+the SQLite DB, so either keep the cap well below free space or mount
+`/data/previews` on a separate volume. Jobs are capped per process
+(`AINDRIVE_PREVIEW_MAX_JOBS`, 4) and per drive
+(`AINDRIVE_PREVIEW_MAX_JOBS_PER_DRIVE`, 2) → 503 + Retry-After.
 
 If the sidecar is down or unset, only those previews degrade ("download to
 open"); nothing else depends on it. Tuning envs: `web/.env.example` (web side)
@@ -163,6 +168,8 @@ Checked against a live `getSupported()` call with the prod CDP key:
 - **doc/ppt/eps/xps/avi… preview says "needs the converter service"** →
   `AINDRIVE_CONVERTER_URL` unset (501). **"could not be converted"** (422) →
   see `docker compose logs converter`; failures are retried after ~10 min.
+  **"doesn't look like a .<ext> document"** (415) → the file's magic bytes
+  don't match its extension (e.g. a PEM `server.key`); by design.
 - **Wallet warns "withdraw ALL your <token>"** → shouldn't happen anymore;
   approvals are encoded for the exact sale amount, not unlimited.
 

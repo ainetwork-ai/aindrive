@@ -31,8 +31,11 @@ Browser shell:
   items, with permission gates (sell/share owner-only; rename/delete = canManage).
 
 Viewer / editors:
-- `viewer(.tsx/-parts/-utils)` — media preview (Range-streamed) + text editing.
-  Picks Monaco (code) or the rich-text editor (.md), owns the Yjs collab lifecycle.
+- `viewer(.tsx/-parts/-utils)` — the file Viewer panel. Kind comes from
+  `lib/preview-kind` (`previewKindForEntry`): `.md` → rich-text editor, text →
+  Monaco (owns the Yjs collab lifecycle), everything else → `previews/`.
+- `previews/` — inline preview renderers (pdf, office, sheets, archives, media,
+  fonts, CAD, server-converted types) + their sandbox rules: `previews/README.md`.
 - `editors/rich-text-editor` — collaborative WYSIWYG Markdown (TipTap + Yjs).
 
 Sharing / payments:

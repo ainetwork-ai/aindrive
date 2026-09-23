@@ -6,7 +6,11 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "img-src 'self' data: blob: https:",
-  "connect-src 'self' wss: https:",
+  // blob: in connect-src/media-src — archive-preview members are blob: URLs
+  // that pdf.js fetches and <video>/<audio> play (archive-open.ts types
+  // them application/octet-stream, so they can't run as a document).
+  "connect-src 'self' wss: https: blob:",
+  "media-src 'self' blob:",
   // Wallet connect flows iframe these origins: WalletConnect's Verify
   // anti-phishing attestation (verify/secure.walletconnect.*) and the
   // Coinbase/Base smart-wallet communicator (keys.coinbase.com). Without them

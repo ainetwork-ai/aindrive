@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extOf, isNativeVideo, monacoLanguageFor, previewKindFor } from "./preview-kind";
+import { extOf, isNativeVideo, monacoLanguageFor, previewKindFor, previewKindForEntry } from "./preview-kind";
 
 // Every type Google Drive lists as previewable
 // (https://support.google.com/drive/answer/37603, fetched 2026-09-23).
@@ -78,5 +78,19 @@ describe("monacoLanguageFor", () => {
     expect(monacoLanguageFor("x.java")).toBe("java");
     expect(monacoLanguageFor("Dockerfile")).toBe("dockerfile");
     expect(monacoLanguageFor("x.unknown")).toBe("plaintext");
+  });
+});
+
+describe("previewKindForEntry", () => {
+  it("falls back to text for agent-tagged text/* the table doesn't list", () => {
+    expect(previewKindForEntry("events.jsonl", "text/plain")).toBe("text");
+    expect(previewKindForEntry("post.mdx", "text/markdown")).toBe("text");
+    expect(previewKindForEntry("yarn.lock", "text/plain")).toBe("text");
+  });
+  it("keeps the name-based kind otherwise", () => {
+    expect(previewKindForEntry("a.docx", "application/octet-stream")).toBe("docx");
+    expect(previewKindForEntry("a.png", "text/plain")).toBe("image"); // name wins
+    expect(previewKindForEntry("blob.bin", "application/octet-stream")).toBe("none");
+    expect(previewKindForEntry("blob.bin", undefined)).toBe("none");
   });
 });

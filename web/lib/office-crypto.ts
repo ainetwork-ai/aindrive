@@ -26,6 +26,16 @@ export class OfficeCryptoUnsupportedError extends Error {
   constructor(detail: string) { super(`Unsupported Office encryption: ${detail}`); this.name = "OfficeCryptoUnsupportedError"; }
 }
 
+/** The file asks for more key-derivation work than any real Office file does. */
+export class OfficeCryptoLimitError extends Error {
+  constructor(detail: string) { super(`This file's encryption settings are out of range (${detail}).`); this.name = "OfficeCryptoLimitError"; }
+}
+
+// MS-OFFCRYPTO caps spinCount at 10,000,000 (Office writes 100,000). Each
+// spin is one hash on the main thread, so a crafted file with 2^31 spins
+// would freeze the tab after the password is typed.
+export const MAX_SPIN_COUNT = 10_000_000;
+
 const CFB_MAGIC = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 
 type Streams = { info: Uint8Array; pkg: Uint8Array };
@@ -92,6 +102,13 @@ async function decryptAgile(s: Streams, password: string): Promise<Uint8Array> {
   }
   const hash = HASHES[ek.hashAlgorithm], dataHash = HASHES[keyData.hashAlgorithm];
   if (!hash || !dataHash) throw new OfficeCryptoUnsupportedError(`hash ${ek.hashAlgorithm}`);
+  const spinCount = Number(ek.spinCount);
+  if (!Number.isInteger(spinCount) || spinCount < 0 || spinCount > MAX_SPIN_COUNT) {
+    throw new OfficeCryptoLimitError(`spinCount ${ek.spinCount}`);
+  }
+  // dataIntegrity (HMAC over the package) is intentionally NOT verified: this
+  // is a read-only preview, a tampered package just renders wrong or fails to
+  // parse, and nothing decrypted here is trusted or written back.
 
   const salt = b64(ek.saltValue);
   const keyBytes = Number(ek.keyBits) / 8, blockSize = Number(ek.blockSize);
@@ -101,7 +118,7 @@ async function decryptAgile(s: Streams, password: string): Promise<Uint8Array> {
   let h = hash(concat(salt, utf16le(password)));
   const buf = new Uint8Array(4 + h.length);
   const bufView = new DataView(buf.buffer);
-  for (let i = 0, n = Number(ek.spinCount); i < n; i++) {
+  for (let i = 0; i < spinCount; i++) {
     bufView.setUint32(0, i, true);
     buf.set(h, 4);
     h = hash(buf);

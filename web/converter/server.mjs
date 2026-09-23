@@ -8,7 +8,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdtemp, mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
@@ -40,6 +40,77 @@ const VIDEO = [
 // Audio is transcoded only when the browser can't decode it (e.g. MPEG-1
 // Layer II .mpga/.mp2) — the client tries native playback first.
 const AUDIO = ["mp3", "mpga", "mp2", "m2a", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac", "weba"];
+
+// Magic bytes per document ext. Mirrors web/lib/preview-convert.ts
+// (CONVERT_MAGIC). LibreOffice / gs / libgxps pick their import filter from
+// the CONTENT, so without this an ".odt" that is really HTML or flat ODF would
+// be imported with remote-resource links, and a "server.key" PEM converted.
+const OLE2 = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const ZIP = [0x50, 0x4b, 0x03, 0x04];
+const RTF = [0x7b, 0x5c, 0x72, 0x74, 0x66]; // {\rtf
+const PS = [0x25, 0x21]; // %! (PostScript files start "%!PS-Adobe" or bare "%!")
+const DOS_EPS = [0xc5, 0xd0, 0xd3, 0xc6];
+const WPD = [0xff, 0x57, 0x50, 0x43];
+const MAGIC = {
+  doc: [OLE2], dot: [OLE2], ppt: [OLE2], pps: [OLE2], pot: [OLE2],
+  key: [ZIP], numbers: [ZIP], pages: [ZIP], odt: [ZIP], ott: [ZIP], odp: [ZIP], xps: [ZIP], oxps: [ZIP],
+  rtf: [RTF],
+  eps: [PS, DOS_EPS], ps: [PS, DOS_EPS],
+  wpd: [WPD],
+};
+
+async function checkMagic(inFile, ext) {
+  const sigs = MAGIC[ext];
+  if (!sigs) return;
+  const fh = await open(inFile, "r");
+  const head = Buffer.alloc(8);
+  try { await fh.read(head, 0, 8, 0); } finally { await fh.close(); }
+  if (!sigs.some((sig) => sig.every((b, i) => head[i] === b))) {
+    throw new ConvertError("file content doesn't match its extension", 415);
+  }
+}
+
+// ffmpeg also picks its demuxer from content: an ".avi" that is really an HLS
+// playlist / concat script / DASH manifest makes it open the URLs or local
+// paths listed inside (SSRF, local file read). `-protocol_whitelist file`
+// blocks network I/O; this list rejects the reference-following demuxers
+// before any transcode even starts. Matched against ffprobe's format_name
+// (comma-separated aliases, e.g. "hls,applehttp").
+const DENY_DEMUXERS = new Set([
+  "hls", "applehttp", "m3u8", // HTTP Live Streaming playlists
+  "concat",                    // concat script: lists other files/URLs
+  "dash", "mpegdash",          // DASH manifests
+  "image2", "image2pipe",      // pattern-expanding image sequences
+  "tty",                       // text/ANSI "video" — renders file text into frames
+  "lavfi",                     // filter graph as input
+  "ffmetadata", "subviewer", "webvtt", "srt", "ass", "sup", // text formats, never a video
+  "data", "bin", "txt",
+]);
+
+const NOT_MEDIA = () => new ConvertError("file content doesn't match its extension", 415);
+const denied = (n) => DENY_DEMUXERS.has(n) || n.startsWith("image2") || n.endsWith("_pipe");
+
+async function probeFormat(inFile, signal) {
+  let out;
+  try {
+    out = await exec("ffprobe", [
+      "-v", "error", "-protocol_whitelist", "file",
+      "-show_entries", "format=format_name", "-of", "default=nw=1:nk=1", inFile,
+    ], signal, { stdout: true, label: "media" });
+  } catch (e) {
+    // A playlist/concat input usually makes ffprobe itself fail — on the
+    // blocked segment URL — so the demuxer is only visible in its log
+    // prefix ("[hls @ 0x…]"). That is a content mismatch, not a bad video.
+    const names = [...(e.stderr ?? "").matchAll(/\[([\w.-]+) @ /g)].map((m) => m[1]);
+    if (names.some(denied) || /not on whitelist|Unsafe file name/.test(e.stderr ?? "")) throw NOT_MEDIA();
+    throw e;
+  }
+  const names = out.trim().split(/[,\s]+/).filter(Boolean);
+  if (names.length === 0 || names.some(denied)) {
+    console.warn(`[converter] rejected input format: ${out.trim().slice(0, 100)}`);
+    throw NOT_MEDIA();
+  }
+}
 
 /** Returns { run(inFile, outDir) → outFile, timeoutMs, mime } or null (415). */
 function engineFor(to, ext) {
@@ -99,8 +170,10 @@ function engineFor(to, ext) {
       timeoutMs: VIDEO_TIMEOUT_MS,
       run: async (inFile, jobDir, signal) => {
         const out = join(jobDir, "out.mp4");
+        await probeFormat(inFile, signal);
         await exec("ffmpeg", [
           "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+          "-protocol_whitelist", "file",
           "-i", inFile,
           "-map", "0:a:0", "-vn", "-sn", "-dn",
           "-c:a", "aac", "-b:a", "160k",
@@ -117,8 +190,10 @@ function engineFor(to, ext) {
       timeoutMs: VIDEO_TIMEOUT_MS,
       run: async (inFile, jobDir, signal) => {
         const out = join(jobDir, "out.mp4");
+        await probeFormat(inFile, signal);
         await exec("ffmpeg", [
           "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+          "-protocol_whitelist", "file",
           "-i", inFile,
           "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn",
           "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
@@ -140,14 +215,17 @@ class ConvertError extends Error {
   constructor(message, status = 422) { super(message); this.status = status; }
 }
 
-/** Spawn without a shell; kill the whole process group on abort. */
-function exec(cmd, args, signal) {
+/** Spawn without a shell; kill the whole process group on abort. Resolves
+ *  with stdout (≤ 4 KiB) when `opts.stdout` is set. */
+function exec(cmd, args, signal, opts = {}) {
   return new Promise((resolve, reject) => {
     // detached → own process group, so a timeout also kills soffice's
     // oosplash → soffice.bin child instead of orphaning it.
-    const child = spawn(cmd, args, { detached: true, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(cmd, args, { detached: true, stdio: ["ignore", opts.stdout ? "pipe" : "ignore", "pipe"] });
     let stderr = "";
+    let stdout = "";
     child.stderr.on("data", (d) => { stderr = (stderr + d).slice(-2000); });
+    child.stdout?.on("data", (d) => { if (stdout.length < 4096) stdout += d; });
     const kill = () => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ } };
     signal.addEventListener("abort", kill, { once: true });
     child.on("error", (e) => { signal.removeEventListener("abort", kill); reject(e); });
@@ -158,9 +236,12 @@ function exec(cmd, args, signal) {
       if (code !== 0) {
         // Parser stderr stays in the sidecar log — it is noise to end users.
         console.warn(`[converter] ${cmd} exit ${code}: ${stderr.trim().slice(-500)}`);
-        return reject(new ConvertError(`${cmd === "soffice" ? "document" : cmd === "ffmpeg" ? "video" : "file"} could not be converted`));
+        const what = opts.label ?? (cmd === "soffice" ? "document" : cmd === "ffmpeg" ? "video" : "file");
+        const err = new ConvertError(`${what} could not be ${cmd === "ffprobe" ? "read" : "converted"}`);
+        err.stderr = stderr; // for callers that classify the failure (probeFormat)
+        return reject(err);
       }
-      resolve();
+      resolve(stdout);
     });
   });
 }
@@ -223,6 +304,7 @@ async function handleConvert(req, res, url) {
     // the engine hanging.
     timer = setTimeout(() => ac.abort(), engine.timeoutMs);
 
+    await checkMagic(inFile, ext);
     const out = await engine.run(inFile, jobDir, ac.signal);
     const size = (await stat(out).catch(() => null))?.size ?? 0;
     if (size === 0) throw new ConvertError("conversion produced no output");

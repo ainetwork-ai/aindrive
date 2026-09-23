@@ -43,7 +43,9 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
   sig-consolidation note in `web/shared/README.md`.
 - `agent-stream.ts` — byte-range `ReadableStream` over sequential `download-chunk` RPCs (Range playback, downloads).
 - `byte-range.ts` — single-range `Range` header parser shared by fs/stream + fs/preview.
-- `preview-convert.ts` — fs/preview jobs: target validation, cache path, agent→converter-sidecar pump, in-flight/failure registry (spec 2026-09-23 §3).
+- `preview-convert.ts` — fs/preview jobs: target validation, agent-stat validation + contained cache path, magic-byte table, LRU cache cap, per-drive job caps, agent→converter-sidecar pump, in-flight/failure registry (spec 2026-09-23 §3).
+- `preview-kind.ts` — pure file name → Viewer renderer kind (`previewKindForEntry` adds the text/* mime fallback); shared by the Viewer and fs/preview.
+- `office-crypto.ts` — decrypts password-protected OOXML (ECMA-376 agile/standard) in the browser for preview; spinCount capped.
 - `aindrive-agent.ts` — A2A agent card + executor (runs `@/shared/agent-skills`).
 
 **Storage / DB**

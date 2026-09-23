@@ -15,7 +15,7 @@ Why a separate image: spec §3 in `docs/superpowers/specs/2026-09-23-file-previe
 
 - `POST /convert?to=pdf|mp4&ext=<ext>` — body = raw file bytes. `200` + the
   converted bytes (`application/pdf` / `video/mp4`), or JSON `{error}`:
-  `415` unknown ext/target, `413` too large, `422` engine failed, `504` timed
+  `415` unknown ext/target or content that doesn't match the ext, `413` too large, `422` engine failed, `504` timed
   out, `503` queue full (`Retry-After`).
 - `GET /healthz` — `{ok, running, queued}`.
 
@@ -36,7 +36,11 @@ nothing: no secrets/env_file, no volumes, no ports, `internal` compose network
 only, read-only root + `/tmp` tmpfs, `cap_drop: ALL`, `no-new-privileges`,
 mem/pid/cpu limits (`web/docker-compose.yml`). Engines are spawned with an
 args array (no shell), on a fixed `in.<ext>` name in a fresh per-job dir that
-is always removed; a timeout SIGKILLs the whole process group.
+is always removed; a timeout SIGKILLs the whole process group. Engines sniff
+content, not the ext, so inputs are gated first: document magic bytes
+(`MAGIC`, mirrors `web/lib/preview-convert.ts`), and for ffmpeg an `ffprobe`
+format check against `DENY_DEMUXERS` (hls/concat/dash/image2/tty/lavfi…)
+plus `-protocol_whitelist file` — a playlist renamed `.avi` must never fetch URLs.
 
 ## Gotchas
 

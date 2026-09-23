@@ -46,9 +46,14 @@ function innerName(name: string): string {
   return name.replace(/\.(gz|bz2|xz)$/i, "") || "file";
 }
 
+// Member blobs back same-origin blob: URLs (download anchor, <video>, pdf.js).
+// An untyped blob opened in a new tab could be sniffed as HTML and run on the
+// app origin, so every member is forced to an inert type.
+const INERT = "application/octet-stream";
+
 function singleFile(name: string, data: Uint8Array): OpenedArchive {
   const path = innerName(name);
-  const blob = new Blob([data as BlobPart]);
+  const blob = new Blob([data as BlobPart], { type: INERT });
   return {
     items: [{ path, isDir: false, size: data.byteLength }],
     encrypted: false,
@@ -83,7 +88,8 @@ export async function openArchive(name: string, data: ArrayBuffer): Promise<Open
       encrypted,
       extract: async (path) => {
         try {
-          return await r.extractSingleFile(byDisplay.get(path) ?? path);
+          const file: Blob = await r.extractSingleFile(byDisplay.get(path) ?? path);
+          return file.type === INERT ? file : file.slice(0, file.size, INERT);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           throw new Error(/passphrase|encrypt|decrypt/i.test(msg) ? ENCRYPTED_ENTRY : `Could not extract this entry (${msg}).`);

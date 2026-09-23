@@ -43,7 +43,8 @@ function frameFactory(doc: Document) {
 }
 
 // Word bullets are often Symbol/Wingdings private-use code points, which
-// render as tofu without those fonts. Swap the common ones for Unicode.
+// render as tofu without those fonts. Swap the common ones for Unicode —
+// in numbering CSS (list markers) and in text runs.
 const SYMBOL_BULLETS: Record<string, string> = { "\uf0b7": "•", "\uf0a7": "▪", "\uf0d8": "➢", "\uf0fc": "✓", "\uf076": "❖", "\uf06e": "■" };
 const SYMBOL_RE = new RegExp(`[${Object.keys(SYMBOL_BULLETS).join("")}]`, "g");
 
@@ -77,6 +78,14 @@ function DocxDocument({ name, data }: { name: string; data: ArrayBuffer }) {
       const fixed = css.replace(SYMBOL_RE, (c) => SYMBOL_BULLETS[c]);
       if (fixed !== css) st.textContent = fixed;
     });
+    // Same code points typed as text / <w:sym> runs. Text nodes only
+    // (nodeValue), so this can never introduce markup.
+    const walker = doc.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const text = n.nodeValue ?? "";
+      if (SYMBOL_RE.test(text)) n.nodeValue = text.replace(SYMBOL_RE, (c) => SYMBOL_BULLETS[c]);
+      SYMBOL_RE.lastIndex = 0; // global regex + test() is stateful
+    }
   }, [data]);
   return <SandboxedDocFrame name={name} render={render} fit={fitPages} css={CSS} />;
 }

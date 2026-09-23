@@ -9,6 +9,10 @@
 // there (e.g. <img onerror>) would run in the app realm. Its XML reader never
 // decodes entities, so text shouldn't carry a raw "<", but we escape any that
 // do before rendering rather than rely on that.
+// Chart strings (titles, series/category names) are NOT touched: echarts
+// draws them with its SVG renderer as <text> textContent, and its default
+// tooltip HTML-encodes names — verified with a deck whose series name is
+// `<img src=x onerror=alert(1)>` (escaped and CDATA variants): no dialog.
 import { useCallback, useEffect, useRef } from "react";
 import type { PreviewProps } from "./types";
 import { OfficeBytes } from "./office-password";

@@ -15,7 +15,7 @@ import { RichTextEditor } from "./editors/rich-text-editor";
 import { PreviewBody } from "./previews";
 import { bytesLoader } from "./previews/use-preview-bytes";
 import type { PreviewSource } from "./previews/types";
-import { previewKindFor, monacoLanguageFor } from "@/lib/preview-kind";
+import { previewKindForEntry, monacoLanguageFor } from "@/lib/preview-kind";
 import { loader } from "@monaco-editor/react";
 
 // Monaco self-host: load the editor runtime from our own origin (/monaco/vs)
@@ -57,11 +57,12 @@ export function Viewer({
 
   // Renderer is picked from the file NAME (lib/preview-kind), not entry.mime:
   // published agents send application/octet-stream for anything outside their
-  // small mime table, which used to leave bmp/tiff/docx/… unpreviewable.
+  // small mime table, which used to leave bmp/tiff/docx/… unpreviewable. mime
+  // is only a fallback for unlisted text/* (previewKindForEntry).
   // Markdown opens the rich-text (WYSIWYG) editor — a SEPARATE Y.Doc root
   // (getXmlFragment) from the Monaco/Y.Text path, so the two never collide. All
   // other text/code stays on Monaco. (See editor-framework-design.md.)
-  const kind = previewKindFor(entry.name);
+  const kind = previewKindForEntry(entry.name, entry.mime);
   const isRichText = kind === "markdown";
   const isText = kind === "text";
 
@@ -343,7 +344,7 @@ export function Viewer({
             }}
           />
         ) : (
-          <PreviewBody key={entry.path} kind={kind} src={previewSource} />
+          <PreviewBody key={`${entry.path}:${entry.mtimeMs}`} kind={kind} src={previewSource} />
         )}
       </div>
       )}

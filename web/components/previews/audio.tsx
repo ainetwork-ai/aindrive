@@ -26,7 +26,7 @@ export default function AudioPreview({ src }: PreviewProps) {
 function Transcoded({ name, url }: { name: string; url: string }) {
   const state = useConverted(url);
   if (state.status === "pending") return <PreviewLoading label="Converting audio…" />;
-  if (state.status === "error") return <PreviewMessage name={name} message={state.message} />;
+  if (state.status === "error") return <PreviewMessage name={name} message={state.message} onRetry={state.retry} />;
   return <AudioCard name={name} url={url} />;
 }
 

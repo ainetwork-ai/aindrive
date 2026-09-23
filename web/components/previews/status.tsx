@@ -14,13 +14,18 @@ export function PreviewLoading({ label }: { label?: string }) {
 }
 
 /** Type icon + name + message. Used for "no inline preview" and for errors. */
-export function PreviewMessage({ name, message }: { name: string; message: string }) {
+export function PreviewMessage({ name, message, onRetry }: { name: string; message: string; onRetry?: () => void }) {
   const { Icon, className: tone } = fileIconForName(name);
   return (
     <div className="h-full min-h-[200px] flex flex-col items-center justify-center gap-3 p-6 text-center">
       <Icon className={clsx("w-16 h-16", tone)} />
       <div className="text-body text-drive-text max-w-xs truncate" title={name}>{name}</div>
       <p className="text-caption text-drive-muted max-w-sm">{message}</p>
+      {onRetry && (
+        <button type="button" onClick={onRetry} className="px-3 py-1.5 rounded-full border border-drive-border text-caption text-drive-text hover:bg-drive-hover">
+          Retry
+        </button>
+      )}
     </div>
   );
 }

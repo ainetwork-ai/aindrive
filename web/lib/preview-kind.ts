@@ -104,6 +104,17 @@ export function previewKindFor(name: string): PreviewKind {
   return "none";
 }
 
+/**
+ * The Viewer's single kind decision. Name first (see header); the agent's mime
+ * is only a fallback for text it tagged text/* whose ext isn't in the table
+ * (.jsonl, .mdx, yarn.lock…) so those keep opening in Monaco.
+ */
+export function previewKindForEntry(name: string, mime: string | undefined): PreviewKind {
+  const kind = previewKindFor(name);
+  if (kind === "none" && mime?.startsWith("text/")) return "text";
+  return kind;
+}
+
 /** Video the browser should try natively before asking for a transcode. */
 export function isNativeVideo(name: string): boolean {
   return NATIVE_VIDEO.has(extOf(name));

@@ -8,6 +8,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind } from "@/lib/mime";
+import { assertInside, validAgentStat } from "@/lib/preview-convert";
 
 /**
  * GET /api/drives/:driveId/fs/thumbnail?path=...&v=<mtimeMs>
@@ -27,7 +28,8 @@ const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16
 
 // Mirrors lib/db.js dataDir (not exported there).
 function thumbsDir(driveId: string): string {
-  return join(process.env.AINDRIVE_DATA_DIR || join(homedir(), ".aindrive"), "thumbs", driveId);
+  const root = join(process.env.AINDRIVE_DATA_DIR || join(homedir(), ".aindrive"), "thumbs");
+  return assertInside(root, join(root, driveId));
 }
 
 function imgResponse(buf: Buffer, contentType = "image/webp"): NextResponse {
@@ -67,17 +69,21 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     // stat first: cheap, and its mtime keys the cache so a hit skips the
     // (much heavier) read RPC entirely.
     const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as
-      { entry: { mtimeMs: number; size: number; isDir: boolean } | null };
+      { entry: { mtimeMs: unknown; size: unknown; isDir: boolean } | null };
     if (!stat.entry || stat.entry.isDir) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
-    if (stat.entry.size > MAX_READ_BYTES) {
+    // mtime lands in a file name; a string like "/../../<drive>/…" from a
+    // modified agent would otherwise read/write another drive's thumbs.
+    const entry = validAgentStat(stat.entry);
+    if (!entry) return NextResponse.json({ error: "agent returned an invalid stat" }, { status: 502 });
+    if (entry.size > MAX_READ_BYTES) {
       return NextResponse.json({ error: "file too large for a thumbnail", limit: MAX_READ_BYTES }, { status: 413 });
     }
 
     const dir = thumbsDir(driveId);
-    const key = `${createHash("sha1").update(path).digest("hex")}-${stat.entry.mtimeMs}.${isSvg ? "svg" : "webp"}`;
-    const cached = join(dir, key);
+    const key = `${createHash("sha1").update(path).digest("hex")}-${entry.mtimeMs}.${isSvg ? "svg" : "webp"}`;
+    const cached = assertInside(dir, join(dir, key));
     if (existsSync(cached)) {
       return imgResponse(readFileSync(cached), isSvg ? "image/svg+xml" : "image/webp");
     }
