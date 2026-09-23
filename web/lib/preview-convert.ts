@@ -37,13 +37,13 @@ function envInt(name: string, dflt: number): number {
 
 /**
  * The only allowed (file, target) pairs: PDF for the "converted" kind, MP4 for
- * video. Anything else is a 400 — the converter is never asked to parse a
+ * video and audio (audio only reaches here when the browser can't decode it). Anything else is a 400 — the converter is never asked to parse a
  * type the Viewer would not have sent to it.
  */
 export function previewTargetFor(path: string, to: string | null): PreviewTarget | null {
   const kind = previewKindFor(path);
   if (to === "pdf" && kind === "converted") return "pdf";
-  if (to === "mp4" && kind === "video") return "mp4";
+  if (to === "mp4" && (kind === "video" || kind === "audio")) return "mp4";
   return null;
 }
 

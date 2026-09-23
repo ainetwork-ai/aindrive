@@ -9,8 +9,8 @@ describe("previewTargetFor", () => {
       expect(previewTargetFor(p, "mp4"), p).toBeNull();
     }
   });
-  it("allows mp4 only for video kinds", () => {
-    for (const p of ["a.avi", "a.wmv", "a.flv", "a.3gp", "a.mpg", "a.mp4", "a.mov"]) {
+  it("allows mp4 only for video and audio kinds", () => {
+    for (const p of ["a.avi", "a.wmv", "a.flv", "a.3gp", "a.mpg", "a.mp4", "a.mov", "a.mpga", "a.mp2", "a.flac"]) {
       expect(previewTargetFor(p, "mp4"), p).toBe("mp4");
       expect(previewTargetFor(p, "pdf"), p).toBeNull();
     }

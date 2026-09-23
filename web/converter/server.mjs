@@ -29,7 +29,7 @@ function int(name, dflt) {
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
 
-// ext → engine. Mirrors web/lib/preview-kind.ts ("converted" + "video" rows).
+// ext → engine. Mirrors web/lib/preview-kind.ts ("converted", "video", "audio" rows).
 const LIBREOFFICE = ["doc", "dot", "rtf", "odt", "ott", "wpd", "ppt", "pps", "pot", "odp", "key", "numbers", "pages"];
 const POSTSCRIPT = ["eps", "ps"];
 const XPS = ["xps", "oxps"];
@@ -37,6 +37,9 @@ const VIDEO = [
   "mp4", "m4v", "webm", "mov", "ogv", "mkv",
   "avi", "wmv", "asf", "flv", "f4v", "3gp", "3g2", "mpg", "mpeg", "mpe", "m1v", "m2v", "vob", "m2ts",
 ];
+// Audio is transcoded only when the browser can't decode it (e.g. MPEG-1
+// Layer II .mpga/.mp2) — the client tries native playback first.
+const AUDIO = ["mp3", "mpga", "mp2", "m2a", "wav", "ogg", "oga", "opus", "m4a", "aac", "flac", "weba"];
 
 /** Returns { run(inFile, outDir) → outFile, timeoutMs, mime } or null (415). */
 function engineFor(to, ext) {
@@ -86,6 +89,24 @@ function engineFor(to, ext) {
       run: async (inFile, jobDir, signal) => {
         const out = join(jobDir, "out.pdf");
         await exec("xpstopdf", [inFile, out], signal);
+        return out;
+      },
+    };
+  }
+  if (to === "mp4" && AUDIO.includes(ext)) {
+    return {
+      mime: "video/mp4",
+      timeoutMs: VIDEO_TIMEOUT_MS,
+      run: async (inFile, jobDir, signal) => {
+        const out = join(jobDir, "out.mp4");
+        await exec("ffmpeg", [
+          "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+          "-i", inFile,
+          "-map", "0:a:0", "-vn", "-sn", "-dn",
+          "-c:a", "aac", "-b:a", "160k",
+          "-movflags", "+faststart",
+          out,
+        ], signal);
         return out;
       },
     };
