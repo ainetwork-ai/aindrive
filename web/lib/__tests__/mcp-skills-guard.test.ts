@@ -19,17 +19,19 @@ const TREE: Record<string, { name: string; isDir: boolean }[]> = {
   secret: [{ name: "plan.txt", isDir: false }],
 };
 const reads: string[] = [];
+const deletes: string[] = [];
 vi.mock("../rpc", () => ({
   AgentError: class extends Error {},
   callAgent: async (_d: string, _s: string, req: { method: string; path: string }) => {
     if (req.method === "list") return { entries: TREE[req.path] ?? [] };
     if (req.method === "read") { reads.push(req.path); return { content: `content of ${req.path}` }; }
+    if (req.method === "delete") { deletes.push(req.path); return { ok: true }; }
     return { ok: true };
   },
 }));
 
 const { db } = await import("../db.js");
-const { runSkill } = await import("../../shared/agent-skills");
+const { runSkill, driveScopedDescriptors } = await import("../../shared/agent-skills");
 
 const viewer = { userId: "viewer1", driveId: "d1", scope: "read" as const };
 const owner = { userId: "owner1", driveId: "d1", scope: "write" as const };
@@ -75,6 +77,36 @@ describe("runSkill guards", () => {
     }
     const w = await runSkill(owner, "write_file", { path: ".aindrive/config.json", content: "{}" });
     expect(w).toMatchObject({ kind: "err", code: "forbidden" });
+    for (const p of [".aindrive", ".aindrive/config.json", "./.aindrive"]) {
+      const d = await runSkill(owner, "delete_path", { path: p });
+      expect(d, `delete ${p}`).toMatchObject({ kind: "err", code: "forbidden" });
+    }
+    expect(deletes).toEqual([]);
+  });
+
+  it("delete_path: editor only, never the root, never under a read scope", async () => {
+    // read-scoped token and a viewer role are both refused before the agent is asked
+    expect(await runSkill(viewer, "delete_path", { path: "free.txt" })).toMatchObject({ kind: "err", code: "forbidden" });
+    expect(await runSkill({ ...viewer, scope: "write" }, "delete_path", { path: "free.txt" }))
+      .toMatchObject({ kind: "err", code: "forbidden" });
+    for (const p of ["", "/", ".", "./"]) {
+      expect(await runSkill(owner, "delete_path", { path: p }), `root ${JSON.stringify(p)}`)
+        .toMatchObject({ kind: "err", code: "invalid_params" });
+    }
+    expect(await runSkill(owner, "delete_path", { path: "../etc" })).toMatchObject({ kind: "err", code: "invalid_params" });
+    expect(await runSkill(owner, "delete_path", { path: "missing.txt" })).toMatchObject({ kind: "err", code: "not_found" });
+    expect(deletes).toEqual([]);
+
+    const f = await runSkill(owner, "delete_path", { path: "/free.txt" });
+    expect(f).toMatchObject({ kind: "ok", structured: { path: "free.txt", kind: "file" } });
+    const d = await runSkill(owner, "delete_path", { path: "secret" });
+    expect(d).toMatchObject({ kind: "ok", structured: { path: "secret", kind: "folder" } });
+    expect(deletes).toEqual(["free.txt", "secret"]);
+  });
+
+  it("drive-scoped tools/list offers delete_path only to write tokens", () => {
+    expect(driveScopedDescriptors("write").map((d) => d.name)).toContain("delete_path");
+    expect(driveScopedDescriptors("read").map((d) => d.name)).not.toContain("delete_path");
   });
 
   it("list_files: listed sale shows locked, unlisted sale is hidden, paid folder can't be opened", async () => {
