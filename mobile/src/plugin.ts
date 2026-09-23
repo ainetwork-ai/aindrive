@@ -32,6 +32,25 @@ export interface AgentConfig {
   driveSecret: string;
   folderUri: string;
   folderLabel?: string;
+  /** Build the photo index right after connecting (first run can take minutes). */
+  indexOnStart?: boolean;
+}
+
+/** Photo-index state for one drive; drives `Index photos` progress in the UI. */
+export interface IndexStatus {
+  indexed: number;
+  running: boolean;
+  done: number;
+  total: number;
+  failed: number;
+  phase: string;
+  lastRunMs: number;
+}
+
+/** Same shape the desktop agent-ask returns, so the web UI needs no change. */
+export interface AskResult {
+  answer: string;
+  sources: { path: string; snippet: string; driveId?: string }[];
 }
 
 export interface DriveStatus {
@@ -41,6 +60,7 @@ export interface DriveStatus {
   connected: boolean;
   rpcCount: number;
   lastError: string | null;
+  index?: IndexStatus;
 }
 
 export interface AgentStatus {
@@ -65,6 +85,10 @@ export interface AindriveAgentPlugin {
   /** Takes one drive offline, or every drive when no driveId is given. */
   stop(opts?: { driveId?: string }): Promise<AgentStatus>;
   status(): Promise<AgentStatus>;
+  /** (Re)build the photo index for one drive, or all running drives. Progress via statusChanged. */
+  reindex(opts?: { driveId?: string }): Promise<AgentStatus>;
+  /** Ask the on-device agent — fully offline (gazetteer + local index). */
+  ask(opts: { query: string }): Promise<AskResult>;
   addListener(
     event: "statusChanged",
     cb: (s: AgentStatus) => void,

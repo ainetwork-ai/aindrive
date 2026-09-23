@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * web UI walks the same directories repeatedly; the cache is dropped for a
  * subtree whenever we mutate it.
  */
-final class SafFs {
+public final class SafFs {
     static final int MAX_PATH_BYTES = 4096;
     static final int MAX_READ_BYTES = 8 * 1024 * 1024;
     static final int MAX_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -62,10 +62,10 @@ final class SafFs {
         pathToDocId.put("", rootDocId);
     }
 
-    static final class Entry {
-        String name, path, mime, ext, docId;
-        boolean isDir;
-        long size, mtimeMs;
+    public static final class Entry {
+        public String name, path, mime, ext, docId;
+        public boolean isDir;
+        public long size, mtimeMs;
     }
 
     // ------------------------------------------------------------ paths
@@ -152,6 +152,31 @@ final class SafFs {
     }
 
     // ------------------------------------------------------------ reads
+
+    /**
+     * Every image file in the tree (HIDDEN dirs skipped), one child query per
+     * directory. Used by the photo indexer; the web side never asks for this.
+     */
+    public List<Entry> walkPhotos() throws IOException {
+        List<Entry> out = new ArrayList<>();
+        java.util.ArrayDeque<String> dirs = new java.util.ArrayDeque<>();
+        dirs.push("");
+        while (!dirs.isEmpty()) {
+            String dir = dirs.pop();
+            for (Entry e : list(dir)) {
+                if (e.isDir) dirs.push(e.path);
+                else if (e.mime != null && e.mime.startsWith("image/")) out.add(e);
+            }
+        }
+        return out;
+    }
+
+    /** Raw stream for one document (by id, not path — ids survive renames). */
+    public InputStream open(String docId) throws IOException {
+        InputStream in = cr.openInputStream(docUri(docId));
+        if (in == null) throw new IOException("cannot open for read");
+        return in;
+    }
 
     List<Entry> list(String rel) throws IOException {
         String docId = requireDoc(rel);

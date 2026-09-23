@@ -19,6 +19,11 @@ import androidx.annotation.Nullable;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import ai.ainetwork.aindrive.agent.AskRunner;
+import ai.ainetwork.aindrive.index.GeoLookup;
+import ai.ainetwork.aindrive.index.Indexer;
+import ai.ainetwork.aindrive.index.PhotoIndex;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -75,6 +80,9 @@ public class AgentService extends Service {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService rpcPool = Executors.newFixedThreadPool(4);
+    /** One indexing run at a time across all drives — it is I/O bound on the same storage anyway. */
+    private final ExecutorService indexPool = Executors.newSingleThreadExecutor();
+    private volatile GeoLookup geo;
     /** driveId → live connection. Insertion order = the order the user started them. */
     private final Map<String, Conn> conns = new LinkedHashMap<>();
 
@@ -121,7 +129,8 @@ public class AgentService extends Service {
         try {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
             conn.fs = new SafFs(this, tree);
-            conn.rpc = new RpcHandler(this, conn.fs, driveId);
+            conn.index = new PhotoIndex(this, driveId);
+            conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
         } catch (Exception e) {
             conn.lastError = "Could not open folder: " + e.getMessage();
             synchronized (conns) { conns.put(driveId, conn); }
@@ -133,6 +142,7 @@ public class AgentService extends Service {
         synchronized (conns) { previous = conns.put(driveId, conn); }
         if (previous != null) previous.close();
         conn.connect();
+        if (intent.getBooleanExtra("indexOnStart", false)) reindex(driveId);
         // START_STICKY: if Android reclaims us under memory pressure, come back
         // and reconnect rather than leaving the drive silently offline.
         return START_STICKY;
@@ -146,6 +156,9 @@ public class AgentService extends Service {
         final AtomicInteger rpcCount = new AtomicInteger();
         SafFs fs;
         RpcHandler rpc;
+        PhotoIndex index;
+        Indexer indexer;
+        AskRunner ask;
         WebSocket ws;
         volatile boolean connected;
         volatile boolean closed;
@@ -207,9 +220,21 @@ public class AgentService extends Service {
             main.postDelayed(this::connect, wait);
         }
 
+        synchronized AskRunner askRunner() {
+            if (ask == null) ask = new AskRunner(index, geo());
+            return ask;
+        }
+
+        synchronized Indexer indexer() {
+            if (indexer == null) indexer = new Indexer(fs, index, geo());
+            return indexer;
+        }
+
         void close() {
             closed = true;
             connected = false;
+            if (indexer != null) indexer.cancel();
+            if (index != null) { try { index.close(); } catch (Exception ignored) { } }
             if (ws != null) {
                 try { ws.close(1001, "agent shutting down"); } catch (Exception ignored) { }
                 ws = null;
@@ -274,9 +299,74 @@ public class AgentService extends Service {
                 o.put("connected", connected);
                 o.put("rpcCount", rpcCount.get());
                 o.put("lastError", lastError == null ? JSONObject.NULL : lastError);
+                JSONObject ix = new JSONObject();
+                Indexer in = indexer;
+                ix.put("indexed", index == null ? 0 : index.count());
+                ix.put("running", in != null && in.running);
+                ix.put("done", in == null ? 0 : in.done);
+                ix.put("total", in == null ? 0 : in.total);
+                ix.put("failed", in == null ? 0 : in.failed);
+                ix.put("phase", in == null ? "idle" : in.phase);
+                ix.put("lastRunMs", in == null ? 0 : in.lastRunMs);
+                o.put("index", ix);
             } catch (Exception ignored) { }
             return o;
         }
+    }
+
+    // ------------------------------------------------------------ on-device agent
+
+    /** Gazetteer is ~34k rows; load once per process, lazily, off the main thread. */
+    private GeoLookup geo() {
+        GeoLookup g = geo;
+        if (g == null) {
+            synchronized (this) {
+                if (geo == null) {
+                    try { geo = GeoLookup.loadGzip(getAssets().open("geo/cities.tsv.gz")); }
+                    catch (Exception e) { throw new RuntimeException("gazetteer load failed: " + e.getMessage(), e); }
+                }
+                g = geo;
+            }
+        }
+        return g;
+    }
+
+    /** (Re)index one drive, or every drive when driveId is null. Returns false if none matched. */
+    boolean reindex(@Nullable String driveId) {
+        java.util.List<Conn> targets = new java.util.ArrayList<>();
+        synchronized (conns) {
+            for (Conn c : conns.values()) if ((driveId == null || driveId.equals(c.driveId)) && c.fs != null) targets.add(c);
+        }
+        for (Conn c : targets) {
+            indexPool.execute(() -> c.indexer().runOnce((done, total, phase) -> notifyStatus()));
+        }
+        return !targets.isEmpty();
+    }
+
+    /**
+     * Ask every running drive and merge, newest first. One phone, one user —
+     * the folders are all theirs, so a question spans all of them.
+     */
+    JSONObject ask(String query) throws Exception {
+        java.util.List<Conn> targets;
+        synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
+        if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
+        if (targets.size() == 1) return targets.get(0).askRunner().ask(query);
+        JSONArray sources = new JSONArray();
+        StringBuilder answer = new StringBuilder();
+        for (Conn c : targets) {
+            if (c.fs == null) continue;
+            JSONObject r = c.askRunner().ask(query);
+            JSONArray s = r.getJSONArray("sources");
+            for (int i = 0; i < s.length(); i++) {
+                JSONObject src = s.getJSONObject(i);
+                src.put("driveId", c.driveId).put("path", (c.folderLabel == null ? c.driveId : c.folderLabel) + "/" + src.getString("path"));
+                sources.put(src);
+            }
+            if (s.length() > 0) answer.append(answer.length() > 0 ? " " : "").append(c.folderLabel).append(": ").append(r.getString("answer"));
+        }
+        if (answer.length() == 0) answer.append(targets.get(0).askRunner().ask(query).getString("answer"));
+        return new JSONObject().put("answer", answer.toString()).put("sources", sources);
     }
 
     /** Mirrors toWsUrl in cli/src/agent.js. */
@@ -336,6 +426,8 @@ public class AgentService extends Service {
             total = conns.size();
             online = 0;
             for (Conn c : conns.values()) {
+                Indexer in = c.indexer;
+                if (in != null && in.running) return "Indexing photos " + in.done + " / " + in.total + " · " + (c.folderLabel == null ? "Folder" : c.folderLabel);
                 if (c.connected) online++;
                 if (labels.length() > 0) labels.append(", ");
                 labels.append(c.folderLabel == null ? "Folder" : c.folderLabel);
@@ -380,6 +472,7 @@ public class AgentService extends Service {
     public void onDestroy() {
         stopping = true;
         rpcPool.shutdownNow();
+        indexPool.shutdownNow();
         if (instance == this) instance = null;
         super.onDestroy();
     }

@@ -43,6 +43,8 @@ dependencies {
     // The agent speaks WSS from a background service; OkHttp is the only
     // WebSocket client on Android that survives Doze with a ping interval.
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    // Photo index: EXIF date/GPS from the header only, no bitmap decode.
+    implementation "androidx.exifinterface:exifinterface:1.3.7"
     testImplementation "junit:junit:$junitVersion"
     // Real org.json on the JVM: the stub in android.jar returns
     // defaults, which would make the signature test pass vacuously.

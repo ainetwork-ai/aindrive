@@ -132,7 +132,8 @@ public class AindriveAgentPlugin extends Plugin {
                 .putExtra("agentToken", call.getString("agentToken"))
                 .putExtra("driveSecret", call.getString("driveSecret"))
                 .putExtra("folderUri", call.getString("folderUri"))
-                .putExtra("folderLabel", call.getString("folderLabel", ""));
+                .putExtra("folderLabel", call.getString("folderLabel", ""))
+                .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getContext().startForegroundService(svc);
         else getContext().startService(svc);
         call.resolve(currentStatus());
@@ -173,6 +174,30 @@ public class AindriveAgentPlugin extends Plugin {
     @PluginMethod
     public void status(PluginCall call) {
         call.resolve(currentStatus());
+    }
+
+    // ------------------------------------------------------------ on-device agent
+
+    /** Build/refresh the photo index for one drive (or all). Progress arrives via statusChanged. */
+    @PluginMethod
+    public void reindex(PluginCall call) {
+        AgentService svc = AgentService.get();
+        if (svc == null) { call.reject("Turn a drive on first"); return; }
+        if (!svc.reindex(call.getString("driveId"))) { call.reject("That drive is not running"); return; }
+        call.resolve(currentStatus());
+    }
+
+    /** Ask the on-device agent. Fully offline: gazetteer + local index only. */
+    @PluginMethod
+    public void ask(PluginCall call) {
+        String query = call.getString("query", "");
+        AgentService svc = AgentService.get();
+        if (svc == null) { call.reject("Turn a drive on first"); return; }
+        // SQLite + parse: fast, but keep it off the WebView thread regardless.
+        new Thread(() -> {
+            try { call.resolve(toJs(svc.ask(query))); }
+            catch (Exception e) { call.reject(e.getMessage() == null ? "ask failed" : e.getMessage()); }
+        }, "aindrive-ask").start();
     }
 
     /**

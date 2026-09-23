@@ -11,7 +11,7 @@
 import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
-import { AindriveAgent, IDLE_STATUS, type AgentStatus, type DriveStatus, type PickedFolder } from "./plugin";
+import { AindriveAgent, IDLE_STATUS, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
 import { normalizeServer, startCliLogin, pollCliLogin, pairDrive } from "./api";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
@@ -50,6 +50,9 @@ let status: AgentStatus = IDLE_STATUS;
 const logLines: string[] = [];
 let busy: string | null = null;
 let errorMsg: string | null = null;
+let askQuery = "";
+let askResult: AskResult | null = null;
+let askBusy = false;
 
 async function save() {
   await Preferences.set({ key: STORE_KEY, value: JSON.stringify(state) });
@@ -257,6 +260,33 @@ async function removeShare(share: SharedFolder) {
   render();
 }
 
+async function reindex() {
+  errorMsg = null;
+  try {
+    status = await AindriveAgent.reindex();
+    log("Indexing photos…");
+  } catch (e) {
+    errorMsg = msgOf(e);
+  }
+  render();
+}
+
+async function ask() {
+  const q = askQuery.trim();
+  if (!q) return;
+  askBusy = true; errorMsg = null; render();
+  try {
+    askResult = await AindriveAgent.ask({ query: q });
+    log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}`);
+  } catch (e) {
+    errorMsg = msgOf(e);
+    askResult = null;
+  } finally {
+    askBusy = false;
+    render();
+  }
+}
+
 // ---------------------------------------------------------------- render
 
 function render() {
@@ -337,6 +367,8 @@ function render() {
 
     ${shareCards || `<div class="card"><h2>Shared folders</h2><p class="note">No folders yet. Add one below — each folder becomes its own drive.</p></div>`}
 
+    ${running > 0 ? photoSearchCard() : ""}
+
     <div class="card">
       <h2>Add</h2>
       <button class="ghost" id="add" ${busy ? "disabled" : ""}>Add a folder to share</button>
@@ -355,6 +387,11 @@ function render() {
   `;
 
   bind("add", addFolder);
+  bind("reindex", reindex);
+  bind("ask", ask);
+  const askInput = document.getElementById("ask-input") as HTMLInputElement | null;
+  askInput?.addEventListener("input", () => { askQuery = askInput.value; });
+  askInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") void ask(); });
   bind("start-all", startAll);
   bind("stop-all", stopAll);
   bind("logout", logout);
@@ -371,6 +408,34 @@ function render() {
       });
     });
   });
+}
+
+/**
+ * On-device agent: index + ask. Everything here runs on the phone — the
+ * gazetteer and index are local, so it works in airplane mode.
+ */
+function photoSearchCard(): string {
+  const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
+  const indexed = ix.reduce((n, i) => n + i.indexed, 0);
+  const active = ix.find((i) => i.running);
+  const progress = active
+    ? `Indexing… ${active.done} / ${active.total}`
+    : indexed > 0 ? `${indexed.toLocaleString()} photos indexed` : "Not indexed yet";
+  const results = askResult ? `
+    <p class="answer">${esc(askResult.answer)}</p>
+    ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s) =>
+      `<li><span class="mono">${esc(s.path)}</span><span class="meta">${esc(s.snippet)}</span></li>`).join("")}</ul>` : ""}` : "";
+  return `
+    <div class="card">
+      <h2>Photo search</h2>
+      <div class="row"><span class="k">Index</span><span class="v">${esc(progress)}</span></div>
+      <button class="ghost" id="reindex" ${active ? "disabled" : ""}>${indexed > 0 ? "Re-index photos" : "Index photos"}</button>
+      <label for="ask-input">Ask</label>
+      <input id="ask-input" type="text" placeholder="파리에서 찍은 사진 찾아줘" value="${esc(askQuery)}" ${askBusy ? "disabled" : ""} />
+      <button id="ask" ${askBusy || !askQuery.trim() ? "disabled" : ""}>${askBusy ? "Searching…" : "Search"}</button>
+      ${results}
+      <p class="note">Runs entirely on this phone: place and date come from each photo's EXIF, matched against an offline gazetteer. No network needed.</p>
+    </div>`;
 }
 
 function bindServerInput() {

@@ -54,3 +54,8 @@ button:disabled { opacity: 0.45; }
 .log div { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); padding: 1px 0; word-break: break-all; }
 .note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
 .err-box { background: #2a1417; border: 1px solid #522; color: var(--err); border-radius: 10px; padding: 10px; font-size: 13px; margin-top: 10px; }
+.answer { margin: 12px 0 6px; font-size: 14px; }
+.hits { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.hits li { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.hits li:last-child { border-bottom: 0; }
+.hits .meta { font-size: 11px; color: var(--muted); }

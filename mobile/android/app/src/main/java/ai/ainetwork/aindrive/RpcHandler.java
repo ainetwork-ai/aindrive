@@ -30,10 +30,9 @@ import java.util.Set;
  *              precisely the legacy fallback path the desktop agent still
  *              supports. Collaborative editing converges through the server;
  *              what is lost is local edit history, not correctness.
- *  - agent-ask: running a drive's AI agent means holding the owner's LLM API
- *              key and walking the whole folder for a knowledge base. Neither
- *              belongs on a phone yet, so it is refused explicitly rather than
- *              answered wrongly.
+ *  - agent-ask: answered by the on-device photo-search agent (agent/AskRunner)
+ *              over this drive's local index — no LLM API key on the phone,
+ *              no network. Same {answer, sources} shape as the desktop agent.
  *
  * Yjs snapshots live in app-private storage, never in the user's folder: the
  * phone's Documents directory should not grow an .aindrive/ control directory
@@ -47,10 +46,13 @@ final class RpcHandler {
 
     private final SafFs fs;
     private final File yjsDir;
+    private final java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask;
 
-    RpcHandler(Context ctx, SafFs fs, String driveId) {
+    RpcHandler(Context ctx, SafFs fs, String driveId,
+               java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask) {
         this.fs = fs;
         this.yjsDir = new File(ctx.getFilesDir(), "yjs/" + sanitizeId(driveId));
+        this.ask = ask;
     }
 
     JSONObject handle(JSONObject params) throws Exception {
@@ -147,8 +149,15 @@ final class RpcHandler {
                         .put("totalBytes", bytes)
                         .put("snapshotBytes", bytes);
             }
-            case "agent-ask":
-                throw new IOException("agent_ask_unsupported_on_mobile");
+            case "agent-ask": {
+                // The web side already checked who may ask; the phone has exactly
+                // one kind of agent (photo search over this drive's index), so
+                // agentId is validated for shape only and agent.json is never read.
+                String agentId = params.optString("agentId", "");
+                if (!agentId.matches("agt_[A-Za-z0-9_-]{6,32}")) throw new IOException("bad_agent_id");
+                JSONObject r = ask.get().ask(params.optString("query", ""));
+                return result(method).put("answer", r.getString("answer")).put("sources", r.getJSONArray("sources"));
+            }
         }
         throw new IOException("unknown method");
     }
