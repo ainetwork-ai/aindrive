@@ -21,7 +21,8 @@
 > characterization tests snapshot the *current (broken)* behaviour and reference
 > this section, so a future fix is a deliberate, separately-reviewed change.
 
-- [ ] **P1 — `aindrive rotate-token` is dead end-to-end.** `cli/src/commands/rotate.js`
+- [x] **P1 — `aindrive rotate-token` is dead end-to-end.** *(fixed 2026-09-23: sends
+  `sessionCookie` as the `aindrive_session` cookie; test `rotate-command.test.mjs`)* `cli/src/commands/rotate.js`
   sends `creds.accessToken` (a field nothing ever writes) as a `Bearer` token, but
   the web route (`web/app/api/drives/[driveId]/rotate/route.ts`) authenticates via
   the `aindrive_session` **cookie**. Root cause: the credential field name drifts

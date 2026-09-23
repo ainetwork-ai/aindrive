@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { nanoid } from "nanoid";
 import { db } from "./db.js";
 import { verifyPayload, signPayload } from "./sig.js";
 import { broadcastReload } from "./dochub.js";
@@ -19,6 +20,10 @@ if (!globalThis.__aindrive_agent_map) globalThis.__aindrive_agent_map = agents;
 const PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 25_000;
 const HEARTBEAT_INTERVAL_MS = 20_000;
+// Live rotation: the agent's old secret still verifies responses for this long
+// after a switch (mirrors cli/src/rotation.js GRACE_MS).
+const ROTATION_GRACE_MS = 60_000;
+const ROTATION_SWEEP_MS = 5 * 60_000;
 
 export function isAgentConnected(driveId) {
   return agents.has(driveId);
@@ -89,7 +94,7 @@ export async function onAgentConnect(ws, req, query) {
   const token = auth.slice(7);
 
   const row = db
-    .prepare("SELECT agent_token_hash, drive_secret FROM drives WHERE id = ?")
+    .prepare("SELECT agent_token_hash, drive_secret, rotation_pending FROM drives WHERE id = ?")
     .get(driveId);
   if (!row) {
     ws.close(4404, "no such drive");
@@ -121,6 +126,14 @@ export async function onAgentConnect(ws, req, query) {
   log.info({ drive: driveId }, "agent connected");
   try { trace("server", "agent-connect", { docId: "agent-" + driveId }); } catch {}
   try { ws.send(JSON.stringify({ type: "hello", v: PROTOCOL_VERSION })); } catch {}
+  if (row.rotation_pending) {
+    // Give the agent a moment to finish its own connect-time setup first.
+    setTimeout(() => {
+      rotateAgentLive(driveId)
+        .then((r) => log.info({ drive: driveId, ...r }, "[rotation] on connect"))
+        .catch((e) => log.warn({ drive: driveId, err: e.message }, "[rotation] on connect failed"));
+    }, 2000).unref?.();
+  }
 
   const heartbeat = setInterval(() => {
     if (ws.readyState !== ws.OPEN) return;
@@ -159,7 +172,9 @@ export async function onAgentConnect(ws, req, query) {
     }
     if (!msg || msg.type !== "response" || !msg.reqId) return;
     const { sig, type, ...rest } = msg;
-    if (!verifyPayload(entry.driveSecret, rest, sig)) {
+    const sigOk = verifyPayload(entry.driveSecret, rest, sig)
+      || (entry.prevSecret && Date.now() < entry.prevUntil && verifyPayload(entry.prevSecret, rest, sig));
+    if (!sigOk) {
       log.warn({ reqId: msg.reqId }, "[agents] dropped response with bad sig");
       return;
     }
@@ -202,4 +217,75 @@ export async function onAgentConnect(ws, req, query) {
 
 function randomReqId() {
   return Math.random().toString(36).slice(2, 14) + Date.now().toString(36);
+}
+
+/**
+ * Rotate a drive's agent token + drive secret WITHOUT disconnecting it.
+ *
+ * Sends `rotate-credentials` (signed with the current secret) to the live
+ * agent, which persists the new pair and answers ok (cli/src/rotation.js).
+ * Only then is the pair stored here, and the old secret keeps verifying
+ * responses for ROTATION_GRACE_MS. If the ok never arrives, nothing changes
+ * server-side and the agent falls back to its previous pair on its next
+ * refused handshake.
+ *
+ * Refuses when the drive has several connected devices: the others would
+ * keep the old token and be locked out on reconnect. Agents that predate this
+ * (older CLI, mobile) answer "unknown method" → `unsupported`, and the drive
+ * stays `rotation_pending` until it upgrades or the owner rotates by hand.
+ *
+ * @returns {Promise<{status: "rotated"|"offline"|"multi-device"|"unsupported"|"busy"|"failed", error?: string}>}
+ */
+export async function rotateAgentLive(driveId) {
+  const entry = agents.get(driveId);
+  if (!entry) return { status: "offline" };
+  const peers = globalThis.__aindrive_agents_by_drive?.get(driveId);
+  if (peers && peers.size > 1) return { status: "multi-device" };
+  if (entry.rotating) return { status: "busy" };
+  entry.rotating = true;
+  try {
+    const agentToken = nanoid(48);
+    const driveSecret = nanoid(48);
+    // Hash BEFORE asking the agent, so the window between its ok and our
+    // write is a single synchronous UPDATE.
+    const hash = await bcrypt.hash(agentToken, 10);
+    let result;
+    try {
+      result = await sendRpc(driveId, { method: "rotate-credentials", agentToken, driveSecret }, { timeoutMs: 15_000 });
+    } catch (e) {
+      if (/unknown method/i.test(e.message)) return { status: "unsupported" };
+      return { status: "failed", error: e.message };
+    }
+    if (!result?.ok) return { status: "failed", error: "agent did not confirm" };
+    db.prepare("UPDATE drives SET agent_token_hash = ?, drive_secret = ?, rotation_pending = 0 WHERE id = ?")
+      .run(hash, driveSecret, driveId);
+    entry.prevSecret = entry.driveSecret;
+    entry.prevUntil = Date.now() + ROTATION_GRACE_MS;
+    entry.driveSecret = driveSecret;
+    return { status: "rotated" };
+  } finally {
+    entry.rotating = false;
+  }
+}
+
+/**
+ * Periodically rotate pending drives whose agent is online. Offline ones are
+ * handled by onAgentConnect when they come back. Called once from server.js.
+ */
+export function startRotationSweeper() {
+  if (globalThis.__aindrive_rotation_sweeper) return;
+  const sweep = async () => {
+    let pending;
+    try { pending = db.prepare("SELECT id FROM drives WHERE rotation_pending = 1").all(); }
+    catch { return; }
+    for (const { id } of pending) {
+      if (!agents.has(id)) continue;
+      try {
+        const r = await rotateAgentLive(id);
+        log.info({ drive: id, ...r }, "[rotation] sweep");
+      } catch (e) { log.warn({ drive: id, err: e.message }, "[rotation] sweep failed"); }
+    }
+  };
+  globalThis.__aindrive_rotation_sweeper = setInterval(sweep, ROTATION_SWEEP_MS);
+  globalThis.__aindrive_rotation_sweeper.unref?.();
 }
