@@ -29,6 +29,19 @@ export function listConnectedDrives() {
 }
 
 /**
+ * Drop the live agent for a drive that is being deleted. The agent's token
+ * row goes away with the drive, so its next reconnect is refused (4404); this
+ * just stops it answering in the meantime.
+ */
+export function disconnectAgent(driveId) {
+  const entry = agents.get(driveId);
+  if (!entry) return false;
+  try { entry.ws.close(4410, "drive deleted"); } catch {}
+  agents.delete(driveId);
+  return true;
+}
+
+/**
  * Send a single RPC call to the agent for `driveId` and await its response.
  * `params` is { method, ...args } per shared protocol.
  */

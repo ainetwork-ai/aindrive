@@ -19,3 +19,5 @@ export function sendRpc<M extends RpcParams["method"]>(
 
 export function isAgentConnected(driveId: string): boolean;
 export function listConnectedDrives(): string[];
+/** Close the live agent socket for a drive being deleted; false if none was connected. */
+export function disconnectAgent(driveId: string): boolean;

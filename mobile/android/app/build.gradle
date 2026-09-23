@@ -1,0 +1,74 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace "ai.ainetwork.aindrive"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "ai.ainetwork.aindrive"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    testOptions {
+        // ExifInterface is pure Java but calls android.util.Log; stub it so the
+        // EXIF unit test can run on the JVM.
+        unitTests.returnDefaultValues = true
+    }
+    buildFeatures {
+        buildConfig true   // MainActivity gates the adb debug hooks on BuildConfig.DEBUG
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    // The agent speaks WSS from a background service; OkHttp is the only
+    // WebSocket client on Android that survives Doze with a ping interval.
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    // Photo index: EXIF date/GPS from the header only, no bitmap decode.
+    implementation "androidx.exifinterface:exifinterface:1.3.7"
+    testImplementation "junit:junit:$junitVersion"
+    // Real org.json on the JVM: the stub in android.jar returns
+    // defaults, which would make the signature test pass vacuously.
+    testImplementation "org.json:json:20231013"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

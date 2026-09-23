@@ -278,6 +278,30 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
     if (!res.ok) toast.error(res.error); else load();
   }
 
+  /**
+   * Drag-move: drop an entry onto a folder row/card or a breadcrumb. Reuses the
+   * rename RPC, which every agent (cli, Android SAF, iOS) implements as a
+   * cross-directory move. `destDir` is the target directory path ("" = root).
+   */
+  async function onMove(entry: DriveEntry, destDir: string) {
+    if (!canEdit) return;
+    const parent = entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "";
+    if (destDir === parent) return; // dropped where it already lives
+    if (entry.isDir && (destDir === entry.path || destDir.startsWith(entry.path + "/"))) {
+      toast.error("Can’t move a folder into itself");
+      return;
+    }
+    const to = destDir ? `${destDir}/${entry.name}` : entry.name;
+    const res = await apiFetch(`/api/drives/${driveId}/fs/rename`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: entry.path, to }),
+    });
+    if (!res.ok) { toast.error(res.error); return; }
+    if (selected?.path === entry.path) setSelected(null);
+    toast.success(`Moved "${entry.name}" to ${destDir ? destDir.split("/").pop() : driveName}`);
+    load();
+  }
+
   function onRowAction(entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") {
     switch (action) {
       case "sell": return setShareOpen({ path: entry.path, focus: "sell" });
@@ -315,6 +339,8 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
           setPath={setPath}
           canEdit={canEdit}
           onUpload={onUpload}
+          onNewFolder={onNewFolder}
+          onMove={onMove}
           setShareOpen={setShareOpen}
           path={path}
           role={role}
@@ -344,6 +370,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
               setPath={setPath}
               canEdit={canEdit}
               onRowAction={onRowAction}
+              onMove={onMove}
               isOwner={isOwner}
               onUpload={onUpload}
               viewMode={viewMode}
