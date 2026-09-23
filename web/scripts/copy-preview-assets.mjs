@@ -24,6 +24,13 @@ const ASSETS = [
     ["dist/worker-bundle.js", "libarchive/worker-bundle.js"],
     ["dist/libarchive.wasm", "libarchive/libarchive.wasm"],
   ]],
+  // dxf-viewer draws TEXT/MTEXT only with a TTF it can fetch. Liberation Sans
+  // (Latin/Greek/Cyrillic; GPLv2 + font exception, redistributable — pdf.js
+  // already ships it, see standard_fonts/LICENSE_LIBERATION).
+  ["pdfjs-dist", [
+    ["standard_fonts/LiberationSans-Regular.ttf", "dxf/fonts/LiberationSans-Regular.ttf"],
+    ["standard_fonts/LICENSE_LIBERATION", "dxf/fonts/LICENSE_LIBERATION"],
+  ]],
 ];
 
 const versionOf = (pkg) => JSON.parse(readFileSync(nm(`${pkg}/package.json`), "utf8")).version;
