@@ -109,7 +109,19 @@ public final class SafFs {
             if (seg.equals("..")) throw new IOException("path escapes drive root");
             out.add(seg);
         }
+        if (isReservedPath(out)) throw new IOException("reserved path");
         return out;
+    }
+
+    /**
+     * The drive's .aindrive/ subtree is off-limits over RPC except the two
+     * parts the web server drives itself: agents/ (agent JSON) and uploads/
+     * (upload temp parts). Mirrors cli/src/rpc.js isReservedRpcPath, as a
+     * second layer behind the web's own reserved-path gate.
+     */
+    static boolean isReservedPath(List<String> segs) {
+        if (segs.isEmpty() || !segs.get(0).equals(".aindrive")) return false;
+        return segs.size() < 2 || !(segs.get(1).equals("agents") || segs.get(1).equals("uploads"));
     }
 
     static String joinPath(String parent, String name) {

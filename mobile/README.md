@@ -44,6 +44,9 @@ drive and a laptop drive are the same thing to the server.
   (`{"result":{"ok":true}}`), not `{}`. `SigCompatTest` pins this against vectors
   generated from `web/lib/sig.js`; regenerate them from Node rather than
   editing them to match new output.
+- **Reserved paths match `cli/src/rpc.js`.** `.aindrive/**` is refused over RPC
+  except `agents/` and `uploads/` (`SafFs.isReservedPath`, `DriveFs.resolve`).
+  This is a second layer behind the web's own gate.
 - **RPC results must match `cli/src/rpc.js`.** The server cannot tell which
   kind of agent it is talking to, so a shape difference surfaces as a broken
   file browser, not an error.
