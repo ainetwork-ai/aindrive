@@ -111,7 +111,12 @@ export function isAllowedRedirectUri(raw: string): boolean {
   if (u.hash) return false;
   const scheme = u.protocol.slice(0, -1).toLowerCase();
   if (scheme === "https") return true;
-  if (scheme === "http") return ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+  if (scheme === "http") {
+    if (["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)) return true;
+    // Dev only: let a client on another machine (e.g. a LAN IP) round-trip
+    // the flow against a local server. Never honoured in production.
+    return process.env.NODE_ENV !== "production" && process.env.AINDRIVE_DEV_ALLOW_HTTP_REDIRECTS === "1";
+  }
   if (["javascript", "data", "file", "blob", "vbscript", "about", "ftp", "ws", "wss", "intent", "filesystem", "view-source"].includes(scheme)) return false;
   return /^[a-z][a-z0-9+.-]*$/.test(scheme);
 }

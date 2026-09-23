@@ -4,6 +4,7 @@
  * role }] }, role = the user's highest role anywhere in the drive. Read the
  * files through `/mcp/d/<id>` with the same token. See app/mcp/README.md.
  */
+import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { ACCOUNT_API_HEADERS, authenticateAccountRequest } from "@/lib/account-tokens";
 import { listUserDrives } from "@/lib/drives";
 import { maxRoleInDrive } from "@/lib/mcp-tokens";
@@ -14,6 +15,10 @@ export function OPTIONS() {
 }
 
 export function GET(req: Request) {
+  const rl = tryConsume({ name: "oauth-drives", key: clientKey(req, "oauth-drives"), limit: 120, windowMs: 60 * 1000 });
+  if (!rl.ok) {
+    return Response.json({ error: "slow_down", error_description: "too many requests" }, { status: 429, headers: ACCOUNT_API_HEADERS });
+  }
   const auth = authenticateAccountRequest(req, "drives:read");
   if (!auth.ok) return auth.response;
   const { userId } = auth.token;
