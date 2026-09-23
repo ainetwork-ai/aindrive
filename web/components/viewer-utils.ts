@@ -1,12 +1,5 @@
 // Pure helpers for the file Viewer — crypto/base64/format utilities separated
 // from the effect-heavy Viewer component. No React, no side effects.
-import type { DriveEntry } from "@/lib/protocol";
-
-export const TEXT_EXT = new Set([
-  "txt", "md", "json", "js", "mjs", "ts", "tsx", "jsx", "html", "css",
-  "py", "rs", "go", "yml", "yaml", "toml", "sh", "sql", "xml", "csv",
-]);
-
 /** Deterministic HSL color from a string (peer identity → avatar color). */
 export function colorForId(s: string): string {
   let h = 0;
@@ -34,15 +27,4 @@ export function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64); const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
-}
-
-/** Monaco language id for a drive entry's extension. */
-export function languageFor(e: DriveEntry): string {
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript", js: "javascript", mjs: "javascript", jsx: "javascript",
-    json: "json", md: "markdown", html: "html", css: "css",
-    py: "python", rs: "rust", go: "go", yaml: "yaml", yml: "yaml",
-    sh: "shell", sql: "sql", xml: "xml",
-  };
-  return map[e.ext] || "plaintext";
 }

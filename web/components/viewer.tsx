@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
@@ -9,12 +9,14 @@ import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
 import { traceClient, SESSION_ID } from "@/lib/yjs/trace-client";
 import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
-import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
+import { colorForId, sha1Base64, bytesToBase64, b64ToBytes } from "./viewer-utils";
 import { ViewerHeader } from "./viewer-parts";
-import { fileIconForName } from "./file-icons";
 import { RichTextEditor } from "./editors/rich-text-editor";
+import { PreviewBody } from "./previews";
+import { bytesLoader } from "./previews/use-preview-bytes";
+import type { PreviewSource } from "./previews/types";
+import { previewKindFor, monacoLanguageFor } from "@/lib/preview-kind";
 import { loader } from "@monaco-editor/react";
-import clsx from "clsx";
 
 // Monaco self-host: load the editor runtime from our own origin (/monaco/vs)
 // instead of @monaco-editor/loader's default jsdelivr CDN, which the app CSP
@@ -53,15 +55,15 @@ export function Viewer({
     return () => mq.removeEventListener?.("change", sync);
   }, []);
 
+  // Renderer is picked from the file NAME (lib/preview-kind), not entry.mime:
+  // published agents send application/octet-stream for anything outside their
+  // small mime table, which used to leave bmp/tiff/docx/… unpreviewable.
   // Markdown opens the rich-text (WYSIWYG) editor — a SEPARATE Y.Doc root
   // (getXmlFragment) from the Monaco/Y.Text path, so the two never collide. All
   // other text/code stays on Monaco. (See editor-framework-design.md.)
-  const isRichText = entry.ext === "md" || entry.ext === "markdown" || entry.mime === "text/markdown";
-  const isText = !isRichText && (entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext));
-  const isImage = entry.mime.startsWith("image/");
-  const isPdf = entry.mime === "application/pdf";
-  const isVideo = entry.mime.startsWith("video/");
-  const isAudio = entry.mime.startsWith("audio/");
+  const kind = previewKindFor(entry.name);
+  const isRichText = kind === "markdown";
+  const isText = kind === "text";
 
   const providerRef = useRef<AindriveProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
@@ -234,9 +236,16 @@ export function Viewer({
   // The &v= param re-keys the URL when the file changes.
   const streamUrl = `/api/drives/${driveId}/fs/stream?path=${encodeURIComponent(entry.path)}&v=${entry.mtimeMs}`;
   const downloadUrl = `/api/drives/${driveId}/fs/download?path=${encodeURIComponent(entry.path)}`;
+  const previewSource = useMemo<PreviewSource>(() => ({
+    name: entry.name,
+    url: streamUrl,
+    size: entry.size,
+    bytes: bytesLoader(streamUrl),
+    convertUrl: (to) => `/api/drives/${driveId}/fs/preview?path=${encodeURIComponent(entry.path)}&to=${to}&v=${entry.mtimeMs}`,
+  }), [driveId, entry.path, entry.name, entry.size, entry.mtimeMs, streamUrl]);
   useEffect(() => {
     if (isText || isRichText) return;
-    // Nothing to prefetch — the media elements load from streamUrl themselves.
+    // Nothing to prefetch — each renderer loads its own bytes.
     setLoading(false);
   }, [isText, isRichText]);
 
@@ -320,22 +329,10 @@ export function Viewer({
           <div className="h-full flex items-center justify-center text-drive-muted">
             <Loader2 className="w-4 h-4 animate-spin" />
           </div>
-        ) : isImage ? (
-          <ImageViewer src={streamUrl} name={entry.name} />
-        ) : isVideo ? (
-          <div className="h-full flex items-center justify-center bg-black p-2">
-            {/* preload=metadata: grab duration/dimensions only; bytes flow on
-                play/seek via Range requests. */}
-            <video src={streamUrl} controls preload="metadata" className="max-w-full max-h-full rounded-md" />
-          </div>
-        ) : isAudio ? (
-          <AudioCard src={streamUrl} name={entry.name} />
-        ) : isPdf ? (
-          <iframe src={streamUrl} title={entry.name} className="w-full h-full" />
         ) : isText ? (
           <MonacoEditor
             height="100%"
-            defaultLanguage={languageFor(entry)}
+            defaultLanguage={monacoLanguageFor(entry.name)}
             onMount={onMonacoMount}
             options={{
               readOnly: !canEdit || touchOnly,
@@ -346,68 +343,10 @@ export function Viewer({
             }}
           />
         ) : (
-          <UnsupportedPreview entry={entry} canDownload={true} />
+          <PreviewBody key={entry.path} kind={kind} src={previewSource} />
         )}
       </div>
       )}
     </aside>
-  );
-}
-
-/**
- * Image preview with fit-to-width default and click-to-toggle 1:1 zoom. A
- * checkerboard backdrop makes transparent PNGs legible. Cursor signals the
- * zoom affordance.
- */
-function ImageViewer({ src, name }: { src: string; name: string }) {
-  const [zoomed, setZoomed] = useState(false);
-  return (
-    <div
-      className={clsx(
-        "min-h-full flex items-center justify-center p-4",
-        zoomed ? "overflow-auto cursor-zoom-out" : "cursor-zoom-in",
-      )}
-      style={{
-        // Subtle checkerboard so transparent images read against white panel.
-        backgroundImage:
-          "linear-gradient(45deg,#f1f3f4 25%,transparent 25%),linear-gradient(-45deg,#f1f3f4 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#f1f3f4 75%),linear-gradient(-45deg,transparent 75%,#f1f3f4 75%)",
-        backgroundSize: "16px 16px",
-        backgroundPosition: "0 0,0 8px,8px -8px,-8px 0",
-      }}
-      onClick={() => setZoomed((v) => !v)}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={name}
-        className={clsx("rounded-md shadow-e1", zoomed ? "max-w-none" : "max-w-full h-auto")}
-      />
-    </div>
-  );
-}
-
-/** Audio player card — type icon + filename over a full-width <audio> control. */
-function AudioCard({ src, name }: { src: string; name: string }) {
-  const { Icon, className: tone } = fileIconForName(name);
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-4 p-6">
-      <Icon className={clsx("w-16 h-16", tone)} />
-      <div className="text-body text-drive-text text-center max-w-xs truncate" title={name}>{name}</div>
-      <audio src={src} controls className="w-full max-w-sm" />
-    </div>
-  );
-}
-
-/** Fallback for types with no inline preview — type icon + download hint. */
-function UnsupportedPreview({ entry, canDownload }: { entry: DriveEntry; canDownload: boolean }) {
-  const { Icon, className: tone } = fileIconForName(entry.name);
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center">
-      <Icon className={clsx("w-16 h-16", tone)} />
-      <div className="text-body text-drive-text max-w-xs truncate" title={entry.name}>{entry.name}</div>
-      <p className="text-caption text-drive-muted">
-        {canDownload ? "No inline preview — use Download to open it locally." : "No preview available for this file type."}
-      </p>
-    </div>
   );
 }
