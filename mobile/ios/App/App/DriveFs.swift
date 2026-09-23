@@ -22,10 +22,11 @@ final class DriveFs {
     }
 
     enum FsError: LocalizedError {
-        case escapes, notFound(String), isDirectory, tooLong, cannotTouchRoot(String)
+        case escapes, notFound(String), isDirectory, tooLong, cannotTouchRoot(String), reserved
         var errorDescription: String? {
             switch self {
             case .escapes: return "path escapes drive root"
+            case .reserved: return "reserved path"
             case .notFound(let p): return "no such path: \(p)"
             case .isDirectory: return "is a directory"
             case .tooLong: return "path too long"
@@ -61,10 +62,17 @@ final class DriveFs {
     func resolve(_ rel: String) throws -> URL {
         guard rel.utf8.count <= Self.maxPathBytes else { throw FsError.tooLong }
         var url = root
+        var segs: [String] = []
         for seg in rel.split(separator: "/") {
             if seg == "." { continue }
             if seg == ".." { throw FsError.escapes }
+            segs.append(String(seg))
             url.appendPathComponent(String(seg))
+        }
+        // .aindrive/ is off-limits over RPC except agents/ + uploads/, which the
+        // web server drives itself. Mirrors cli/src/rpc.js isReservedRpcPath.
+        if segs.first == ".aindrive" && !(segs.count >= 2 && (segs[1] == "agents" || segs[1] == "uploads")) {
+            throw FsError.reserved
         }
         let resolved = url.standardizedFileURL
         // Belt-and-braces: a symlink inside the folder could still point out of it.
