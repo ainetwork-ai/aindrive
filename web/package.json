@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "copy-monaco": "node scripts/copy-monaco.mjs",
-    "predev": "node scripts/copy-monaco.mjs",
-    "prebuild": "node scripts/copy-monaco.mjs",
+    "predev": "node scripts/copy-monaco.mjs && node scripts/copy-preview-assets.mjs",
+    "prebuild": "node scripts/copy-monaco.mjs && node scripts/copy-preview-assets.mjs",
     "dev": "node server.js",
     "build": "next build",
     "start": "NODE_ENV=production node server.js",

@@ -2,3 +2,5 @@
 
 # Build artifact: Monaco editor runtime self-hosted into public/ (scripts/copy-monaco.mjs)
 public/monaco
+# Build artifact: preview renderer workers/wasm/CMaps (scripts/copy-preview-assets.mjs)
+public/preview-assets
