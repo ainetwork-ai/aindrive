@@ -257,7 +257,9 @@ function open() {
       refresh_expires_at INTEGER,
       last_used_at INTEGER,
       revoked_at INTEGER,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_mcp_tokens_drive ON mcp_tokens(drive_id, user_id);
     CREATE TABLE IF NOT EXISTS oauth_clients (
@@ -276,7 +278,9 @@ function open() {
       code_challenge TEXT NOT NULL,
       consumed INTEGER NOT NULL DEFAULT 0,
       expires_at INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
   try {

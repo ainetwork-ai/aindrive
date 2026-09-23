@@ -89,6 +89,15 @@ describe("mcp tokens (lib)", () => {
     expect(tokens.verifyMcpToken(token)).toBeNull();
     expect(tokens.verifyMcpToken("aind_pat_nope")).toBeNull();
   });
+
+  it("tokens die with their drive (ON DELETE CASCADE)", () => {
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)")
+      .run("dgone", "owner1", "Gone", "h", "s");
+    const { token } = tokens.issuePat({ userId: "owner1", driveId: "dgone", name: "t", scope: "read", ttlDays: null });
+    db.prepare("DELETE FROM drives WHERE id = 'dgone'").run();
+    expect(tokens.verifyMcpToken(token)).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM mcp_tokens WHERE drive_id = 'dgone'").get()).toEqual({ n: 0 });
+  });
 });
 
 describe("/mcp/d/[driveId]", () => {
