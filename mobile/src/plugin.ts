@@ -48,6 +48,16 @@ export interface IndexStatus {
 }
 
 /** Same shape the desktop agent-ask returns, so the web UI needs no change. */
+/** One row of an in-app folder listing; same shape the drive shows on the web. */
+export interface FileEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number;
+  mtimeMs: number;
+  mime: string;
+}
+
 export interface AskResult {
   answer: string;
   sources: { path: string; snippet: string; driveId?: string }[];
@@ -80,7 +90,15 @@ export interface AindriveAgentPlugin {
    * Opens the system file picker (multi-select) and copies the chosen files
    * into the folder — the phone's stand-in for dragging files into a share.
    */
-  addFiles(opts: { folderUri: string }): Promise<{ added: string[]; failed: string[] }>;
+  addFiles(opts: { folderUri: string; path?: string }): Promise<{ added: string[]; failed: string[] }>;
+  mkdir(opts: { folderUri: string; path: string }): Promise<void>;
+  rename(opts: { folderUri: string; from: string; to: string }): Promise<void>;
+  /** Recursive, idempotent — like `rm -rf`. */
+  delete(opts: { folderUri: string; path: string }): Promise<void>;
+  /** List a directory inside a shared folder, read locally (no network). `path` "" = root. */
+  listFolder(opts: { folderUri: string; path?: string }): Promise<{ entries: FileEntry[] }>;
+  /** Open a file with the phone's own viewer (Android: ACTION_VIEW chooser; iOS: Quick Look). */
+  openFile(opts: { folderUri: string; path: string }): Promise<void>;
   /**
    * Adds a drive to the running agent (starting the foreground service on
    * Android if needed) and connects it. Calling again with the same driveId

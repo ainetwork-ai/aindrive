@@ -34,7 +34,8 @@ public class QueryParserTest {
                 + "New York City\tUS\t40.71427\t-74.00597\t8804190\t뉴욕 시\n"
                 + "Nice\tFR\t43.70313\t7.26608\t342669\t니스\n"
                 + "Paris\tUS\t33.66094\t-95.55551\t24782\t\n"
-                + "Boulogne-Billancourt\tFR\t48.83333\t2.25\t120071\t불로뉴비양쿠르\n";
+                + "Boulogne-Billancourt\tFR\t48.83333\t2.25\t120071\t불로뉴비양쿠르\n"
+                + "Goyang-si\tKR\t37.65639\t126.835\t1073069\t고양시\n";
         geo = GeoLookup.load(new ByteArrayInputStream(tsv.getBytes(StandardCharsets.UTF_8)));
         parser = new QueryParser(geo);
     }
@@ -45,7 +46,7 @@ public class QueryParserTest {
         assertEquals("Paris", q.city);
         assertEquals("FR", q.country);
         assertNull(q.dateFrom);
-        assertNull(q.textQuery);
+        assertNull(q.textQuery());
         assertTrue(q.korean);
     }
 
@@ -54,7 +55,7 @@ public class QueryParserTest {
         SearchQuery q = parser.parse("프랑스 여행 갔던 사진", NOW);
         assertEquals("FR", q.country);
         assertNull(q.city);
-        assertNull(q.textQuery);
+        assertNull(q.textQuery());
     }
 
     @Test
@@ -64,7 +65,7 @@ public class QueryParserTest {
         assertEquals("Jeju City", q.city);
         assertEquals(Long.valueOf(at(2025, 6, 1)), q.dateFrom);
         assertEquals(Long.valueOf(at(2025, 9, 1)), q.dateTo);
-        assertEquals("바다", q.textQuery);
+        assertEquals("바다", q.textQuery());
     }
 
     @Test
@@ -73,7 +74,7 @@ public class QueryParserTest {
         assertEquals("Paris", q.city);
         assertEquals(Long.valueOf(at(2024, 5, 1)), q.dateFrom);
         assertEquals(Long.valueOf(at(2024, 6, 1)), q.dateTo);
-        assertEquals("야경", q.textQuery);
+        assertEquals("야경", q.textQuery());
     }
 
     @Test
@@ -82,7 +83,7 @@ public class QueryParserTest {
         assertEquals("New York City", q.city);
         assertEquals("US", q.country);
         assertEquals(Long.valueOf(at(2024, 5, 1)), q.dateFrom);
-        assertNull(q.textQuery);
+        assertNull(q.textQuery());
     }
 
     @Test
@@ -99,7 +100,7 @@ public class QueryParserTest {
         assertEquals("Jeju City", q.city);
         assertEquals(Long.valueOf(at(2025, 6, 1)), q.dateFrom);
         assertEquals(Long.valueOf(at(2025, 9, 1)), q.dateTo);
-        assertNull(q.textQuery);
+        assertNull(q.textQuery());
     }
 
     @Test
@@ -108,6 +109,33 @@ public class QueryParserTest {
         assertEquals("Seoul", parser.parse("서울특별시에서 찍은 사진", NOW).city);
         assertEquals("Jeju City", parser.parse("제주 사진", NOW).city);
         assertEquals("New York City", parser.parse("뉴욕 사진", NOW).city);
+    }
+
+    @Test
+    public void subjectMarkerIsNotStrippedForPlaces() {
+        // 고양이 = cat; 고양 = Goyang (KR, 1M people). Only locative particles unlock a place.
+        SearchQuery q = parser.parse("고양이 사진 보여줘", NOW);
+        assertNull(q.city);
+        assertEquals("고양이", q.textQuery());
+        assertEquals("Goyang-si", parser.parse("고양에서 찍은 사진", NOW).city);
+    }
+
+    @Test
+    public void kindsAndRecency() {
+        SearchQuery q = parser.parse("recent PDFs", NOW);
+        assertEquals("pdf", q.kind);
+        assertEquals(Long.valueOf(at(2026, 8, 24)), q.dateFrom);   // NOW is 2026-09-23
+        assertNull(q.textQuery());
+        q = parser.parse("지난주 스크린샷", NOW);           // 2026-09-23 is a Wednesday → last week = Sep 14–20
+        assertEquals("screenshot", q.kind);
+        assertEquals(Long.valueOf(at(2026, 9, 14)), q.dateFrom);
+        assertEquals(Long.valueOf(at(2026, 9, 21)), q.dateTo);
+        q = parser.parse("계약서 pdf 파일", NOW);
+        assertEquals("pdf", q.kind);
+        assertEquals("계약서", q.textQuery());
+        q = parser.parse("큰 영상 파일", NOW);
+        assertEquals("video", q.kind);
+        assertEquals(Long.valueOf(QueryParser.LARGE_BYTES), q.minSize);
     }
 
     @Test
@@ -122,7 +150,7 @@ public class QueryParserTest {
         SearchQuery q = parser.parse("강아지 사진 보여줘", NOW);
         assertNull(q.country);
         assertNull(q.dateFrom);
-        assertEquals("강아지", q.textQuery);
+        assertEquals("강아지", q.textQuery());
     }
 
     @Test
