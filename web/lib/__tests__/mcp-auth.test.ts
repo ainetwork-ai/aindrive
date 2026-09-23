@@ -137,10 +137,15 @@ describe("token management API", () => {
   it("viewer can issue read but not write; owner sees everyone's; holder/owner can revoke", async () => {
     cookieJar.set("aindrive_session", await sign("viewer1"));
     const post = (body: unknown) => tokensRoute.POST(
-      new Request("http://drive.test/api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) as any,
+      new Request("http://drive.test/api", { method: "POST", headers: { "content-type": "application/json", origin: "http://drive.test" }, body: JSON.stringify(body) }) as any,
       driveCtx("d1"),
     );
     expect((await post({ name: "w", scope: "write", ttlDays: 30 })).status).toBe(403);
+    const noOrigin = await tokensRoute.POST(
+      new Request("http://drive.test/api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x" }) }) as any,
+      driveCtx("d1"),
+    );
+    expect(noOrigin.status).toBe(403); // CSRF guard
     const ok = await post({ name: "mine", scope: "read", ttlDays: null });
     expect(ok.status).toBe(201);
     const { token, row, mcpUrl } = await ok.json();
@@ -153,7 +158,7 @@ describe("token management API", () => {
 
     cookieJar.set("aindrive_session", await sign("stranger"));
     expect((await tokensRoute.GET(new Request("http://drive.test") as any, driveCtx("d1"))).status).toBe(403);
-    const del = (id: string) => tokenIdRoute.DELETE(new Request("http://drive.test") as any, { params: Promise.resolve({ driveId: "d1", tokenId: id }) });
+    const del = (id: string) => tokenIdRoute.DELETE(new Request("http://drive.test", { headers: { origin: "http://drive.test" } }) as any, { params: Promise.resolve({ driveId: "d1", tokenId: id }) });
     expect((await del(row.id)).status).toBe(403);
 
     cookieJar.set("aindrive_session", await sign("owner1"));
@@ -162,6 +167,16 @@ describe("token management API", () => {
     expect(all.tokens.some((t: { user_email: string }) => t.user_email === "v@example.com")).toBe(true);
     expect((await del(row.id)).status).toBe(200);
     expect(tokens.verifyMcpToken(token)).toBeNull();
+  });
+});
+
+describe("safeNextPath", () => {
+  it("keeps same-origin paths and drops open-redirect forms", async () => {
+    const { safeNextPath } = await import("../safe-next");
+    expect(safeNextPath("/oauth/authorize?client_id=a&x=1")).toBe("/oauth/authorize?client_id=a&x=1");
+    for (const bad of ["//evil.com", "/\\evil.com", "/%5Cevil.com".replace("%5C", "\\"), "https://evil.com", "", null]) {
+      expect(safeNextPath(bad as string | null)).toBe("/");
+    }
   });
 });
 
@@ -201,6 +216,7 @@ describe("OAuth 2.1 flow", () => {
     }
     expect(oauth.isAllowedRedirectUri("cursor://anysphere.cursor-retrieval/oauth/callback")).toBe(true);
     expect(oauth.isAllowedRedirectUri("https://claude.ai/api/mcp/auth_callback")).toBe(true);
+    expect(oauth.isAllowedRedirectUri("intent://x#Intent;end")).toBe(false);
   });
 
   it("register → consent → code exchange → call → refresh rotation → revoke", async () => {
@@ -245,14 +261,25 @@ describe("OAuth 2.1 flow", () => {
     expect(t2.access_token).not.toBe(t1.access_token);
     expect(tokens.verifyMcpToken(t1.access_token)).toBeNull();
     expect(tokens.verifyMcpToken(t2.access_token)).not.toBeNull();
-    const reused = await form({ grant_type: "refresh_token", refresh_token: t1.refresh_token, client_id: clientId });
-    expect(reused.status).toBe(400);
-
     const row = tokens.listActiveTokens("d1", "owner1").find((x) => x.kind === "oauth")!;
     expect(row.name).toBe("Test App");
-    tokens.revokeToken(row.id);
+
+    // Replaying the superseded refresh token = leak → the whole grant dies.
+    const reused = await form({ grant_type: "refresh_token", refresh_token: t1.refresh_token, client_id: clientId });
+    expect(reused.status).toBe(400);
     expect(tokens.verifyMcpToken(t2.access_token)).toBeNull();
     expect((await form({ grant_type: "refresh_token", refresh_token: t2.refresh_token, client_id: clientId })).status).toBe(400);
+    expect(tokens.getToken(row.id)?.revoked_at).not.toBeNull();
+  });
+
+  it("revoking a connected app kills its tokens", async () => {
+    cookieJar.set("aindrive_session", await sign("owner1"));
+    const code = new URL((await (await approve()).json()).redirect).searchParams.get("code")!;
+    const t = await (await form({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: redirectUri, code_verifier: verifier })).json();
+    const row = tokens.listActiveTokens("d1", "owner1").find((x) => x.kind === "oauth")!;
+    tokens.revokeToken(row.id);
+    expect(tokens.verifyMcpToken(t.access_token)).toBeNull();
+    expect((await form({ grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: clientId })).status).toBe(400);
   });
 
   it("clamps an OAuth grant to read for a viewer", async () => {

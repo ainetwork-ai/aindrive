@@ -41,10 +41,21 @@ The flow follows the MCP authorization spec, so a client needs only the URL:
 The drive comes from the RFC 8707 `resource` (= the drive's MCP URL). Scopes
 on the wire are `drive:read` / `drive:write`.
 
+## Guards in runSkill (every MCP call)
+
+- The path is canonicalized once (`normalizePath`); that same string feeds the access check, paywall and agent call.
+- The `.aindrive/` subtree (agent token, drive secret, agent API keys) is refused for every role.
+- Paid rules match `fs/*`: a priced subtree can't be read or listed without an
+  entitlement. Listed sales show as `locked`, unlisted sales are hidden, and `search` never descends into them.
+- `write_file` enforces the same size and tier file-count caps as `fs/write`.
+
 ## Gotchas
 
 - Every URL is built from `AINDRIVE_PUBLIC_URL` (`env.publicUrl`). If it is wrong,
   `resource` validation fails and the metadata points at the wrong host.
 - An authorization code is burned before it is checked, so a failed exchange can't be retried.
+- Replaying a superseded refresh token revokes the whole grant (the token leaked).
+- Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`).
+- The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing.
 - Redirect URIs: https, loopback http, or a private-use scheme (`cursor://`); never `javascript:`/`data:`/`file:`.
 - Tests: `lib/__tests__/mcp-auth.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.

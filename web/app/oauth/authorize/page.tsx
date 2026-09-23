@@ -65,7 +65,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
       <ConsentForm
         params={params}
         clientName={v.value.client.client_name}
-        redirectHost={new URL(v.value.redirectUri).host || v.value.redirectUri}
+        redirectHost={(() => { const u = new URL(v.value.redirectUri); return u.host ? `${u.protocol}//${u.host}` : v.value.redirectUri; })()}
         driveName={drive.name}
         userEmail={user.email}
         canWrite={ceiling === "write"}

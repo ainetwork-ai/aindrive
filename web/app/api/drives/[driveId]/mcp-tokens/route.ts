@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getUser } from "@/lib/session";
+import { isSameOrigin } from "@/lib/oauth";
 import { getDrive } from "@/lib/drives";
 import { clampScope, issuePat, listActiveTokens, mcpUrlFor } from "@/lib/mcp-tokens";
 
@@ -46,6 +47,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 }
 
 export async function POST(req: NextRequest, { params }: Ctx) {
+  if (!isSameOrigin(req)) return NextResponse.json({ error: "bad origin" }, { status: 403 });
   const { driveId } = await params;
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });

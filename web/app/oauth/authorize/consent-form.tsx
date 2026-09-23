@@ -42,11 +42,15 @@ export function ConsentForm({ params, clientName, redirectHost, driveName, userE
         <h1 className="text-xl font-semibold">Connect {clientName}</h1>
       </div>
       <p className="mt-3 text-sm text-drive-text">
-        <strong>{clientName}</strong> wants to access the drive <strong>{driveName}</strong> through MCP.
+        An app calling itself <strong>{clientName}</strong> wants to access the drive <strong>{driveName}</strong> through MCP.
       </p>
-      <p className="mt-1 text-caption text-drive-muted">
-        Signed in as {userEmail}. You&apos;ll be sent back to {redirectHost}.
-      </p>
+      {/* The name is self-asserted at dynamic registration, so anyone can
+          register "Claude". The redirect destination is the real identity. */}
+      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-caption text-amber-900">
+        Access will be sent to <strong className="font-mono break-all">{redirectHost}</strong>. The app name is
+        self-reported and not verified by aindrive. Only continue if you started this connection from that app.
+      </div>
+      <p className="mt-2 text-caption text-drive-muted">Signed in as {userEmail}.</p>
 
       <fieldset className="mt-5 space-y-2">
         <legend className="text-caption font-medium text-drive-text mb-1">Permission</legend>

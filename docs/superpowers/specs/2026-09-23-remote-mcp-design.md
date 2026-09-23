@@ -52,9 +52,24 @@ Nothing in the UI issued a token or showed the URL.
 - DCR is limited to 20/h per IP and the token endpoint to 60/min per IP. A user
   can hold at most 50 active PATs per drive.
 
+## Security review follow-ups (same PR)
+
+An independent review of the first cut found, and this PR fixes:
+- A paywall bypass via non-canonical paths (`/paid/a.pdf`). runSkill now normalizes once.
+- `.aindrive/config.json` was readable through skills. It is now refused. **This bug predates the PR and
+  still exists in the HTTP `fs/*` routes and the CLI agent's read/write handlers (tracked separately).**
+- `list_files`/`stat`/`search` leaked paid and unlisted entries. They now follow R-VIS-PAID-001.
+- MCP writes skipped quotas.
+- Refresh reuse was not detected.
+- Unbounded DCR (added a global cap and GC).
+- Login `next=/\evil` open redirect.
+- Unverified client names on the consent screen.
+
 ## Testing
 
 `lib/__tests__/mcp-auth.test.ts`: scope clamp, PAT lifecycle, 401 +
 resource_metadata, cross-drive 403, read-scope tool filtering, live-role
 clamp, management API permissions, full OAuth flow (CSRF, deny, PKCE failure
-burning the code, refresh rotation and reuse rejection, revoke), viewer clamp.
+burning the code, refresh rotation, reuse → grant revoked, revoke), viewer clamp,
+safe `next`. `lib/__tests__/mcp-skills-guard.test.ts`: path canonicalization vs
+paywall, `.aindrive` refusal, and paid visibility on list/stat/search.

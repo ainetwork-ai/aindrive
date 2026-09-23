@@ -23,6 +23,10 @@ export function OPTIONS() {
 export async function POST(req: Request) {
   const rl = tryConsume({ name: "oauth-register", key: clientKey(req, "oauth-register"), limit: 20, windowMs: 60 * 60 * 1000 });
   if (!rl.ok) return fail("slow_down", "too many registrations", 429);
+  // Global ceiling too: the per-IP key trusts X-Forwarded-For, which a client
+  // can vary, so this bounds table growth regardless.
+  const global = tryConsume({ name: "oauth-register-global", key: "all", limit: 500, windowMs: 60 * 60 * 1000 });
+  if (!global.ok) return fail("slow_down", "registration temporarily unavailable", 429);
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body || typeof body !== "object") return fail("invalid_client_metadata", "JSON body required");

@@ -4,12 +4,14 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getUser } from "@/lib/session";
+import { isSameOrigin } from "@/lib/oauth";
 import { getDrive } from "@/lib/drives";
 import { getToken, revokeToken } from "@/lib/mcp-tokens";
 
 type Ctx = { params: Promise<{ driveId: string; tokenId: string }> };
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
+  if (!isSameOrigin(req)) return NextResponse.json({ error: "bad origin" }, { status: 403 });
   const { driveId, tokenId } = await params;
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });

@@ -252,6 +252,7 @@ function open() {
       client_id TEXT,
       token_hash TEXT NOT NULL UNIQUE,
       refresh_hash TEXT UNIQUE,
+      prev_refresh_hash TEXT,
       expires_at INTEGER,
       refresh_expires_at INTEGER,
       last_used_at INTEGER,
@@ -278,6 +279,11 @@ function open() {
       created_at INTEGER NOT NULL
     );
   `);
+  try {
+    handle.exec("ALTER TABLE mcp_tokens ADD COLUMN prev_refresh_hash TEXT");
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) throw e;
+  }
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

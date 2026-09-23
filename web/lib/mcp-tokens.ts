@@ -138,16 +138,22 @@ export function issueOAuthTokens(opts: {
 
 /**
  * Refresh-token grant: rotate both tokens in place. The presented refresh
- * token stops working immediately (its hash is overwritten), so a replayed
- * old refresh token is simply `null` → invalid_grant.
+ * token stops working immediately (its hash moves to prev_refresh_hash).
+ * Presenting that superseded token again means it leaked — someone else
+ * already rotated — so the whole grant is revoked (OAuth 2.1 §4.3.1).
  */
 export function refreshOAuthTokens(refreshToken: string, clientId: string): OAuthTokenPair | null {
+  const presented = hashToken(refreshToken);
+  const reused = db
+    .prepare("UPDATE mcp_tokens SET revoked_at = ? WHERE prev_refresh_hash = ? AND kind = 'oauth' AND revoked_at IS NULL")
+    .run(Date.now(), presented);
+  if (reused.changes > 0) return null;
   const row = db
     .prepare(
       `SELECT id, scope, client_id, refresh_expires_at, revoked_at FROM mcp_tokens
        WHERE refresh_hash = ? AND kind = 'oauth'`,
     )
-    .get(hashToken(refreshToken)) as
+    .get(presented) as
     | { id: string; scope: McpScope; client_id: string; refresh_expires_at: number; revoked_at: number | null }
     | undefined;
   const now = Date.now();
@@ -156,10 +162,11 @@ export function refreshOAuthTokens(refreshToken: string, clientId: string): OAut
   const refresh = mint("aind_ort");
   const res = db
     .prepare(
-      `UPDATE mcp_tokens SET token_hash = ?, refresh_hash = ?, expires_at = ?, refresh_expires_at = ?
+      `UPDATE mcp_tokens SET token_hash = ?, refresh_hash = ?, prev_refresh_hash = refresh_hash,
+                             expires_at = ?, refresh_expires_at = ?
        WHERE id = ? AND refresh_hash = ?`,
     )
-    .run(hashToken(access), hashToken(refresh), now + ACCESS_TTL_MS, now + REFRESH_TTL_MS, row.id, hashToken(refreshToken));
+    .run(hashToken(access), hashToken(refresh), now + ACCESS_TTL_MS, now + REFRESH_TTL_MS, row.id, presented);
   if (res.changes !== 1) return null; // lost a concurrent refresh race
   return { access_token: access, refresh_token: refresh, expires_in: ACCESS_TTL_MS / 1000, scope: row.scope };
 }

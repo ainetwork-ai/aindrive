@@ -65,6 +65,17 @@ export function driveIdFromResource(resource: string | null | undefined): string
   return m ? m[1] : null;
 }
 
+/**
+ * CSRF guard for cookie-authenticated mutations (consent decision, PAT
+ * issue/revoke): the browser-sent Origin must be this server.
+ */
+export function isSameOrigin(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  if (!origin) return false;
+  if (origin === new URL(baseUrl()).origin) return true;
+  try { return new URL(origin).host === req.headers.get("host"); } catch { return false; }
+}
+
 // ── Dynamic client registration ─────────────────────────────────────────
 
 export type OAuthClient = { client_id: string; client_name: string; redirect_uris: string[] };
@@ -81,11 +92,25 @@ export function isAllowedRedirectUri(raw: string): boolean {
   const scheme = u.protocol.slice(0, -1).toLowerCase();
   if (scheme === "https") return true;
   if (scheme === "http") return ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
-  if (["javascript", "data", "file", "blob", "vbscript", "about", "ftp", "ws", "wss"].includes(scheme)) return false;
+  if (["javascript", "data", "file", "blob", "vbscript", "about", "ftp", "ws", "wss", "intent", "filesystem", "view-source"].includes(scheme)) return false;
   return /^[a-z][a-z0-9+.-]*$/.test(scheme);
 }
 
+/**
+ * Housekeeping, run on registration: drop codes past expiry by a day, and
+ * registrations older than a week that never obtained a token (abandoned or
+ * spam DCR). Keeps both tables bounded without a scheduler.
+ */
+export function gcOAuth(now = Date.now()) {
+  db.prepare("DELETE FROM oauth_codes WHERE expires_at < ?").run(now - 24 * 60 * 60 * 1000);
+  db.prepare(
+    `DELETE FROM oauth_clients WHERE created_at < ?
+       AND client_id NOT IN (SELECT client_id FROM mcp_tokens WHERE client_id IS NOT NULL)`,
+  ).run(now - 7 * 24 * 60 * 60 * 1000);
+}
+
 export function registerClient(clientName: string, redirectUris: string[]): OAuthClient {
+  gcOAuth();
   const clientId = `aind_client_${randomBytes(16).toString("base64url")}`;
   db.prepare(
     "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) VALUES (?, ?, ?, ?)",

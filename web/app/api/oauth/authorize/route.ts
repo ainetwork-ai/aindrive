@@ -7,18 +7,11 @@
  */
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/session";
-import { baseUrl, issueCode, redirectWith, validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
+import { isSameOrigin, issueCode, redirectWith, validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
 import { clampScope, isMcpScope } from "@/lib/mcp-tokens";
 
-function sameOrigin(req: Request): boolean {
-  const origin = req.headers.get("origin");
-  if (!origin) return false;
-  if (origin === new URL(baseUrl()).origin) return true;
-  try { return new URL(origin).host === req.headers.get("host"); } catch { return false; }
-}
-
 export async function POST(req: Request) {
-  if (!sameOrigin(req)) return NextResponse.json({ error: "bad origin" }, { status: 403 });
+  if (!isSameOrigin(req)) return NextResponse.json({ error: "bad origin" }, { status: 403 });
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
