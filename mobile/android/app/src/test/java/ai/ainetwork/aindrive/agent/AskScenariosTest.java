@@ -55,7 +55,7 @@ public class AskScenariosTest {
                 assertEquals("bad row: " + line, 7, c.length);
                 rows++;
                 SearchQuery q = parser.parse(c[1], NOW);
-                String got = row(q.city, q.country, q.dateFrom, q.dateTo, q.textQuery);
+                String got = row(q.city, q.country, q.dateFrom, q.dateTo, q.textQuery());
                 String want = row(nul(c[2]), nul(c[3]), nul(c[4]) == null ? null : at(c[4]),
                         nul(c[5]) == null ? null : at(c[5]), nul(c[6]));
                 if (!got.equals(want)) failures.add(c[0] + "  " + c[1] + "\n      want " + want + "\n      got  " + got);

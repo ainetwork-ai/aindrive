@@ -53,6 +53,7 @@ let errorMsg: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
 let askBusy = false;
+let searchOpen = false;
 
 async function save() {
   await Preferences.set({ key: STORE_KEY, value: JSON.stringify(state) });
@@ -338,8 +339,12 @@ function render() {
       <h2>Activity</h2>
       <div class="log">${logLines.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>No activity yet</div>"}</div>
     </div>`;
+  const running = status.drives.filter((d) => d.running).length;
   const intro = `
-    <h1>aindrive</h1>
+    <div class="topbar">
+      <h1>aindrive</h1>
+      ${state.sessionCookie ? `<button class="icon" id="toggle-search" aria-label="Search" title="Search" ${running === 0 ? "disabled" : ""}>${searchOpen ? "✕" : "🔍"}</button>` : ""}
+    </div>
     <p class="sub">Share folders on this phone as drives. Files stay on the device; the server only relays signed RPCs.</p>`;
 
   // Step 1 — not logged in: server + login only.
@@ -363,7 +368,6 @@ function render() {
 
   // Step 2 — logged in: one card per shared folder, plus "add folder".
   const online = status.drives.filter((d) => d.connected).length;
-  const running = status.drives.filter((d) => d.running).length;
   const agentDot = online > 0 ? "on" : running > 0 ? "err" : "off";
   const agentLabel = running === 0 ? "Offline"
     : online === running ? `Online (${online} ${online === 1 ? "drive" : "drives"})`
@@ -396,6 +400,7 @@ function render() {
 
   app.innerHTML = `
     ${intro}
+    ${searchOpen && running > 0 ? searchPanel() : ""}
     <div class="card">
       <h2>Status</h2>
       <div class="row"><span class="k">Account</span><span class="v">${esc(state.email ?? "Logged in")}</span></div>
@@ -407,8 +412,6 @@ function render() {
     </div>
 
     ${shareCards || `<div class="card"><h2>Shared folders</h2><p class="note">No folders yet. Add one below — each folder becomes its own drive.</p></div>`}
-
-    ${running > 0 ? photoSearchCard() : ""}
 
     <div class="card">
       <h2>Add</h2>
@@ -428,6 +431,7 @@ function render() {
   `;
 
   bind("add", addFolder);
+  bind("toggle-search", () => { searchOpen = !searchOpen; render(); if (searchOpen) (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("reindex", reindex);
   bind("ask", ask);
   const askInput = document.getElementById("ask-input") as HTMLInputElement | null;
@@ -453,30 +457,31 @@ function render() {
 }
 
 /**
- * On-device agent: index + ask. Everything here runs on the phone — the
+ * On-device agent: index + ask, spanning ALL folders that are turned on (the
+ * service merges per-drive answers). Everything runs on the phone — the
  * gazetteer and index are local, so it works in airplane mode.
  */
-function photoSearchCard(): string {
+function searchPanel(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
   const indexed = ix.reduce((n, i) => n + i.indexed, 0);
   const active = ix.find((i) => i.running);
   const progress = active
     ? `Indexing… ${active.done} / ${active.total}`
-    : indexed > 0 ? `${indexed.toLocaleString()} photos indexed` : "Not indexed yet";
+    : indexed > 0 ? `${indexed.toLocaleString()} files indexed` : "Not indexed yet";
   const results = askResult ? `
     <p class="answer">${esc(askResult.answer)}</p>
     ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s) =>
       `<li><span class="mono">${esc(s.path)}</span><span class="meta">${esc(s.snippet)}</span></li>`).join("")}</ul>` : ""}` : "";
   return `
-    <div class="card">
-      <h2>Photo search</h2>
+    <div class="card search">
+      <h2>Search</h2>
       <div class="row"><span class="k">Index</span><span class="v">${esc(progress)}</span></div>
-      <button class="ghost" id="reindex" ${active ? "disabled" : ""}>${indexed > 0 ? "Re-index photos" : "Index photos"}</button>
-      <label for="ask-input">Ask</label>
-      <input id="ask-input" type="text" placeholder="파리에서 찍은 사진 찾아줘" value="${esc(askQuery)}" ${askBusy ? "disabled" : ""} />
+      <button class="ghost" id="reindex" ${active ? "disabled" : ""}>${indexed > 0 ? "Re-index files" : "Index files"}</button>
+      <label for="ask-input">Ask across all shared folders</label>
+      <input id="ask-input" type="text" placeholder="파리에서 찍은 사진 찾아줘 · 지난주 스크린샷 · 계약서 pdf" value="${esc(askQuery)}" ${askBusy ? "disabled" : ""} />
       <button id="ask" ${askBusy || !askQuery.trim() ? "disabled" : ""}>${askBusy ? "Searching…" : "Search"}</button>
       ${results}
-      <p class="note">Runs entirely on this phone: place and date come from each photo's EXIF, matched against an offline gazetteer. No network needed.</p>
+      <p class="note">Runs entirely on this phone across every folder that is turned on: file type, name, date and size for all files, plus place and time from photo EXIF (offline gazetteer). No network needed.</p>
     </div>`;
 }
 

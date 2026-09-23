@@ -178,10 +178,10 @@ public final class SafFs {
     // ------------------------------------------------------------ reads
 
     /**
-     * Every image file in the tree (HIDDEN dirs skipped), one child query per
-     * directory. Used by the photo indexer; the web side never asks for this.
+     * Every file in the tree (HIDDEN dirs skipped), one child query per
+     * directory. Used by the file indexer; the web side never asks for this.
      */
-    public List<Entry> walkPhotos() throws IOException {
+    public List<Entry> walkFiles() throws IOException {
         List<Entry> out = new ArrayList<>();
         java.util.ArrayDeque<String> dirs = new java.util.ArrayDeque<>();
         dirs.push("");
@@ -189,7 +189,7 @@ public final class SafFs {
             String dir = dirs.pop();
             for (Entry e : list(dir)) {
                 if (e.isDir) dirs.push(e.path);
-                else if (e.mime != null && e.mime.startsWith("image/")) out.add(e);
+                else out.add(e);
             }
         }
         return out;

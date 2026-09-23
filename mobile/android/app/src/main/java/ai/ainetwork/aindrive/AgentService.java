@@ -22,7 +22,7 @@ import org.json.JSONObject;
 import ai.ainetwork.aindrive.agent.AskRunner;
 import ai.ainetwork.aindrive.index.GeoLookup;
 import ai.ainetwork.aindrive.index.Indexer;
-import ai.ainetwork.aindrive.index.PhotoIndex;
+import ai.ainetwork.aindrive.index.FileIndex;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -144,7 +144,7 @@ public class AgentService extends Service {
         try {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
             conn.fs = new SafFs(this, tree);
-            conn.index = new PhotoIndex(this, driveId);
+            conn.index = new FileIndex(this, driveId);
             conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
         } catch (Exception e) {
             conn.lastError = "Could not open folder: " + e.getMessage();
@@ -171,7 +171,7 @@ public class AgentService extends Service {
         final AtomicInteger rpcCount = new AtomicInteger();
         SafFs fs;
         RpcHandler rpc;
-        PhotoIndex index;
+        FileIndex index;
         Indexer indexer;
         AskRunner ask;
         WebSocket ws;
