@@ -24,6 +24,10 @@ public final class SearchQuery {
     public List<String> keywords = new ArrayList<>();
     /** The question was written in Korean → answer in Korean. */
     public boolean korean;
+    /** "…모아서 폴더로 만들어줘": copy the matches into a new folder. */
+    public boolean collect;
+    /** "…공유해줘": after collecting, mint a share link for that folder (done by the shell, which holds the session). */
+    public boolean share;
 
     public @Nullable String textQuery() {
         return keywords.isEmpty() ? null : String.join(" ", keywords);

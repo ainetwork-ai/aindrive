@@ -40,16 +40,24 @@ public final class AskRunner {
     /** Also drop anything more than this below the best photo — the tail of near-misses. */
     public static final float CLIP_MARGIN = 0.08f;
 
+    /** What the agent may DO to the folder, provided by the service (SAF on Android). */
+    public interface FileOps {
+        /** Copy the document with `docId` to `destRel` (parents created). */
+        void copy(String docId, String destRel) throws Exception;
+    }
+
     private final FileIndex index;
     private final GeoLookup geo;
     private final QueryParser parser;
     private final Supplier<ClipEmbedder> clip;
+    private final @Nullable FileOps ops;
 
-    public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip) {
+    public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops) {
         this.index = index;
         this.geo = geo;
         this.parser = new QueryParser(geo);
         this.clip = clip;
+        this.ops = ops;
     }
 
     public JSONObject ask(String question) throws Exception {
@@ -91,7 +99,39 @@ public final class AskRunner {
         }
         out.put("answer", answerFor(q, ranked, relaxed, anyContent, anySpeech));
         out.put("sources", sources);
+        if (q.collect && ops != null && !ranked.isEmpty() && relaxed.isEmpty()) out.put("action", collect(q, ranked, question));
+        else if (q.collect) out.put("action", new JSONObject().put("type", "collect").put("skipped", true)
+                .put("reason", ranked.isEmpty() ? "nothing matched" : !relaxed.isEmpty() ? "only loose matches" : "no file access"));
         return out;
+    }
+
+    /**
+     * Task: copy the matches into a new top-level folder named after the
+     * question, e.g. "음식 사진 2026-09". Sharing the folder needs the web
+     * session, which lives in the shell, so that step is reported for it.
+     */
+    private JSONObject collect(SearchQuery q, List<Hit> hits, String question) throws Exception {
+        String folder = folderName(q);
+        int copied = 0, failed = 0;
+        JSONArray files = new JSONArray();
+        for (Hit h : hits) {
+            String dest = folder + "/" + h.row.name;
+            if (h.row.path.equals(dest)) continue;   // already there
+            try { ops.copy(h.row.docId, dest); copied++; files.put(dest); }
+            catch (Exception e) { failed++; }
+        }
+        return new JSONObject().put("type", "collect").put("folder", folder).put("copied", copied).put("failed", failed)
+                .put("share", q.share).put("files", files);
+    }
+
+    private String folderName(SearchQuery q) {
+        StringBuilder n = new StringBuilder();
+        for (String k : q.keywords) n.append(n.length() > 0 ? " " : "").append(k);
+        if (q.city != null) n.append(n.length() > 0 ? " " : "").append(q.korean && geo.cityKo(q.city) != null ? geo.cityKo(q.city) : q.city);
+        else if (q.country != null) n.append(n.length() > 0 ? " " : "").append(geo.countryName(q.country, q.korean));
+        n.append(n.length() > 0 ? " " : "").append(kindNoun(q.kind, 2, q.korean));
+        if (q.dateFrom != null) n.append(" ").append(new SimpleDateFormat("yyyy-MM", Locale.US).format(q.dateFrom));
+        return n.toString().replaceAll("[\\/:*?\"<>|]", " ").trim();
     }
 
     private static final class Hit {

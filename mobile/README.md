@@ -98,6 +98,14 @@ drive and a laptop drive are the same thing to the server.
   equivalent; a backgrounded app keeps the socket only for a short background
   task assertion. The drive is online while the app is open. This is a platform
   limit, not a TODO.
+- **The agent can act, not just answer.** "…모아서 폴더로 만들어줘" copies the
+  matches into a new top-level folder named after the question (`SafFs.copy`,
+  `AskRunner.collect`, reported as `action` on the result); "…공유해줘" makes
+  the shell mint a viewer link for that folder via `POST /api/drives/:id/shares`
+  (the shell holds the session — the native side never does). Only exact
+  matches are collected: a relaxed search reports `skipped` instead.
+- **Files open in the app.** Images (downscaled via `readFile`) and audio show
+  in an in-app viewer; everything else goes to the OS chooser (`openFile`).
 - **`agent-ask` is answered on the phone, offline.** Same `{answer, sources:
   [{path, snippet, matchedBy}]}` as the desktop agent, produced by
   `agent/AskRunner` over this drive's index; `agent.json` is never read (the

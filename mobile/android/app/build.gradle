@@ -34,6 +34,9 @@ android {
         // sherpa-onnx's x86 slice still carries a libonnxruntime.so that
         // collides with onnxruntime-android; phones are arm64, keep one copy.
         jniLibs.pickFirsts += ["lib/x86/libonnxruntime.so", "lib/x86_64/libonnxruntime.so"]
+        // Store .so files uncompressed at 16 KB-aligned offsets (Android 15+
+        // 16 KB page-size devices refuse to load them otherwise).
+        jniLibs.useLegacyPackaging = false
     }
     buildTypes {
         release {

@@ -131,6 +131,63 @@ public class AindriveAgentPlugin extends Plugin {
         }
     }
 
+    /**
+     * File bytes for the in-app viewer: images come back downscaled (longest
+     * edge ≤ maxPx, JPEG) so a 12 MP photo is a few hundred KB on the bridge;
+     * anything else is raw, capped at 25 MB.
+     */
+    @PluginMethod
+    public void readFile(PluginCall call) {
+        String folderUri = call.getString("folderUri");
+        String path = call.getString("path");
+        int maxPx = call.getInt("maxPx", 1600);
+        if (folderUri == null || path == null) { call.reject("missing folderUri/path"); return; }
+        new Thread(() -> {
+            try {
+                SafFs fs = new SafFs(getContext(), Uri.parse(folderUri));
+                SafFs.Entry e = fs.stat(path);
+                if (e == null || e.isDir) throw new java.io.FileNotFoundException("no such file");
+                byte[] bytes; String mime = e.mime == null ? "application/octet-stream" : e.mime;
+                if (mime.startsWith("image/")) {
+                    byte[] raw = fs.read(path, 64 * 1024 * 1024);
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length, o);
+                    int sample = 1;
+                    while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= maxPx) sample *= 2;
+                    android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+                    o2.inSampleSize = sample;
+                    android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length, o2);
+                    if (bmp == null) throw new java.io.IOException("not an image");
+                    // Honour EXIF orientation so portrait phone shots don't show sideways.
+                    try {
+                        androidx.exifinterface.media.ExifInterface ex = new androidx.exifinterface.media.ExifInterface(new java.io.ByteArrayInputStream(raw));
+                        int rot = ex.getRotationDegrees();
+                        if (rot != 0) {
+                            android.graphics.Matrix m = new android.graphics.Matrix(); m.postRotate(rot);
+                            android.graphics.Bitmap r = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
+                            if (r != bmp) { bmp.recycle(); bmp = r; }
+                        }
+                    } catch (Exception ignored) { }
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos);
+                    bmp.recycle();
+                    bytes = bos.toByteArray(); mime = "image/jpeg";
+                } else {
+                    if (e.size > 25L * 1024 * 1024) throw new java.io.IOException("file too large to view in the app");
+                    bytes = fs.read(path, (int) Math.min(e.size, 25L * 1024 * 1024));
+                }
+                JSObject ret = new JSObject();
+                ret.put("mime", mime);
+                ret.put("name", e.name);
+                ret.put("base64", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP));
+                call.resolve(ret);
+            } catch (Exception ex) {
+                call.reject("Could not read file: " + ex.getMessage());
+            }
+        }, "aindrive-read").start();
+    }
+
     /** Hand a file to whatever app handles its type (the phone's "open"). */
     @PluginMethod
     public void openFile(PluginCall call) {

@@ -34,7 +34,7 @@ public final class QueryParser {
      * they are rare in search questions and 고양이/나비/거미 must stay whole.
      */
     private static final String[] KO_PARTICLES = {
-            "에서의", "에서는", "에서", "으로", "로", "까지", "부터", "에는", "에", "의", "은", "는", "을", "를", "과", "와", "도", "랑", "이랑", "하고",
+            "에서의", "에서는", "에서", "으로", "로", "까지", "부터", "에는", "에", "의", "은", "는", "을", "를", "과", "와", "도", "랑", "이랑", "하고", "들만", "만",
     };
     /**
      * For PLACE matching only the locative/possessive particles are stripped:
@@ -51,6 +51,7 @@ public final class QueryParser {
             "내", "나의", "우리", "그", "저", "것", "거", "들", "중", "중에", "중에서", "관련", "관련된", "모든", "전체", "다른", "제일", "가장", "좋은", "이름",
             // "X 얘기한 녹음" — the verbs around a topic word are not the topic
             "얘기한", "얘기", "이야기", "이야기한", "언급된", "언급한", "언급", "나온", "나왔던", "말한", "말했던", "관한", "대한", "다룬", "논의한", "토론한", "설명한", "들어간", "들어있는", "포함된", "나오는",
+            "먹은", "먹었던", "마신", "본", "봤던", "산", "샀던", "갔다온", "다녀온",
             // English
             "find", "show", "search", "get", "open", "list", "me", "the", "a", "an", "of", "from", "in", "at", "on", "my", "our", "all", "any", "some", "with", "for", "that", "which",
             "taken", "took", "trip", "travel", "travelled", "traveled", "vacation", "holiday", "please", "i", "we", "were", "was", "named", "called", "about", "best", "good",
@@ -96,6 +97,10 @@ public final class QueryParser {
         for (String k : keywords) if (!RECORDING_WORDS.contains(k.toLowerCase(Locale.ROOT))) out.add(k);
         return out;
     }
+    /** Verbs that turn a question into a task. Matched as prefixes of a token ("모아서", "모아", "만들어줘"). */
+    private static final String[] COLLECT_WORDS = {"모아", "모아서", "모아줘", "모으", "묶어", "정리해", "폴더로", "폴더에", "앨범으로", "앨범", "collect", "gather", "folder", "album", "organize", "organise"};
+    private static final String[] SHARE_WORDS = {"공유", "링크", "share", "link"};
+    private static final String[] TASK_FILLER = {"만들어", "만들고", "만들어서", "만들어줘", "만든", "새", "넣어", "넣고", "해줘", "해서", "하고", "줘", "그리고", "다음", "then", "and", "make", "create", "put", "into", "new", "them", "it", "me"};
     private static final Set<String> SIZE_WORDS = new HashSet<>(Arrays.asList("큰", "대용량", "용량큰", "무거운", "large", "big", "huge", "biggest", "largest"));
     private static final Pattern YEAR = Pattern.compile("^(19|20)\\d{2}$");
     private static final Pattern YEAR_MONTH = Pattern.compile("^((?:19|20)\\d{2})[-./]?(0?[1-9]|1[0-2])$");
@@ -153,6 +158,17 @@ public final class QueryParser {
                 if (q.kind == null || "*".equals(q.kind)) q.kind = kind;
                 used[i] = true; continue;
             }
+            // "음식사진", "회의영상": a content word glued to a kind word.
+            for (String kw : new String[]{"사진", "영상", "동영상", "문서", "녹음", "스크린샷"}) {
+                if (lower.length() > kw.length() + 1 && lower.endsWith(kw)) {
+                    String k2 = KIND_WORDS.get(kw);
+                    if (q.kind == null || "*".equals(q.kind)) q.kind = k2;
+                    tokens.set(i, t.substring(0, t.length() - kw.length()));   // leave the content part for step 4
+                    kind = "";
+                    break;
+                }
+            }
+            if (kind != null) { t = tokens.get(i); lower = t.toLowerCase(Locale.ROOT); }
             if (SIZE_WORDS.contains(lower)) { q.minSize = LARGE_BYTES; used[i] = true; continue; }
             Matcher mm;
             if ((mm = YEAR_MONTH.matcher(t)).matches()) { y = Integer.parseInt(mm.group(1)); m = Integer.parseInt(mm.group(2)); used[i] = true; }
@@ -196,7 +212,17 @@ public final class QueryParser {
             if (y != null) applyDate(q, y, m, season);
         }
 
-        // 3. Whatever is left is a keyword for the file name (and, later, CLIP).
+        // 3. Task words: "모아서 폴더로 만들어서 공유해줘" is an instruction, not content.
+        for (int i = 0; i < tokens.size(); i++) {
+            if (used[i]) continue;
+            String lower = stripParticles(tokens.get(i)).toLowerCase(Locale.ROOT);
+            String raw = tokens.get(i).toLowerCase(Locale.ROOT);
+            if (startsWithAny(raw, COLLECT_WORDS) || startsWithAny(lower, COLLECT_WORDS)) { q.collect = true; used[i] = true; }
+            else if (startsWithAny(raw, SHARE_WORDS) || startsWithAny(lower, SHARE_WORDS)) { q.share = true; q.collect = true; used[i] = true; }
+            else if (startsWithAny(raw, TASK_FILLER) || startsWithAny(lower, TASK_FILLER)) { if (q.collect || q.share || i > 0) used[i] = true; }
+        }
+
+        // 4. Whatever is left is a keyword for the file name (and, later, CLIP).
         for (int i = 0; i < tokens.size(); i++) {
             if (used[i]) continue;
             String t = stripParticles(tokens.get(i));
@@ -220,6 +246,11 @@ public final class QueryParser {
             if (tok.length() > p.length() + 1 && tok.endsWith(p)) return tok.substring(0, tok.length() - p.length());
         }
         return tok;
+    }
+
+    private static boolean startsWithAny(String t, String[] prefixes) {
+        for (String p : prefixes) if (t.startsWith(p)) return true;
+        return false;
     }
 
     static String stripParticles(String tok) {

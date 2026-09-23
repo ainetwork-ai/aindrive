@@ -139,6 +139,22 @@ public class QueryParserTest {
     }
 
     @Test
+    public void taskWordsBecomeActions() {
+        SearchQuery q = parser.parse("이번달에 먹은 음식사진만 모아서 폴더로 만들어서 공유해줘", NOW);
+        assertEquals("photo", q.kind);
+        assertEquals("음식", q.textQuery());
+        assertEquals(Long.valueOf(at(2026, 9, 1)), q.dateFrom);
+        assertTrue(q.collect);
+        assertTrue(q.share);
+        q = parser.parse("collect my dog photos into a folder", NOW);
+        assertEquals("photo", q.kind);
+        assertEquals("dog", q.textQuery());
+        assertTrue(q.collect);
+        q = parser.parse("강아지 사진", NOW);
+        assertTrue(!q.collect && !q.share);
+    }
+
+    @Test
     public void winterSpansYearBoundary() {
         SearchQuery q = parser.parse("2023년 겨울 사진", NOW);
         assertEquals(Long.valueOf(at(2023, 12, 1)), q.dateFrom);

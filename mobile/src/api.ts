@@ -87,6 +87,11 @@ export function pairDrive(server: string, sessionCookie: string, name: string): 
   return post<DrivePair>(server, "/api/drives", { name }, sessionCookie);
 }
 
+/** Mint a viewer link for a path in the drive (editor+). Returns the public URL. */
+export async function createShare(server: string, sessionCookie: string, driveId: string, path: string): Promise<{ url: string; token: string }> {
+  return post<{ url: string; token: string }>(server, `/api/drives/${encodeURIComponent(driveId)}/shares`, { path, role: "viewer" }, sessionCookie);
+}
+
 /** Delete the server-side drive (creator only). 404 is treated as already gone. */
 export async function deleteDrive(server: string, sessionCookie: string, driveId: string): Promise<void> {
   try {

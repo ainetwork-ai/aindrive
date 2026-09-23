@@ -77,6 +77,19 @@ export interface FileEntry {
 export interface AskResult {
   answer: string;
   sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo" }[];
+  /** Present when the question was a task ("…모아서 폴더로 만들어줘"). */
+  action?: {
+    type: "collect";
+    driveId?: string;
+    /** Drive-relative path of the folder that was created. */
+    folder?: string;
+    copied?: number;
+    failed?: number;
+    /** The user also asked to share it — the shell mints the link (it holds the session). */
+    share?: boolean;
+    skipped?: boolean;
+    reason?: string;
+  };
 }
 
 export interface DriveStatus {
@@ -116,6 +129,8 @@ export interface AindriveAgentPlugin {
   listFolder(opts: { folderUri: string; path?: string }): Promise<{ entries: FileEntry[] }>;
   /** Open a file with the phone's own viewer (Android: ACTION_VIEW chooser; iOS: Quick Look). */
   openFile(opts: { folderUri: string; path: string }): Promise<void>;
+  /** File bytes for the in-app viewer; images come back downscaled to `maxPx` (default 1600) as JPEG. */
+  readFile(opts: { folderUri: string; path: string; maxPx?: number }): Promise<{ mime: string; name: string; base64: string }>;
   /**
    * Adds a drive to the running agent (starting the foreground service on
    * Android if needed) and connects it. Calling again with the same driveId

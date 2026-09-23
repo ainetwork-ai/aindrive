@@ -323,6 +323,21 @@ public final class SafFs {
         pathToDocId.put(String.join("/", splitPath(rel)), docId);
     }
 
+    /** Copy one document (by id) to a new path inside the tree; existing target is replaced. */
+    public void copy(String srcDocId, String destRel) throws IOException {
+        String existing = resolve(destRel);
+        String destId = existing != null ? existing : createFile(destRel);
+        try (InputStream in = cr.openInputStream(docUri(srcDocId));
+             OutputStream out = cr.openOutputStream(docUri(destId), "wt")) {
+            if (in == null || out == null) throw new IOException("cannot open for copy");
+            byte[] buf = new byte[256 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+        }
+        invalidate(destRel);
+    }
+
     /** Create the file (and any missing parent directories) and return its id. */
     private String createFile(String rel) throws IOException {
         List<String> segs = splitPath(rel);

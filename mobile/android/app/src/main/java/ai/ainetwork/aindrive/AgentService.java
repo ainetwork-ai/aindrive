@@ -245,7 +245,7 @@ public class AgentService extends Service {
         }
 
         synchronized AskRunner askRunner() {
-            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull);
+            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, (docId, destRel) -> fs.copy(docId, destRel));
             return ask;
         }
 
@@ -475,10 +475,12 @@ public class AgentService extends Service {
             JSONObject r = targets.get(0).askRunner().ask(query);
             JSONArray s = r.getJSONArray("sources");
             for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", targets.get(0).driveId);
+            if (r.has("action")) r.getJSONObject("action").put("driveId", targets.get(0).driveId);
             return r;
         }
         JSONArray sources = new JSONArray();
         StringBuilder answer = new StringBuilder();
+        JSONObject actionOut = new JSONObject();
         for (Conn c : targets) {
             if (c.fs == null) continue;
             JSONObject r = c.askRunner().ask(query);
@@ -491,9 +493,12 @@ public class AgentService extends Service {
                 sources.put(src);
             }
             if (s.length() > 0) answer.append(answer.length() > 0 ? " " : "").append(c.folderLabel).append(": ").append(r.getString("answer"));
+            if (r.has("action") && !r.getJSONObject("action").optBoolean("skipped") && !actionOut.has("folder")) actionOut = r.getJSONObject("action").put("driveId", c.driveId);
         }
         if (answer.length() == 0) answer.append(targets.get(0).askRunner().ask(query).getString("answer"));
-        return new JSONObject().put("answer", answer.toString()).put("sources", sources);
+        JSONObject merged = new JSONObject().put("answer", answer.toString()).put("sources", sources);
+        if (actionOut.has("folder")) merged.put("action", actionOut);
+        return merged;
     }
 
     /** Mirrors toWsUrl in cli/src/agent.js. */

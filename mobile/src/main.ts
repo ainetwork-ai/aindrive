@@ -16,7 +16,7 @@ import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
-import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive } from "./api";
+import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare } from "./api";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
 const STORE_KEY = "aindrive.mobile.state.v2";
@@ -73,6 +73,10 @@ let browse: {
   plusMenu: boolean;      // "+" menu (new folder / add files)
 } | null = null;
 let showAllActivity = false;
+/** In-app viewer: what is open (images and audio play here; everything else goes to the OS). */
+let viewer: { share: SharedFolder; path: string; name: string; mime: string; src?: string; loading: boolean } | null = null;
+/** Share link minted for the agent's last collected folder. */
+let actionShare: { folder: string; url?: string; busy: boolean; error?: string } | null = null;
 let toast: { msg: string; error?: boolean; timer?: number } | null = null;
 let confirmSheet: { title: string; body: string; ok: string; danger?: boolean; resolve: (v: boolean) => void } | null = null;
 
@@ -251,8 +255,59 @@ async function browseOpen(entry: FileEntry) {
   const share = browseShare();
   if (!browse || !share) return;
   if (entry.isDir) { browse.path = entry.path; await loadBrowse(); return; }
-  try { await AindriveAgent.openFile({ folderUri: share.folder.uri, path: entry.path }); }
+  await viewFile(share, entry.path, entry.mime);
+}
+
+/**
+ * Open a file the way a person expects: images and audio right here in the
+ * app (no chooser, no web), everything else with the phone's own app.
+ */
+async function viewFile(share: SharedFolder, path: string, mime?: string) {
+  const name = path.split("/").pop() ?? path;
+  const m = mime || guessMime(name);
+  if (m.startsWith("image/") || m.startsWith("audio/")) {
+    viewer = { share, path, name, mime: m, loading: true };
+    render();
+    try {
+      const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path, maxPx: 1600 });
+      if (viewer && viewer.path === path) { viewer.src = `data:${r.mime};base64,${r.base64}`; viewer.mime = r.mime; viewer.loading = false; }
+    } catch (e) {
+      viewer = null;
+      notify(msgOf(e), true);
+    }
+    render();
+    return;
+  }
+  try { await AindriveAgent.openFile({ folderUri: share.folder.uri, path }); }
   catch (e) { notify(msgOf(e), true); }
+}
+
+function guessMime(name: string): string {
+  const e = (name.split(".").pop() ?? "").toLowerCase();
+  if (["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp"].includes(e)) return "image/" + (e === "jpg" ? "jpeg" : e);
+  if (["mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac", "amr"].includes(e)) return "audio/" + e;
+  if (["mp4", "mov", "mkv", "webm", "3gp"].includes(e)) return "video/" + e;
+  return "application/octet-stream";
+}
+
+/** After "…공유해줘": mint a viewer link for the folder the agent just made. */
+async function shareCollected() {
+  const a = askResult?.action;
+  if (!a?.folder || !state.sessionCookie) return;
+  const share = shareByDrive(a.driveId);
+  if (!share?.drive) { notify("Turn the folder on to share it.", true); return; }
+  actionShare = { folder: a.folder, busy: true };
+  render();
+  try {
+    const r = await createShare(state.server, state.sessionCookie, share.drive.driveId, a.folder);
+    actionShare = { folder: a.folder, url: r.url, busy: false };
+    log(`Shared ${a.folder}: ${r.url}`);
+    await navigator.clipboard?.writeText(r.url).then(() => notify("Link copied")).catch(() => {});
+  } catch (e) {
+    actionShare = { folder: a.folder, busy: false, error: msgOf(e) };
+    log(`Error: ${msgOf(e)}`);
+  }
+  render();
 }
 
 function joinPath(dir: string, name: string): string {
@@ -500,10 +555,13 @@ async function ask(q = askQuery) {
   q = q.trim();
   if (!q) return;
   askQuery = q;
-  askBusy = true; render();
+  askBusy = true; actionShare = null; render();
   try {
     askResult = await AindriveAgent.ask({ query: q });
     log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}`);
+    const a = askResult.action;
+    if (a?.folder) log(`Agent made folder "${a.folder}" with ${a.copied} file${a.copied === 1 ? "" : "s"}`);
+    if (a?.folder && a.share) void shareCollected();
   } catch (e) {
     fail(e);
     askResult = null;
@@ -539,6 +597,8 @@ const I = {
   lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>`,
   back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>`,
+  agent: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v3"/><rect x="4" y="6" width="16" height="12" rx="4"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><path d="M9.5 15.5h5M2 11v3M22 11v3M8 18v2.5M16 18v2.5"/></svg>`,
+  link: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>`,
 };
 
 // ---------------------------------------------------------------- render
@@ -604,7 +664,7 @@ function homeScreen(): string {
       <h1>aindrive</h1>
       <div class="actions">
         ${anyPaired ? `<button class="iconbtn" id="add" aria-label="Add folder" title="Add folder">${I.plus}</button>` : ""}
-        <button class="iconbtn primary" id="toggle-search" aria-label="Search" title="Search">${I.search}</button>
+        <button class="iconbtn primary" id="toggle-search" aria-label="Agent" title="Agent">${I.agent}</button>
       </div>
     </div>
 
@@ -706,7 +766,7 @@ function bindHome() {
 
 // ---- search
 
-const SUGGESTIONS = ["파리에서 찍은 사진", "강아지 사진", "에펠탑", "예산 얘기한 회의 녹음", "지난주 스크린샷", "계약서 pdf"];
+const SUGGESTIONS = ["파리에서 찍은 사진", "강아지 사진", "이번달 음식 사진 모아서 폴더 만들고 공유해줘", "예산 얘기한 회의 녹음", "지난주 스크린샷", "계약서 pdf"];
 
 function searchSheet(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
@@ -728,8 +788,21 @@ function searchSheet(): string {
         ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
         <button class="btn small" id="ensure-models">Download models</button>
       </div>`;
-  const body = askBusy ? `<div class="searching"><span class="spinner"></span> Searching…</div>`
+  const a = askResult?.action;
+  const actionCard = !a ? "" : a.skipped
+    ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "This folder can't be written to.")}</p></div>`
+    : `<div class="card action">
+        <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.folder ?? "")}</b><br><span class="hint">${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
+        <div class="folder-foot">
+          <button class="btn secondary small" id="action-open">Open folder</button>
+          ${actionShare?.url ? `<button class="btn small" id="action-copy">${I.link} Copy link</button>` : `<button class="btn small" id="action-share" ${actionShare?.busy ? "disabled" : ""}>${actionShare?.busy ? "Sharing…" : `${I.link} Share link`}</button>`}
+        </div>
+        ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
+        ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
+      </div>`;
+  const body = askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>`
     : askResult ? `
+      ${actionCard}
       <p class="answer">${esc(askResult.answer)}</p>
       ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s, i) => {
         const name = s.path.split("/").pop() ?? s.path;
@@ -740,12 +813,12 @@ function searchSheet(): string {
     : `
       <p class="note" style="margin:0 0 8px">Try asking</p>
       <div class="chips">${SUGGESTIONS.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>
-      <p class="hint">Understands file type, name, date and size for every file; where and when photos were taken; what photos show and what recordings say. Runs on this phone — works offline.</p>`;
+      <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Runs on this phone; only sharing needs the server.</p>`;
   return `
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="field">${I.search}<input id="ask-input" type="text" enterkeyhint="search" placeholder="Ask across your folders" value="${esc(askQuery)}" autocomplete="off" />
+        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="Ask or tell me what to do" value="${esc(askQuery)}" autocomplete="off" />
           ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
       </div>
       <div class="body">
@@ -769,8 +842,14 @@ function bindSearch() {
     const hit = askResult?.sources[Number(li.dataset.hit)];
     if (!hit) return;
     const share = shareByDrive(hit.driveId);
-    if (share) void openDrive(share, hit.path); else notify("Turn the folder on to open it on the web.", true);
+    if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
+  bind("action-share", shareCollected);
+  bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
+  bind("action-open", () => {
+    const a = askResult?.action; const share = shareByDrive(a?.driveId);
+    if (share && a?.folder) { searchOpen = false; void openBrowser(share, a.folder); }
+  });
   bindOverlays();
 }
 
@@ -873,6 +952,27 @@ function bindBrowse() {
 
 // ---- overlays
 
+function viewerSheet(): string {
+  if (!viewer) return "";
+  const media = viewer.loading ? `<div class="searching"><span class="spinner"></span> Loading…</div>`
+    : viewer.mime.startsWith("image/") ? `<img src="${viewer.src}" alt="${esc(viewer.name)}" />`
+    : `<audio controls autoplay src="${viewer.src}"></audio>`;
+  return `
+    <div class="viewer" id="viewer">
+      <div class="bar">
+        <button class="iconbtn" id="viewer-close" aria-label="Close">${I.back}</button>
+        <div class="title">${esc(viewer.name)}</div>
+        <button class="iconbtn" id="viewer-ext" aria-label="Open with another app" title="Open with another app">${I.more}</button>
+      </div>
+      <div class="stage">${media}</div>
+    </div>`;
+}
+
+function bindViewer() {
+  bind("viewer-close", () => { viewer = null; render(); });
+  bind("viewer-ext", () => { const v = viewer; if (!v) return; void AindriveAgent.openFile({ folderUri: v.share.folder.uri, path: v.path }).catch((e) => notify(msgOf(e), true)); });
+}
+
 function overlays(): string {
   const t = toast ? `<div class="toast ${toast.error ? "error" : ""}" role="status">${esc(toast.msg)}${toast.error ? `<button id="toast-close">OK</button>` : ""}</div>` : "";
   const c = confirmSheet ? `
@@ -886,10 +986,11 @@ function overlays(): string {
         </div>
       </div>
     </div>` : "";
-  return t + c;
+  return viewerSheet() + t + c;
 }
 
 function bindOverlays() {
+  bindViewer();
   bind("toast-close", () => { toast = null; render(); });
   bind("confirm-no", () => confirmSheet?.resolve(false));
   bind("confirm-yes", () => confirmSheet?.resolve(true));
@@ -954,6 +1055,7 @@ async function boot() {
   });
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
+    else if (viewer) { viewer = null; render(); }
     else if (searchOpen) { searchOpen = false; render(); }
     else if (browse) browseBack();
     else if (menuFor) { menuFor = null; render(); }
