@@ -22,7 +22,7 @@ import org.json.JSONObject;
 import ai.ainetwork.aindrive.agent.AskRunner;
 import ai.ainetwork.aindrive.index.GeoLookup;
 import ai.ainetwork.aindrive.index.Indexer;
-import ai.ainetwork.aindrive.index.PhotoIndex;
+import ai.ainetwork.aindrive.index.FileIndex;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -144,7 +144,7 @@ public class AgentService extends Service {
         try {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
             conn.fs = new SafFs(this, tree);
-            conn.index = new PhotoIndex(this, driveId);
+            conn.index = new FileIndex(this, driveId);
             conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
         } catch (Exception e) {
             conn.lastError = "Could not open folder: " + e.getMessage();
@@ -171,7 +171,7 @@ public class AgentService extends Service {
         final AtomicInteger rpcCount = new AtomicInteger();
         SafFs fs;
         RpcHandler rpc;
-        PhotoIndex index;
+        FileIndex index;
         Indexer indexer;
         AskRunner ask;
         WebSocket ws;
@@ -371,7 +371,12 @@ public class AgentService extends Service {
         java.util.List<Conn> targets;
         synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
-        if (targets.size() == 1) return targets.get(0).askRunner().ask(query);
+        if (targets.size() == 1) {
+            JSONObject r = targets.get(0).askRunner().ask(query);
+            JSONArray s = r.getJSONArray("sources");
+            for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", targets.get(0).driveId);
+            return r;
+        }
         JSONArray sources = new JSONArray();
         StringBuilder answer = new StringBuilder();
         for (Conn c : targets) {
@@ -380,7 +385,9 @@ public class AgentService extends Service {
             JSONArray s = r.getJSONArray("sources");
             for (int i = 0; i < s.length(); i++) {
                 JSONObject src = s.getJSONObject(i);
-                src.put("driveId", c.driveId).put("path", (c.folderLabel == null ? c.driveId : c.folderLabel) + "/" + src.getString("path"));
+                // Keep `path` drive-relative (the web deep-link needs it); the
+                // folder is named in `drive` so the UI can still show it.
+                src.put("driveId", c.driveId).put("drive", c.folderLabel == null ? c.driveId : c.folderLabel);
                 sources.put(src);
             }
             if (s.length() > 0) answer.append(answer.length() > 0 ? " " : "").append(c.folderLabel).append(": ").append(r.getString("answer"));
