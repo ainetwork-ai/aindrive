@@ -49,11 +49,13 @@ public final class AskRunner {
                     .put("sources", new JSONArray());
         }
 
-        String relaxed = null;
+        // Relax the least-intended constraint first: a person asking for
+        // "spring photos from Paris" cares about Paris more than about spring.
+        List<String> relaxed = new ArrayList<>();
         List<PhotoIndex.Row> rows = index.query(toFilter(q), LIMIT);
-        if (rows.isEmpty() && q.city != null) { q.city = null; relaxed = "city"; rows = index.query(toFilter(q), LIMIT); }
-        if (rows.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed = "date"; rows = index.query(toFilter(q), LIMIT); }
-        if (rows.isEmpty() && q.country != null) { q.country = null; relaxed = "country"; rows = index.query(toFilter(q), LIMIT); }
+        if (rows.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed.add("date"); rows = index.query(toFilter(q), LIMIT); }
+        if (rows.isEmpty() && q.city != null) { q.city = null; relaxed.add("city"); rows = index.query(toFilter(q), LIMIT); }
+        if (rows.isEmpty() && q.country != null) { q.country = null; relaxed.add("country"); rows = index.query(toFilter(q), LIMIT); }
 
         JSONArray sources = new JSONArray();
         for (PhotoIndex.Row r : rows) {
@@ -78,7 +80,7 @@ public final class AskRunner {
         return s.toString();
     }
 
-    private String answerFor(SearchQuery q, List<PhotoIndex.Row> rows, @Nullable String relaxed, String question) {
+    private String answerFor(SearchQuery q, List<PhotoIndex.Row> rows, List<String> relaxed, String question) {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
             return ko ? "조건에 맞는 사진을 찾지 못했어요." : "No photos matched your question.";
@@ -96,9 +98,11 @@ public final class AskRunner {
         String n = rows.size() >= LIMIT ? (ko ? LIMIT + "장 이상" : LIMIT + "+") : String.valueOf(rows.size());
 
         StringBuilder a = new StringBuilder();
-        if (relaxed != null) {
+        if (!relaxed.isEmpty()) {
+            List<String> parts = new ArrayList<>();
+            for (String r : relaxed) parts.add(ko ? relaxedKo(r) : relaxedEn(r));
             a.append(ko ? "정확히 일치하는 사진은 없어서 " : "Nothing matched exactly, so ")
-             .append(ko ? relaxedKo(relaxed) : relaxedEn(relaxed)).append(ko ? " " : " — ");
+             .append(String.join(ko ? "·" : " and ", parts)).append(ko ? " 조건을 빼고 " : " — ");
         }
         if (ko) {
             a.append(where.isEmpty() ? "" : where + " ").append(when.isEmpty() ? "" : when + " ")
@@ -131,9 +135,9 @@ public final class AskRunner {
 
     private static String relaxedKo(String r) {
         switch (r) {
-            case "city": return "도시 조건을 빼고";
-            case "date": return "날짜 조건을 빼고";
-            default: return "장소 조건을 빼고";
+            case "city": return "도시";
+            case "date": return "날짜";
+            default: return "국가";
         }
     }
 
@@ -141,7 +145,7 @@ public final class AskRunner {
         switch (r) {
             case "city": return "ignoring the city";
             case "date": return "ignoring the date";
-            default: return "ignoring the place";
+            default: return "ignoring the country";
         }
     }
 }
