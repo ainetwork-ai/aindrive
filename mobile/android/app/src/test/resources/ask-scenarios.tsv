@@ -1,0 +1,119 @@
+# On-device agent — 100 question-understanding scenarios.
+# Run by agent/AskScenariosTest against the REAL bundled gazetteer (assets/geo/cities.tsv.gz).
+# "Today" is fixed at 2026-09-24 so relative dates are deterministic.
+#
+# columns: id	question	city	country	dateFrom	dateTo	text
+#   city     GeoNames name the parser must resolve, or - for none
+#   country  ISO-3166 alpha-2, or -
+#   dateFrom inclusive YYYY-MM-DD, or -      dateTo exclusive YYYY-MM-DD, or -
+#   text     leftover content words (space-joined), or -
+#
+# ---- A. Korean city + particle (the headline case) ----
+A01	파리에서 찍은 사진 찾아줘	Paris	FR	-	-	-
+A02	파리 사진	Paris	FR	-	-	-
+A03	파리에서의 사진들	Paris	FR	-	-	-
+A04	파리는 어디	Paris	FR	-	-	-
+A05	런던에서 찍은 사진 보여줘	London	GB	-	-	-
+A06	도쿄 여행 사진	Tokyo	JP	-	-	-
+A07	뉴욕에서 찍은 것	New York City	US	-	-	-
+A08	서울 사진	Seoul	KR	-	-	-
+A09	서울특별시에서 찍은 사진	Seoul	KR	-	-	-
+A10	부산에서 찍은 사진	Busan	KR	-	-	-
+A11	제주 사진	Jeju City	KR	-	-	-
+A12	제주시 사진	Jeju City	KR	-	-	-
+A13	니스에서 찍은 사진	Nice	FR	-	-	-
+A14	로마 사진 찾아줘	Rome	IT	-	-	-
+A15	베를린에서 찍은 사진	Berlin	DE	-	-	-
+A16	방콕에서 찍었던 사진	Bangkok	TH	-	-	-
+A17	오사카 사진	Osaka	JP	-	-	-
+A18	홍콩 사진	Hong Kong	HK	-	-	-
+A19	싱가포르 사진	-	SG	-	-	-
+A20	바르셀로나에서 찍은 사진	Barcelona	ES	-	-	-
+# ---- B. Korean country ----
+B01	프랑스 여행 갔던 사진	-	FR	-	-	-
+B02	프랑스에서 찍은 사진	-	FR	-	-	-
+B03	한국에서 찍은 사진	-	KR	-	-	-
+B04	대한민국 사진	-	KR	-	-	-
+B05	일본 여행 사진	-	JP	-	-	-
+B06	미국에서 찍은 사진	-	US	-	-	-
+B07	영국 사진	-	GB	-	-	-
+B08	이탈리아 여행 갔을때 사진	-	IT	-	-	-
+B09	스페인 사진 보여줘	-	ES	-	-	-
+B10	독일에서 찍은 사진	-	DE	-	-	-
+B11	베트남 여행 사진	-	VN	-	-	-
+B12	태국 사진	-	TH	-	-	-
+B13	대만에서 찍은 사진	-	TW	-	-	-
+B14	불란서 사진	-	FR	-	-	-
+B15	네덜란드 사진	-	NL	-	-	-
+# ---- C. English places (city, multi-word, country, aliases) ----
+C01	photos from Paris	Paris	FR	-	-	-
+C02	show me pictures taken in London	London	GB	-	-	-
+C03	photos from New York	New York City	US	-	-	-
+C04	pictures I took in Los Angeles	Los Angeles	US	-	-	-
+C05	photos from San Francisco	San Francisco	US	-	-	-
+C06	find my Tokyo photos	Tokyo	JP	-	-	-
+C07	pictures from France	-	FR	-	-	-
+C08	photos taken in the UK	-	GB	-	-	-
+C09	USA trip photos	-	US	-	-	-
+C10	pictures from Korea	-	KR	-	-	-
+C11	photos from South Korea	-	KR	-	-	-
+C12	Japan vacation pictures	-	JP	-	-	-
+C13	photos from Mexico	-	MX	-	-	-
+C14	pictures from Hong Kong	Hong Kong	HK	-	-	-
+C15	photos from Dubai	-	AE	-	-	-
+# ---- D. Absolute dates ----
+D01	2024년 5월 파리 사진	Paris	FR	2024-05-01	2024-06-01	-
+D02	2024년 사진	-	-	2024-01-01	2025-01-01	-
+D03	2023년에 찍은 사진	-	-	2023-01-01	2024-01-01	-
+D04	2024-05 사진	-	-	2024-05-01	2024-06-01	-
+D05	2024.12 사진	-	-	2024-12-01	2025-01-01	-
+D06	photos from May 2024	-	-	2024-05-01	2024-06-01	-
+D07	pictures from 2022	-	-	2022-01-01	2023-01-01	-
+D08	photos from December 2024 in Paris	Paris	FR	2024-12-01	2025-01-01	-
+D09	2025년 1월 서울 사진	Seoul	KR	2025-01-01	2025-02-01	-
+D10	Tokyo photos from March 2025	Tokyo	JP	2025-03-01	2025-04-01	-
+# ---- E. Relative dates (today = 2026-09-24) ----
+E01	작년 사진	-	-	2025-01-01	2026-01-01	-
+E02	올해 사진	-	-	2026-01-01	2027-01-01	-
+E03	재작년 사진	-	-	2024-01-01	2025-01-01	-
+E04	지난달 사진	-	-	2026-08-01	2026-09-01	-
+E05	이번달 사진	-	-	2026-09-01	2026-10-01	-
+E06	photos from last year	-	-	2025-01-01	2026-01-01	-
+E07	this year's photos	-	-	2026-01-01	2027-01-01	-
+E08	pictures from last month	-	-	2026-08-01	2026-09-01	-
+E09	5월 사진	-	-	2026-05-01	2026-06-01	-
+E10	photos from July	-	-	2026-07-01	2026-08-01	-
+# ---- F. Seasons ----
+F01	작년 여름 사진	-	-	2025-06-01	2025-09-01	-
+F02	지난 여름 사진	-	-	2025-06-01	2025-09-01	-
+F03	photos from last summer	-	-	2025-06-01	2025-09-01	-
+F04	2023년 겨울 사진	-	-	2023-12-01	2024-03-01	-
+F05	올해 봄 사진	-	-	2026-03-01	2026-06-01	-
+F06	2024년 가을 사진	-	-	2024-09-01	2024-12-01	-
+F07	여름 사진	-	-	2026-06-01	2026-09-01	-
+F08	last winter in Tokyo	Tokyo	JP	2025-12-01	2026-03-01	-
+F09	작년 여름 제주 바다 사진	Jeju City	KR	2025-06-01	2025-09-01	바다
+F10	spring photos from Paris	Paris	FR	2026-03-01	2026-06-01	-
+# ---- G. Content words survive (for the CLIP stage) ----
+G01	강아지 사진 보여줘	-	-	-	-	강아지
+G02	바다 사진	-	-	-	-	바다
+G03	파리 야경 사진	Paris	FR	-	-	야경
+G04	제주 바다 사진	Jeju City	KR	-	-	바다
+G05	음식 사진 찾아줘	-	-	-	-	음식
+G06	sunset photos	-	-	-	-	sunset
+G07	beach photos from Nice	Nice	FR	-	-	beach
+G08	photos of my cat	-	-	-	-	cat
+G09	2024년 5월 파리 에펠탑	Paris	FR	2024-05-01	2024-06-01	에펠탑
+G10	런던 빅벤 사진	London	GB	-	-	빅벤
+# ---- H. Must NOT over-match ----
+H01	사진 찾아줘	-	-	-	-	-
+H02	show me all photos	-	-	-	-	-
+H03	nice photos	-	-	-	-	nice
+H04	제일 좋은 사진	-	-	-	-	제일 좋은
+H05	모든 사진 보여줘	-	-	-	-	-
+# ---- I. Edge cases ----
+I01	  파리   사진  	Paris	FR	-	-	-
+I02	파리, 2024년 5월!	Paris	FR	2024-05-01	2024-06-01	-
+I03	PARIS PHOTOS	Paris	FR	-	-	-
+I04	Paris.	Paris	FR	-	-	-
+I05	파리랑 런던 사진	Paris	FR	-	-	-

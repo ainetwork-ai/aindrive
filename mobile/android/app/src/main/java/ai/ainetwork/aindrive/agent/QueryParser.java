@@ -31,12 +31,24 @@ public final class QueryParser {
             // Korean
             "사진", "사진들", "이미지", "찍은", "찍었던", "찍힌", "촬영한", "갔던", "갔을때", "갔을", "여행", "여행갔던", "때",
             "찾아줘", "찾아", "찾아봐", "보여줘", "보여", "줘", "좀", "다", "모두", "전부", "있어", "있나", "있니", "뭐", "어디",
-            "내", "나의", "우리", "그", "저", "것", "거", "들", "중", "중에", "중에서", "관련", "관련된",
+            "내", "나의", "우리", "그", "저", "것", "거", "들", "중", "중에", "중에서", "관련", "관련된", "모든", "전체", "다른",
             // English
             "photo", "photos", "picture", "pictures", "pic", "pics", "image", "images", "shot", "shots",
             "find", "show", "me", "the", "a", "an", "of", "from", "in", "at", "on", "my", "our", "all", "any", "some",
             "taken", "took", "trip", "travel", "travelled", "traveled", "vacation", "holiday", "please", "that", "i", "we", "were", "was"
     ));
+    /**
+     * Words the date pass owns. They are never tried as places even when the
+     * gazetteer has a city by that name: 지난 is Jinan (CN), spring is Spring (US).
+     */
+    private static final Set<String> DATE_WORDS = new HashSet<>(Arrays.asList(
+            "작년", "올해", "재작년", "지난", "지난달", "이번달", "이번", "봄", "여름", "가을", "겨울",
+            "last", "this", "next", "year", "month", "spring", "summer", "autumn", "fall", "winter",
+            "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+            "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec"));
+    /** English city names that are also everyday words: only a capitalised token means the city. */
+    private static final Set<String> NEEDS_CAPITAL = new HashSet<>(Arrays.asList(
+            "nice", "spring", "reading", "bath", "orange", "mobile", "buffalo", "phoenix", "jordan", "victoria", "of", "most", "split", "bar", "male"));
     private static final Pattern YEAR = Pattern.compile("^(19|20)\\d{2}$");
     private static final Pattern YEAR_MONTH = Pattern.compile("^((?:19|20)\\d{2})[-./]?(0?[1-9]|1[0-2])$");
     private static final Pattern KO_YEAR = Pattern.compile("^((?:19|20)\\d{2})년$");
@@ -66,11 +78,13 @@ public final class QueryParser {
             for (int i = 0; i + span <= tokens.size(); i++) {
                 if (anyUsed(used, i, span)) continue;
                 String raw = String.join(" ", tokens.subList(i, i + span));
+                if (reservedSpan(tokens, i, span)) continue;
                 GeoLookup.Place p = placeOf(raw);
                 if (p == null) continue;
                 if (p.city != null && q.city == null) { q.city = p.city; q.country = p.country; }
                 else if (p.city == null && q.country == null) q.country = p.country;
-                else continue;
+                // A second place ("파리랑 런던") has no slot yet; swallow it rather
+                // than let it leak into the content words.
                 Arrays.fill(used, i, i + span, true);
             }
         }
@@ -137,8 +151,20 @@ public final class QueryParser {
         return tok;
     }
 
+    /** A span is off-limits as a place when it holds a date word or an uncapitalised ambiguous name. */
+    private static boolean reservedSpan(List<String> tokens, int from, int n) {
+        for (int i = from; i < from + n; i++) {
+            String raw = tokens.get(i);
+            String t = stripParticles(raw).toLowerCase(Locale.ROOT);
+            if (DATE_WORDS.contains(t)) return true;
+            if (n == 1 && NEEDS_CAPITAL.contains(t) && !Character.isUpperCase(raw.charAt(0))) return true;
+        }
+        return false;
+    }
+
     private static List<String> tokenize(String s) {
         List<String> out = new ArrayList<>();
+        s = s.replaceAll("(?i)'s\\b", "");   // "this year's" → "this year"
         for (String t : s.trim().split("[\\s,;!?~()\\[\\]\"']+")) {
             t = t.replaceAll("[.]+$", "");
             if (!t.isEmpty()) out.add(t);
