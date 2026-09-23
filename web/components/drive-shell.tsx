@@ -19,6 +19,7 @@ import {
 // interactive client-only surfaces with no SSR value.
 const Viewer = dynamic(() => import("./viewer").then((m) => m.Viewer), { ssr: false });
 const ShareDialog = dynamic(() => import("./share-dialog").then((m) => m.ShareDialog), { ssr: false });
+const McpModal = dynamic(() => import("./mcp-modal").then((m) => m.McpModal), { ssr: false });
 const CreateAgentModal = dynamic(() => import("./create-agent-modal").then((m) => m.CreateAgentModal), { ssr: false });
 const FolderChat = dynamic(() => import("./folder-chat").then((m) => m.FolderChat), { ssr: false });
 
@@ -73,6 +74,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   const [shares, setShares] = useState<ShareSummary[]>([]);
   const [showcase, setShowcase] = useState<ShowcaseItem[]>([]);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // List/grid preference. Starts "list" so SSR + first client render agree
@@ -330,6 +332,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
         driveId={driveId}
         role={role}
         onCreateAgent={() => setAgentModalOpen(true)}
+        onOpenMcp={() => setMcpModalOpen(true)}
       />
 
       <main className="flex-1 flex flex-col min-w-0">
@@ -416,6 +419,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
           onClose={() => { setShareOpen(null); loadShares(); }}
         />
       )}
+      {mcpModalOpen && <McpModal driveId={driveId} onClose={() => setMcpModalOpen(false)} />}
       {agentModalOpen && (
         <CreateAgentModal
           driveId={driveId}

@@ -22,10 +22,28 @@ import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { drizzleDb } from "@/lib/db";
 import { drives as drivesTable } from "../drizzle/schema";
 import { callAgent, AgentError } from "@/lib/rpc";
+import { paidAccessDenial, paidLocksForListing } from "@/lib/sale-access.js";
 import { normalizePath } from "@/lib/path";
+import { getUserTier, TIER_FILE_LIMIT } from "@/lib/tier";
+import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
-export type SkillCtx = { userId: string };
+// Mirrors fs/write/route.ts (AINDRIVE_MAX_WRITE_BYTES).
+const MAX_WRITE_BYTES = parseInt(process.env.AINDRIVE_MAX_WRITE_BYTES ?? String(100 * 1024 * 1024), 10);
+
+function splitPath(p: string): { parent: string; base: string } {
+  const i = p.lastIndexOf("/");
+  return i < 0 ? { parent: "", base: p } : { parent: p.slice(0, i), base: p.slice(i + 1) };
+}
+
+/**
+ * `driveId` pins every call to one drive (drive-scoped MCP endpoint /
+ * token): `drive_id` defaults to it, any other drive is forbidden, and
+ * `list_drives` is unavailable. `scope` is the token's ceiling — "read"
+ * forbids write_file regardless of the user's role. Both omitted = the
+ * legacy account-wide surface (A2A executor, session-auth /mcp).
+ */
+export type SkillCtx = { userId: string; driveId?: string; scope?: "read" | "write" };
 
 export type SkillOk = { kind: "ok"; structured: unknown; text: string };
 export type SkillErr = {
@@ -125,6 +143,28 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
   },
 ];
 
+/**
+ * Descriptors for a drive-pinned surface: no list_drives, no drive_id
+ * argument (the URL/token fixes the drive), and no write_file under a
+ * read scope — clients should not be offered a tool that always fails.
+ */
+export function driveScopedDescriptors(scope: "read" | "write"): SkillDescriptor[] {
+  return SKILL_DESCRIPTORS
+    .filter((d) => d.name !== "list_drives" && (scope === "write" || d.name !== "write_file"))
+    .map((d) => {
+      const schema = d.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+      const { drive_id: _omit, ...properties } = schema.properties ?? {};
+      return {
+        ...d,
+        inputSchema: {
+          ...schema,
+          properties,
+          ...(schema.required ? { required: schema.required.filter((r) => r !== "drive_id") } : {}),
+        },
+      };
+    });
+}
+
 export function isSkillName(s: string): s is SkillName {
   return (SKILL_NAMES as readonly string[]).includes(s);
 }
@@ -143,6 +183,9 @@ export async function runSkill(
   }
 
   if (name === "list_drives") {
+    if (ctx.driveId) {
+      return { kind: "err", code: "forbidden", message: "list_drives is unavailable on a drive-scoped endpoint" };
+    }
     const rows = drizzleDb
       .select({ id: drivesTable.id, name: drivesTable.name, owner_id: drivesTable.owner_id })
       .from(drivesTable)
@@ -154,7 +197,10 @@ export async function runSkill(
     return { kind: "ok", structured: { drives: rows }, text };
   }
 
-  const driveIdRaw = arg(args, "drive_id");
+  const driveIdRaw = arg(args, "drive_id") ?? ctx.driveId;
+  if (ctx.driveId && driveIdRaw !== ctx.driveId) {
+    return { kind: "err", code: "forbidden", message: "token is scoped to a different drive" };
+  }
   if (typeof driveIdRaw !== "string" || !driveIdRaw) {
     return { kind: "err", code: "invalid_params", message: "drive_id required" };
   }
@@ -163,28 +209,56 @@ export async function runSkill(
   if (!drive) return { kind: "err", code: "not_found", message: "drive_not_found" };
   const driveSecret: string = drive.drive_secret;
 
+  // Canonicalize ONCE and use the same string for every check and the agent
+  // call: access, paywall and system-path checks must all see the path the
+  // agent will actually touch ("/paid/a.pdf" and "paid//a.pdf" are "paid/a.pdf").
+  // (search walks from `path` too.)
+  const rawPath = arg(args, "path");
   let path: string;
   try {
-    path = normalizePath(typeof arg(args, "path") === "string" ? (arg(args, "path") as string) : "");
+    path = normalizePath(typeof rawPath === "string" ? rawPath : "");
   } catch (e) {
     return { kind: "err", code: "invalid_params", message: `invalid path: ${(e as Error).message}` };
   }
-  // `.aindrive/` (agent token, drive secret, agent API keys) is off-limits to every role.
-  if (isSystemPath(path)) return { kind: "err", code: "forbidden", message: "reserved path" };
+  // `.aindrive/` holds the agent token, drive secret and agent API keys —
+  // never reachable through a skill, whatever the caller's role.
+  if (isSystemPath(path)) {
+    return { kind: "err", code: "forbidden", message: "reserved path" };
+  }
+
   const need: Role = name === "write_file" ? "editor" : "viewer";
+  if (need === "editor" && ctx.scope === "read") {
+    return { kind: "err", code: "forbidden", message: "forbidden (token scope is read-only)" };
+  }
   const role = await resolveAccess(driveId, path, ctx.userId);
   if (!atLeast(role, need)) {
     return { kind: "err", code: "forbidden", message: `forbidden (need ${need}, have ${role})` };
   }
+  // Paid carve-out, mirroring requireDriveRole on the fs/* routes: a bare
+  // viewer can't open (read or list into) a priced subtree without an
+  // entitlement. editor+ bypass inside paidAccessDenial.
+  if (name !== "stat" && paidAccessDenial(driveId, path, role, ctx.userId)) {
+    return { kind: "err", code: "forbidden", message: `payment required for ${path || "/"}` };
+  }
+
+  // R-VIS-PAID-001, as in fs/list: listed paid children show as locked,
+  // unlisted (private, link-only) paid children are hidden entirely.
+  type Entry = { name: string; isDir: boolean; size?: number; locked?: boolean };
+  const visibleEntries = (dir: string, entries: Entry[]): Entry[] => {
+    const locks = paidLocksForListing(driveId, dir, entries.map((e) => e.name), role, ctx.userId);
+    return entries
+      .filter((e) => !(locks[e.name] && !locks[e.name].listed))
+      .map((e) => (locks[e.name] ? { ...e, locked: true } : e));
+  };
 
   try {
     switch (name) {
       case "list_files": {
         const r = await callAgent(driveId, driveSecret, { method: "list", path });
-        const entries = (r.entries ?? []) as Array<{ name: string; isDir: boolean; size?: number }>;
+        const entries = visibleEntries(path, (r.entries ?? []) as Entry[]);
         const text = entries.length === 0
           ? `(empty) ${path || "/"}`
-          : entries.map((e) => `${e.isDir ? "📁" : "📄"} ${e.name}`).join("\n");
+          : entries.map((e) => `${e.isDir ? "📁" : "📄"} ${e.name}${e.locked ? " 🔒" : ""}`).join("\n");
         return { kind: "ok", structured: { entries }, text };
       }
       case "read_file": {
@@ -203,16 +277,34 @@ export async function runSkill(
           return { kind: "err", code: "invalid_params", message: "content (string) required" };
         }
         const encoding = (arg(args, "encoding") === "base64" ? "base64" : "utf8") as "utf8" | "base64";
+        // Same caps as fs/write: payload size + the owner's tiered file count on create.
+        const byteLength = encoding === "base64" ? Math.ceil(content.length * 3 / 4) : Buffer.byteLength(content, "utf8");
+        if (byteLength > MAX_WRITE_BYTES) {
+          return { kind: "err", code: "invalid_params", message: `payload too large (limit ${MAX_WRITE_BYTES} bytes)` };
+        }
+        const { parent, base } = splitPath(path);
+        let creating = true;
+        try {
+          const l = await callAgent(driveId, driveSecret, { method: "list", path: parent });
+          creating = !((l.entries ?? []) as Entry[]).some((e) => e.name === base && !e.isDir);
+        } catch { /* parent missing → create */ }
+        const ownerId = drive.owner_id as string;
+        if (creating) {
+          const { tier } = await getUserTier();
+          const limit = TIER_FILE_LIMIT[tier];
+          if (Number.isFinite(limit) && getOwnerUsage(ownerId).files + 1 > limit) {
+            return { kind: "err", code: "forbidden", message: `file_limit_reached (tier ${tier}, limit ${limit})` };
+          }
+        }
         const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
+        if (creating) bumpOwnerUsage(ownerId, { files: 1 });
         return { kind: "ok", structured: r, text: `wrote ${path}` };
       }
       case "stat": {
         if (!path) return { kind: "err", code: "invalid_params", message: "path required" };
-        const slash = path.lastIndexOf("/");
-        const parent = slash >= 0 ? path.slice(0, slash) : "";
-        const base = slash >= 0 ? path.slice(slash + 1) : path;
+        const { parent, base } = splitPath(path);
         const r = await callAgent(driveId, driveSecret, { method: "list", path: parent });
-        const entry = ((r.entries ?? []) as Array<{ name: string }>).find((e) => e.name === base);
+        const entry = visibleEntries(parent, (r.entries ?? []) as Entry[]).find((e) => e.name === base);
         if (!entry) return { kind: "err", code: "not_found", message: `no entry at ${path}` };
         return { kind: "ok", structured: entry, text: JSON.stringify(entry) };
       }
@@ -222,24 +314,24 @@ export async function runSkill(
           return { kind: "err", code: "invalid_params", message: "query required" };
         }
         const q = qRaw.toLowerCase();
-        const start = typeof arg(args, "path") === "string" ? (arg(args, "path") as string) : "";
         const lim = arg(args, "limit");
         const limit = Math.min(typeof lim === "number" ? lim : 50, 500);
-        const matches: Array<{ path: string; isDir: boolean }> = [];
+        const matches: Array<{ path: string; isDir: boolean; locked?: boolean }> = [];
         const walk = async (dir: string): Promise<void> => {
           if (matches.length >= limit) return;
           const r = await callAgent(driveId, driveSecret, { method: "list", path: dir });
-          for (const e of (r.entries ?? []) as Array<{ name: string; isDir: boolean }>) {
+          for (const e of visibleEntries(dir, (r.entries ?? []) as Entry[])) {
             if (matches.length >= limit) return;
             const full = dir ? `${dir}/${e.name}` : e.name;
-            if (e.name.toLowerCase().includes(q)) matches.push({ path: full, isDir: e.isDir });
-            if (e.isDir) await walk(full);
+            if (e.name.toLowerCase().includes(q)) matches.push({ path: full, isDir: e.isDir, ...(e.locked ? { locked: true } : {}) });
+            // Never descend into a subtree this caller hasn't paid for.
+            if (e.isDir && !e.locked) await walk(full);
           }
         };
-        await walk(start);
+        await walk(path);
         const text = matches.length === 0
           ? `(no matches for "${qRaw}")`
-          : matches.map((m) => `${m.isDir ? "📁" : "📄"} ${m.path}`).join("\n");
+          : matches.map((m) => `${m.isDir ? "📁" : "📄"} ${m.path}${m.locked ? " 🔒" : ""}`).join("\n");
         return { kind: "ok", structured: { matches, truncated: matches.length >= limit }, text };
       }
     }

@@ -1,0 +1,61 @@
+# web/app/mcp — remote MCP endpoints
+
+Remote Model Context Protocol (Streamable HTTP, stateless) over a drive, so
+other apps (Claude Code, claude.ai, ChatGPT, Cursor, …) can list/read/search/
+write files. Tools are the shared agent skills (`shared/agent-skills.ts`
+`runSkill`), plumbed through `lib/mcp-http.ts`. Users reach the connection
+panel from the drive sidebar → **MCP** (`components/mcp-modal.tsx`).
+
+## Endpoints
+
+| Path | Auth | Scope |
+|------|------|-------|
+| `/mcp/d/[driveId]` | `Authorization: Bearer <MCP token>` | one drive, `read` or `write` ceiling. **Use this.** |
+| `/mcp` | session JWT as bearer, or session cookie | legacy, account-wide (all drives). Not advertised. |
+
+Drive endpoint tools: `list_files`, `read_file`, `stat`, `search`, plus
+`write_file` for write tokens. There is no `drive_id` argument; the URL fixes it.
+
+## Tokens (`lib/mcp-tokens.ts`, table `mcp_tokens`)
+
+- **PAT** `aind_pat_…`: issued in the MCP modal (`POST /api/drives/[id]/mcp-tokens`),
+  shown once, expires in 30d / 90d / never, revocable.
+- **OAuth** `aind_oat_…` (1h) + refresh `aind_ort_…` (30d, rotated on every use):
+  one row per connected app, listed and revocable in the same modal.
+- Only sha256 hashes are stored. A token is bound to one drive. Its scope is a
+  **ceiling**: every call re-resolves the holder's live role (and the paid
+  carve-out), so leaving the drive or being downgraded takes effect immediately.
+  Issue-time scope is clamped by the holder's highest role (viewer → read only).
+
+## OAuth 2.1 (`lib/oauth.ts`)
+
+The flow follows the MCP authorization spec, so a client needs only the URL:
+
+1. `/mcp/d/[id]` without a token → `401` + `WWW-Authenticate: … resource_metadata=…`
+2. `/.well-known/oauth-protected-resource/mcp/d/[id]` (RFC 9728) → the auth server
+3. `/.well-known/oauth-authorization-server` (RFC 8414)
+4. `POST /api/oauth/register`: dynamic client registration (RFC 7591), public clients only
+5. `/oauth/authorize`: login redirect, then consent page (`app/oauth/authorize/`) → `POST /api/oauth/authorize`
+6. `POST /api/oauth/token`: `authorization_code` (PKCE S256 required) / `refresh_token`
+
+The drive comes from the RFC 8707 `resource` (= the drive's MCP URL). Scopes
+on the wire are `drive:read` / `drive:write`.
+
+## Guards in runSkill (every MCP call)
+
+- The path is canonicalized once (`normalizePath`); that same string feeds the access check, paywall and agent call.
+- The `.aindrive/` subtree (agent token, drive secret, agent API keys) is refused for every role.
+- Paid rules match `fs/*`: a priced subtree can't be read or listed without an
+  entitlement. Listed sales show as `locked`, unlisted sales are hidden, and `search` never descends into them.
+- `write_file` enforces the same size and tier file-count caps as `fs/write`.
+
+## Gotchas
+
+- Every URL is built from `AINDRIVE_PUBLIC_URL` (`env.publicUrl`). If it is wrong,
+  `resource` validation fails and the metadata points at the wrong host.
+- An authorization code is burned before it is checked, so a failed exchange can't be retried.
+- Replaying a superseded refresh token revokes the whole grant (the token leaked).
+- Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`).
+- The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing.
+- Redirect URIs: https, loopback http, or a private-use scheme (`cursor://`); never `javascript:`/`data:`/`file:`.
+- Tests: `lib/__tests__/mcp-auth.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.

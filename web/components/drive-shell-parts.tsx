@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
-  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut, EyeOff,
+  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut, EyeOff, Plug,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { SortKey, SortState } from "@/lib/sort-entries";
@@ -42,7 +42,7 @@ export type ViewMode = "list" | "grid";
 type Crumb = { label: string; path: string };
 
 export function DriveSidebar({
-  sidebarOpen, setSidebarOpen, onNewFolder, onUpload, canEdit, drives, driveId, role, onCreateAgent,
+  sidebarOpen, setSidebarOpen, onNewFolder, onUpload, canEdit, drives, driveId, role, onCreateAgent, onOpenMcp,
 }: {
   sidebarOpen: boolean;
   setSidebarOpen: (v: boolean) => void;
@@ -54,6 +54,8 @@ export function DriveSidebar({
   role: string;
   /** Owner-only: open the Create-agent modal (relocated here from the header). */
   onCreateAgent: () => void;
+  /** Any member: open the remote-MCP panel (URL + tokens / OAuth apps). */
+  onOpenMcp: () => void;
 }) {
   const isOwner = role === "owner";
   // Hidden input the "New → Upload files" menu item triggers, so the sidebar's
@@ -131,6 +133,12 @@ export function DriveSidebar({
       {/* Drive-administration shelf — owner-only actions relocated off the
           top bar so the file view's chrome stays calm. */}
       <div className="mt-auto pt-2 border-t border-drive-border space-y-0.5">
+        <button
+          onClick={() => { onOpenMcp(); setSidebarOpen(false); }}
+          className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-body text-drive-text hover:bg-drive-hover"
+        >
+          <Plug className="w-4 h-4 text-drive-muted" /> MCP
+        </button>
         {isOwner && (
           <button
             onClick={() => { onCreateAgent(); setSidebarOpen(false); }}

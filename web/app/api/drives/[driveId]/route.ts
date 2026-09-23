@@ -92,8 +92,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
  * DELETE /api/drives/:driveId — delete a drive for good. Creator only (a
  * co-owner can manage the drive but not end it — `leave` is their exit).
  *
- * Removes the drive row; members, shares, invites, receipts, payout wallets
- * and upload sessions go with it via ON DELETE CASCADE (lib/db.js). The files
+ * Removes the drive row; members, shares, invites, receipts, payout wallets,
+ * upload sessions and remote-MCP tokens/codes go with it via ON DELETE CASCADE
+ * (lib/db.js). The files
  * themselves are untouched: they live on the agent's machine, which is simply
  * disconnected and refused on its next reconnect. Counts against the
  * per-user drive limit (POST /api/drives) are freed immediately — this is the

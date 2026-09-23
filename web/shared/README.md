@@ -23,7 +23,9 @@ Wire protocol (web ↔ CLI agent over the WebSocket RPC bridge — see
 
 Agent skills (backing both MCP tools and A2A executor):
 - `agent-skills.ts` — `runSkill` + `SKILL_DESCRIPTORS` (JSON Schema). One backing
-  fn for `app/mcp/route.ts` and `lib/aindrive-agent.ts`. Pulls in `@/lib/*` (drives,
+  fn for the MCP routes (`app/mcp/`, via `lib/mcp-http.ts`) and `lib/aindrive-agent.ts`.
+  `SkillCtx.driveId`/`scope` pin a call to one drive + read/write ceiling
+  (`driveScopedDescriptors`). Pulls in `@/lib/*` (drives,
   access, db, rpc), so it is web-bound, not pure domain.
 
 HTTP contracts (cross-track frozen agreement):
