@@ -371,7 +371,12 @@ public class AgentService extends Service {
         java.util.List<Conn> targets;
         synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
-        if (targets.size() == 1) return targets.get(0).askRunner().ask(query);
+        if (targets.size() == 1) {
+            JSONObject r = targets.get(0).askRunner().ask(query);
+            JSONArray s = r.getJSONArray("sources");
+            for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", targets.get(0).driveId);
+            return r;
+        }
         JSONArray sources = new JSONArray();
         StringBuilder answer = new StringBuilder();
         for (Conn c : targets) {
@@ -380,7 +385,9 @@ public class AgentService extends Service {
             JSONArray s = r.getJSONArray("sources");
             for (int i = 0; i < s.length(); i++) {
                 JSONObject src = s.getJSONObject(i);
-                src.put("driveId", c.driveId).put("path", (c.folderLabel == null ? c.driveId : c.folderLabel) + "/" + src.getString("path"));
+                // Keep `path` drive-relative (the web deep-link needs it); the
+                // folder is named in `drive` so the UI can still show it.
+                src.put("driveId", c.driveId).put("drive", c.folderLabel == null ? c.driveId : c.folderLabel);
                 sources.put(src);
             }
             if (s.length() > 0) answer.append(answer.length() > 0 ? " " : "").append(c.folderLabel).append(": ").append(r.getString("answer"));

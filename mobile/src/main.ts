@@ -7,6 +7,10 @@
  * browser, poll until the user approves, then create the drive. The resulting
  * driveId/agentToken/driveSecret are handed to the native agent service,
  * which is what actually serves the picked device folder.
+ *
+ * UI principles: one primary action per screen, a switch for on/off state, an
+ * overflow menu for the rare and destructive actions, no developer detail on
+ * the surface, and feedback via toasts instead of boxes that appear mid-page.
  */
 import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
@@ -45,15 +49,22 @@ interface LegacyState {
   drive?: DriveCreds;
 }
 
+interface Activity { at: number; msg: string }
+
 let state: SavedState = { server: DEFAULT_SERVER, shares: [] };
 let status: AgentStatus = IDLE_STATUS;
-const logLines: string[] = [];
+const activity: Activity[] = [];
+/** Folder keys with an action in flight — drives the switch's busy look. */
+const busyShares = new Set<string>();
 let busy: string | null = null;
-let errorMsg: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
 let askBusy = false;
 let searchOpen = false;
+let menuFor: string | null = null;
+let showAllActivity = false;
+let toast: { msg: string; error?: boolean; timer?: number } | null = null;
+let confirmSheet: { title: string; body: string; ok: string; danger?: boolean; resolve: (v: boolean) => void } | null = null;
 
 async function save() {
   await Preferences.set({ key: STORE_KEY, value: JSON.stringify(state) });
@@ -83,12 +94,37 @@ async function load() {
   } catch { /* corrupt → defaults */ }
 }
 
+// ---------------------------------------------------------------- feedback
+
 function log(msg: string) {
-  const ts = new Date().toTimeString().slice(0, 8);
-  logLines.unshift(`${ts}  ${msg}`);
-  if (logLines.length > 120) logLines.pop();
+  activity.unshift({ at: Date.now(), msg });
+  if (activity.length > 120) activity.pop();
   render();
 }
+
+/** Non-blocking feedback. Errors stay until dismissed; successes fade. */
+function notify(msg: string, error = false) {
+  if (toast?.timer) clearTimeout(toast.timer);
+  toast = { msg, error };
+  if (!error) toast.timer = window.setTimeout(() => { toast = null; render(); }, 3200);
+  render();
+}
+
+function fail(e: unknown) {
+  const m = msgOf(e);
+  log(`Error: ${m}`);
+  notify(m, true);
+}
+
+/** In-app confirmation sheet instead of the WebView's native confirm(). */
+function confirmAsync(title: string, body: string, ok: string, danger = false): Promise<boolean> {
+  return new Promise((resolve) => {
+    confirmSheet = { title, body, ok, danger, resolve: (v) => { confirmSheet = null; resolve(v); render(); } };
+    render();
+  });
+}
+
+// ---------------------------------------------------------------- helpers
 
 function driveUrl(share: SharedFolder): string | null {
   if (!share.drive) return null;
@@ -109,48 +145,58 @@ function findShare(key: string): SharedFolder | undefined {
   return state.shares.find((s) => shareKey(s) === key);
 }
 
+function shareByDrive(driveId: string | undefined): SharedFolder | undefined {
+  if (driveId) return state.shares.find((s) => s.drive?.driveId === driveId);
+  const running = state.shares.filter((s) => driveStatus(s)?.running);
+  return running.length === 1 ? running[0] : undefined;
+}
+
 // ---------------------------------------------------------------- actions
 
 async function addFolder() {
-  errorMsg = null;
   try {
     const folder = await AindriveAgent.pickFolder();
     if (findShare(folder.uri)) {
-      errorMsg = `"${folder.label}" is already shared.`;
-      return render();
+      notify(`"${folder.label}" is already shared.`, true);
+      return;
     }
-    state.shares.push({ folder });
+    const share: SharedFolder = { folder };
+    state.shares.push(share);
     await save();
     log(`Folder added: ${folder.label}`);
+    // Adding a folder means sharing it — go straight to online, no second tap.
+    await startShare(share);
   } catch (e) {
-    errorMsg = msgOf(e);
+    if (!/cancel/i.test(msgOf(e))) fail(e);
+    render();
   }
-  render();
 }
 
 /** Copy files picked in the system picker into a shared folder. */
 async function addFiles(share: SharedFolder) {
-  errorMsg = null;
+  const key = shareKey(share);
+  busyShares.add(key); render();
   try {
-    busy = `Adding files to ${share.folder.label}…`; render();
     const r = await AindriveAgent.addFiles({ folderUri: share.folder.uri });
-    if (r.added.length) log(`Added ${r.added.length} file${r.added.length === 1 ? "" : "s"} to ${share.folder.label}: ${r.added.join(", ")}`);
+    if (r.added.length) {
+      log(`Added ${r.added.length} file${r.added.length === 1 ? "" : "s"} to ${share.folder.label}: ${r.added.join(", ")}`);
+      notify(`Added ${r.added.length} file${r.added.length === 1 ? "" : "s"} to ${share.folder.label}`);
+    }
     for (const f of r.failed) log(`Could not add ${f}`);
-    if (r.failed.length && !r.added.length) errorMsg = r.failed[0];
+    if (r.failed.length && !r.added.length) notify(r.failed[0], true);
   } catch (e) {
-    errorMsg = msgOf(e);
+    if (!/cancel/i.test(msgOf(e))) fail(e);
   } finally {
-    busy = null;
+    busyShares.delete(key);
     render();
   }
 }
 
 async function login() {
-  errorMsg = null;
   try {
     state.server = normalizeServer(state.server);
     await save();
-    busy = "Waiting for login approval in the browser…"; render();
+    busy = "Waiting for you to approve in the browser…"; render();
     const start = await startCliLogin(state.server);
     const url = `${state.server}/cli-login/${start.linkId}`;
     log(`Opening login link: ${url}`);
@@ -163,8 +209,7 @@ async function login() {
     await save();
     log(`Logged in${approved.email ? ` (${approved.email})` : ""}`);
   } catch (e) {
-    errorMsg = msgOf(e);
-    log(`Error: ${errorMsg}`);
+    fail(e);
   } finally {
     busy = null;
     render();
@@ -172,6 +217,8 @@ async function login() {
 }
 
 async function logout() {
+  const ok = await confirmAsync("Log out?", "Folders on this phone stop being shared and their credentials are removed from this device. Nothing on the server is deleted.", "Log out", true);
+  if (!ok) return;
   await AindriveAgent.stop().catch(() => {});
   state = { server: state.server, shares: [] };
   await save();
@@ -180,12 +227,11 @@ async function logout() {
 }
 
 async function startShare(share: SharedFolder) {
-  errorMsg = null;
-  if (!state.sessionCookie) { errorMsg = "Log in first."; return render(); }
-
+  if (!state.sessionCookie) { notify("Log in first.", true); return; }
+  const key = shareKey(share);
+  busyShares.add(key); render();
   try {
     if (!share.drive) {
-      busy = `Pairing ${share.folder.label}…`; render();
       const paired = await pairDrive(state.server, state.sessionCookie, share.folder.label);
       share.drive = {
         driveId: paired.driveId,
@@ -197,8 +243,6 @@ async function startShare(share: SharedFolder) {
       await save();
       log(`Paired ${share.folder.label}: ${paired.driveId}`);
     }
-
-    busy = `Starting ${share.folder.label}…`; render();
     status = await AindriveAgent.start({
       serverUrl: state.server,
       driveId: share.drive.driveId,
@@ -206,13 +250,13 @@ async function startShare(share: SharedFolder) {
       driveSecret: share.drive.driveSecret,
       folderUri: share.folder.uri,
       folderLabel: share.folder.label,
+      indexOnStart: true,
     });
     log(`${share.folder.label} online`);
   } catch (e) {
-    errorMsg = msgOf(e);
-    log(`Error: ${errorMsg}`);
+    fail(e);
   } finally {
-    busy = null;
+    busyShares.delete(key);
     render();
   }
 }
@@ -222,7 +266,6 @@ async function startAll() {
   for (const share of state.shares) {
     if (driveStatus(share)?.running) continue;
     await startShare(share);
-    if (errorMsg) break;
   }
 }
 
@@ -250,22 +293,26 @@ async function pollUntilApproved(server: string, linkId: string, deviceSecret: s
 
 async function stopShare(share: SharedFolder) {
   if (!share.drive) return;
+  const key = shareKey(share);
+  busyShares.add(key); render();
   try {
     status = await AindriveAgent.stop({ driveId: share.drive.driveId });
     log(`${share.folder.label} offline`);
-  } catch (e) { errorMsg = msgOf(e); }
-  render();
+  } catch (e) { fail(e); }
+  finally { busyShares.delete(key); render(); }
 }
 
 async function stopAll() {
-  try { status = await AindriveAgent.stop(); log("All drives offline"); }
-  catch (e) { errorMsg = msgOf(e); }
+  try { status = await AindriveAgent.stop(); log("All folders offline"); }
+  catch (e) { fail(e); }
   render();
 }
 
-async function openDrive(share: SharedFolder) {
+async function openDrive(share: SharedFolder, path?: string) {
   const url = driveUrl(share);
-  if (url) await Browser.open({ url });
+  if (!url) return;
+  const dir = path ? path.split("/").slice(0, -1).join("/") : "";
+  await Browser.open({ url: dir ? `${url}?path=${encodeURIComponent(dir)}` : url });
 }
 
 /**
@@ -274,26 +321,29 @@ async function openDrive(share: SharedFolder) {
  * Files in the folder are untouched.
  */
 async function removeShare(share: SharedFolder) {
-  errorMsg = null;
-  const what = share.drive
-    ? `Remove "${share.folder.label}"?\n\nIts drive is deleted from the server: members lose access and share links stop working. Files on this phone are not deleted.`
-    : `Remove "${share.folder.label}" from the list?`;
-  if (!confirm(what)) return;
+  const ok = await confirmAsync(
+    `Stop sharing "${share.folder.label}"?`,
+    share.drive
+      ? "The drive is deleted from the server: members lose access and share links stop working. Files on this phone are not deleted."
+      : "It is removed from this list. Files on this phone are not deleted.",
+    "Remove", true);
+  if (!ok) return;
+  const key = shareKey(share);
+  busyShares.add(key); render();
   if (share.drive) {
     await AindriveAgent.stop({ driveId: share.drive.driveId }).catch(() => {});
     if (state.sessionCookie) {
       try {
-        busy = `Deleting drive for ${share.folder.label}…`; render();
         await deleteDrive(state.server, state.sessionCookie, share.drive.driveId);
         log(`Deleted drive ${share.drive.driveId}`);
       } catch (e) {
-        errorMsg = `Drive could not be deleted on the server (${msgOf(e)}). It still counts toward your drive limit — delete it from Manage on the web.`;
-        log(`Error: ${errorMsg}`);
-      } finally {
-        busy = null;
+        const m = `Drive could not be deleted on the server (${msgOf(e)}). It still counts toward your drive limit — delete it from Manage on the web.`;
+        log(`Error: ${m}`);
+        notify(m, true);
       }
     }
   }
+  busyShares.delete(key);
   state.shares = state.shares.filter((s) => s !== share);
   await save();
   try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
@@ -302,25 +352,25 @@ async function removeShare(share: SharedFolder) {
 }
 
 async function reindex() {
-  errorMsg = null;
   try {
     status = await AindriveAgent.reindex();
-    log("Indexing photos…");
+    log("Indexing files…");
   } catch (e) {
-    errorMsg = msgOf(e);
+    fail(e);
   }
   render();
 }
 
-async function ask() {
-  const q = askQuery.trim();
+async function ask(q = askQuery) {
+  q = q.trim();
   if (!q) return;
-  askBusy = true; errorMsg = null; render();
+  askQuery = q;
+  askBusy = true; render();
   try {
     askResult = await AindriveAgent.ask({ query: q });
     log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}`);
   } catch (e) {
-    errorMsg = msgOf(e);
+    fail(e);
     askResult = null;
   } finally {
     askBusy = false;
@@ -328,170 +378,290 @@ async function ask() {
   }
 }
 
+function openSearch() {
+  if (!status.drives.some((d) => d.running)) {
+    notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — search looks through your shared folders.", true);
+    return;
+  }
+  searchOpen = true;
+  menuFor = null;
+  render();
+  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
+  // First open with nothing indexed yet: start it, nobody wants to find a button first.
+  const ix = status.drives.map((d) => d.index).filter((i) => !!i);
+  if (ix.length && ix.every((i) => i && i.indexed === 0 && !i.running)) void reindex();
+}
+
+// ---------------------------------------------------------------- icons
+
+const I = {
+  search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`,
+  plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
+  more: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`,
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`,
+  phone: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18h2"/></svg>`,
+  lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
+  sparkle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>`,
+};
+
 // ---------------------------------------------------------------- render
 
 function render() {
   const app = document.getElementById("app");
   if (!app) return;
-  const err = errorMsg ? `<div class="err-box">${esc(errorMsg)}</div>` : "";
-  const activity = `
-    <div class="card">
-      <h2>Activity</h2>
-      <div class="log">${logLines.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>No activity yet</div>"}</div>
-    </div>`;
-  const running = status.drives.filter((d) => d.running).length;
-  const intro = `
-    <div class="topbar">
-      <h1>aindrive</h1>
-      ${state.sessionCookie ? `<button class="icon" id="toggle-search" aria-label="Search" title="Search" ${running === 0 ? "disabled" : ""}>${searchOpen ? "✕" : "🔍"}</button>` : ""}
-    </div>
-    <p class="sub">Share folders on this phone as drives. Files stay on the device; the server only relays signed RPCs.</p>`;
+  if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); return; }
+  if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); return; }
+  app.innerHTML = homeScreen() + overlays();
+  bindHome();
+}
 
-  // Step 1 — not logged in: server + login only.
-  if (!state.sessionCookie) {
-    app.innerHTML = `
-      ${intro}
-      <div class="card">
-        <h2>Log in</h2>
+// ---- login
+
+function loginScreen(): string {
+  return `
+    <div class="hero">
+      <h1>aindrive</h1>
+      <p>Turn a folder on this phone into a shared drive — and find anything in it by asking.</p>
+    </div>
+    <ul class="features">
+      <li><span class="ic">${I.phone}</span><div><b>Files stay on your phone</b><span>Nothing is uploaded. The server only relays requests to this device.</span></div></li>
+      <li><span class="ic">${I.lock}</span><div><b>Only the folders you pick</b><span>You choose each folder; the app can't see anything else.</span></div></li>
+      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"파리에서 찍은 사진", "last week's screenshots", "계약서 pdf" — answered on-device, offline.</span></div></li>
+    </ul>
+    <div class="card">
+      <button class="btn" id="login" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : "Continue in browser"}</button>
+      <p class="hint">Sign in opens in your browser. Approve it there and come back — this app never sees your password.</p>
+      <details class="adv">
+        <summary>Advanced · server</summary>
         <label for="server">Server</label>
         <input id="server" type="text" value="${esc(state.server)}" ${busy ? "disabled" : ""} />
-        <button id="login" ${busy ? "disabled" : ""}>${busy ?? "Log in"}</button>
-        ${err}
-        <p class="note">Login opens in your browser. Approve it there and come back to this app.</p>
+      </details>
+    </div>
+    ${overlays()}`;
+}
+
+function bindLogin() {
+  bind("login", login);
+  const serverInput = document.getElementById("server") as HTMLInputElement | null;
+  serverInput?.addEventListener("change", () => { state.server = serverInput.value; void save(); });
+  bindOverlays();
+}
+
+// ---- home
+
+function homeScreen(): string {
+  const running = status.drives.filter((d) => d.running).length;
+  const anyPaired = state.shares.length > 0;
+  const folders = state.shares.map(folderCard).join("");
+  const empty = `
+    <div class="card empty">
+      <div class="art">${I.folder}</div>
+      <h3>Share your first folder</h3>
+      <p>Pick a folder on this phone. It becomes a drive you can open on the web, share with people, and search by asking.</p>
+      <button class="btn" id="add-first">${I.plus} Choose a folder</button>
+    </div>`;
+  const acts = activity.slice(0, showAllActivity ? 30 : 4);
+  return `
+    <div class="topbar">
+      <h1>aindrive</h1>
+      <div class="actions">
+        ${anyPaired ? `<button class="iconbtn" id="add" aria-label="Add folder" title="Add folder">${I.plus}</button>` : ""}
+        <button class="iconbtn primary" id="toggle-search" aria-label="Search" title="Search">${I.search}</button>
       </div>
-      ${activity}
-    `;
-    bind("login", login);
-    bindServerInput();
-    return;
-  }
-
-  // Step 2 — logged in: one card per shared folder, plus "add folder".
-  const online = status.drives.filter((d) => d.connected).length;
-  const agentDot = online > 0 ? "on" : running > 0 ? "err" : "off";
-  const agentLabel = running === 0 ? "Offline"
-    : online === running ? `Online (${online} ${online === 1 ? "drive" : "drives"})`
-    : `Online ${online}/${running}`;
-  const idle = state.shares.some((s) => !driveStatus(s)?.running);
-
-  const shareCards = state.shares.map((share) => {
-    const key = shareKey(share);
-    const d = driveStatus(share);
-    const dot = d?.connected ? "on" : d?.running ? "err" : "off";
-    const label = d?.connected ? "Online" : d?.running ? (d.lastError ? "Reconnecting…" : "Connecting…") : "Offline";
-    const url = driveUrl(share);
-    return `
-      <div class="card" data-share="${esc(key)}">
-        <h2>${esc(share.folder.label)}</h2>
-        <div class="row"><span class="k">Status</span><span class="v"><span class="dot ${dot}"></span>${label}</span></div>
-        <div class="row"><span class="k">Drive ID</span><span class="v mono">${esc(share.drive?.driveId ?? "Not paired yet")}</span></div>
-        <div class="row"><span class="k">Requests served</span><span class="v mono">${d?.rpcCount ?? 0}</span></div>
-        ${d?.lastError && !d.connected ? `<div class="err-box">${esc(d.lastError)}</div>` : ""}
-        ${
-          d?.running
-            ? `<button class="danger" data-act="stop">Turn off</button>`
-            : `<button data-act="start" ${busy ? "disabled" : ""}>${share.drive ? "Turn on" : "Start sharing"}</button>`
-        }
-        <button class="ghost" data-act="addfiles" ${busy ? "disabled" : ""}>Add files to this folder</button>
-        ${url ? `<button class="ghost" data-act="open">Open drive in browser</button>` : ""}
-        <button class="ghost" data-act="remove" ${d?.running || busy ? "disabled" : ""}>Remove folder</button>
-      </div>`;
-  }).join("");
-
-  app.innerHTML = `
-    ${intro}
-    ${searchOpen && running > 0 ? searchPanel() : ""}
-    <div class="card">
-      <h2>Status</h2>
-      <div class="row"><span class="k">Account</span><span class="v">${esc(state.email ?? "Logged in")}</span></div>
-      <div class="row"><span class="k">Server</span><span class="v mono">${esc(state.server)}</span></div>
-      <div class="row"><span class="k">Agent</span><span class="v"><span class="dot ${agentDot}"></span>${agentLabel}</span></div>
-      <div class="row"><span class="k">Shared folders</span><span class="v mono">${state.shares.length}</span></div>
-      ${busy ? `<p class="note">${esc(busy)}</p>` : ""}
-      ${err}
     </div>
 
-    ${shareCards || `<div class="card"><h2>Shared folders</h2><p class="note">No folders yet. Add one below — each folder becomes its own drive.</p></div>`}
+    ${anyPaired ? `
+      <div class="section">
+        <h2>Shared folders</h2>
+        ${state.shares.length > 1 ? (running < state.shares.length
+          ? `<button class="link" id="start-all">Turn all on</button>`
+          : `<button class="link" id="stop-all">Turn all off</button>`) : ""}
+      </div>
+      ${folders}
+      <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; the notification is the off switch.</p>`
+      : empty}
 
+    <div class="section"><h2>Recent activity</h2>${activity.length > 4 ? `<button class="link" id="more-activity">${showAllActivity ? "Show less" : "Show all"}</button>` : ""}</div>
     <div class="card">
-      <h2>Add</h2>
-      <button class="ghost" id="add" ${busy ? "disabled" : ""}>Add a folder to share</button>
-      ${state.shares.length > 1 ? `
-        <button id="start-all" ${busy || !idle ? "disabled" : ""}>Turn all on</button>
-        <button class="danger" id="stop-all" ${running === 0 ? "disabled" : ""}>Turn all off</button>` : ""}
-      <p class="note">Need a new folder? Create it in the system folder picker, then use "Add files" to fill it from this phone. Sharing works only while the agent is running. It keeps running as a foreground service even when the app is in the background.</p>
+      ${acts.length ? `<ul class="activity">${acts.map((a) => `<li><time>${esc(when(a.at))}</time><span class="msg">${esc(a.msg)}</span></li>`).join("")}</ul>`
+        : `<p class="note" style="margin:0">Nothing yet. Things you do here and connections from the web show up in this list.</p>`}
     </div>
 
-    ${activity}
-
+    <div class="section"><h2>Account</h2></div>
     <div class="card">
-      <h2>Account</h2>
-      <button class="danger" id="logout" ${running > 0 ? "disabled" : ""}>Log out</button>
-    </div>
-  `;
+      <div class="kv"><span class="k">Signed in as</span><span class="v">${esc(state.email ?? "—")}</span></div>
+      <div class="kv"><span class="k">Server</span><span class="v mono">${esc(state.server.replace(/^https?:\/\//, ""))}</span></div>
+      <button class="btn secondary" id="logout" ${running > 0 ? "disabled" : ""}>Log out</button>
+      ${running > 0 ? `<p class="hint">Turn every folder off to log out.</p>` : ""}
+    </div>`;
+}
 
+function folderCard(share: SharedFolder): string {
+  const key = shareKey(share);
+  const d = driveStatus(share);
+  const isBusy = busyShares.has(key);
+  const on = !!d?.running;
+  const dot = d?.connected ? "on" : d?.running ? "err" : "off";
+  const stateText = isBusy ? (on ? "Turning off…" : share.drive ? "Connecting…" : "Setting up…")
+    : d?.connected ? "Online"
+    : d?.running ? (d.lastError ? "Reconnecting…" : "Connecting…")
+    : "Not shared";
+  const ix = d?.index;
+  const indexText = on && ix ? (ix.running ? ` · indexing ${ix.done}/${ix.total}` : ix.indexed ? ` · ${ix.indexed.toLocaleString()} files` : "") : "";
+  const menu = menuFor === key ? `
+    <div class="menu">
+      <button data-act="addfiles">Add files from this phone…</button>
+      ${driveUrl(share) ? `<button data-act="open">Open on the web</button>` : ""}
+      ${share.drive ? `<button data-act="copy">Copy drive ID</button>` : ""}
+      <div class="sep"></div>
+      <button class="danger" data-act="remove" ${on ? "disabled" : ""}>Remove folder${on ? " · turn off first" : ""}</button>
+    </div>` : "";
+  return `
+    <div class="card" data-share="${esc(key)}">
+      <div class="folder">
+        <div class="glyph">${I.folder}</div>
+        <div style="min-width:0">
+          <div class="name">${esc(share.folder.label)}</div>
+          <div class="state"><span class="dot ${dot}"></span>${esc(stateText)}${esc(indexText)}</div>
+        </div>
+        <div class="controls">
+          <button class="switch ${isBusy ? "busy" : ""}" role="switch" aria-checked="${on}" aria-label="Share ${esc(share.folder.label)}" data-act="toggle" ${isBusy ? "disabled" : ""}></button>
+          <div class="menu-wrap">
+            <button class="iconbtn" style="border:0;background:none;width:38px" data-act="menu" aria-label="More">${I.more}</button>
+            ${menu}
+          </div>
+        </div>
+      </div>
+      ${d?.lastError && !d.connected && !isBusy ? `<p class="hint folder-err" style="color:var(--warn)">${esc(d.lastError)}</p>` : ""}
+    </div>`;
+}
+
+function bindHome() {
+  const app = document.getElementById("app")!;
   bind("add", addFolder);
-  bind("toggle-search", () => { searchOpen = !searchOpen; render(); if (searchOpen) (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
-  bind("reindex", reindex);
-  bind("ask", ask);
-  const askInput = document.getElementById("ask-input") as HTMLInputElement | null;
-  askInput?.addEventListener("input", () => { askQuery = askInput.value; });
-  askInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") void ask(); });
+  bind("add-first", addFolder);
+  bind("toggle-search", openSearch);
   bind("start-all", startAll);
   bind("stop-all", stopAll);
   bind("logout", logout);
+  bind("more-activity", () => { showAllActivity = !showAllActivity; render(); });
   app.querySelectorAll<HTMLElement>("[data-share]").forEach((card) => {
     const share = findShare(card.dataset.share!);
     if (!share) return;
     card.querySelectorAll<HTMLButtonElement>("[data-act]").forEach((btn) => {
       const act = btn.dataset.act;
-      btn.addEventListener("click", () => {
-        if (act === "start") void startShare(share);
-        else if (act === "stop") void stopShare(share);
-        else if (act === "open") void openDrive(share);
-        else if (act === "addfiles") void addFiles(share);
-        else if (act === "remove") void removeShare(share);
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (act === "toggle") { void (driveStatus(share)?.running ? stopShare(share) : startShare(share)); }
+        else if (act === "menu") { menuFor = menuFor === shareKey(share) ? null : shareKey(share); render(); }
+        else if (act === "open") { menuFor = null; void openDrive(share); }
+        else if (act === "addfiles") { menuFor = null; void addFiles(share); }
+        else if (act === "copy") { menuFor = null; void navigator.clipboard?.writeText(share.drive!.driveId).then(() => notify("Drive ID copied")); }
+        else if (act === "remove") { menuFor = null; void removeShare(share); }
       });
     });
   });
+  if (menuFor) app.addEventListener("click", () => { menuFor = null; render(); }, { once: true });
+  bindOverlays();
 }
 
-/**
- * On-device agent: index + ask, spanning ALL folders that are turned on (the
- * service merges per-drive answers). Everything runs on the phone — the
- * gazetteer and index are local, so it works in airplane mode.
- */
-function searchPanel(): string {
+// ---- search
+
+const SUGGESTIONS = ["파리에서 찍은 사진", "지난주 스크린샷", "계약서 pdf", "작년 여름 사진", "큰 영상 파일", "최근 문서"];
+
+function searchSheet(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
   const indexed = ix.reduce((n, i) => n + i.indexed, 0);
   const active = ix.find((i) => i.running);
-  const progress = active
-    ? `Indexing… ${active.done} / ${active.total}`
-    : indexed > 0 ? `${indexed.toLocaleString()} files indexed` : "Not indexed yet";
-  const results = askResult ? `
-    <p class="answer">${esc(askResult.answer)}</p>
-    ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s) =>
-      `<li><span class="mono">${esc(s.path)}</span><span class="meta">${esc(s.snippet)}</span></li>`).join("")}</ul>` : ""}` : "";
+  const indexLine = active
+    ? `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`
+    : `<div class="indexline"><span>${indexed ? `${indexed.toLocaleString()} files indexed` : "Not indexed yet"}</span><button class="btn secondary small" id="reindex">${indexed ? "Refresh" : "Index now"}</button></div>`;
+  const body = askBusy ? `<div class="searching"><span class="spinner"></span> Searching…</div>`
+    : askResult ? `
+      <p class="answer">${esc(askResult.answer)}</p>
+      ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s, i) => {
+        const name = s.path.split("/").pop() ?? s.path;
+        const dir = s.path.split("/").slice(0, -1).join("/");
+        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${esc(name)}</div><div class="meta">${esc([s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+      }).join("")}</ul>` : ""}`
+    : `
+      <p class="note" style="margin:0 0 8px">Try asking</p>
+      <div class="chips">${SUGGESTIONS.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>
+      <p class="hint">Understands file type, name, date and size for every file, plus where and when photos were taken. Runs on this phone — works offline.</p>`;
   return `
-    <div class="card search">
-      <h2>Search</h2>
-      <div class="row"><span class="k">Index</span><span class="v">${esc(progress)}</span></div>
-      <button class="ghost" id="reindex" ${active ? "disabled" : ""}>${indexed > 0 ? "Re-index files" : "Index files"}</button>
-      <label for="ask-input">Ask across all shared folders</label>
-      <input id="ask-input" type="text" placeholder="파리에서 찍은 사진 찾아줘 · 지난주 스크린샷 · 계약서 pdf" value="${esc(askQuery)}" ${askBusy ? "disabled" : ""} />
-      <button id="ask" ${askBusy || !askQuery.trim() ? "disabled" : ""}>${askBusy ? "Searching…" : "Search"}</button>
-      ${results}
-      <p class="note">Runs entirely on this phone across every folder that is turned on: file type, name, date and size for all files, plus place and time from photo EXIF (offline gazetteer). No network needed.</p>
+    <div class="sheet">
+      <div class="bar">
+        <button class="iconbtn" id="close-search" aria-label="Back">${I.back}</button>
+        <div class="field">${I.search}<input id="ask-input" type="text" enterkeyhint="search" placeholder="Ask across your folders" value="${esc(askQuery)}" autocomplete="off" />
+          ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
+      </div>
+      <div class="body">
+        ${indexLine}
+        ${body}
+      </div>
     </div>`;
 }
 
-function bindServerInput() {
-  const serverInput = document.getElementById("server") as HTMLInputElement | null;
-  serverInput?.addEventListener("change", () => {
-    state.server = serverInput.value;
-    void save();
-  });
+function bindSearch() {
+  bind("close-search", () => { searchOpen = false; render(); });
+  bind("reindex", reindex);
+  bind("clear-ask", () => { askQuery = ""; askResult = null; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
+  const input = document.getElementById("ask-input") as HTMLInputElement | null;
+  input?.addEventListener("input", () => { askQuery = input.value; });
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { input.blur(); void ask(); } });
+  document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
+  document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
+    const hit = askResult?.sources[Number(li.dataset.hit)];
+    if (!hit) return;
+    const share = shareByDrive(hit.driveId);
+    if (share) void openDrive(share, hit.path); else notify("Turn the folder on to open it on the web.", true);
+  }));
+  bindOverlays();
 }
+
+function kindClass(name: string): string {
+  const e = ext(name).toLowerCase();
+  if (["jpg", "jpeg", "png", "heic", "webp", "gif"].includes(e)) return "photo";
+  if (["mp4", "mov", "mkv", "webm"].includes(e)) return "video";
+  if (e === "pdf") return "pdf";
+  if (["doc", "docx", "txt", "md", "hwp", "xlsx", "xls", "csv", "ppt", "pptx"].includes(e)) return "doc";
+  return "";
+}
+
+function ext(name: string): string {
+  const i = name.lastIndexOf(".");
+  const e = i >= 0 ? name.slice(i + 1) : "";
+  return (e.length > 4 ? e.slice(0, 4) : e || "file").toUpperCase();
+}
+
+// ---- overlays
+
+function overlays(): string {
+  const t = toast ? `<div class="toast ${toast.error ? "error" : ""}" role="status">${esc(toast.msg)}${toast.error ? `<button id="toast-close">OK</button>` : ""}</div>` : "";
+  const c = confirmSheet ? `
+    <div class="scrim" id="scrim">
+      <div class="confirm" id="confirm">
+        <h3>${esc(confirmSheet.title)}</h3>
+        <p>${esc(confirmSheet.body)}</p>
+        <div class="row">
+          <button class="btn secondary" id="confirm-no">Cancel</button>
+          <button class="btn ${confirmSheet.danger ? "danger" : ""}" id="confirm-yes">${esc(confirmSheet.ok)}</button>
+        </div>
+      </div>
+    </div>` : "";
+  return t + c;
+}
+
+function bindOverlays() {
+  bind("toast-close", () => { toast = null; render(); });
+  bind("confirm-no", () => confirmSheet?.resolve(false));
+  bind("confirm-yes", () => confirmSheet?.resolve(true));
+  document.getElementById("scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) confirmSheet?.resolve(false); });
+}
+
+// ---------------------------------------------------------------- utils
 
 function bind(id: string, fn: () => void) {
   document.getElementById(id)?.addEventListener("click", fn);
@@ -501,6 +671,15 @@ function esc(s: string): string {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
   );
+}
+
+/** "12:41" today, "Sep 23" otherwise — the phone's own clock and locale. */
+function when(at: number): string {
+  const d = new Date(at);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** fetch()/CapacitorHttp rejections (DNS, offline, reset) — never HTTP statuses. */
@@ -537,6 +716,12 @@ async function boot() {
   }).catch(() => {});
   App.addListener("resume", () => {
     AindriveAgent.status().then((s) => { status = s; render(); }).catch(() => {});
+  });
+  App.addListener("backButton", () => {
+    if (confirmSheet) confirmSheet.resolve(false);
+    else if (searchOpen) { searchOpen = false; render(); }
+    else if (menuFor) { menuFor = null; render(); }
+    else App.exitApp();
   });
   render();
 }
