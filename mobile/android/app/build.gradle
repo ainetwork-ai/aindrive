@@ -16,6 +16,14 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    testOptions {
+        // ExifInterface is pure Java but calls android.util.Log; stub it so the
+        // EXIF unit test can run on the JVM.
+        unitTests.returnDefaultValues = true
+    }
+    buildFeatures {
+        buildConfig true   // MainActivity gates the adb debug hooks on BuildConfig.DEBUG
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17

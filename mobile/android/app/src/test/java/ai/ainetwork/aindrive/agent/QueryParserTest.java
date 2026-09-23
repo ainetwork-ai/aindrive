@@ -33,7 +33,8 @@ public class QueryParserTest {
                 + "Jeju City\tKR\t33.50972\t126.52194\t408000\t제주시\n"
                 + "New York City\tUS\t40.71427\t-74.00597\t8804190\t뉴욕\n"
                 + "Nice\tFR\t43.70313\t7.26608\t342669\t니스\n"
-                + "Paris\tUS\t33.66094\t-95.55551\t24782\t\n";
+                + "Paris\tUS\t33.66094\t-95.55551\t24782\t\n"
+                + "Boulogne-Billancourt\tFR\t48.83333\t2.25\t120071\t불로뉴비양쿠르\n";
         geo = GeoLookup.load(new ByteArrayInputStream(tsv.getBytes(StandardCharsets.UTF_8)));
         parser = new QueryParser(geo);
     }
@@ -90,6 +91,15 @@ public class QueryParserTest {
         assertEquals("GB", q.country);
         assertEquals(Long.valueOf(at(2025, 1, 1)), q.dateFrom);
         assertEquals(Long.valueOf(at(2026, 1, 1)), q.dateTo);
+    }
+
+    @Test
+    public void lastSummerEnglish() {
+        SearchQuery q = parser.parse("photos from Jeju last summer", NOW);
+        assertEquals("Jeju City", q.city);
+        assertEquals(Long.valueOf(at(2025, 6, 1)), q.dateFrom);
+        assertEquals(Long.valueOf(at(2025, 9, 1)), q.dateTo);
+        assertNull(q.textQuery);
     }
 
     @Test

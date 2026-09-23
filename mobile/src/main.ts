@@ -127,6 +127,42 @@ async function addFolder() {
   render();
 }
 
+/** Make a brand-new folder to share (pick where, name it), then it can be filled. */
+async function createFolder() {
+  errorMsg = null;
+  const name = prompt("Name for the new shared folder");
+  if (!name || !name.trim()) return;
+  try {
+    busy = "Choose where to create the folder…"; render();
+    const folder = await AindriveAgent.createFolder({ name: name.trim() });
+    state.shares.push({ folder });
+    await save();
+    log(`Folder created: ${folder.label}`);
+  } catch (e) {
+    errorMsg = msgOf(e);
+  } finally {
+    busy = null;
+    render();
+  }
+}
+
+/** Copy files picked in the system picker into a shared folder. */
+async function addFiles(share: SharedFolder) {
+  errorMsg = null;
+  try {
+    busy = `Adding files to ${share.folder.label}…`; render();
+    const r = await AindriveAgent.addFiles({ folderUri: share.folder.uri });
+    if (r.added.length) log(`Added ${r.added.length} file${r.added.length === 1 ? "" : "s"} to ${share.folder.label}: ${r.added.join(", ")}`);
+    for (const f of r.failed) log(`Could not add ${f}`);
+    if (r.failed.length && !r.added.length) errorMsg = r.failed[0];
+  } catch (e) {
+    errorMsg = msgOf(e);
+  } finally {
+    busy = null;
+    render();
+  }
+}
+
 async function login() {
   errorMsg = null;
   try {
@@ -348,6 +384,7 @@ function render() {
             ? `<button class="danger" data-act="stop">Turn off</button>`
             : `<button data-act="start" ${busy ? "disabled" : ""}>${share.drive ? "Turn on" : "Start sharing"}</button>`
         }
+        <button class="ghost" data-act="addfiles" ${busy ? "disabled" : ""}>Add files to this folder</button>
         ${url ? `<button class="ghost" data-act="open">Open drive in browser</button>` : ""}
         <button class="ghost" data-act="remove" ${d?.running || busy ? "disabled" : ""}>Remove folder</button>
       </div>`;
@@ -371,11 +408,12 @@ function render() {
 
     <div class="card">
       <h2>Add</h2>
-      <button class="ghost" id="add" ${busy ? "disabled" : ""}>Add a folder to share</button>
+      <button id="create" ${busy ? "disabled" : ""}>Create a new folder to share</button>
+      <button class="ghost" id="add" ${busy ? "disabled" : ""}>Share an existing folder</button>
       ${state.shares.length > 1 ? `
         <button id="start-all" ${busy || !idle ? "disabled" : ""}>Turn all on</button>
         <button class="danger" id="stop-all" ${running === 0 ? "disabled" : ""}>Turn all off</button>` : ""}
-      <p class="note">Sharing works only while the agent is running. It keeps running as a foreground service even when the app is in the background.</p>
+      <p class="note">A new folder is created where you choose (e.g. Documents); use "Add files" on it to fill it from this phone. Sharing works only while the agent is running. It keeps running as a foreground service even when the app is in the background.</p>
     </div>
 
     ${activity}
@@ -387,6 +425,7 @@ function render() {
   `;
 
   bind("add", addFolder);
+  bind("create", createFolder);
   bind("reindex", reindex);
   bind("ask", ask);
   const askInput = document.getElementById("ask-input") as HTMLInputElement | null;
@@ -404,6 +443,7 @@ function render() {
         if (act === "start") void startShare(share);
         else if (act === "stop") void stopShare(share);
         else if (act === "open") void openDrive(share);
+        else if (act === "addfiles") void addFiles(share);
         else if (act === "remove") void removeShare(share);
       });
     });

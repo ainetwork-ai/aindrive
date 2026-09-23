@@ -55,11 +55,53 @@ public final class SafFs {
     private final String rootDocId;
     private final ConcurrentHashMap<String, String> pathToDocId = new ConcurrentHashMap<>();
 
-    SafFs(Context ctx, Uri treeUri) {
+    /**
+     * @param folderUri a SAF tree URI, optionally with a `#docId` fragment
+     *                  naming a sub-folder of that tree to use as the drive
+     *                  root (see {@link #subfolderUri}). The tree URI is what
+     *                  the permission grant covers; a sub-folder cannot be
+     *                  re-rooted as its own tree without a fresh grant.
+     */
+    SafFs(Context ctx, Uri folderUri) {
         this.cr = ctx.getContentResolver();
-        this.treeUri = treeUri;
-        this.rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
+        this.treeUri = treeOf(folderUri);
+        String sub = folderUri.getFragment();
+        this.rootDocId = sub == null || sub.isEmpty() ? DocumentsContract.getTreeDocumentId(treeUri) : sub;
         pathToDocId.put("", rootDocId);
+    }
+
+    /** Folder handle for a sub-folder of a granted tree: `tree#docId`. */
+    static Uri subfolderUri(Uri treeUri, String docId) {
+        return treeUri.buildUpon().fragment(docId).build();
+    }
+
+    /** The granted tree URI behind a folder handle (fragment stripped). */
+    static Uri treeOf(Uri folderUri) {
+        return folderUri.getFragment() == null ? folderUri : folderUri.buildUpon().fragment(null).build();
+    }
+
+    /** Document URI of the drive root, for callers that create children in it. */
+    Uri rootDocUri() { return docUri(rootDocId); }
+
+    /**
+     * Copy an external content stream into the root as a new file, replacing
+     * any existing file of that name. Used by "Add files" in the shell.
+     */
+    void importFile(String name, InputStream in) throws IOException {
+        String existing = resolve(name);
+        if (existing != null) {
+            DocumentsContract.deleteDocument(cr, docUri(existing));
+            invalidate(name);
+        }
+        Uri created = DocumentsContract.createDocument(cr, rootDocUri(), guessMime(name), name);
+        if (created == null) throw new IOException("could not create " + name);
+        try (OutputStream out = cr.openOutputStream(created, "wt")) {
+            if (out == null) throw new IOException("could not open " + name);
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
+        invalidate(name);
     }
 
     public static final class Entry {

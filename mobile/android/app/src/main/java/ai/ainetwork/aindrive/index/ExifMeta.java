@@ -15,6 +15,12 @@ public final class ExifMeta {
     public @Nullable Long takenAtMs;
     public @Nullable Double lat, lon;
 
+    /**
+     * NOTE: Android 10+ strips GPS tags from any media stream handed to an app
+     * without ACCESS_MEDIA_LOCATION (redaction happens in the storage layer, so
+     * SAF is affected too). The plugin requests that permission before indexing;
+     * without it every photo silently indexes as "no location".
+     */
     public static ExifMeta read(InputStream in) throws IOException {
         ExifInterface exif = new ExifInterface(in);
         ExifMeta m = new ExifMeta();

@@ -65,6 +65,9 @@ public class AgentService extends Service {
 
     public static final String ACTION_START = "ai.ainetwork.aindrive.START";
     public static final String ACTION_STOP = "ai.ainetwork.aindrive.STOP";
+    /** Dev/QA hooks: `adb shell am startservice -a …ASK --es query "…"` logs the answer; REINDEX rebuilds. */
+    public static final String ACTION_ASK = "ai.ainetwork.aindrive.ASK";
+    public static final String ACTION_REINDEX = "ai.ainetwork.aindrive.REINDEX";
     public static final String EXTRA_DRIVE_ID = "driveId";
 
     /** Backoff schedule copied from cli/src/agent.js so reconnects feel the same. */
@@ -107,6 +110,18 @@ public class AgentService extends Service {
             // its next launch.
             shutdownAll();
             return START_NOT_STICKY;
+        }
+        if (ACTION_REINDEX.equals(intent.getAction())) {
+            reindex(intent.getStringExtra(EXTRA_DRIVE_ID));
+            return START_STICKY;
+        }
+        if (ACTION_ASK.equals(intent.getAction())) {
+            String q = intent.getStringExtra("query");
+            rpcPool.execute(() -> {
+                try { Log.i(TAG, "ask(" + q + ") → " + ask(q == null ? "" : q).toString(2)); }
+                catch (Exception e) { Log.w(TAG, "ask failed", e); }
+            });
+            return START_STICKY;
         }
         if (ACTION_STOP.equals(intent.getAction())) {
             String id = intent.getStringExtra(EXTRA_DRIVE_ID);
@@ -322,7 +337,9 @@ public class AgentService extends Service {
         if (g == null) {
             synchronized (this) {
                 if (geo == null) {
-                    try { geo = GeoLookup.loadGzip(getAssets().open("geo/cities.tsv.gz")); }
+                    // AAPT already inflates .gz assets and drops the suffix: the bundled
+                    // geo/cities.tsv.gz is read back as geo/cities.tsv.
+                    try { geo = GeoLookup.load(getAssets().open("geo/cities.tsv")); }
                     catch (Exception e) { throw new RuntimeException("gazetteer load failed: " + e.getMessage(), e); }
                 }
                 g = geo;
@@ -338,7 +355,10 @@ public class AgentService extends Service {
             for (Conn c : conns.values()) if ((driveId == null || driveId.equals(c.driveId)) && c.fs != null) targets.add(c);
         }
         for (Conn c : targets) {
-            indexPool.execute(() -> c.indexer().runOnce((done, total, phase) -> notifyStatus()));
+            indexPool.execute(() -> {
+                try { c.indexer().runOnce((done, total, phase) -> notifyStatus()); }
+                catch (RuntimeException e) { c.lastError = e.getMessage(); Log.w(TAG, "index failed", e); notifyStatus(); }
+            });
         }
         return !targets.isEmpty();
     }

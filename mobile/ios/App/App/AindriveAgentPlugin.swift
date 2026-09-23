@@ -18,6 +18,8 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "AindriveAgent"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pickFolder", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "createFolder", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "addFiles", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
@@ -25,6 +27,9 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private static let bookmarkKey = "ai.ainetwork.aindrive.folderBookmark"
     private var pickCall: CAPPluginCall?
+    /// What the pending document picker is for; its delegate is shared.
+    private enum PickMode { case folder, parentForNewFolder(String), filesInto(URL) }
+    private var pickMode: PickMode = .folder
 
     public override func load() {
         AgentCore.shared.onStatusChange = { [weak self] status in
@@ -35,11 +40,37 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     // MARK: - folder
 
     @objc func pickFolder(_ call: CAPPluginCall) {
+        pickMode = .folder
+        present(call, types: [.folder], multiple: false)
+    }
+
+    /// "Share a NEW folder": pick where it lives, create `name` inside, bookmark it.
+    @objc func createFolder(_ call: CAPPluginCall) {
+        let name = (call.getString("name") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !name.contains("/"), !name.hasPrefix(".") else {
+            call.reject("Enter a folder name without slashes")
+            return
+        }
+        pickMode = .parentForNewFolder(name)
+        present(call, types: [.folder], multiple: false)
+    }
+
+    /// "Put files into a shared folder": the file picker is the phone's drag-and-drop.
+    @objc func addFiles(_ call: CAPPluginCall) {
+        guard let key = call.getString("folderUri"), let folder = Self.resolveBookmark(key) else {
+            call.reject("Folder access permission has expired. Please pick the folder again.")
+            return
+        }
+        pickMode = .filesInto(folder)
+        present(call, types: [.item], multiple: true)
+    }
+
+    private func present(_ call: CAPPluginCall, types: [UTType], multiple: Bool) {
         pickCall = call
         DispatchQueue.main.async {
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: false)
             picker.delegate = self
-            picker.allowsMultipleSelection = false
+            picker.allowsMultipleSelection = multiple
             self.bridge?.viewController?.present(picker, animated: true)
         }
     }
@@ -108,19 +139,52 @@ extension AindriveAgentPlugin: UIDocumentPickerDelegate {
         guard let call = pickCall else { return }
         pickCall = nil
         guard let url = urls.first else {
-            call.reject("Folder selection was cancelled")
+            call.reject("Selection was cancelled")
             return
         }
-        do {
-            let key = try Self.storeBookmark(url)
-            call.resolve(["uri": key, "label": url.lastPathComponent])
-        } catch {
-            call.reject("Could not persist folder access permission: \(error.localizedDescription)")
+        switch pickMode {
+        case .folder:
+            do {
+                let key = try Self.storeBookmark(url)
+                call.resolve(["uri": key, "label": url.lastPathComponent])
+            } catch {
+                call.reject("Could not persist folder access permission: \(error.localizedDescription)")
+            }
+        case .parentForNewFolder(let name):
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let child = url.appendingPathComponent(name, isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
+                let key = try Self.storeBookmark(child)
+                call.resolve(["uri": key, "label": child.lastPathComponent])
+            } catch {
+                call.reject("Could not create folder: \(error.localizedDescription)")
+            }
+        case .filesInto(let folder):
+            DispatchQueue.global(qos: .userInitiated).async {
+                let scoped = folder.startAccessingSecurityScopedResource()
+                defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+                var added: [String] = [], failed: [String] = []
+                for src in urls {
+                    let srcScoped = src.startAccessingSecurityScopedResource()
+                    defer { if srcScoped { src.stopAccessingSecurityScopedResource() } }
+                    let dst = folder.appendingPathComponent(src.lastPathComponent)
+                    do {
+                        if FileManager.default.fileExists(atPath: dst.path) { try FileManager.default.removeItem(at: dst) }
+                        try FileManager.default.copyItem(at: src, to: dst)
+                        added.append(src.lastPathComponent)
+                    } catch {
+                        failed.append("\(src.lastPathComponent): \(error.localizedDescription)")
+                    }
+                }
+                call.resolve(["added": added, "failed": failed])
+            }
         }
     }
 
     public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        pickCall?.reject("Folder selection was cancelled")
+        pickCall?.reject("Selection was cancelled")
         pickCall = nil
     }
 }

@@ -32,7 +32,8 @@ import org.json.JSONObject;
 @CapacitorPlugin(
         name = "AindriveAgent",
         permissions = {
-                @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"})
+                @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"}),
+                @Permission(alias = "mediaLocation", strings = {"android.permission.ACCESS_MEDIA_LOCATION"})
         })
 public class AindriveAgentPlugin extends Plugin {
 
@@ -95,6 +96,127 @@ public class AindriveAgentPlugin extends Plugin {
         int colon = docId.lastIndexOf(':');
         String tail = colon >= 0 ? docId.substring(colon + 1) : docId;
         return tail.isEmpty() ? "My folder" : tail;
+    }
+
+    // ------------------------------------------------------------ create + fill
+
+    /**
+     * "Share a NEW folder": the user picks where it should live (a SAF tree,
+     * granted persistably), we create the sub-folder there and hand back a
+     * folder handle rooted at it (see SafFs.subfolderUri). The parent grant is
+     * what makes the sub-folder readable; the handle keeps both.
+     */
+    @PluginMethod
+    public void createFolder(PluginCall call) {
+        String name = call.getString("name", "").trim();
+        if (name.isEmpty() || name.contains("/") || name.startsWith(".")) {
+            call.reject("Enter a folder name without slashes");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(call, intent, "parentPicked");
+    }
+
+    @ActivityCallback
+    private void parentPicked(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        Intent data = result.getData();
+        Uri tree = data == null ? null : data.getData();
+        if (tree == null) {
+            call.reject("Location selection was cancelled");
+            return;
+        }
+        String name = call.getString("name", "").trim();
+        ContentResolver cr = getContext().getContentResolver();
+        try {
+            cr.takePersistableUriPermission(
+                    tree, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            Uri parentDoc = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
+            Uri created = DocumentsContract.createDocument(cr, parentDoc, DocumentsContract.Document.MIME_TYPE_DIR, name);
+            if (created == null) throw new java.io.IOException("the storage provider refused to create a folder here");
+            JSObject ret = new JSObject();
+            ret.put("uri", SafFs.subfolderUri(tree, DocumentsContract.getDocumentId(created)).toString());
+            // Providers may de-duplicate ("name (1)"); report what really exists.
+            ret.put("label", displayName(created, name));
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Could not create folder: " + e.getMessage());
+        }
+    }
+
+    /**
+     * "Put files into a shared folder": the phone has no drag-and-drop, so the
+     * system file picker is the drop. Each picked document is copied into the
+     * folder root (replacing a same-named file, like a desktop overwrite).
+     */
+    @PluginMethod
+    public void addFiles(PluginCall call) {
+        if (call.getString("folderUri") == null) {
+            call.reject("missing folderUri");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*")
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(call, intent, "filesPicked");
+    }
+
+    @ActivityCallback
+    private void filesPicked(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        Intent data = result.getData();
+        java.util.List<Uri> picked = new java.util.ArrayList<>();
+        if (data != null) {
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) picked.add(data.getClipData().getItemAt(i).getUri());
+            } else if (data.getData() != null) {
+                picked.add(data.getData());
+            }
+        }
+        if (picked.isEmpty()) {
+            call.reject("File selection was cancelled");
+            return;
+        }
+        Uri folder = Uri.parse(call.getString("folderUri"));
+        // Copies can be large; keep them off the main thread so the WebView
+        // stays responsive, then resolve back on it.
+        new Thread(() -> {
+            ContentResolver cr = getContext().getContentResolver();
+            com.getcapacitor.JSArray names = new com.getcapacitor.JSArray();
+            com.getcapacitor.JSArray failed = new com.getcapacitor.JSArray();
+            SafFs fs;
+            try { fs = new SafFs(getContext(), folder); }
+            catch (Exception e) { call.reject("Folder is no longer accessible: " + e.getMessage()); return; }
+            for (Uri src : picked) {
+                String name = displayName(src, "file");
+                try (java.io.InputStream in = cr.openInputStream(src)) {
+                    if (in == null) throw new java.io.IOException("unreadable");
+                    fs.importFile(name, in);
+                    names.put(name);
+                } catch (Exception e) {
+                    failed.put(name + ": " + e.getMessage());
+                }
+            }
+            JSObject ret = new JSObject();
+            ret.put("added", names);
+            ret.put("failed", failed);
+            call.resolve(ret);
+        }, "aindrive-import").start();
+    }
+
+    private String displayName(Uri doc, String fallback) {
+        try (android.database.Cursor c = getContext().getContentResolver().query(
+                doc, new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                String n = c.getString(0);
+                if (n != null && !n.isEmpty()) return n;
+            }
+        } catch (Exception ignored) { }
+        return fallback;
     }
 
     // ------------------------------------------------------------ agent
@@ -181,6 +303,22 @@ public class AindriveAgentPlugin extends Plugin {
     /** Build/refresh the photo index for one drive (or all). Progress arrives via statusChanged. */
     @PluginMethod
     public void reindex(PluginCall call) {
+        // Android 10+ redacts GPS from media streams unless this is granted, and
+        // an index without locations cannot answer "photos from Paris".
+        if (Build.VERSION.SDK_INT >= 29 && getPermissionState("mediaLocation") != com.getcapacitor.PermissionState.GRANTED) {
+            requestPermissionForAlias("mediaLocation", call, "afterMediaLocationPermission");
+            return;
+        }
+        doReindex(call);
+    }
+
+    @com.getcapacitor.annotation.PermissionCallback
+    private void afterMediaLocationPermission(PluginCall call) {
+        // Refused → index anyway; dates still work, places will be empty.
+        doReindex(call);
+    }
+
+    private void doReindex(PluginCall call) {
         AgentService svc = AgentService.get();
         if (svc == null) { call.reject("Turn a drive on first"); return; }
         if (!svc.reindex(call.getString("driveId"))) { call.reject("That drive is not running"); return; }

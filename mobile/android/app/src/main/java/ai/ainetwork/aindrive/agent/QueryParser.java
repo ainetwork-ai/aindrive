@@ -93,7 +93,14 @@ public final class QueryParser {
                 y = c.get(Calendar.YEAR); m = c.get(Calendar.MONTH) + 1; used[i] = true; if (lower.equals("last")) used[i + 1] = true;
             }
             else if (lower.equals("이번달") || lower.equals("this") && next(tokens, i).equals("month")) { y = year; m = now.get(Calendar.MONTH) + 1; used[i] = true; if (lower.equals("this")) used[i + 1] = true; }
-            else if (isSeason(lower) != null) { season = isSeason(lower); used[i] = true; }
+            else if (isSeason(lower) != null) {
+                season = isSeason(lower); used[i] = true;
+                // "last summer" / "지난 여름" = that season of the previous year.
+                if (i > 0 && !used[i - 1]) {
+                    String prev = tokens.get(i - 1).toLowerCase(Locale.ROOT);
+                    if (prev.equals("last") || prev.equals("지난")) { y = year - 1; used[i - 1] = true; }
+                }
+            }
             else {
                 int mi = monthIndex(lower);
                 if (mi > 0) { m = mi; used[i] = true; }

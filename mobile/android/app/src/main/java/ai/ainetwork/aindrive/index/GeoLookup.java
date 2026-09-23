@@ -112,10 +112,16 @@ public final class GeoLookup {
 
     // ------------------------------------------------------------ GPS → place
 
-    /** Nearest city within ~150 km, else null (open sea, Antarctica…). */
+    /**
+     * The city a photo "was taken in": within ~100 km, the candidate with the
+     * lowest distance / sqrt(population). A photo at the Eiffel Tower is 3 km
+     * from Boulogne-Billancourt (120k) and 4 km from Paris (2.1M) — the user
+     * calls that Paris, and so must the index, or "파리" never matches.
+     * Null when nothing is within range (open sea, Antarctica…).
+     */
     public @Nullable City nearest(double lat, double lon) {
         City best = null;
-        double bestKm = 150;
+        double bestScore = Double.MAX_VALUE;
         int la = (int) Math.floor(lat), lo = (int) Math.floor(lon);
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
@@ -124,7 +130,9 @@ public final class GeoLookup {
                 for (int i : bucket) {
                     City c = cities.get(i);
                     double km = haversineKm(lat, lon, c.lat, c.lon);
-                    if (km < bestKm) { bestKm = km; best = c; }
+                    if (km > 100) continue;
+                    double score = km / Math.sqrt(Math.max(c.pop, 1000));
+                    if (score < bestScore) { bestScore = score; best = c; }
                 }
             }
         }

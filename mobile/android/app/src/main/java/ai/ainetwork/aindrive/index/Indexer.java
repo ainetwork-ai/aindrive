@@ -97,5 +97,6 @@ public final class Indexer {
             }
         }
         index.upsert(r);
+        Log.d(TAG, "indexed " + e.name + " takenAt=" + r.takenAt + " gps=" + r.lat + "," + r.lon + " → " + r.city + "/" + r.country);
     }
 }
