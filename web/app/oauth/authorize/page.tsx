@@ -1,5 +1,6 @@
 /**
- * /oauth/authorize — OAuth consent screen for remote-MCP clients.
+ * /oauth/authorize — OAuth consent screen for remote-MCP clients and for
+ * account grants ("Sign in with aindrive", no `resource`).
  * Validates the request server-side, sends anonymous users through /login
  * (returning here), then renders the Approve/Deny form (./consent-form.tsx),
  * which POSTs to /api/oauth/authorize. See app/mcp/README.md.
@@ -9,7 +10,7 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
 import { clampScope } from "@/lib/mcp-tokens";
-import { ConsentForm } from "./consent-form";
+import { AccountConsentForm, ConsentForm } from "./consent-form";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,22 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
     redirect(`/login?next=${encodeURIComponent(`/oauth/authorize?${qs}`)}`);
   }
 
+  const redirectHost = (() => { const u = new URL(v.value.redirectUri); return u.host ? `${u.protocol}//${u.host}` : v.value.redirectUri; })();
+
+  if (v.value.driveId === null) {
+    return (
+      <Shell>
+        <AccountConsentForm
+          params={params}
+          clientName={v.value.client.client_name}
+          redirectHost={redirectHost}
+          userEmail={user.email}
+          scopes={v.value.accountScopes}
+        />
+      </Shell>
+    );
+  }
+
   const drive = getDrive(v.value.driveId);
   const ceiling = drive ? clampScope(drive.id, user.id, "write") : null;
   if (!drive || !ceiling) {
@@ -65,7 +82,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
       <ConsentForm
         params={params}
         clientName={v.value.client.client_name}
-        redirectHost={(() => { const u = new URL(v.value.redirectUri); return u.host ? `${u.protocol}//${u.host}` : v.value.redirectUri; })()}
+        redirectHost={redirectHost}
         driveName={drive.name}
         userEmail={user.email}
         canWrite={ceiling === "write"}

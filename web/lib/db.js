@@ -291,6 +291,44 @@ function open() {
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) throw e;
   }
+  // Account-level OAuth grant (lib/account-tokens, lib/oauth): "Sign in with
+  // aindrive" for third-party apps — one token pair covering the user, not one
+  // drive. Separate tables so mcp_tokens/oauth_codes keep drive_id NOT NULL.
+  // scope is a space-separated string of account scopes ("profile drives:read").
+  // Access `aind_aat_…` (1h) + refresh `aind_art_…` (30d, rotated in place,
+  // reuse of a superseded refresh revokes the row). Only sha256 hashes; epoch ms.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS account_oauth_codes (
+      code_hash TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      code_challenge TEXT NOT NULL,
+      consumed INTEGER NOT NULL DEFAULT 0,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS account_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      refresh_hash TEXT NOT NULL UNIQUE,
+      prev_refresh_hash TEXT,
+      expires_at INTEGER NOT NULL,
+      refresh_expires_at INTEGER NOT NULL,
+      last_used_at INTEGER,
+      revoked_at INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_tokens_user ON account_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_account_tokens_prev_refresh ON account_tokens(prev_refresh_hash);
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

@@ -1,11 +1,14 @@
 /**
  * POST /api/oauth/token — authorization_code (PKCE) and refresh_token grants.
  * Accepts application/x-www-form-urlencoded (RFC 6749) or JSON. Issues
- * drive-bound MCP tokens via lib/mcp-tokens.ts. See app/mcp/README.md.
+ * drive-bound MCP tokens via lib/mcp-tokens.ts, or account-grant tokens via
+ * lib/account-tokens.ts — the kind follows the code's table / the refresh
+ * token's prefix. Same response shape for both. See app/mcp/README.md.
  */
 import { tryConsume, clientKey } from "@/lib/rate-limit";
-import { getClient, redeemCode, scopeString } from "@/lib/oauth";
+import { getClient, redeemAccountCode, redeemCode, scopeString } from "@/lib/oauth";
 import { issueOAuthTokens, refreshOAuthTokens } from "@/lib/mcp-tokens";
+import { ACCOUNT_REFRESH_PREFIX, issueAccountTokens, refreshAccountTokens } from "@/lib/account-tokens";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -44,12 +47,24 @@ export async function POST(req: Request) {
     if (!p.code || !p.redirect_uri || !p.code_verifier) {
       return fail("invalid_request", "code, redirect_uri and code_verifier are required");
     }
-    const redeemed = redeemCode({
+    const exchange = {
       code: p.code,
       clientId: client.client_id,
       redirectUri: p.redirect_uri,
       codeVerifier: p.code_verifier,
-    });
+    };
+    const redeemed = redeemCode(exchange);
+    // A code lives in exactly one table, so a drive miss falls through to the account table.
+    const account = redeemed ? null : redeemAccountCode(exchange);
+    if (account) {
+      const pair = issueAccountTokens({
+        userId: account.userId,
+        clientId: client.client_id,
+        clientName: client.client_name,
+        scopes: account.scopes,
+      });
+      return Response.json({ ...pair, token_type: "Bearer" }, { headers: { ...CORS, ...NO_STORE } });
+    }
     if (!redeemed) return fail("invalid_grant", "authorization code is invalid, expired, used, or the PKCE verifier does not match");
     const pair = issueOAuthTokens({
       userId: redeemed.userId,
@@ -63,6 +78,11 @@ export async function POST(req: Request) {
 
   if (p.grant_type === "refresh_token") {
     if (!p.refresh_token) return fail("invalid_request", "refresh_token is required");
+    if (p.refresh_token.startsWith(ACCOUNT_REFRESH_PREFIX)) {
+      const pair = refreshAccountTokens(p.refresh_token, client.client_id);
+      if (!pair) return fail("invalid_grant", "refresh token is invalid, expired or revoked");
+      return Response.json({ ...pair, token_type: "Bearer" }, { headers: { ...CORS, ...NO_STORE } });
+    }
     const pair = refreshOAuthTokens(p.refresh_token, client.client_id);
     if (!pair) return fail("invalid_grant", "refresh token is invalid, expired or revoked");
     return Response.json({ ...pair, token_type: "Bearer", scope: scopeString(pair.scope) }, { headers: { ...CORS, ...NO_STORE } });

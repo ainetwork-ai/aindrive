@@ -48,7 +48,7 @@ export function hashToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
-function mint(prefix: string): string {
+export function mint(prefix: string): string {
   return `${prefix}_${randomBytes(32).toString("base64url")}`;
 }
 
