@@ -35,10 +35,43 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: "3737"
       AINDRIVE_DATA_DIR: /data
+      # Preview converter sidecar below (doc/ppt/iWork/eps/xps → PDF, legacy
+      # video → MP4). Unset = those previews show "download to open".
+      AINDRIVE_CONVERTER_URL: http://converter:8080
     volumes:
       - aindrive-data:/data
     ports:
       - "127.0.0.1:3738:3737"
+    networks:
+      - default     # egress (agents' WSS, RPCs, CDP, SMTP) + the published port
+      - converter   # the only path to the sidecar
+
+  # Runs LibreOffice / Ghostscript / libgxps / ffmpeg against user files —
+  # parsers with long CVE histories — so it gets nothing worth stealing and no
+  # way out: no env_file (no secrets), no volumes, no ports, and only the
+  # internal network (no egress). Read-only root; /tmp tmpfs is its only
+  # writable space. See converter/README.md.
+  converter:
+    build:
+      context: ./converter
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # tmpfs pages count against mem_limit: 2 concurrent jobs × (≤512MB input +
+    # output) + LibreOffice/ffmpeg working set.
+    mem_limit: 3g
+    pids_limit: 256
+    cpus: 2
+    networks:
+      - converter
+
+networks:
+  converter:
+    internal: true
 
 volumes:
   aindrive-data:

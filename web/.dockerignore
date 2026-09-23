@@ -31,3 +31,5 @@ docker-compose.yml
 docker-compose.*.yml
 Dockerfile
 .dockerignore
+# Separate image (its own build context); not part of the web app.
+converter

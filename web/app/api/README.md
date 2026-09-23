@@ -49,6 +49,7 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
 | `download` | chunked stream, `Content-Disposition: attachment`, no size cap. |
 | `thumbnail` | 256px webp via sharp, disk cache keyed by `sha1(path)+mtime`. |
+| `preview` | `?to=pdf\|mp4`: server conversion via the `web/converter/` sidecar for doc/ppt/iWork/eps/xps and non-browser video. Async (`202` pending → Range-served bytes), disk cache `previews/` keyed by `sha1(path)+mtime`; `422` failed, `501` no converter. Logic: `lib/preview-convert.ts`. |
 | `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. |
 
 Payments / capabilities:

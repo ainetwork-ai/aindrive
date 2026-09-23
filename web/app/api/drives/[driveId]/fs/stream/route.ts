@@ -4,6 +4,7 @@ import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind } from "@/lib/mime";
 import { agentByteStream } from "@/lib/agent-stream";
+import { parseByteRange } from "@/lib/byte-range";
 
 /**
  * GET /api/drives/:driveId/fs/stream?path=...
@@ -55,32 +56,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     const size = stat.entry.size;
     const { mime } = classifyKind(path);
 
-    // Range grammar (single range only — multipart ranges are not worth the
-    // complexity for media playback): bytes=a-b | bytes=a- | bytes=-n
-    let start = 0;
-    let endExclusive = size;
-    let status = 200;
-    const range = req.headers.get("range");
-    if (range) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
-      const first = m?.[1] ?? "";
-      const last = m?.[2] ?? "";
-      if (!m || (first === "" && last === "")) {
-        return NextResponse.json({ error: "malformed range" }, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
-      }
-      if (first === "") {
-        // suffix form: last n bytes
-        const n = Math.min(parseInt(last, 10), size);
-        start = size - n;
-      } else {
-        start = parseInt(first, 10);
-        endExclusive = last === "" ? size : Math.min(parseInt(last, 10) + 1, size);
-      }
-      if (start >= size || start >= endExclusive) {
-        return NextResponse.json({ error: "range not satisfiable" }, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
-      }
-      status = 206;
+    const range = parseByteRange(req.headers.get("range"), size);
+    if (!range.ok) {
+      return NextResponse.json({ error: range.error }, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
     }
+    const { start, endExclusive } = range;
+    const status = range.partial ? 206 : 200;
 
     const headers: Record<string, string> = {
       "Accept-Ranges": "bytes",

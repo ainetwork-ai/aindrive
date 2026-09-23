@@ -68,6 +68,22 @@ DOCKER_PUBLISH_GUIDE.
 > `web/.env`. (Forgetting the secrets fails loud — the SESSION_SECRET boot
 > check exits rather than running insecure.)
 
+### Preview converter sidecar
+
+`docker compose up -d --build` also builds and runs **`converter`**
+(`web/converter/`, ~1.2 GB image: LibreOffice, Ghostscript, libgxps, ffmpeg,
+CJK fonts). It turns doc/ppt/iWork/eps/ps/xps into PDF and legacy video into
+MP4 for the Viewer. It is locked down on purpose — no env_file, no volumes, no
+ports, `internal` network only (no egress), read-only root, cap_drop ALL,
+mem/pid/cpu limits — so never add secrets, mounts or ports to it. `web` reaches
+it at `AINDRIVE_CONVERTER_URL=http://converter:8080` (set in compose).
+Converted output is cached under the data volume (`/data/previews/`, keyed by
+path+mtime; old entries are not GC'd yet — prune it if it grows).
+
+If the sidecar is down or unset, only those previews degrade ("download to
+open"); nothing else depends on it. Tuning envs: `web/.env.example` (web side)
+and `web/converter/README.md` (sidecar side).
+
 ## Env that matters for payments
 
 Field reference with defaults is `web/.env.example`. For a mainnet release the
@@ -144,6 +160,9 @@ Checked against a live `getSupported()` call with the prod CDP key:
   has no payout wallet; owner sets it in Settings → Payments.
 - **Payment "succeeds" but no funds / dev tx hash** → `AINDRIVE_DEV_BYPASS_X402`
   is `1`. Must be `0` in prod (boot check should have refused to start).
+- **doc/ppt/eps/xps/avi… preview says "needs the converter service"** →
+  `AINDRIVE_CONVERTER_URL` unset (501). **"could not be converted"** (422) →
+  see `docker compose logs converter`; failures are retried after ~10 min.
 - **Wallet warns "withdraw ALL your <token>"** → shouldn't happen anymore;
   approvals are encoded for the exact sale amount, not unlimited.
 
