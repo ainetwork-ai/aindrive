@@ -15,7 +15,7 @@
 import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
-import { AindriveAgent, IDLE_STATUS, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
+import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
 import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive } from "./api";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
@@ -62,6 +62,16 @@ let askResult: AskResult | null = null;
 let askBusy = false;
 let searchOpen = false;
 let menuFor: string | null = null;
+/** In-app file browser: which share, where in it, what we saw there. */
+let browse: {
+  key: string;
+  path: string;
+  entries: FileEntry[] | null;
+  error: string | null;
+  loading: boolean;
+  menu: string | null;   // entry path whose ⋯ menu is open
+  plusMenu: boolean;      // "+" menu (new folder / add files)
+} | null = null;
 let showAllActivity = false;
 let toast: { msg: string; error?: boolean; timer?: number } | null = null;
 let confirmSheet: { title: string; body: string; ok: string; danger?: boolean; resolve: (v: boolean) => void } | null = null;
@@ -173,11 +183,11 @@ async function addFolder() {
 }
 
 /** Copy files picked in the system picker into a shared folder. */
-async function addFiles(share: SharedFolder) {
+async function addFiles(share: SharedFolder, path = "") {
   const key = shareKey(share);
   busyShares.add(key); render();
   try {
-    const r = await AindriveAgent.addFiles({ folderUri: share.folder.uri });
+    const r = await AindriveAgent.addFiles({ folderUri: share.folder.uri, path });
     if (r.added.length) {
       log(`Added ${r.added.length} file${r.added.length === 1 ? "" : "s"} to ${share.folder.label}: ${r.added.join(", ")}`);
       notify(`Added ${r.added.length} file${r.added.length === 1 ? "" : "s"} to ${share.folder.label}`);
@@ -188,8 +198,123 @@ async function addFiles(share: SharedFolder) {
     if (!/cancel/i.test(msgOf(e))) fail(e);
   } finally {
     busyShares.delete(key);
+    if (browse?.key === key) await loadBrowse();
     render();
   }
+}
+
+// ---------------------------------------------------------------- file browser
+//
+// Reads the shared folder locally through the native plugin — the same tree
+// the agent serves — so it works offline and while the drive is off. Basic
+// file-manager verbs only: navigate, open, new folder, add files, rename,
+// delete. Anything richer (sharing, selling, previews) is the web UI's job.
+
+function browseShare(): SharedFolder | undefined {
+  return browse ? findShare(browse.key) : undefined;
+}
+
+async function openBrowser(share: SharedFolder, path = "") {
+  menuFor = null;
+  browse = { key: shareKey(share), path, entries: null, error: null, loading: true, menu: null, plusMenu: false };
+  render();
+  await loadBrowse();
+}
+
+async function loadBrowse() {
+  const share = browseShare();
+  if (!browse || !share) return;
+  browse.loading = true; browse.error = null; browse.menu = null; browse.plusMenu = false;
+  render();
+  try {
+    const r = await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: browse.path });
+    if (!browse) return;
+    browse.entries = r.entries;
+  } catch (e) {
+    if (browse) { browse.entries = []; browse.error = msgOf(e); }
+  } finally {
+    if (browse) browse.loading = false;
+    render();
+  }
+}
+
+/** Back: up one level, or close the browser at the root. */
+function browseBack() {
+  if (!browse) return;
+  if (browse.menu || browse.plusMenu) { browse.menu = null; browse.plusMenu = false; render(); return; }
+  if (!browse.path) { browse = null; render(); return; }
+  browse.path = browse.path.split("/").slice(0, -1).join("/");
+  void loadBrowse();
+}
+
+async function browseOpen(entry: FileEntry) {
+  const share = browseShare();
+  if (!browse || !share) return;
+  if (entry.isDir) { browse.path = entry.path; await loadBrowse(); return; }
+  try { await AindriveAgent.openFile({ folderUri: share.folder.uri, path: entry.path }); }
+  catch (e) { notify(msgOf(e), true); }
+}
+
+function joinPath(dir: string, name: string): string {
+  return dir ? `${dir}/${name}` : name;
+}
+
+function validName(name: string | null): string | null {
+  const n = (name ?? "").trim();
+  if (!n || n === "." || n === ".." || n.includes("/")) return null;
+  return n;
+}
+
+async function browseNewFolder() {
+  const share = browseShare();
+  if (!browse || !share) return;
+  browse.plusMenu = false;
+  const name = validName(prompt("New folder name"));
+  if (!name) return render();
+  try {
+    await AindriveAgent.mkdir({ folderUri: share.folder.uri, path: joinPath(browse.path, name) });
+    log(`Created folder ${name} in ${share.folder.label}`);
+  } catch (e) { notify(msgOf(e), true); }
+  await loadBrowse();
+}
+
+async function browseRename(entry: FileEntry) {
+  const share = browseShare();
+  if (!browse || !share) return;
+  browse.menu = null;
+  const name = validName(prompt("Rename", entry.name));
+  if (!name || name === entry.name) return render();
+  if (browse.entries?.some((e) => e.name === name)) { notify(`"${name}" already exists here`, true); return; }
+  try {
+    await AindriveAgent.rename({ folderUri: share.folder.uri, from: entry.path, to: joinPath(browse.path, name) });
+    log(`Renamed ${entry.name} → ${name}`);
+  } catch (e) { notify(msgOf(e), true); }
+  await loadBrowse();
+}
+
+async function browseDelete(entry: FileEntry) {
+  const share = browseShare();
+  if (!browse || !share) return;
+  browse.menu = null; render();
+  const ok = await confirmAsync(
+    `Delete "${entry.name}"?`,
+    entry.isDir ? "The folder and everything inside it is deleted from this phone." : "The file is deleted from this phone.",
+    "Delete", true,
+  );
+  if (!ok) return;
+  try {
+    await AindriveAgent.delete({ folderUri: share.folder.uri, path: entry.path });
+    log(`Deleted ${entry.name}`);
+  } catch (e) { notify(msgOf(e), true); }
+  await loadBrowse();
+}
+
+function prettyBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const u = ["KB", "MB", "GB", "TB"];
+  let i = -1; let v = n;
+  do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
 }
 
 async function login() {
@@ -413,6 +538,7 @@ function render() {
   if (!app) return;
   if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); return; }
   if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); return; }
+  if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); return; }
   app.innerHTML = homeScreen() + overlays();
   bindHome();
 }
@@ -521,8 +647,8 @@ function folderCard(share: SharedFolder): string {
   return `
     <div class="card" data-share="${esc(key)}">
       <div class="folder">
-        <div class="glyph">${I.folder}</div>
-        <div style="min-width:0">
+        <div class="glyph" data-act="browse">${I.folder}</div>
+        <div style="min-width:0" data-act="browse" role="button" aria-label="Open ${esc(share.folder.label)}">
           <div class="name">${esc(share.folder.label)}</div>
           <div class="state"><span class="dot ${dot}"></span>${esc(stateText)}${esc(indexText)}</div>
         </div>
@@ -555,6 +681,7 @@ function bindHome() {
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
         if (act === "toggle") { void (driveStatus(share)?.running ? stopShare(share) : startShare(share)); }
+        else if (act === "browse") { void openBrowser(share); }
         else if (act === "menu") { menuFor = menuFor === shareKey(share) ? null : shareKey(share); render(); }
         else if (act === "open") { menuFor = null; void openDrive(share); }
         else if (act === "addfiles") { menuFor = null; void addFiles(share); }
@@ -634,6 +761,88 @@ function ext(name: string): string {
   const i = name.lastIndexOf(".");
   const e = i >= 0 ? name.slice(i + 1) : "";
   return (e.length > 4 ? e.slice(0, 4) : e || "file").toUpperCase();
+}
+
+// ---- file browser
+
+function browseSheet(): string {
+  const share = browseShare();
+  if (!browse || !share) return "";
+  const crumbs = browse.path ? browse.path.split("/") : [];
+  const title = crumbs.length ? crumbs[crumbs.length - 1] : share.folder.label;
+  const sub = crumbs.length ? [share.folder.label, ...crumbs.slice(0, -1)].join(" / ") : (driveStatus(share)?.connected ? "Online" : "On this phone");
+  const isBusy = busyShares.has(browse.key);
+  const plus = browse.plusMenu ? `
+    <div class="menu">
+      <button data-op="newfolder">New folder</button>
+      <button data-op="addfiles">Add files from this phone…</button>
+      ${driveUrl(share) ? `<div class="sep"></div><button data-op="web">Open on the web</button>` : ""}
+    </div>` : "";
+  let body: string;
+  if (browse.loading && !browse.entries) body = `<div class="searching"><span class="spinner"></span> Loading…</div>`;
+  else if (browse.error) body = `<div class="empty"><h3>Couldn’t read this folder</h3><p>${esc(browse.error)}</p><button class="btn secondary" id="browse-retry">Try again</button></div>`;
+  else if (!browse.entries?.length) body = `<div class="empty"><div class="art">${I.folder}</div><h3>Empty folder</h3><p>Add files from this phone or create a folder with the + button.</p></div>`;
+  else body = `<ul class="hits files">${browse.entries.map((e) => {
+    const menu = browse!.menu === e.path ? `
+      <div class="menu">
+        <button data-op="open">${e.isDir ? "Open" : "Open with…"}</button>
+        <button data-op="rename">Rename</button>
+        <div class="sep"></div>
+        <button class="danger" data-op="delete">Delete</button>
+      </div>` : "";
+    const meta = e.isDir ? "Folder" : [prettyBytes(e.size), e.mtimeMs ? new Date(e.mtimeMs).toLocaleDateString() : ""].filter(Boolean).join(" · ");
+    return `<li data-entry="${esc(e.path)}">
+      <span class="kind ${e.isDir ? "dir" : kindClass(e.name)}" data-op="open">${e.isDir ? I.folder : esc(ext(e.name))}</span>
+      <div style="min-width:0" data-op="open"><div class="name">${esc(e.name)}</div><div class="meta">${esc(meta)}</div></div>
+      <div class="menu-wrap"><button class="iconbtn" style="border:0;background:none;width:38px" data-op="menu" aria-label="More">${I.more}</button>${menu}</div>
+    </li>`;
+  }).join("")}</ul>`;
+  return `
+    <div class="sheet">
+      <div class="bar">
+        <button class="iconbtn" id="browse-back" aria-label="Back">${I.back}</button>
+        <div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${esc(sub)}</div></div>
+        <div class="menu-wrap">
+          <button class="iconbtn primary" id="browse-plus" aria-label="Add" ${isBusy ? "disabled" : ""}>${isBusy ? `<span class="spinner"></span>` : I.plus}</button>
+          ${plus}
+        </div>
+      </div>
+      <div class="body" id="browse-body">${body}</div>
+    </div>`;
+}
+
+function bindBrowse() {
+  const share = browseShare();
+  if (!browse || !share) return;
+  bind("browse-back", browseBack);
+  bind("browse-retry", () => void loadBrowse());
+  bind("browse-plus", () => { if (browse) { browse.plusMenu = !browse.plusMenu; browse.menu = null; render(); } });
+  document.querySelectorAll<HTMLElement>("#browse-plus ~ .menu [data-op]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const op = btn.dataset.op;
+      if (op === "newfolder") void browseNewFolder();
+      else if (op === "addfiles") { if (browse) browse.plusMenu = false; void addFiles(share, browse!.path); }
+      else if (op === "web") { if (browse) browse.plusMenu = false; void openDrive(share, browse!.path ? `${browse!.path}/x` : undefined); }
+    });
+  });
+  document.querySelectorAll<HTMLElement>("[data-entry]").forEach((li) => {
+    const entry = browse!.entries?.find((e) => e.path === li.dataset.entry);
+    if (!entry) return;
+    li.querySelectorAll<HTMLElement>("[data-op]").forEach((el) => {
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const op = el.dataset.op;
+        if (op === "open") { if (browse) browse.menu = null; void browseOpen(entry); }
+        else if (op === "menu") { if (browse) { browse.menu = browse.menu === entry.path ? null : entry.path; browse.plusMenu = false; render(); } }
+        else if (op === "rename") void browseRename(entry);
+        else if (op === "delete") void browseDelete(entry);
+      });
+    });
+  });
+  // Tap anywhere else closes open menus.
+  document.getElementById("browse-body")?.addEventListener("click", () => {
+    if (browse && (browse.menu || browse.plusMenu)) { browse.menu = null; browse.plusMenu = false; render(); }
+  });
 }
 
 // ---- overlays
@@ -720,6 +929,7 @@ async function boot() {
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
     else if (searchOpen) { searchOpen = false; render(); }
+    else if (browse) browseBack();
     else if (menuFor) { menuFor = null; render(); }
     else App.exitApp();
   });

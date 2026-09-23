@@ -163,6 +163,7 @@ input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .hits .kind.photo { color: #f59e0b; } .hits .kind.video { color: #ec4899; } .hits .kind.pdf { color: #ef4444; } .hits .kind.doc { color: #3b82f6; }
 .hits .name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hits .meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hits .meta:has(+ *) { white-space: normal; }
 .searching { display: flex; align-items: center; gap: 10px; color: var(--muted); padding: 20px 0; justify-content: center; }
 
 /* ---------- activity / account ---------- */
@@ -192,3 +193,12 @@ input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .confirm .row { display: flex; gap: 10px; }
 .confirm .row .btn { margin: 0; }
 .fab-space { height: 8px; }
+
+/* ---- in-app file browser */
+.crumbs { flex: 1; min-width: 0; }
+.crumbs .title { font-weight: 700; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumbs .sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hits.files li { grid-template-columns: 36px 1fr auto; }
+.hits.files .kind.dir svg { width: 20px; height: 20px; color: var(--accent); }
+.hits.files .menu { top: 40px; }
+.folder [data-act="browse"] { cursor: pointer; }

@@ -62,20 +62,25 @@ public final class SafFs {
         pathToDocId.put("", rootDocId);
     }
 
+    /** Content URI for an existing path — what an ACTION_VIEW intent needs. */
+    Uri uriFor(String rel) throws IOException { return docUri(requireDoc(rel)); }
+
     /** Document URI of the drive root, for callers that create children in it. */
     Uri rootDocUri() { return docUri(rootDocId); }
 
     /**
-     * Copy an external content stream into the root as a new file, replacing
-     * any existing file of that name. Used by "Add files" in the shell.
+     * Copy an external content stream into directory `dir` ("" = root) as a
+     * new file, replacing any existing file of that name. Used by "Add files".
      */
-    void importFile(String name, InputStream in) throws IOException {
-        String existing = resolve(name);
+    void importFile(String dir, String name, InputStream in) throws IOException {
+        String rel = joinPath(String.join("/", splitPath(dir)), name);
+        String existing = resolve(rel);
         if (existing != null) {
             DocumentsContract.deleteDocument(cr, docUri(existing));
-            invalidate(name);
+            invalidate(rel);
         }
-        Uri created = DocumentsContract.createDocument(cr, rootDocUri(), guessMime(name), name);
+        String parentId = requireDoc(dir);
+        Uri created = DocumentsContract.createDocument(cr, docUri(parentId), guessMime(name), name);
         if (created == null) throw new IOException("could not create " + name);
         try (OutputStream out = cr.openOutputStream(created, "wt")) {
             if (out == null) throw new IOException("could not open " + name);
@@ -83,7 +88,7 @@ public final class SafFs {
             int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
         }
-        invalidate(name);
+        invalidate(rel);
     }
 
     public static final class Entry {
@@ -193,6 +198,13 @@ public final class SafFs {
             }
         }
         return out;
+    }
+
+    /** Seekable descriptor for one document — MediaExtractor needs to seek, a stream will not do. */
+    public android.os.ParcelFileDescriptor openFd(String docId) throws IOException {
+        android.os.ParcelFileDescriptor pfd = cr.openFileDescriptor(docUri(docId), "r");
+        if (pfd == null) throw new IOException("cannot open");
+        return pfd;
     }
 
     /** Raw stream for one document (by id, not path — ids survive renames). */

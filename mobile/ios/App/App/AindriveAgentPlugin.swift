@@ -19,6 +19,11 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pickFolder", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "addFiles", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listFolder", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "mkdir", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rename", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "delete", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "start", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stop", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
@@ -26,8 +31,11 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private static let bookmarkKey = "ai.ainetwork.aindrive.folderBookmark"
     private var pickCall: CAPPluginCall?
+    /// Kept alive while a preview is up: the security scope lives in the DriveFs.
+    private var previewFs: DriveFs?
+    private var previewController: UIDocumentInteractionController?
     /// What the pending document picker is for; its delegate is shared.
-    private enum PickMode { case folder, filesInto(URL) }
+    private enum PickMode { case folder, filesInto(URL, String) }
     private var pickMode: PickMode = .folder
 
     public override func load() {
@@ -49,7 +57,7 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Folder access permission has expired. Please pick the folder again.")
             return
         }
-        pickMode = .filesInto(folder)
+        pickMode = .filesInto(folder, call.getString("path") ?? "")
         present(call, types: [.item], multiple: true)
     }
 
@@ -61,6 +69,72 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
             picker.allowsMultipleSelection = multiple
             self.bridge?.viewController?.present(picker, animated: true)
         }
+    }
+
+    // MARK: - browse
+
+    /// In-app file browser for a shared folder: the same folder the agent
+    /// serves, read locally — no network, works while the drive is off.
+    @objc func listFolder(_ call: CAPPluginCall) {
+        guard let key = call.getString("folderUri"), let folder = Self.resolveBookmark(key) else {
+            call.reject("Folder access permission has expired. Please pick the folder again.")
+            return
+        }
+        let fs = DriveFs(root: folder)
+        do {
+            let entries = try fs.list(call.getString("path") ?? "").map { e -> [String: Any] in
+                ["name": e.name, "path": e.path, "isDir": e.isDir, "size": e.size, "mtimeMs": e.mtimeMs, "mime": e.mime]
+            }
+            call.resolve(["entries": entries])
+        } catch {
+            call.reject("Could not read folder: \(error.localizedDescription)")
+        }
+    }
+
+    /// Quick Look preview of a file (the phone's "open").
+    @objc func openFile(_ call: CAPPluginCall) {
+        guard let key = call.getString("folderUri"), let folder = Self.resolveBookmark(key),
+              let path = call.getString("path") else {
+            call.reject("missing folderUri/path")
+            return
+        }
+        let fs = DriveFs(root: folder)
+        guard let url = try? fs.resolve(path) else {
+            call.reject("Could not open file")
+            return
+        }
+        DispatchQueue.main.async {
+            self.previewFs = fs
+            let controller = UIDocumentInteractionController(url: url)
+            controller.delegate = self
+            self.previewController = controller
+            if !controller.presentPreview(animated: true) {
+                controller.presentOptionsMenu(from: .zero, in: self.bridge?.viewController?.view ?? UIView(), animated: true)
+            }
+            call.resolve()
+        }
+    }
+
+    /// Basic edits for the in-app browser; same DriveFs calls the web's RPCs use.
+    @objc func mkdir(_ call: CAPPluginCall) {
+        withFs(call) { try $0.mkdir(call.getString("path") ?? "") }
+    }
+
+    @objc func rename(_ call: CAPPluginCall) {
+        withFs(call) { try $0.rename(from: call.getString("from") ?? "", to: call.getString("to") ?? "") }
+    }
+
+    @objc func delete(_ call: CAPPluginCall) {
+        withFs(call) { try $0.delete(call.getString("path") ?? "") }
+    }
+
+    private func withFs(_ call: CAPPluginCall, _ op: (DriveFs) throws -> Void) {
+        guard let key = call.getString("folderUri"), let folder = Self.resolveBookmark(key) else {
+            call.reject("Folder access permission has expired. Please pick the folder again.")
+            return
+        }
+        do { try op(DriveFs(root: folder)); call.resolve() }
+        catch { call.reject(error.localizedDescription) }
     }
 
     // MARK: - agent
@@ -122,6 +196,16 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 }
 
+extension AindriveAgentPlugin: UIDocumentInteractionControllerDelegate {
+    public func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
+        bridge?.viewController ?? UIViewController()
+    }
+    public func documentInteractionControllerDidEndPreview(_ controller: UIDocumentInteractionController) {
+        previewController = nil
+        previewFs = nil
+    }
+}
+
 extension AindriveAgentPlugin: UIDocumentPickerDelegate {
     public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         guard let call = pickCall else { return }
@@ -138,7 +222,7 @@ extension AindriveAgentPlugin: UIDocumentPickerDelegate {
             } catch {
                 call.reject("Could not persist folder access permission: \(error.localizedDescription)")
             }
-        case .filesInto(let folder):
+        case .filesInto(let folder, let dir):
             DispatchQueue.global(qos: .userInitiated).async {
                 let scoped = folder.startAccessingSecurityScopedResource()
                 defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
@@ -146,7 +230,8 @@ extension AindriveAgentPlugin: UIDocumentPickerDelegate {
                 for src in urls {
                     let srcScoped = src.startAccessingSecurityScopedResource()
                     defer { if srcScoped { src.stopAccessingSecurityScopedResource() } }
-                    let dst = folder.appendingPathComponent(src.lastPathComponent)
+                    let dst = (dir.isEmpty ? folder : folder.appendingPathComponent(dir, isDirectory: true))
+                        .appendingPathComponent(src.lastPathComponent)
                     do {
                         if FileManager.default.fileExists(atPath: dst.path) { try FileManager.default.removeItem(at: dst) }
                         try FileManager.default.copyItem(at: src, to: dst)

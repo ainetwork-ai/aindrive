@@ -98,6 +98,90 @@ public class AindriveAgentPlugin extends Plugin {
         return tail.isEmpty() ? "My folder" : tail;
     }
 
+    // ------------------------------------------------------------ browse
+
+    /**
+     * In-app file browser for a shared folder. Reads the same SAF tree the
+     * agent serves, so what the user sees here is exactly what the drive shows
+     * on the web — no network, works while the drive is off.
+     */
+    @PluginMethod
+    public void listFolder(PluginCall call) {
+        String folderUri = call.getString("folderUri");
+        String path = call.getString("path", "");
+        if (folderUri == null) { call.reject("missing folderUri"); return; }
+        try {
+            SafFs fs = new SafFs(getContext(), Uri.parse(folderUri));
+            com.getcapacitor.JSArray entries = new com.getcapacitor.JSArray();
+            for (SafFs.Entry e : fs.list(path)) {
+                JSObject o = new JSObject();
+                o.put("name", e.name);
+                o.put("path", e.path);
+                o.put("isDir", e.isDir);
+                o.put("size", e.size);
+                o.put("mtimeMs", e.mtimeMs);
+                o.put("mime", e.mime);
+                entries.put(o);
+            }
+            JSObject ret = new JSObject();
+            ret.put("entries", entries);
+            call.resolve(ret);
+        } catch (Exception e) {
+            call.reject("Could not read folder: " + e.getMessage());
+        }
+    }
+
+    /** Hand a file to whatever app handles its type (the phone's "open"). */
+    @PluginMethod
+    public void openFile(PluginCall call) {
+        String folderUri = call.getString("folderUri");
+        String path = call.getString("path");
+        if (folderUri == null || path == null) { call.reject("missing folderUri/path"); return; }
+        try {
+            SafFs fs = new SafFs(getContext(), Uri.parse(folderUri));
+            SafFs.Entry e = fs.stat(path);
+            if (e == null) throw new java.io.FileNotFoundException("no such file");
+            Intent view = new Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(fs.uriFor(path), e.isDir ? "*/*" : e.mime)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(Intent.createChooser(view, e.name));
+            call.resolve();
+        } catch (android.content.ActivityNotFoundException e) {
+            call.reject("No app on this phone can open this file");
+        } catch (Exception e) {
+            call.reject("Could not open file: " + e.getMessage());
+        }
+    }
+
+    /** Basic edits for the in-app browser; same SafFs calls the web's RPCs use. */
+    @PluginMethod
+    public void mkdir(PluginCall call) {
+        withFs(call, (fs) -> { fs.mkdirs(call.getString("path", "")); return null; });
+    }
+
+    @PluginMethod
+    public void rename(PluginCall call) {
+        withFs(call, (fs) -> { fs.rename(call.getString("from", ""), call.getString("to", "")); return null; });
+    }
+
+    @PluginMethod
+    public void delete(PluginCall call) {
+        withFs(call, (fs) -> { fs.delete(call.getString("path", "")); return null; });
+    }
+
+    private interface FsOp { Object run(SafFs fs) throws Exception; }
+
+    private void withFs(PluginCall call, FsOp op) {
+        String folderUri = call.getString("folderUri");
+        if (folderUri == null) { call.reject("missing folderUri"); return; }
+        try {
+            op.run(new SafFs(getContext(), Uri.parse(folderUri)));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject(e.getMessage() == null ? "failed" : e.getMessage());
+        }
+    }
+
     // ------------------------------------------------------------ add files
 
     /**
@@ -135,6 +219,7 @@ public class AindriveAgentPlugin extends Plugin {
             return;
         }
         Uri folder = Uri.parse(call.getString("folderUri"));
+        String dir = call.getString("path", "");
         // Copies can be large; keep them off the main thread so the WebView
         // stays responsive, then resolve back on it.
         new Thread(() -> {
@@ -148,7 +233,7 @@ public class AindriveAgentPlugin extends Plugin {
                 String name = displayName(src, "file");
                 try (java.io.InputStream in = cr.openInputStream(src)) {
                     if (in == null) throw new java.io.IOException("unreadable");
-                    fs.importFile(name, in);
+                    fs.importFile(dir, name, in);
                     names.put(name);
                 } catch (Exception e) {
                     failed.put(name + ": " + e.getMessage());

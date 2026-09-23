@@ -22,7 +22,7 @@ drive and a laptop drive are the same thing to the server.
 
 | Path | Role |
 |------|------|
-| `src/main.ts` | shell UI: log in, add folders, add files to them, pair/start/stop each one, status. |
+| `src/main.ts` | shell UI: log in, add folders, pair/start/stop each one, status, and an in-app file browser per folder (navigate, open, new folder, add files, rename, delete). |
 | `src/api.ts` | pairing calls — `/api/auth/cli/start`, `/poll`, `/api/drives` |
 | `src/plugin.ts` | typed face of the native `AindriveAgent` plugin |
 | `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
@@ -52,9 +52,13 @@ drive and a laptop drive are the same thing to the server.
   would be; the native side keys connections by driveId. Plugin API:
   `start(config)` adds/replaces a drive, `stop({driveId})` removes one,
   `stop()` removes all, `status()` returns `{running, connected, drives[]}`.
-- **`addFiles({folderUri})` is the phone's drag-and-drop**: the system file
-  picker, copied into the folder root, same-name files replaced. New folders
-  are made in the system folder picker itself, not by the app.
+- **The in-app browser reads the folder locally.** `listFolder`, `openFile`,
+  `mkdir`, `rename`, `delete` and `addFiles({folderUri, path})` go straight to
+  `SafFs`/`DriveFs` — the same code the RPCs use — so it works offline and
+  while the drive is off, and shows exactly what the web shows. `addFiles` is
+  the phone's drag-and-drop: the system file picker, copied into the folder,
+  same-name files replaced. `openFile` hands the file to the OS (Android
+  ACTION_VIEW chooser, iOS Quick Look).
 - **Folder access is scoped per tree.** Android takes a persistable SAF grant
   per folder; iOS stores a security-scoped bookmark per folder. Neither can
   read outside the folders the user picked.
