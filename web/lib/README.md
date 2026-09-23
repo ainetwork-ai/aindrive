@@ -36,6 +36,11 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 **Agent bridge / RPC**
 - `agents.js` — in-memory registry of connected agent WebSockets; `sendRpc`, `onAgentConnect`, heartbeat, multi-device fan-out.
+  `rotateAgentLive` rotates a drive's agent token + secret over the live socket
+  without disconnecting it (the CLI half is `cli/src/rotation.js`). Set
+  `drives.rotation_pending = 1` to queue a drive: it rotates on its next connect,
+  or within 5 min if it is online (`startRotationSweeper`). Multi-device drives
+  and older agents stay pending; `rotate-token` (manual) clears the flag.
 - `rpc.ts` — typed `callAgent<M>()` wrapper + `AgentError`.
 - `protocol.ts` — RPC method/params/result types + `DriveEntry` (mirrored to `cli/`).
 - `sig.js` — HMAC sign/verify of RPC frames with the drive_secret (the live

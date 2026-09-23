@@ -22,7 +22,8 @@ internals.
 | `willow-sync.js` | multi-device sync wire protocol over the same WS (`attachSync`): summary → want → give |
 | `willow/` | `KvDriverSqlite` + `schemes` backing the official Willow `Store` |
 | `sig.js` | HMAC sign/verify of RPC frames — **mirrors `web/lib/sig.js`** (wire-compat) |
-| `config.js` | on-disk secret/cred store: drive config + global creds, written `0600` / dir `0700` |
+| `config.js` | on-disk secret/cred store: drive config + global creds, written `0600` / dir `0700`; drive config replaced atomically |
+| `rotation.js` | live credential rotation pushed by the server (`rotate-credentials` RPC): persist new + previous pair, 60 s old-secret grace, revert on a 4401 handshake, commit on `hello` |
 | `api.js` | thin HTTP client (`apiFetch`) to the server |
 | `daemon.js` | detached background-agent management (spawn, pid file, logfile) |
 | `logger.js` | pino logger |
@@ -37,9 +38,6 @@ internals.
   (canonicalisation does not recurse — see the `sig.js` header).
 - **`willow-store.js`: the `yjs_entries` mirror is the source of truth for reads**;
   the Willow `Store` write is write-only decoration today.
-- **Known bugs** (tracked, not fixed here): `rotate-token` is dead (cred field-name
-  drift) — see [`../../docs/PRODUCTION_TODO.md`](../../docs/PRODUCTION_TODO.md)
-  "Known bugs".
 - **Tests**: vitest (`npm test`). `__tests__/*.test.mjs` includes characterization
   suites that snapshot current behaviour (added during the agent-first migration);
   `QUIRK`/`CURRENT BEHAVIOUR`-labelled cases lock intentional-looking oddities so a
