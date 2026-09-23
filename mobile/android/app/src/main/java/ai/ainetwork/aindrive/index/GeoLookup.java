@@ -42,6 +42,8 @@ public final class GeoLookup {
 
     /** Only cities at least this big are matchable by name — keeps "Nice" from matching a hamlet. */
     private static final int NAME_MATCH_MIN_POP = 50_000;
+    /** Longest first, so 특별자치시 is not cut as 시. */
+    private static final String[] KO_ADMIN_SUFFIXES = {"특별자치시", "특별자치도", "특별시", "광역시", " 시", "시", "군"};
 
     private final List<City> cities = new ArrayList<>();
     /** 1°×1° cells → indices into `cities`. */
@@ -79,7 +81,14 @@ public final class GeoLookup {
                     if (en.endsWith(" city")) g.byName.putIfAbsent(en.substring(0, en.length() - 5), city);
                     if (city.ko != null) {
                         g.byName.putIfAbsent(city.ko, city);
-                        if (city.ko.length() >= 3 && city.ko.endsWith("시")) g.byName.putIfAbsent(city.ko.substring(0, city.ko.length() - 1), city);
+                        // Official Korean names carry an administrative suffix nobody says
+                        // in a question: 서울특별시 → 서울, 부산광역시 → 부산, 제주시 → 제주, 뉴욕 시 → 뉴욕.
+                        for (String suffix : KO_ADMIN_SUFFIXES) {
+                            if (city.ko.length() > suffix.length() + 1 && city.ko.endsWith(suffix)) {
+                                g.byName.putIfAbsent(city.ko.substring(0, city.ko.length() - suffix.length()).trim(), city);
+                                break;
+                            }
+                        }
                     }
                 }
             }

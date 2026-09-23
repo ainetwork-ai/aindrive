@@ -29,9 +29,9 @@ public class QueryParserTest {
     public static void load() throws Exception {
         String tsv = "# name\tcountry\tlat\tlon\tpop\tko\n"
                 + "Paris\tFR\t48.85341\t2.3488\t2138551\t파리\n"
-                + "Seoul\tKR\t37.566\t126.9784\t10349312\t서울\n"
+                + "Seoul\tKR\t37.566\t126.9784\t10349312\t서울특별시\n"
                 + "Jeju City\tKR\t33.50972\t126.52194\t408000\t제주시\n"
-                + "New York City\tUS\t40.71427\t-74.00597\t8804190\t뉴욕\n"
+                + "New York City\tUS\t40.71427\t-74.00597\t8804190\t뉴욕 시\n"
                 + "Nice\tFR\t43.70313\t7.26608\t342669\t니스\n"
                 + "Paris\tUS\t33.66094\t-95.55551\t24782\t\n"
                 + "Boulogne-Billancourt\tFR\t48.83333\t2.25\t120071\t불로뉴비양쿠르\n";
@@ -100,6 +100,14 @@ public class QueryParserTest {
         assertEquals(Long.valueOf(at(2025, 6, 1)), q.dateFrom);
         assertEquals(Long.valueOf(at(2025, 9, 1)), q.dateTo);
         assertNull(q.textQuery);
+    }
+
+    @Test
+    public void koreanAdminSuffixIsOptional() {
+        assertEquals("Seoul", parser.parse("서울 사진", NOW).city);
+        assertEquals("Seoul", parser.parse("서울특별시에서 찍은 사진", NOW).city);
+        assertEquals("Jeju City", parser.parse("제주 사진", NOW).city);
+        assertEquals("New York City", parser.parse("뉴욕 사진", NOW).city);
     }
 
     @Test
