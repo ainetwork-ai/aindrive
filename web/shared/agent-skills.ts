@@ -58,9 +58,13 @@ const SKILL_NAMES = [
   "list_files",
   "read_file",
   "write_file",
+  "delete_path",
   "stat",
   "search",
 ] as const;
+
+/** Skills that change the drive: editor role, and never under a read scope. */
+const MUTATING: readonly string[] = ["write_file", "delete_path"];
 
 export type SkillName = (typeof SKILL_NAMES)[number];
 
@@ -116,6 +120,18 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
     },
   },
   {
+    name: "delete_path",
+    description: "Delete a file, or a folder with everything in it. The drive root cannot be deleted.",
+    inputSchema: {
+      type: "object",
+      required: ["drive_id", "path"],
+      properties: {
+        drive_id: { type: "string" },
+        path: { type: "string" },
+      },
+    },
+  },
+  {
     name: "stat",
     description: "Metadata for a single path (name, isDir, size).",
     inputSchema: {
@@ -145,12 +161,13 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
 
 /**
  * Descriptors for a drive-pinned surface: no list_drives, no drive_id
- * argument (the URL/token fixes the drive), and no write_file under a
- * read scope — clients should not be offered a tool that always fails.
+ * argument (the URL/token fixes the drive), and no mutating skill
+ * (write_file, delete_path) under a read scope — clients should not be
+ * offered a tool that always fails.
  */
 export function driveScopedDescriptors(scope: "read" | "write"): SkillDescriptor[] {
   return SKILL_DESCRIPTORS
-    .filter((d) => d.name !== "list_drives" && (scope === "write" || d.name !== "write_file"))
+    .filter((d) => d.name !== "list_drives" && (scope === "write" || !MUTATING.includes(d.name)))
     .map((d) => {
       const schema = d.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
       const { drive_id: _omit, ...properties } = schema.properties ?? {};
@@ -226,7 +243,7 @@ export async function runSkill(
     return { kind: "err", code: "forbidden", message: "reserved path" };
   }
 
-  const need: Role = name === "write_file" ? "editor" : "viewer";
+  const need: Role = MUTATING.includes(name) ? "editor" : "viewer";
   if (need === "editor" && ctx.scope === "read") {
     return { kind: "err", code: "forbidden", message: "forbidden (token scope is read-only)" };
   }
@@ -299,6 +316,26 @@ export async function runSkill(
         const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
         if (creating) bumpOwnerUsage(ownerId, { files: 1 });
         return { kind: "ok", structured: r, text: `wrote ${path}` };
+      }
+      case "delete_path": {
+        // "" is the drive root — the whole shared folder, never a delete target
+        if (!path) return { kind: "err", code: "invalid_params", message: "path required (the drive root cannot be deleted)" };
+        // As fs/delete: learn file vs folder first so the owner's usage counter
+        // moves the right way. Drift on recursive folder deletes is acceptable —
+        // limits are upper bounds.
+        const { parent, base } = splitPath(path);
+        let kind: "file" | "folder" | "unknown" = "unknown";
+        try {
+          const l = await callAgent(driveId, driveSecret, { method: "list", path: parent });
+          const entry = ((l.entries ?? []) as Entry[]).find((e) => e.name === base);
+          if (!entry) return { kind: "err", code: "not_found", message: `no entry at ${path}` };
+          kind = entry.isDir ? "folder" : "file";
+        } catch { /* parent unlistable — let the agent decide */ }
+        const r = await callAgent(driveId, driveSecret, { method: "delete", path });
+        const ownerId = drive.owner_id as string;
+        if (kind === "file") bumpOwnerUsage(ownerId, { files: -1 });
+        else if (kind === "folder") bumpOwnerUsage(ownerId, { folders: -1 });
+        return { kind: "ok", structured: { ...r, path, kind }, text: `deleted ${path}` };
       }
       case "stat": {
         if (!path) return { kind: "err", code: "invalid_params", message: "path required" };
