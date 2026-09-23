@@ -28,6 +28,11 @@ export async function writeDriveConfig(dir, config) {
   const metaDir = join(resolve(dir), ".aindrive");
   if (!existsSync(metaDir)) mkdirSync(metaDir, { recursive: true, mode: 0o700 });
   const file = join(metaDir, "config.json");
-  await fsp.writeFile(file, JSON.stringify(config, null, 2));
-  try { chmodSync(file, 0o600); } catch {}
+  // Atomic replace: this file holds the only copy of the agent credentials
+  // (rotated in place by rotate-token / live rotation), so a crash mid-write
+  // must never leave it truncated.
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fsp.writeFile(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
+  try { chmodSync(tmp, 0o600); } catch {}
+  await fsp.rename(tmp, file);
 }

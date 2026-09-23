@@ -6,6 +6,7 @@ import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rp
 import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
 import { log } from "./logger.js";
+import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
 const PROTOCOL_VERSION = 1;
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
@@ -18,6 +19,10 @@ const CLOSE_HANDSHAKE_MS = 200;  // grace for the WS close handshake to flush be
 let shuttingDown = false;
 let inFlightCount = 0;
 let activeWs = null; // set by connectOnce while open
+// Old secret still accepted for a short window after a live rotation, so
+// requests the server signed just before switching don't get dropped.
+let graceSecret = null;
+let graceUntil = 0;
 
 function installShutdownHandlers() {
   let shutdownStarted = false;
@@ -144,12 +149,19 @@ function connectOnce({ root, drive, wsUrl }) {
       let frame;
       try { frame = JSON.parse(data.toString("utf8")); }
       catch (e) { log.debug({ err: e.message }, "[agent recv] parse fail"); return; }
-      if (frame?.type === "hello") { log.debug("[agent recv] hello"); return; }
+      if (frame?.type === "hello") {
+        log.debug("[agent recv] hello");
+        // The server only says hello after accepting our token → any fallback
+        // pair kept from a previous rotation can go.
+        commitRotation({ root, drive }).catch((e) => log.warn({ err: e.message }, "commitRotation failed"));
+        return;
+      }
       if (frame?.type !== "request" || !frame.reqId) { log.debug({ type: frame?.type }, "[agent recv] ignored"); return; }
       if (frame.v !== PROTOCOL_VERSION) { log.debug({ v: frame.v }, "[agent] bad version"); return; }
       const { sig, type, ...rest } = frame;
       log.debug({ sig: sig?.slice(0,8), keys: Object.keys(rest).sort().join(",") }, "[agent] verifying");
-      const verified = verifyPayload(drive.driveSecret, rest, sig);
+      const verified = verifyPayload(drive.driveSecret, rest, sig)
+        || (graceSecret !== null && Date.now() < graceUntil && verifyPayload(graceSecret, rest, sig));
       log.debug({ verified }, "[agent] verified");
       if (!verified) {
         log.warn("dropped forged request");
@@ -165,6 +177,32 @@ function connectOnce({ root, drive, wsUrl }) {
           response.sig = signPayload(drive.driveSecret, payloadForSig);
           ws.send(JSON.stringify(response));
         } catch {}
+        return;
+      }
+
+      // Live credential rotation (see rotation.js): persist, answer with the
+      // OLD secret, then switch. Handled here, not in handleRpc, because it
+      // needs the drive config and the connection's signing state.
+      if (frame.params?.method === "rotate-credentials") {
+        let response;
+        let rotation = null;
+        try {
+          rotation = await applyRotation({ root, drive, params: frame.params });
+          response = { type: "response", reqId: frame.reqId, ok: true, result: { ok: true } };
+        } catch (e) {
+          response = { type: "response", reqId: frame.reqId, ok: false, error: sanitize(e.message) };
+        }
+        try {
+          const { type: _t, ...payloadForSig } = response;
+          response.sig = signPayload(drive.driveSecret, payloadForSig);
+          ws.send(JSON.stringify(response));
+        } catch (e) { log.error({ err: e.message }, "send/sign failed"); }
+        if (rotation) {
+          graceSecret = rotation.previousSecret;
+          graceUntil = Date.now() + GRACE_MS;
+          rotation.adopt();
+          log.info({ driveId: drive.driveId }, "agent credentials rotated");
+        }
         return;
       }
 
@@ -190,8 +228,15 @@ function connectOnce({ root, drive, wsUrl }) {
       } catch (e) { log.error({ err: e.message }, "send/sign failed"); }
     });
 
-    ws.once("close", (code, reason) => {
+    ws.once("close", async (code, reason) => {
       const msg = `disconnected${code ? ` (${code}${reason ? `: ${reason.toString()}` : ""})` : ""}`;
+      // Token refused right after a live rotation → the server never stored
+      // the new pair (its ok was lost). Fall back to the pair it still has.
+      if (code === 4401 && drive.previousCredentials) {
+        try {
+          if (await revertRotation({ root, drive })) log.warn("token refused after rotation — reverted to previous credentials");
+        } catch (e) { log.error({ err: e.message }, "revertRotation failed"); }
+      }
       if (activeWs === ws) activeWs = null;
       if (watcher) { try { watcher.close(); } catch {} }
       for (const t of recentChanges.values()) clearTimeout(t);

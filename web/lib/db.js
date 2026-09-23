@@ -176,6 +176,9 @@ function open() {
     "ALTER TABLE drives ADD COLUMN namespace_pubkey BLOB",
     "ALTER TABLE drives ADD COLUMN namespace_secret BLOB",
     "ALTER TABLE drives ADD COLUMN last_hostname TEXT",
+    // 1 = rotate this drive's agent credentials live when its agent is online
+    // (lib/agents.js rotateAgentLive). Cleared by a successful live or manual rotation.
+    "ALTER TABLE drives ADD COLUMN rotation_pending INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE drives ADD COLUMN payout_wallet TEXT",
     "ALTER TABLE payment_receipts ADD COLUMN account_id TEXT",
     "ALTER TABLE payment_receipts ADD COLUMN currency TEXT",
