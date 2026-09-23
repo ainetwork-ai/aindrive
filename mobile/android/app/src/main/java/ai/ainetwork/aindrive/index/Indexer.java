@@ -3,6 +3,10 @@ package ai.ainetwork.aindrive.index;
 import android.util.Log;
 
 import ai.ainetwork.aindrive.SafFs;
+import ai.ainetwork.aindrive.clip.ClipEmbedder;
+import ai.ainetwork.aindrive.speech.SpeechRecognizer;
+
+import androidx.annotation.Nullable;
 
 import java.io.InputStream;
 import java.util.HashSet;
@@ -31,15 +35,25 @@ public final class Indexer {
     public volatile String phase = "idle";
     public volatile long lastRunMs;
 
+    /** Which recognisers are available for this run; null = that kind of recognition is skipped. */
+    public interface Recognisers {
+        @Nullable ClipEmbedder clip();
+        @Nullable SpeechRecognizer speech();
+    }
+
+    public volatile int recognised, toRecognise;
+
     private final SafFs fs;
     private final FileIndex index;
     private final GeoLookup geo;
+    private final Recognisers recognisers;
     private final AtomicBoolean cancel = new AtomicBoolean();
 
-    public Indexer(SafFs fs, FileIndex index, GeoLookup geo) {
+    public Indexer(SafFs fs, FileIndex index, GeoLookup geo, Recognisers recognisers) {
         this.fs = fs;
         this.index = index;
         this.geo = geo;
+        this.recognisers = recognisers;
     }
 
     public void cancel() { cancel.set(true); }
@@ -67,9 +81,10 @@ public final class Indexer {
                 if (done % 50 == 0) progress.onProgress(done, total, phase);
             }
             int removed = index.deleteMissing(live);
+            Log.i(TAG, "indexed " + total + " files (" + failed + " failed, " + removed + " removed)");
+            recognise(files, progress);
             phase = "done";
             lastRunMs = System.currentTimeMillis();
-            Log.i(TAG, "indexed " + total + " files (" + failed + " failed, " + removed + " removed)");
             progress.onProgress(done, total, phase);
         } catch (Exception ex) {
             phase = "error: " + ex.getMessage();
@@ -78,6 +93,56 @@ public final class Indexer {
         } finally {
             running = false;
         }
+    }
+
+    /**
+     * Second pass: what is IN the file. Photos get a CLIP vector, audio and
+     * video a transcript. Runs after the metadata pass so a fast index is
+     * usable while the slow part (≈50 ms per photo, ≈1/13 of the audio's
+     * length per recording) catches up. Files already recognised are skipped,
+     * so a model that arrives later only costs what it adds.
+     */
+    private void recognise(List<SafFs.Entry> files, Progress progress) {
+        ClipEmbedder clip = recognisers.clip();
+        SpeechRecognizer speech = recognisers.speech();
+        if (clip == null && speech == null) return;
+        phase = "recognising";
+        recognised = 0; toRecognise = 0;
+        List<SafFs.Entry> todo = new java.util.ArrayList<>();
+        for (SafFs.Entry e : files) {
+            String kind = FileIndex.kindOf(e.mime, e.name);
+            boolean photo = clip != null && (FileIndex.PHOTO.equals(kind) || FileIndex.SCREENSHOT.equals(kind));
+            boolean av = speech != null && (FileIndex.AUDIO.equals(kind) || FileIndex.VIDEO.equals(kind));
+            if ((photo || av) && index.needsRecognition(e.docId, photo, av)) todo.add(e);
+        }
+        toRecognise = todo.size();
+        progress.onProgress(0, toRecognise, phase);
+        for (SafFs.Entry e : todo) {
+            if (cancel.get()) { phase = "cancelled"; return; }
+            String kind = FileIndex.kindOf(e.mime, e.name);
+            try {
+                if (FileIndex.PHOTO.equals(kind) || FileIndex.SCREENSHOT.equals(kind)) {
+                    try (InputStream in = fs.open(e.docId)) {
+                        float[] v = clip.embedImage(in);
+                        if (v != null) index.setRecognition(e.docId, FileIndex.encodeVec(v), null);
+                    }
+                } else {
+                    try (android.os.ParcelFileDescriptor pfd = fs.openFd(e.docId)) {
+                        SpeechRecognizer.Transcript t = speech.transcribe(pfd.getFileDescriptor());
+                        // An empty transcript is still a result: the file was heard and had no speech.
+                        index.setRecognition(e.docId, null, t == null ? "" : t.text);
+                        Log.d(TAG, "transcribed " + e.name + " (" + (t == null ? 0 : Math.round(t.durationSec)) + "s): " + (t == null ? "" : t.text.substring(0, Math.min(120, t.text.length()))));
+                    }
+                }
+            } catch (Exception ex) {
+                failed++;
+                Log.w(TAG, "recognise " + e.name + ": " + ex.getMessage());
+            }
+            recognised++;
+            if (recognised % 10 == 0) progress.onProgress(recognised, toRecognise, phase);
+        }
+        Log.i(TAG, "recognised " + recognised + " files (" + failed + " failed)");
+        progress.onProgress(recognised, toRecognise, phase);
     }
 
     private void indexOne(SafFs.Entry e) throws Exception {

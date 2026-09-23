@@ -2,6 +2,7 @@ package ai.ainetwork.aindrive.agent;
 
 import androidx.annotation.Nullable;
 
+import ai.ainetwork.aindrive.clip.ClipEmbedder;
 import ai.ainetwork.aindrive.index.FileIndex;
 import ai.ainetwork.aindrive.index.GeoLookup;
 
@@ -10,31 +11,45 @@ import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
- * The on-device agent, P1: parse → filter the file index → answer.
+ * The on-device agent: parse → filter the file index → recognise → answer.
+ *
+ * Hard constraints (kind, place, date, size) come from the index. Content
+ * words are matched three ways, in this order of trust:
+ *   1. the file NAME contains the word;
+ *   2. the TRANSCRIPT of a recording contains the word (speech recognition);
+ *   3. the PHOTO looks like the word (CLIP: "a photo of a dog" vs each image).
+ * Rows are ranked name > transcript > photo score, then newest first.
  *
  * Returns the same `{ answer, sources: [{ path, snippet }] }` the desktop
- * agent-ask returns, so the web UI needs no change. When the strict filter
- * finds nothing, constraints are relaxed one at a time — keywords, then date,
- * city, country, kind — and the answer says which, rather than returning an
- * empty list.
+ * agent-ask returns, so the web UI needs no change. When nothing matches,
+ * constraints are relaxed one at a time and the answer says which.
  */
 public final class AskRunner {
     public static final int LIMIT = 50;
+    /** CLIP cosine at/above which a photo "is" the query (calibrated on real photos: matches ≈ .19–.31, others ≈ .10–.15). */
+    public static final float CLIP_MIN = 0.17f;
+    /** Also drop anything more than this below the best photo — the tail of near-misses. */
+    public static final float CLIP_MARGIN = 0.08f;
 
     private final FileIndex index;
     private final GeoLookup geo;
     private final QueryParser parser;
+    private final Supplier<ClipEmbedder> clip;
 
-    public AskRunner(FileIndex index, GeoLookup geo) {
+    public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip) {
         this.index = index;
         this.geo = geo;
         this.parser = new QueryParser(geo);
+        this.clip = clip;
     }
 
     public JSONObject ask(String question) throws Exception {
@@ -50,44 +65,138 @@ public final class AskRunner {
                     .put("sources", new JSONArray());
         }
 
-        // Relax the least-intended constraint first: a person asking for
-        // "spring photos from Paris" cares about Paris more than about spring,
-        // and a keyword that matches no file name is the weakest signal of all.
         List<String> relaxed = new ArrayList<>();
-        List<FileIndex.Row> rows = index.query(toFilter(q), LIMIT);
-        if (rows.isEmpty() && !q.keywords.isEmpty()) { q.keywords.clear(); relaxed.add("keyword"); rows = index.query(toFilter(q), LIMIT); }
-        if (rows.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed.add("date"); rows = index.query(toFilter(q), LIMIT); }
-        if (rows.isEmpty() && q.city != null) { q.city = null; relaxed.add("city"); rows = index.query(toFilter(q), LIMIT); }
-        if (rows.isEmpty() && q.country != null) { q.country = null; relaxed.add("country"); rows = index.query(toFilter(q), LIMIT); }
-        if (rows.isEmpty() && q.kind != null) { q.kind = null; relaxed.add("kind"); rows = index.query(toFilter(q), LIMIT); }
+        Map<String, Hit> hits = search(q);
+        if (hits.isEmpty() && !q.keywords.isEmpty()) { q.keywords.clear(); relaxed.add("keyword"); hits = search(q); }
+        if (hits.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed.add("date"); hits = search(q); }
+        if (hits.isEmpty() && q.city != null) { q.city = null; relaxed.add("city"); hits = search(q); }
+        if (hits.isEmpty() && q.country != null) { q.country = null; relaxed.add("country"); hits = search(q); }
+        if (hits.isEmpty() && q.kind != null) { q.kind = null; relaxed.add("kind"); hits = search(q); }
+
+        List<Hit> ranked = new ArrayList<>(hits.values());
+        ranked.sort((a, b) -> {
+            if (a.tier != b.tier) return Integer.compare(a.tier, b.tier);
+            if (a.tier != 0 && a.score != b.score) return Float.compare(b.score, a.score);
+            long ta = a.row.whenMs == null ? 0 : a.row.whenMs, tb = b.row.whenMs == null ? 0 : b.row.whenMs;
+            return Long.compare(tb, ta);
+        });
+        if (ranked.size() > LIMIT) ranked = ranked.subList(0, LIMIT);
 
         JSONArray sources = new JSONArray();
-        for (FileIndex.Row r : rows) {
-            sources.put(new JSONObject().put("path", r.path).put("snippet", snippet(r)));
+        boolean anyContent = false, anySpeech = false;
+        for (Hit h : ranked) {
+            sources.put(new JSONObject().put("path", h.row.path).put("snippet", snippet(h)).put("matchedBy", h.how));
+            anyContent |= h.tier == 2;
+            anySpeech |= h.tier == 1;
         }
-        out.put("answer", answerFor(q, rows, relaxed));
+        out.put("answer", answerFor(q, ranked, relaxed, anyContent, anySpeech));
         out.put("sources", sources);
         return out;
     }
 
-    private static FileIndex.Filter toFilter(SearchQuery q) {
-        FileIndex.Filter f = new FileIndex.Filter();
-        f.kind = q.kind; f.country = q.country; f.city = q.city;
-        f.dateFrom = q.dateFrom; f.dateTo = q.dateTo; f.minSize = q.minSize;
-        f.keywords = new ArrayList<>(q.keywords);
-        return f;
+    private static final class Hit {
+        final FileIndex.Row row; final int tier; final float score; final String how; final @Nullable String excerpt;
+        Hit(FileIndex.Row r, int tier, float score, String how, @Nullable String excerpt) { row = r; this.tier = tier; this.score = score; this.how = how; this.excerpt = excerpt; }
     }
 
-    private String snippet(FileIndex.Row r) {
+    /** All rows matching the hard filters, each with the strongest way its content matched. */
+    private Map<String, Hit> search(SearchQuery q) throws Exception {
+        Map<String, Hit> out = new LinkedHashMap<>();
+        FileIndex.Filter base = new FileIndex.Filter();
+        base.kind = q.kind; base.country = q.country; base.city = q.city;
+        base.dateFrom = q.dateFrom; base.dateTo = q.dateTo; base.minSize = q.minSize;
+
+        if (q.keywords.isEmpty()) {
+            for (FileIndex.Row r : index.query(base, LIMIT)) out.put(r.docId, new Hit(r, 0, 0, "filter", null));
+            return out;
+        }
+
+        // 1. name
+        FileIndex.Filter byName = copy(base);
+        byName.keywords = new ArrayList<>(q.keywords);
+        for (FileIndex.Row r : index.query(byName, LIMIT)) out.put(r.docId, new Hit(r, 0, 0, "name", null));
+
+        // 2. transcript (recordings and videos only — the index stores transcripts for those)
+        List<String> content = QueryParser.contentWords(q.keywords);
+        if (content.isEmpty()) return out;
+        FileIndex.Filter bySpeech = copy(base);
+        bySpeech.keywords = new ArrayList<>(content);
+        bySpeech.keywordsInTranscript = true;
+        // Any keyword heard is a candidate; but when some recording matched
+        // several words ("meeting" + "patience"), the ones that matched only
+        // the generic word are noise, so keep the best tier only.
+        List<Hit> speechHits = new ArrayList<>();
+        int bestWords = 0;
+        for (FileIndex.Row r : index.query(bySpeech, LIMIT)) {
+            if (out.containsKey(r.docId) || r.transcript == null) continue;
+            String lower = r.transcript.toLowerCase(Locale.ROOT);
+            int hitWords = 0;
+            for (String k : content) if (lower.contains(k.toLowerCase(Locale.ROOT))) hitWords++;
+            bestWords = Math.max(bestWords, hitWords);
+            speechHits.add(new Hit(r, 1, hitWords, "speech", excerpt(r.transcript, content)));
+        }
+        for (Hit h : speechHits) if (bestWords < 2 || h.score >= bestWords) out.put(h.row.docId, h);
+
+        // 3. what the photo looks like
+        ClipEmbedder emb = clip.get();
+        boolean photoish = q.kind == null || FileIndex.PHOTO.equals(q.kind) || FileIndex.SCREENSHOT.equals(q.kind);
+        if (emb != null && photoish) {
+            FileIndex.Filter withVec = copy(base);
+            withVec.withVec = true;
+            if (withVec.kind == null) withVec.kind = FileIndex.PHOTO;
+            List<FileIndex.Row> photos = index.query(withVec, 0);
+            if (!photos.isEmpty()) {
+                StringBuilder en = new StringBuilder();
+                for (String k : content) en.append(en.length() > 0 ? " " : "").append(ContentWords.toEnglish(k));
+                float[] t = emb.embedText("a photo of " + en);
+                List<Object[]> scored = new ArrayList<>();
+                float best = 0;
+                for (FileIndex.Row r : photos) {
+                    float[] v = r.vector();
+                    if (v == null) continue;
+                    float s = ClipEmbedder.dot(v, t);
+                    best = Math.max(best, s);
+                    scored.add(new Object[]{r, s});
+                }
+                float cut = Math.max(CLIP_MIN, best - CLIP_MARGIN);
+                for (Object[] o : scored) {
+                    FileIndex.Row r = (FileIndex.Row) o[0]; float s = (Float) o[1];
+                    if (s >= cut && !out.containsKey(r.docId)) out.put(r.docId, new Hit(r, 2, s, "photo", null));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static FileIndex.Filter copy(FileIndex.Filter f) {
+        FileIndex.Filter c = new FileIndex.Filter();
+        c.kind = f.kind; c.country = f.country; c.city = f.city; c.dateFrom = f.dateFrom; c.dateTo = f.dateTo; c.minSize = f.minSize;
+        return c;
+    }
+
+    /** A short window of the transcript around the first keyword, for the result row. */
+    static String excerpt(String transcript, List<String> keywords) {
+        String lower = transcript.toLowerCase(Locale.ROOT);
+        int at = -1;
+        for (String k : keywords) { at = lower.indexOf(k.toLowerCase(Locale.ROOT)); if (at >= 0) break; }
+        if (at < 0) at = 0;
+        int from = Math.max(0, at - 40), to = Math.min(transcript.length(), at + 60);
+        return (from > 0 ? "…" : "") + transcript.substring(from, to).trim() + (to < transcript.length() ? "…" : "");
+    }
+
+    private String snippet(Hit h) {
+        FileIndex.Row r = h.row;
         StringBuilder s = new StringBuilder();
         if (r.whenMs != null) s.append(new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(r.whenMs));
         if (r.city != null) s.append(s.length() > 0 ? " · " : "").append(r.city);
         if (r.country != null) s.append(r.city != null ? ", " : (s.length() > 0 ? " · " : "")).append(r.country);
         if (r.city == null && r.country == null) s.append(s.length() > 0 ? " · " : "").append(r.kind).append(" · ").append(humanSize(r.size));
+        if (h.excerpt != null) s.append(" · “").append(h.excerpt).append("”");
+        else if (h.tier == 2) s.append(String.format(Locale.US, " · looks like it (%.0f%%)", Math.min(99, h.score * 300)));
         return s.toString();
     }
 
-    private String answerFor(SearchQuery q, List<FileIndex.Row> rows, List<String> relaxed) {
+    private String answerFor(SearchQuery q, List<Hit> rows, List<String> relaxed, boolean anyContent, boolean anySpeech) {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
             return ko ? "조건에 맞는 파일을 찾지 못했어요." : "No files matched your question.";
@@ -96,7 +205,8 @@ public final class AskRunner {
         Set<String> countries = new LinkedHashSet<>();
         Set<String> kinds = new LinkedHashSet<>();
         Long min = null, max = null;
-        for (FileIndex.Row r : rows) {
+        for (Hit h : rows) {
+            FileIndex.Row r = h.row;
             if (r.city != null) cities.add(ko && geo.cityKo(r.city) != null ? geo.cityKo(r.city) : r.city);
             if (r.country != null) countries.add(geo.countryName(r.country, ko));
             kinds.add(r.kind);
@@ -121,9 +231,15 @@ public final class AskRunner {
             if (!when.isEmpty()) a.append(when).append(" ");
             if (photoish && (!where.isEmpty() || !when.isEmpty())) a.append("찍은 ");
             a.append(noun).append(" ").append(n).append(countKo(onlyKind)).append("를 찾았어요.");
+            if (anyContent && anySpeech) a.append(" 사진 내용과 녹음 내용을 인식해서 찾았어요.");
+            else if (anyContent) a.append(" 사진 내용을 인식해서 찾았어요.");
+            else if (anySpeech) a.append(" 녹음 내용에서 찾았어요.");
         } else {
             a.append("Found ").append(n).append(" ").append(noun)
              .append(where.isEmpty() ? "" : " taken in " + where).append(when.isEmpty() ? "" : " (" + when + ")").append(".");
+            if (anyContent && anySpeech) a.append(" Matched by what the photos show and what the recordings say.");
+            else if (anyContent) a.append(" Matched by what the photos show.");
+            else if (anySpeech) a.append(" Matched by what the recordings say.");
         }
         return a.toString();
     }
@@ -143,7 +259,7 @@ public final class AskRunner {
             case FileIndex.PHOTO: return ko ? "사진" : (n == 1 ? "photo" : "photos");
             case FileIndex.SCREENSHOT: return ko ? "스크린샷" : (n == 1 ? "screenshot" : "screenshots");
             case FileIndex.VIDEO: return ko ? "영상" : (n == 1 ? "video" : "videos");
-            case FileIndex.AUDIO: return ko ? "오디오 파일" : (n == 1 ? "audio file" : "audio files");
+            case FileIndex.AUDIO: return ko ? "녹음" : (n == 1 ? "recording" : "recordings");
             case FileIndex.PDF: return ko ? "PDF" : (n == 1 ? "PDF" : "PDFs");
             case FileIndex.DOCUMENT: return ko ? "문서" : (n == 1 ? "document" : "documents");
             case FileIndex.SPREADSHEET: return ko ? "스프레드시트" : (n == 1 ? "spreadsheet" : "spreadsheets");
@@ -181,7 +297,7 @@ public final class AskRunner {
 
     private static String relaxedKo(String r) {
         switch (r) {
-            case "keyword": return "이름";
+            case "keyword": return "내용";
             case "city": return "도시";
             case "date": return "날짜";
             case "kind": return "종류";
@@ -191,7 +307,7 @@ public final class AskRunner {
 
     private static String relaxedEn(String r) {
         switch (r) {
-            case "keyword": return "ignoring the name";
+            case "keyword": return "ignoring the content words";
             case "city": return "ignoring the city";
             case "date": return "ignoring the date";
             case "kind": return "ignoring the file type";

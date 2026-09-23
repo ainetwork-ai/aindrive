@@ -30,7 +30,10 @@ drive and a laptop drive are the same thing to the server.
 | `android/…/RpcHandler.java` | RPC method dispatch, mirroring `cli/src/rpc.js` |
 | `android/…/Sig.java` | HMAC frame signing, byte-compatible with `web/lib/sig.js` |
 | `android/…/index/{PhotoIndex,Indexer,ExifMeta,GeoLookup}.java` | on-device photo index: app-private SQLite, EXIF date/GPS, offline GeoNames gazetteer (`assets/geo/cities.tsv.gz`, built by `scripts/build-gazetteer.py`) |
-| `android/…/agent/{QueryParser,AskRunner,SearchQuery}.java` | the on-device agent: question → place/date filters → `{answer, sources}`; answers `agent-ask` and the in-app search |
+| `android/…/agent/{QueryParser,AskRunner,SearchQuery,ContentWords}.java` | the on-device agent: question → kind/place/date/size filters + content words → name, transcript and photo matching → `{answer, sources}`; answers `agent-ask` and the in-app search |
+| `android/…/clip/{ClipEmbedder,ClipTokenizer,ModelStore}.java` | photo recognition: MobileCLIP-S0 on ONNX Runtime (image + text → 512-d), CLIP BPE tokenizer port, verified model downloads (`assets/clip/models.json`) |
+| `android/…/speech/{SpeechRecognizer,AudioDecoder}.java` | speech recognition: Whisper-base (int8) via sherpa-onnx; any container → 16 kHz PCM through MediaCodec (`assets/speech/models.json`) |
+| `scripts/make-real-corpus.py`, `scripts/run-device-scenarios.py` | real-photo / real-speech corpus + the adb runner that asks every scenario on the phone |
 | `ios/App/App/AgentCore.swift` | same agent, one `DriveConn` (`URLSessionWebSocketTask`) per drive |
 | `ios/App/App/DriveFs.swift` | filesystem over a security-scoped folder bookmark |
 | `ios/App/App/{RpcHandler,Sig}.swift` | iOS counterparts of the above |
@@ -65,6 +68,15 @@ drive and a laptop drive are the same thing to the server.
 
 ## Gotchas
 
+- **Use the fp32 MobileCLIP vision export.** The int8 export gives random
+  rankings and the fp16 one computes wrong vectors on Android's CPU execution
+  provider (cosine ≈ 0.2 with the reference); fp32 matches (≥ 0.96).
+- **sherpa-onnx must be the `static-link-onnxruntime` AAR** (fetched by
+  `app/sherpa-onnx.gradle`): the plain AAR bundles a `libonnxruntime.so` that
+  collides with `onnxruntime-android`. The APK is arm64-only for the same reason.
+- **Whisper-base Korean is approximate** (CER ≈ 0.45 on read speech; English is
+  near-perfect). Distinctive words survive, filler does not — enough to find
+  "the meeting where we discussed the budget", not to write minutes.
 - **Android 10+ redacts GPS EXIF from any stream an app opens** unless it holds
   `ACCESS_MEDIA_LOCATION` — SAF included, silently. Without the grant every photo
   indexes with a date but no place and "photos from Paris" finds nothing.
@@ -86,8 +98,17 @@ drive and a laptop drive are the same thing to the server.
   equivalent; a backgrounded app keeps the socket only for a short background
   task assertion. The drive is online while the app is open. This is a platform
   limit, not a TODO.
-- **`agent-ask` is refused on mobile** — it would need the owner's LLM key and a
-  full-folder knowledge walk on the phone.
+- **`agent-ask` is answered on the phone, offline.** Same `{answer, sources:
+  [{path, snippet, matchedBy}]}` as the desktop agent, produced by
+  `agent/AskRunner` over this drive's index; `agent.json` is never read (the
+  phone has one kind of agent) and no LLM key exists on the device.
+- **Recognition is real and on-device.** Photos get a MobileCLIP vector (the
+  question's content words become "a photo of …" and rank photos by cosine;
+  ≥ 0.17 and within 0.08 of the best counts as a match), recordings and videos
+  get a Whisper transcript (first 15 min, 28 s windows) searched by keyword.
+  Models (≈ 230 MB) are not in the APK: `ensureModels()` downloads them with
+  SHA-256 checks into `filesDir/models/`. Verified on device with real Commons
+  photographs and real meeting / Korean recordings (46/46 scenarios).
 - **`yjs-*` keeps only the latest snapshot**, not the append-only Willow store,
   because there is no Y.js in the native process. That is the same fallback path
   the desktop agent still supports: collaboration converges through the server,

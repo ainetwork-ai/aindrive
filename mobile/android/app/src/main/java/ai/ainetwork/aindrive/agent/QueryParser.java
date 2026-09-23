@@ -49,10 +49,13 @@ public final class QueryParser {
             "찍은", "찍었던", "찍힌", "촬영한", "갔던", "갔을때", "갔을", "여행", "여행갔던", "때", "받은", "만든", "저장한", "저장된", "다운받은", "다운로드한",
             "찾아줘", "찾아", "찾아봐", "찾기", "검색", "보여줘", "보여", "줘", "좀", "다", "모두", "전부", "있어", "있나", "있니", "뭐", "어디", "어떤",
             "내", "나의", "우리", "그", "저", "것", "거", "들", "중", "중에", "중에서", "관련", "관련된", "모든", "전체", "다른", "제일", "가장", "좋은", "이름",
+            // "X 얘기한 녹음" — the verbs around a topic word are not the topic
+            "얘기한", "얘기", "이야기", "이야기한", "언급된", "언급한", "언급", "나온", "나왔던", "말한", "말했던", "관한", "대한", "다룬", "논의한", "토론한", "설명한", "들어간", "들어있는", "포함된", "나오는",
             // English
             "find", "show", "search", "get", "open", "list", "me", "the", "a", "an", "of", "from", "in", "at", "on", "my", "our", "all", "any", "some", "with", "for", "that", "which",
             "taken", "took", "trip", "travel", "travelled", "traveled", "vacation", "holiday", "please", "i", "we", "were", "was", "named", "called", "about", "best", "good",
-            "downloaded", "saved", "received", "sent", "shared"
+            "downloaded", "saved", "received", "sent", "shared",
+            "mentioned", "mentions", "mentioning", "talked", "talking", "talks", "discussed", "discussing", "discussion", "said", "says", "where", "when", "who", "someone", "they", "he", "she"
     ));
     /** Kind words, per category. "사진" alone means photos; "파일" means any kind. */
     private static final Map<String, String> KIND_WORDS = new HashMap<>();
@@ -80,6 +83,19 @@ public final class QueryParser {
     /** English city names that are also everyday words: only a capitalised token means the city. */
     private static final Set<String> NEEDS_CAPITAL = new HashSet<>(Arrays.asList(
             "nice", "spring", "reading", "bath", "orange", "mobile", "buffalo", "phoenix", "jordan", "victoria", "of", "most", "split", "bar", "male", "media"));
+    /**
+     * "meeting recording about X": words that describe a recording rather than
+     * what was said in it. They still match file NAMES (녹음_회의.m4a), but are
+     * left out of the transcript and photo matching.
+     */
+    public static final Set<String> RECORDING_WORDS = new HashSet<>(Arrays.asList(
+            "meeting", "meetings", "회의", "미팅", "interview", "인터뷰", "call", "통화", "conversation", "대화", "talk", "강의", "lecture", "voice", "memo", "메모"));
+
+    public static List<String> contentWords(List<String> keywords) {
+        List<String> out = new ArrayList<>();
+        for (String k : keywords) if (!RECORDING_WORDS.contains(k.toLowerCase(Locale.ROOT))) out.add(k);
+        return out;
+    }
     private static final Set<String> SIZE_WORDS = new HashSet<>(Arrays.asList("큰", "대용량", "용량큰", "무거운", "large", "big", "huge", "biggest", "largest"));
     private static final Pattern YEAR = Pattern.compile("^(19|20)\\d{2}$");
     private static final Pattern YEAR_MONTH = Pattern.compile("^((?:19|20)\\d{2})[-./]?(0?[1-9]|1[0-2])$");

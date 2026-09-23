@@ -363,6 +363,15 @@ public class AindriveAgentPlugin extends Plugin {
         call.resolve(currentStatus());
     }
 
+    /** Download the recognition models (photos + speech, ≈230 MB, verified) and recognise what is indexed. Progress via statusChanged. */
+    @PluginMethod
+    public void ensureModels(PluginCall call) {
+        Intent svc = new Intent(getContext(), AgentService.class).setAction(AgentService.ACTION_ENSURE_MODELS);
+        if (AgentService.get() == null) { call.reject("Turn a folder on first"); return; }
+        getContext().startService(svc);
+        call.resolve(currentStatus());
+    }
+
     /** Ask the on-device agent. Fully offline: gazetteer + local index only. */
     @PluginMethod
     public void ask(PluginCall call) {

@@ -476,6 +476,16 @@ async function removeShare(share: SharedFolder) {
   render();
 }
 
+async function ensureModels() {
+  try {
+    status = await AindriveAgent.ensureModels();
+    log("Downloading recognition models…");
+  } catch (e) {
+    fail(e);
+  }
+  render();
+}
+
 async function reindex() {
   try {
     status = await AindriveAgent.reindex();
@@ -696,27 +706,41 @@ function bindHome() {
 
 // ---- search
 
-const SUGGESTIONS = ["파리에서 찍은 사진", "지난주 스크린샷", "계약서 pdf", "작년 여름 사진", "큰 영상 파일", "최근 문서"];
+const SUGGESTIONS = ["파리에서 찍은 사진", "강아지 사진", "에펠탑", "예산 얘기한 회의 녹음", "지난주 스크린샷", "계약서 pdf"];
 
 function searchSheet(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
   const indexed = ix.reduce((n, i) => n + i.indexed, 0);
   const active = ix.find((i) => i.running);
+  const recognised = ix.reduce((n, i) => n + (i.recognisedTotal ?? 0), 0);
+  const models = status.models;
   const indexLine = active
-    ? `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`
-    : `<div class="indexline"><span>${indexed ? `${indexed.toLocaleString()} files indexed` : "Not indexed yet"}</span><button class="btn secondary small" id="reindex">${indexed ? "Refresh" : "Index now"}</button></div>`;
+    ? (active.phase === "recognising"
+      ? `<div class="indexline"><div style="flex:1">Recognising photos & recordings… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
+      : `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`)
+    : `<div class="indexline"><span>${indexed ? `${indexed.toLocaleString()} files indexed${recognised ? ` · ${recognised.toLocaleString()} recognised` : ""}` : "Not indexed yet"}</span><button class="btn secondary small" id="reindex">${indexed ? "Refresh" : "Index now"}</button></div>`;
+  const modelsLine = !models ? "" : models.downloading
+    ? `<div class="indexline"><div style="flex:1">Downloading recognition models… ${Math.round(models.done / 1e6)} / ${Math.round(models.total / 1e6)} MB<div class="progress"><i style="width:${models.total ? Math.round(100 * models.done / models.total) : 0}%"></i></div></div></div>`
+    : models.ready ? ""
+    : `<div class="card" style="margin:0 0 12px;padding:12px 14px">
+        <b style="font-size:14px">Recognise what's inside</b>
+        <p class="note" style="margin:4px 0 10px">Find photos by what they show and recordings by what was said — on this phone, offline. One-time download of about ${Math.round(models.total / 1e6)} MB.</p>
+        ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
+        <button class="btn small" id="ensure-models">Download models</button>
+      </div>`;
   const body = askBusy ? `<div class="searching"><span class="spinner"></span> Searching…</div>`
     : askResult ? `
       <p class="answer">${esc(askResult.answer)}</p>
       ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s, i) => {
         const name = s.path.split("/").pop() ?? s.path;
         const dir = s.path.split("/").slice(0, -1).join("/");
-        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${esc(name)}</div><div class="meta">${esc([s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+        const how = s.matchedBy === "photo" ? "👁" : s.matchedBy === "speech" ? "🎙" : "";
+        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${s.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
       }).join("")}</ul>` : ""}`
     : `
       <p class="note" style="margin:0 0 8px">Try asking</p>
       <div class="chips">${SUGGESTIONS.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>
-      <p class="hint">Understands file type, name, date and size for every file, plus where and when photos were taken. Runs on this phone — works offline.</p>`;
+      <p class="hint">Understands file type, name, date and size for every file; where and when photos were taken; what photos show and what recordings say. Runs on this phone — works offline.</p>`;
   return `
     <div class="sheet">
       <div class="bar">
@@ -725,6 +749,7 @@ function searchSheet(): string {
           ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
       </div>
       <div class="body">
+        ${modelsLine}
         ${indexLine}
         ${body}
       </div>
@@ -734,6 +759,7 @@ function searchSheet(): string {
 function bindSearch() {
   bind("close-search", () => { searchOpen = false; render(); });
   bind("reindex", reindex);
+  bind("ensure-models", ensureModels);
   bind("clear-ask", () => { askQuery = ""; askResult = null; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });

@@ -43,8 +43,24 @@ export interface IndexStatus {
   done: number;
   total: number;
   failed: number;
+  /** "scanning" | "indexing" | "recognising" | "done" | "cancelled" | "idle" | "error: …" */
   phase: string;
   lastRunMs: number;
+  /** Recognition pass (photos → CLIP vectors, recordings → transcripts). */
+  recognised: number;
+  toRecognise: number;
+  recognisedTotal: number;
+}
+
+/** On-device recognition models (photos + speech): present, or being fetched. */
+export interface ModelsStatus {
+  photos: boolean;
+  speech: boolean;
+  ready: boolean;
+  downloading: boolean;
+  done: number;
+  total: number;
+  error: string | null;
 }
 
 /** Same shape the desktop agent-ask returns, so the web UI needs no change. */
@@ -60,7 +76,7 @@ export interface FileEntry {
 
 export interface AskResult {
   answer: string;
-  sources: { path: string; snippet: string; driveId?: string }[];
+  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo" }[];
 }
 
 export interface DriveStatus {
@@ -79,6 +95,7 @@ export interface AgentStatus {
   /** True while at least one drive's socket is up. */
   connected: boolean;
   drives: DriveStatus[];
+  models?: ModelsStatus;
 }
 
 export const IDLE_STATUS: AgentStatus = { running: false, connected: false, drives: [] };
@@ -110,6 +127,8 @@ export interface AindriveAgentPlugin {
   status(): Promise<AgentStatus>;
   /** (Re)build the photo index for one drive, or all running drives. Progress via statusChanged. */
   reindex(opts?: { driveId?: string }): Promise<AgentStatus>;
+  /** Download the recognition models (≈230 MB, checksum-verified) and recognise indexed files. Progress via statusChanged. */
+  ensureModels(): Promise<AgentStatus>;
   /** Ask the on-device agent — fully offline (gazetteer + local index). */
   ask(opts: { query: string }): Promise<AskResult>;
   addListener(

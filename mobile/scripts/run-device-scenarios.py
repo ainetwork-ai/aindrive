@@ -21,7 +21,10 @@ import time
 DIR = sys.argv[1] if len(sys.argv) > 1 else "test-corpus"
 SKIP_PUSH = "--skip-push" in sys.argv
 PKG = "ai.ainetwork.aindrive"
-SUB = "test-corpus"
+# --sub NAME: sub-folder of the shared folder to push into (default test-corpus)
+SUB = sys.argv[sys.argv.index("--sub") + 1] if "--sub" in sys.argv else "test-corpus"
+# --wipe-others: also delete the other known corpus sub-folder so expectations aren't polluted
+WIPE = [x for x in ("test-corpus", "real-corpus") if x != SUB] if "--wipe-others" in sys.argv else []
 
 def adb(*a, **k):
     return subprocess.run(["adb", *a], capture_output=True, text=True, **k)
@@ -53,42 +56,50 @@ scen = json.load(open(os.path.join(DIR, "device-scenarios.json"), encoding="utf-
 if not SKIP_PUSH:
     print(f"pushing {len(scen['files'])} files → {target}")
     adb("shell", "rm", "-rf", f"'{target}'")
+    for w in WIPE: adb("shell", "rm", "-rf", f"'{root}/{w}'")
     r = adb("push", os.path.join(DIR, "corpus"), f"{target}")
     if r.returncode: sys.exit(r.stderr)
 
 # rebuild the index from scratch
 adb("shell", "am", "force-stop", PKG)
-adb("shell", "run-as", PKG, "sh", "-c", "rm -f files/index/*.db files/index/*.db-journal")
+for f in adb("shell", "run-as", PKG, "ls", "files/index").stdout.split():
+    adb("shell", "run-as", PKG, "rm", "-f", f"files/index/{f}")
 adb("logcat", "-G", "8M"); adb("logcat", "-c")
 d = share["drive"]
 hook("ai.ainetwork.aindrive.START", serverUrl=st["server"], driveId=d["driveId"], agentToken=d["agentToken"],
      driveSecret=d["driveSecret"], folderUri=uri, folderLabel=share["folder"]["label"], indexOnStart=True)
-for _ in range(120):
+# Wait for the metadata pass, then — if recognition models are on the phone —
+# for the recognition pass too (it logs "recognised N files" when it ends).
+has_models = "vision_model" in adb("shell", "run-as", PKG, "ls", "files/models/clip").stdout
+m = done = None
+for _ in range(1800):
     time.sleep(1)
     log = adb("logcat", "-d", "-s", "AindriveIndexer").stdout
-    m = re.search(r"indexed (\d+) files \((\d+) failed", log)
-    if m: break
+    m = m or re.search(r"indexed (\d+) files \((\d+) failed", log)
+    done = re.search(r"recognised (\d+) files", log)
+    if m and (done or not has_models): break
 else:
     sys.exit("indexing did not finish")
-print(f"indexed {m.group(1)} files ({m.group(2)} failed)")
+print(f"indexed {m.group(1)} files ({m.group(2)} failed); " + (f"recognition: {done.group(0)}" if done else "no recognition models on the phone"))
 
+# Ask in batches and harvest logcat after each: answers carry up to 50 sources
+# with snippets, and a hundred of them overflow the ring buffer.
+answers = {}
+def harvest():
+    log = adb("logcat", "-d", "-s", "AindriveAgent").stdout
+    log = re.sub(r"^.*?AindriveAgent: ", "", log, flags=re.M)
+    for part in re.split(r"(?=ask\()", log):
+        m = re.match(r"ask\((.*?)\) → (\{.*)", part, re.S)
+        if not m: continue
+        try: answers[m.group(1)] = json.loads(m.group(2).strip())
+        except json.JSONDecodeError: continue
+    adb("logcat", "-c")
 adb("logcat", "-c")
-for s in scen["scenarios"]:
+for i, s in enumerate(scen["scenarios"]):
     hook("ai.ainetwork.aindrive.ASK", query=s["q"])
     time.sleep(1.3)
-time.sleep(3)
-log = adb("logcat", "-d", "-s", "AindriveAgent").stdout
-log = re.sub(r"^.*?AindriveAgent: ", "", log, flags=re.M)
-
-answers = {}
-for part in re.split(r"(?=ask\()", log):
-    m = re.match(r"ask\((.*?)\) → (\{.*)", part, re.S)
-    if not m: continue
-    try:
-        j = json.loads(m.group(2).strip())
-    except json.JSONDecodeError:
-        continue
-    answers[m.group(1)] = j
+    if (i + 1) % 8 == 0: time.sleep(1.5); harvest()
+time.sleep(3); harvest()
 
 passed, failed = 0, []
 for s in scen["scenarios"]:
@@ -96,18 +107,28 @@ for s in scen["scenarios"]:
     if a is None:
         failed.append((s, "no answer logged", None)); continue
     got = sorted(os.path.basename(x["path"]) for x in a["sources"] if x["path"].startswith(SUB + "/"))
-    if got == s["expect"]:
-        passed += 1
+    if "answerContains" in s:
+        ok = s["answerContains"] in a["answer"]
+        s["expect"] = f"answer contains “{s['answerContains']}”"
+    elif "expect" in s:
+        ok = got == s["expect"]
     else:
-        failed.append((s, a["answer"], got))
+        must, must_not = set(s["mustInclude"]), set(s["mustExclude"])
+        recall = 1.0 if not must else len(must & set(got)) / len(must)
+        ok = recall >= s.get("minRecall", 1.0) and not (must_not & set(got))
+        s["expect"] = f"≥{int(100 * s.get('minRecall', 1))}% of {sorted(must)} and none of {len(must_not)} excluded"
+    if ok: passed += 1
+    else: failed.append((s, a["answer"], got))
 
 print(f"\n{passed}/{len(scen['scenarios'])} scenarios passed")
 for s, ans, got in failed:
     print(f"\nFAIL {s['id']}  {s['q']}\n   answer: {ans}")
-    if got is not None:
+    if got is not None and isinstance(s["expect"], list):
         missing = sorted(set(s["expect"]) - set(got)); extra = sorted(set(got) - set(s["expect"]))
         if missing: print(f"   missing: {missing[:8]}{' …' if len(missing) > 8 else ''}")
         if extra: print(f"   extra:   {extra[:8]}{' …' if len(extra) > 8 else ''}")
+    elif got is not None:
+        print(f"   want:    {s['expect']}\n   got:     {got[:10]}{' …' if len(got) > 10 else ''}")
 json.dump({"passed": passed, "failed": [{"id": s["id"], "q": s["q"], "answer": ans, "got": got, "expect": s["expect"]} for s, ans, got in failed]},
           open(os.path.join(DIR, "device-report.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 sys.exit(0 if not failed else 1)

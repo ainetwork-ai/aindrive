@@ -26,7 +26,7 @@ import java.util.Set;
  * a moved file is not re-read.
  */
 public final class FileIndex extends SQLiteOpenHelper {
-    private static final int SCHEMA = 2;
+    private static final int SCHEMA = 3;
 
     /** Coarse file categories a person names in a question ("screenshots", "PDF", "영상"). */
     public static final String PHOTO = "photo", SCREENSHOT = "screenshot", VIDEO = "video", AUDIO = "audio",
@@ -39,6 +39,11 @@ public final class FileIndex extends SQLiteOpenHelper {
         /** EXIF DateTimeOriginal for photos, else the file's mtime. */
         public @Nullable Long whenMs;
         public @Nullable Double lat, lon;
+        /** CLIP image embedding (512 × float32, little-endian), null until recognised. */
+        public @Nullable byte[] vec;
+        /** Speech transcript for audio/video, null until recognised. */
+        public @Nullable String transcript;
+        public @Nullable float[] vector() { return vec == null ? null : decodeVec(vec); }
     }
 
     /** Hard filters; null/empty means "any". Ranking is the caller's job. */
@@ -47,6 +52,10 @@ public final class FileIndex extends SQLiteOpenHelper {
         public @Nullable Long dateFrom, dateTo, minSize;
         /** Every keyword must appear in the file NAME (case-insensitive substring). */
         public List<String> keywords = new ArrayList<>();
+        /** When set, keywords may match the transcript instead of the name (OR). */
+        public boolean keywordsInTranscript;
+        /** Only rows that have a CLIP vector. */
+        public boolean withVec;
     }
 
     public FileIndex(Context ctx, String driveId) {
@@ -64,7 +73,7 @@ public final class FileIndex extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE files ("
                 + "doc_id TEXT PRIMARY KEY, path TEXT NOT NULL, name TEXT NOT NULL, name_lc TEXT NOT NULL,"
                 + "kind TEXT NOT NULL, mime TEXT, mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL,"
-                + "when_ms INTEGER, lat REAL, lon REAL, country TEXT, city TEXT)");
+                + "when_ms INTEGER, lat REAL, lon REAL, country TEXT, city TEXT, vec BLOB, transcript TEXT)");
         db.execSQL("CREATE INDEX files_when ON files(when_ms)");
         db.execSQL("CREATE INDEX files_kind ON files(kind)");
         db.execSQL("CREATE INDEX files_country ON files(country)");
@@ -87,6 +96,28 @@ public final class FileIndex extends SQLiteOpenHelper {
         }
     }
 
+    /** Indexed, but recognition (vec / transcript) has not run yet — e.g. the model arrived later. */
+    public boolean needsRecognition(String docId, boolean wantVec, boolean wantTranscript) {
+        try (Cursor c = getReadableDatabase().rawQuery(
+                "SELECT vec IS NULL, transcript IS NULL FROM files WHERE doc_id = ?", new String[]{docId})) {
+            if (!c.moveToFirst()) return true;
+            return (wantVec && c.getInt(0) == 1) || (wantTranscript && c.getInt(1) == 1);
+        }
+    }
+
+    public void setRecognition(String docId, @Nullable byte[] vec, @Nullable String transcript) {
+        ContentValues v = new ContentValues();
+        if (vec != null) v.put("vec", vec);
+        if (transcript != null) v.put("transcript", transcript);
+        if (v.size() > 0) getWritableDatabase().update("files", v, "doc_id = ?", new String[]{docId});
+    }
+
+    public int countRecognised() {
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM files WHERE vec IS NOT NULL OR transcript IS NOT NULL", null)) {
+            return c.moveToFirst() ? c.getInt(0) : 0;
+        }
+    }
+
     public void upsert(Row r) {
         ContentValues v = new ContentValues();
         v.put("doc_id", r.docId);
@@ -102,6 +133,8 @@ public final class FileIndex extends SQLiteOpenHelper {
         if (r.lon != null) v.put("lon", r.lon); else v.putNull("lon");
         v.put("country", r.country);
         v.put("city", r.city);
+        if (r.vec != null) v.put("vec", r.vec);
+        if (r.transcript != null) v.put("transcript", r.transcript);
         getWritableDatabase().insertWithOnConflict("files", null, v, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
@@ -136,12 +169,25 @@ public final class FileIndex extends SQLiteOpenHelper {
         if (f.dateFrom != null) { where.append(" AND when_ms >= ?"); args.add(String.valueOf(f.dateFrom)); }
         if (f.dateTo != null) { where.append(" AND when_ms < ?"); args.add(String.valueOf(f.dateTo)); }
         if (f.minSize != null) { where.append(" AND size >= ?"); args.add(String.valueOf(f.minSize)); }
-        for (String kw : f.keywords) {
-            where.append(" AND name_lc LIKE ? ESCAPE '\\'");
-            args.add("%" + kw.toLowerCase(Locale.ROOT).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%");
+        if (f.keywordsInTranscript && !f.keywords.isEmpty()) {
+            // A recording matches when ANY keyword was heard: speech recognition
+            // drops words, and "budget meeting" should still find the meeting
+            // that only had "budget" transcribed. Callers rank by how many hit.
+            where.append(" AND transcript IS NOT NULL AND (");
+            for (int i = 0; i < f.keywords.size(); i++) {
+                where.append(i > 0 ? " OR " : "").append("lower(transcript) LIKE ? ESCAPE '\\'");
+                args.add(like(f.keywords.get(i)));
+            }
+            where.append(")");
+        } else {
+            for (String kw : f.keywords) {
+                where.append(" AND name_lc LIKE ? ESCAPE '\\'");
+                args.add(like(kw));
+            }
         }
+        if (f.withVec) where.append(" AND vec IS NOT NULL");
         String order = f.minSize != null ? "size DESC, when_ms DESC" : "when_ms DESC, path ASC";
-        String sql = "SELECT doc_id, path, name, kind, mime, mtime_ms, size, when_ms, lat, lon, country, city FROM files WHERE "
+        String sql = "SELECT doc_id, path, name, kind, mime, mtime_ms, size, when_ms, lat, lon, country, city, vec, transcript FROM files WHERE "
                 + where + " ORDER BY " + order + (limit > 0 ? " LIMIT " + limit : "");
         List<Row> out = new ArrayList<>();
         try (Cursor c = getReadableDatabase().rawQuery(sql, args.toArray(new String[0]))) {
@@ -159,10 +205,31 @@ public final class FileIndex extends SQLiteOpenHelper {
                 r.lon = c.isNull(9) ? null : c.getDouble(9);
                 r.country = c.isNull(10) ? null : c.getString(10);
                 r.city = c.isNull(11) ? null : c.getString(11);
+                r.vec = c.isNull(12) ? null : c.getBlob(12);
+                r.transcript = c.isNull(13) ? null : c.getString(13);
                 out.add(r);
             }
         }
         return out;
+    }
+
+    private static String like(String kw) {
+        return "%" + kw.toLowerCase(Locale.ROOT).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+    }
+
+    // ------------------------------------------------------------ vectors
+
+    public static byte[] encodeVec(float[] v) {
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(v.length * 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (float x : v) b.putFloat(x);
+        return b.array();
+    }
+
+    public static float[] decodeVec(byte[] b) {
+        java.nio.FloatBuffer f = java.nio.ByteBuffer.wrap(b).order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer();
+        float[] v = new float[f.remaining()];
+        f.get(v);
+        return v;
     }
 
     // ------------------------------------------------------------ kind
@@ -178,7 +245,7 @@ public final class FileIndex extends SQLiteOpenHelper {
             return SCREENSHOT_NAME.matcher(name).find() ? SCREENSHOT : PHOTO;
         }
         if (m.startsWith("video/") || in(ext, "mp4", "mov", "mkv", "avi", "webm", "3gp", "m4v")) return VIDEO;
-        if (m.startsWith("audio/") || in(ext, "mp3", "m4a", "wav", "aac", "flac", "ogg", "opus")) return AUDIO;
+        if (m.startsWith("audio/") || m.equals("application/ogg") || in(ext, "mp3", "m4a", "wav", "aac", "flac", "ogg", "oga", "opus", "amr", "wma", "3ga")) return AUDIO;
         if (m.equals("application/pdf") || ext.equals("pdf")) return PDF;
         if (in(ext, "xls", "xlsx", "csv", "numbers", "ods") || m.contains("spreadsheet") || m.contains("excel")) return SPREADSHEET;
         if (in(ext, "ppt", "pptx", "key", "odp") || m.contains("presentation") || m.contains("powerpoint")) return PRESENTATION;

@@ -355,16 +355,19 @@ sc("회의 녹음", kind="audio", kw=["회의"])
 sc("backup zip", kind="archive", kw=["backup"])
 sc("회의 영상", kind="video", kw=["회의"])
 sc("drone video", kind="video", kw=["drone"])
-# G. name keyword only / content-ish words (matched on file names for now)
+# G. name keyword only / content-ish words. With recognition models on the phone the
+#    agent may ALSO surface photos that look like the word (these are solid-colour
+#    stand-ins, so anything it adds is noise) — require the named files, allow extras.
+def scc(q, **f): S.append({"id": f"S{len(S) + 1:03d}", "q": q, "mustInclude": expect(**f), "mustExclude": [], "minRecall": 1.0})
 sc("영수증", kw=["영수증"])
-sc("영수증 사진", kind="photo", kw=["영수증"])
-sc("강아지 사진", kind="photo", kw=["강아지"])
-sc("고양이 사진 보여줘", kind="photo", kw=["고양이"])
-sc("바다 사진", kind="photo", kw=["바다"])
-sc("제주 바다 사진", kind="photo", city="Jeju City", kw=["바다"])
-sc("음식 사진", kind="photo", kw=["음식"])
-sc("파리 음식 사진", kind="photo", city="Paris", kw=["음식"])
-sc("한강 사진", kind="photo", kw=["한강"])
+scc("영수증 사진", kind="photo", kw=["영수증"])
+scc("강아지 사진", kind="photo", kw=["강아지"])
+scc("고양이 사진 보여줘", kind="photo", kw=["고양이"])
+scc("바다 사진", kind="photo", kw=["바다"])
+scc("제주 바다 사진", kind="photo", city="Jeju City", kw=["바다"])
+scc("음식 사진", kind="photo", kw=["음식"])
+scc("파리 음식 사진", kind="photo", city="Paris", kw=["음식"])
+scc("한강 사진", kind="photo", kw=["한강"])
 sc("제안서", kw=["제안서"])
 sc("manual", kw=["manual"])
 # H. size
@@ -375,8 +378,9 @@ sc("대용량 사진", kind="photo", min_size=LARGE)
 
 assert len(S) == 100, len(S)
 for s in S:
-    assert s["expect"], f"scenario has no expected files: {s['q']}"
-    assert len(s["expect"]) <= 50, f"more than LIMIT: {s['q']}"
+    files_ = s.get("expect", s.get("mustInclude"))
+    assert files_, f"scenario has no expected files: {s['q']}"
+    assert len(files_) <= 50, f"more than LIMIT: {s['q']}"
 
 with open(os.path.join(OUT, "device-scenarios.json"), "w", encoding="utf-8") as f:
     json.dump({"generatedAt": NOW.isoformat(), "files": records, "scenarios": S}, f, ensure_ascii=False, indent=1)

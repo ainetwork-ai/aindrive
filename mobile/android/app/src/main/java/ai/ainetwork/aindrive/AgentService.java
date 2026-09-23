@@ -20,7 +20,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import ai.ainetwork.aindrive.agent.AskRunner;
+import ai.ainetwork.aindrive.clip.ClipEmbedder;
+import ai.ainetwork.aindrive.clip.ModelStore;
 import ai.ainetwork.aindrive.index.GeoLookup;
+import ai.ainetwork.aindrive.speech.SpeechRecognizer;
 import ai.ainetwork.aindrive.index.Indexer;
 import ai.ainetwork.aindrive.index.FileIndex;
 
@@ -68,6 +71,8 @@ public class AgentService extends Service {
     /** Dev/QA hooks: `adb shell am startservice -a …ASK --es query "…"` logs the answer; REINDEX rebuilds. */
     public static final String ACTION_ASK = "ai.ainetwork.aindrive.ASK";
     public static final String ACTION_REINDEX = "ai.ainetwork.aindrive.REINDEX";
+    /** Download the recognition models (photos + speech), then re-run recognition on every drive. */
+    public static final String ACTION_ENSURE_MODELS = "ai.ainetwork.aindrive.ENSURE_MODELS";
     public static final String EXTRA_DRIVE_ID = "driveId";
 
     /** Backoff schedule copied from cli/src/agent.js so reconnects feel the same. */
@@ -113,6 +118,10 @@ public class AgentService extends Service {
         }
         if (ACTION_REINDEX.equals(intent.getAction())) {
             reindex(intent.getStringExtra(EXTRA_DRIVE_ID));
+            return START_STICKY;
+        }
+        if (ACTION_ENSURE_MODELS.equals(intent.getAction())) {
+            ensureModels();
             return START_STICKY;
         }
         if (ACTION_ASK.equals(intent.getAction())) {
@@ -236,12 +245,15 @@ public class AgentService extends Service {
         }
 
         synchronized AskRunner askRunner() {
-            if (ask == null) ask = new AskRunner(index, geo());
+            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull);
             return ask;
         }
 
         synchronized Indexer indexer() {
-            if (indexer == null) indexer = new Indexer(fs, index, geo());
+            if (indexer == null) indexer = new Indexer(fs, index, geo(), new Indexer.Recognisers() {
+                @Override public ClipEmbedder clip() { return clipOrNull(); }
+                @Override public SpeechRecognizer speech() { return speechOrNull(); }
+            });
             return indexer;
         }
 
@@ -323,10 +335,98 @@ public class AgentService extends Service {
                 ix.put("failed", in == null ? 0 : in.failed);
                 ix.put("phase", in == null ? "idle" : in.phase);
                 ix.put("lastRunMs", in == null ? 0 : in.lastRunMs);
+                ix.put("recognised", in == null ? 0 : in.recognised);
+                ix.put("toRecognise", in == null ? 0 : in.toRecognise);
+                ix.put("recognisedTotal", index == null ? 0 : index.countRecognised());
                 o.put("index", ix);
             } catch (Exception ignored) { }
             return o;
         }
+    }
+
+    // ------------------------------------------------------------ recognition models
+
+    private volatile ModelStore clipStore, speechStore;
+    private volatile ClipEmbedder clip;
+    private volatile SpeechRecognizer speech;
+    private volatile boolean modelsDownloading;
+    private volatile String modelsError;
+    private volatile long modelsDone, modelsTotal;
+
+    private ModelStore clipStore() throws java.io.IOException {
+        if (clipStore == null) clipStore = new ModelStore(this, "clip/models.json");
+        return clipStore;
+    }
+
+    private ModelStore speechStore() throws java.io.IOException {
+        if (speechStore == null) speechStore = new ModelStore(this, "speech/models.json");
+        return speechStore;
+    }
+
+    /** The photo recogniser if its files are on the phone; null otherwise (never downloads here). */
+    @Nullable ClipEmbedder clipOrNull() {
+        ClipEmbedder c = clip;
+        if (c != null) return c;
+        synchronized (this) {
+            if (clip == null) {
+                try { ModelStore s = clipStore(); if (s.ready()) clip = new ClipEmbedder(this, s); }
+                catch (Exception e) { Log.w(TAG, "clip unavailable: " + e.getMessage()); }
+            }
+            return clip;
+        }
+    }
+
+    @Nullable SpeechRecognizer speechOrNull() {
+        SpeechRecognizer r = speech;
+        if (r != null) return r;
+        synchronized (this) {
+            if (speech == null) {
+                try { ModelStore s = speechStore(); if (s.ready()) speech = new SpeechRecognizer(this, s); }
+                catch (Exception e) { Log.w(TAG, "speech unavailable: " + e.getMessage()); }
+            }
+            return speech;
+        }
+    }
+
+    JSONObject modelsJson() {
+        JSONObject o = new JSONObject();
+        try {
+            boolean clipReady = false, speechReady = false; long total = 0;
+            try { clipReady = clipStore().ready(); total += clipStore().totalBytes(); } catch (Exception ignored) { }
+            try { speechReady = speechStore().ready(); total += speechStore().totalBytes(); } catch (Exception ignored) { }
+            o.put("photos", clipReady).put("speech", speechReady).put("ready", clipReady && speechReady)
+             .put("downloading", modelsDownloading).put("done", modelsDone).put("total", modelsDownloading ? modelsTotal : total)
+             .put("error", modelsError == null ? JSONObject.NULL : modelsError);
+        } catch (Exception ignored) { }
+        return o;
+    }
+
+    /** Fetch both model sets (verified), then recognise everything already indexed. */
+    void ensureModels() {
+        if (modelsDownloading) return;
+        modelsDownloading = true; modelsError = null; modelsDone = 0;
+        indexPool.execute(() -> {
+            try {
+                ModelStore[] stores = {clipStore(), speechStore()};
+                modelsTotal = stores[0].totalBytes() + stores[1].totalBytes();
+                final long[] base = {0};
+                for (ModelStore s : stores) {
+                    final long[] fileDone = {0};
+                    long storeBase = base[0];
+                    s.ensure((id, done, tot) -> { modelsDone = storeBase + fileDone[0] + done; if (done >= tot) { fileDone[0] += tot; } notifyStatus(); });
+                    base[0] += s.totalBytes();
+                }
+                modelsDone = modelsTotal;
+                Log.i(TAG, "models ready");
+            } catch (Exception e) {
+                modelsError = e.getMessage();
+                Log.w(TAG, "model download failed", e);
+            } finally {
+                modelsDownloading = false;
+                notifyStatus();
+            }
+            if (modelsError == null) reindex(null);
+        });
     }
 
     // ------------------------------------------------------------ on-device agent
@@ -442,6 +542,7 @@ public class AgentService extends Service {
             o.put("running", !stopping && drives.length() > 0);
             o.put("connected", anyConnected);
             o.put("drives", drives);
+            o.put("models", modelsJson());
         } catch (Exception ignored) { }
         return o;
     }
@@ -454,7 +555,11 @@ public class AgentService extends Service {
             online = 0;
             for (Conn c : conns.values()) {
                 Indexer in = c.indexer;
-                if (in != null && in.running) return "Indexing photos " + in.done + " / " + in.total + " · " + (c.folderLabel == null ? "Folder" : c.folderLabel);
+                if (in != null && in.running) {
+                    String what = "recognising".equals(in.phase) ? "Recognising " + in.recognised + " / " + in.toRecognise : "Indexing " + in.done + " / " + in.total;
+                    return what + " · " + (c.folderLabel == null ? "Folder" : c.folderLabel);
+                }
+                if (modelsDownloading) return "Downloading recognition models " + (modelsDone / 1_000_000) + " / " + (modelsTotal / 1_000_000) + " MB";
                 if (c.connected) online++;
                 if (labels.length() > 0) labels.append(", ");
                 labels.append(c.folderLabel == null ? "Folder" : c.folderLabel);
