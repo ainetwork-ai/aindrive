@@ -41,6 +41,25 @@ The flow follows the MCP authorization spec, so a client needs only the URL:
 The drive comes from the RFC 8707 `resource` (= the drive's MCP URL). Scopes
 on the wire are `drive:read` / `drive:write`.
 
+## Account-level grant ("Sign in with aindrive") — `lib/account-tokens.ts`
+
+For third-party web apps: one token pair for the user, not one drive.
+
+- Request `/oauth/authorize` with **no `resource`** and only account scopes:
+  `profile` and/or `drives:read`. Mixing in `drive:*` or any unknown scope is
+  rejected. Consent lists what the app gets; login redirect as usual.
+- Same DCR, PKCE and `/api/oauth/token` exchange/refresh as the drive flow
+  (the code's table decides the kind); `scope` comes back as e.g. `"profile drives:read"`.
+- Tokens (table `account_tokens`): access `aind_aat_…` (1h) + refresh
+  `aind_art_…` (30d, rotated; reuse revokes the grant). Hashes only.
+- `GET /api/oauth/userinfo` (`profile`) → `{ sub, email, email_verified, name, wallet_address }`.
+  Wallet-only accounts have a placeholder email and `email_verified: false`, so don't show that email.
+- `GET /api/oauth/drives` (`drives:read`) → `{ drives: [{ id, name, online, role }] }`.
+- `/mcp/d/[id]` accepts the access token (`drives:read`) on any drive the user
+  is a member of, read-only (no write tools); a non-member drive → 403.
+- Connected apps: `GET /api/oauth/account-tokens`, `DELETE /api/oauth/account-tokens/[id]`
+  (session + same-origin). There is no UI for this yet.
+
 ## Guards in runSkill (every MCP call)
 
 - The path is canonicalized once (`normalizePath`); that same string feeds the access check, paywall and agent call.
@@ -58,4 +77,4 @@ on the wire are `drive:read` / `drive:write`.
 - Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`).
 - The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing.
 - Redirect URIs: https, loopback http, or a private-use scheme (`cursor://`); never `javascript:`/`data:`/`file:`.
-- Tests: `lib/__tests__/mcp-auth.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.
+- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.

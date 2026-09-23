@@ -64,13 +64,15 @@ Payments / capabilities:
 | `paymaster` (POST, CORS) | ERC-7677 proxy: sponsors a permit2 buyer's `approve(Permit2)` gas. Requires a `?g=` sponsor grant; validates the userOp is exactly the granted approve (lib/paymaster) before forwarding to `CDP_PAYMASTER_URL`. Called by the buyer's WALLET, not our pages. |
 | `paymaster/grant` (POST) | mint the sponsor grant for one permit2 sale (asset/amount/chain from the share's current quote, wallet-bound, 10-min TTL). Login-gated + rate-limited. |
 
-Remote-MCP OAuth (the flow is described in `app/mcp/README.md`):
+Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md`):
 
 | Route | Notes |
 |-------|-------|
 | `oauth/register` (POST, CORS) | RFC 7591 dynamic client registration; public clients only; rate-limited per IP. |
 | `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. |
-| `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens. |
+| `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
+| `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). |
+| `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |
 
 Ops / dev:
 
