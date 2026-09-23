@@ -45,6 +45,36 @@ function neutralizeText(root: unknown) {
   }
 }
 
+// pptx-preview's chart options need two corrections, applied on every echarts
+// setOption (it gives us no hook):
+// - Charts that take their colors from the deck theme (no explicit series
+//   fill — the common case, e.g. python-pptx/PowerPoint defaults) arrive with
+//   `color: []`, so echarts paints every bar/slice with fill "none": axes
+//   show, data doesn't. Substitute Office's default accent palette.
+// - Untitled charts get a hard-coded Chinese placeholder title ("图表标题").
+// Animations are also turned off: the preview is static and zooms slides.
+const OFFICE_PALETTE = ["#4472C4", "#ED7D31", "#A5A5A5", "#FFC000", "#5B9BD5", "#70AD47", "#264478", "#9E480E", "#636363", "#997300"];
+let chartsPatched = false;
+async function patchCharts() {
+  if (chartsPatched) return;
+  chartsPatched = true;
+  const echarts = await import("echarts");
+  const probe = echarts.init(document.createElement("div"), null, { renderer: "svg", width: 1, height: 1 });
+  const proto = Object.getPrototypeOf(probe) as { setOption: (...a: unknown[]) => unknown };
+  probe.dispose();
+  const original = proto.setOption;
+  proto.setOption = function (this: unknown, option: unknown, ...rest: unknown[]) {
+    if (option && typeof option === "object") {
+      const o = option as Record<string, unknown>;
+      o.animation = false;
+      if (!Array.isArray(o.color) || o.color.length === 0) o.color = OFFICE_PALETTE;
+      const titles = Array.isArray(o.title) ? o.title : o.title ? [o.title] : [];
+      for (const t of titles as Array<Record<string, unknown>>) if (t && t.text === "图表标题") t.text = "";
+    }
+    return original.call(this, option, ...rest);
+  };
+}
+
 function fitSlides(doc: Document, width: number) {
   const host = doc.querySelector<HTMLElement>(".pptx-host");
   if (host) host.style.zoom = String(Math.min(1.5, (width - 24) / RENDER_WIDTH));
@@ -56,6 +86,7 @@ function Deck({ name, data }: { name: string; data: ArrayBuffer }) {
 
   const render = useCallback(async (doc: Document) => {
     const { init } = await import("pptx-preview");
+    await patchCharts();
     const host = doc.createElement("div");
     host.className = "pptx-host";
     doc.body.append(host);
