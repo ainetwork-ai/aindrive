@@ -72,6 +72,18 @@ const LIMITS = {
   maxUploadChunkBytes: 4 * 1024 * 1024,
 };
 
+// Parts of `.aindrive/` the web server legitimately drives over RPC: agent
+// JSON (web/src/infra/agent-repo) and upload temp parts (web fs/upload*).
+// Everything else there — config.json (agentToken + driveSecret), agent.pid,
+// willow.db, yjs/ — is refused, as defense in depth behind the web's own
+// reserved-path gate. Mirrors web/shared/domain/policy/system-paths.ts.
+const RPC_ALLOWED_SYSTEM_DIRS = [".aindrive/agents", ".aindrive/uploads"];
+
+export function isReservedRpcPath(rel) {
+  if (rel !== ".aindrive" && !rel.startsWith(".aindrive/")) return false;
+  return !RPC_ALLOWED_SYSTEM_DIRS.some((d) => rel === d || rel.startsWith(d + "/"));
+}
+
 export function safeResolve(root, rel) {
   if (typeof rel !== "string") throw new Error("invalid path");
   if (Buffer.byteLength(rel, "utf8") > LIMITS.maxPathBytes) throw new Error("path too long");
@@ -79,6 +91,8 @@ export function safeResolve(root, rel) {
   if (joined !== root && !joined.startsWith(root + path.sep)) {
     throw new Error("path escapes drive root");
   }
+  // Check the RESOLVED path so "./.aindrive//config.json" can't slip by.
+  if (isReservedRpcPath(toRel(root, joined))) throw new Error("reserved path");
   return joined;
 }
 

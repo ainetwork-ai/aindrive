@@ -3,6 +3,8 @@ import { getUser } from "@/lib/session";
 import { getDrive, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { paidAccessDenial } from "./sale-access.js";
+import { normalizePath } from "./path";
+import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
 export type DriveGate = { drive: DriveRow; role: Role; userId: string | null };
 
@@ -21,6 +23,7 @@ export type DriveGate = { drive: DriveRow; role: Role; userId: string | null };
  *   const { drive, role } = gate;
  *
  * Error semantics are preserved exactly from the previous inline code:
+ *   - reserved `.aindrive/`    -> 403 { error: "reserved path" } (any role)
  *   - missing drive            -> 404 { error: "drive not found" }
  *   - insufficient role + user -> 403 { error: "forbidden" }
  *   - insufficient role, anon  -> 401 { error: "forbidden" }
@@ -32,6 +35,13 @@ export async function requireDriveRole(
   targetPath: string,
   opts: { min: Role },
 ): Promise<DriveGate | NextResponse> {
+  // `.aindrive/` holds the agent token, drive secret and agent API keys: no
+  // role, not even owner, reaches it through a drive route. Checked on the
+  // canonical form so "/.aindrive" or "./.aindrive//x" can't slip by.
+  let canonical: string;
+  try { canonical = normalizePath(targetPath); }
+  catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
+  if (isSystemPath(canonical)) return NextResponse.json({ error: "reserved path" }, { status: 403 });
   const user = await getUser();
   const drive = getDrive(driveId);
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });

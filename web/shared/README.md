@@ -56,9 +56,11 @@ Display (pure, no I/O):
   two key-orderings of the same object verify identically. Don't add new sig files.
 - **`contracts/http.ts` is frozen**: shapes are a cross-track agreement; changing
   one requires a multi-track sync, not a solo edit.
-- **`.aindrive/` is a single failure point**: cap-bearer fs reads MUST go through a
-  check that rejects `isSystemPath` paths, or `llm.apiKey` leaks. Enforcement lives
-  in HTTP middleware / fs routes, not here. Server-internal callers intentionally bypass it.
+- **`.aindrive/` is a single failure point**: it holds `config.json` (agentToken +
+  driveSecret, enough to impersonate the agent) and `llm.apiKey`. Every user-supplied
+  path must be rejected by `isSystemPath`. The enforcement points are listed in
+  `domain/policy/system-paths.ts`. Server-internal callers (agent repo, upload temp
+  parts) bypass them on purpose.
 - **`registry.ts` must stay in sync with CLI factories**: a name listed here but
   missing from CLI's resolvers surfaces as `agent_misconfigured` at ask time.
 - **Secrets boundary**: web holds no LLM secrets; agent execution (and `llm.apiKey`

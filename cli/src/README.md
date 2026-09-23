@@ -17,7 +17,7 @@ internals.
 | `commands/` | one file per verb: `login` `serve` `rotate` `status` `stop` `logs` `mcp` |
 | `agent.js` | WS bridge to the server: signed-RPC loop, `fs.watch` change gossip, graceful drain/shutdown. Pure helpers `toWsUrl`/`sanitize` exported for test |
 | `agent-runner.js` | local `agent-ask` execution (knowledge fetch + LLM call). The API key never leaves this process — the whole point of running it here |
-| `rpc.js` | the RPC dispatch (`handleRpc`): fs `read`/`write`/`list`/`stat`, chunked `upload`/`download`, `yjs-*`, `agent-ask`. Path-escape guard `safeResolve` |
+| `rpc.js` | the RPC dispatch (`handleRpc`): fs `read`/`write`/`list`/`stat`, chunked `upload`/`download`, `yjs-*`, `agent-ask`. Path guard `safeResolve`: no root escape, and `.aindrive/` refused except `agents/` + `uploads/` (`isReservedRpcPath`) |
 | `willow-store.js` | the `yjs_entries` SQLite store — **authoritative for all reads**; the official Willow `Store` is also written but fire-and-forget / not read back (see Gotchas) |
 | `willow-sync.js` | multi-device sync wire protocol over the same WS (`attachSync`): summary → want → give |
 | `willow/` | `KvDriverSqlite` + `schemes` backing the official Willow `Store` |
