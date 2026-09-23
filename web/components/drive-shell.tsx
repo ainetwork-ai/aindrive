@@ -363,6 +363,11 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
             />
           ) : (
             <Viewer
+              // One Viewer instance per file. Reusing it across files let the
+              // collab effect's cleanup flush the pending autosave with the NEW
+              // entry's path but the OLD file's text — overwriting the next file
+              // opened — and left Monaco showing the previous file.
+              key={selected.path}
               driveId={driveId}
               entry={selected}
               canEdit={canEdit}
