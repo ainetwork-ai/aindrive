@@ -51,7 +51,7 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         guard let folder = Self.resolveBookmark(call.getString("folderUri")!) else {
-            call.reject("폴더 접근 권한이 만료되었습니다. 폴더를 다시 선택하세요.")
+            call.reject("Folder access permission has expired. Please pick the folder again.")
             return
         }
         let config = AgentCore.Config(
@@ -102,19 +102,19 @@ extension AindriveAgentPlugin: UIDocumentPickerDelegate {
         guard let call = pickCall else { return }
         pickCall = nil
         guard let url = urls.first else {
-            call.reject("폴더 선택이 취소되었습니다")
+            call.reject("Folder selection was cancelled")
             return
         }
         do {
             let key = try Self.storeBookmark(url)
             call.resolve(["uri": key, "label": url.lastPathComponent])
         } catch {
-            call.reject("폴더 접근 권한을 유지할 수 없습니다: \(error.localizedDescription)")
+            call.reject("Could not persist folder access permission: \(error.localizedDescription)")
         }
     }
 
     public func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        pickCall?.reject("폴더 선택이 취소되었습니다")
+        pickCall?.reject("Folder selection was cancelled")
         pickCall = nil
     }
 }

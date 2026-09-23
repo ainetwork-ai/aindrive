@@ -56,7 +56,7 @@ public class AindriveAgentPlugin extends Plugin {
         Intent data = result.getData();
         Uri tree = data == null ? null : data.getData();
         if (tree == null) {
-            call.reject("폴더 선택이 취소되었습니다");
+            call.reject("Folder selection was cancelled");
             return;
         }
         // Without this the grant dies with the activity and the drive breaks on
@@ -66,7 +66,7 @@ public class AindriveAgentPlugin extends Plugin {
                     tree,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
         } catch (SecurityException e) {
-            call.reject("폴더 접근 권한을 유지할 수 없습니다: " + e.getMessage());
+            call.reject("Could not persist folder access permission: " + e.getMessage());
             return;
         }
 
@@ -92,7 +92,7 @@ public class AindriveAgentPlugin extends Plugin {
         } catch (Exception ignored) { }
         int colon = docId.lastIndexOf(':');
         String tail = colon >= 0 ? docId.substring(colon + 1) : docId;
-        return tail.isEmpty() ? "내 폴더" : tail;
+        return tail.isEmpty() ? "My folder" : tail;
     }
 
     // ------------------------------------------------------------ agent

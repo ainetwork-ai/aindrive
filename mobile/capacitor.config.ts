@@ -10,7 +10,9 @@ const config: CapacitorConfig = {
     allowMixedContent: false,
   },
   plugins: {
-    CapacitorHttp: { enabled: false },
+    // Native HTTP so the shell's fetch() to the aindrive server is not subject
+    // to WebView CORS (origin https://localhost; the server sets no CORS headers).
+    CapacitorHttp: { enabled: true },
   },
 };
 

@@ -3,6 +3,8 @@
  * Mirrors cli/src/commands/login.js and cli/src/commands/serve.js — same
  * endpoints, same single-use 10-minute pairing link.
  */
+import { CapacitorCookies } from "@capacitor/core";
+
 export interface CliStart {
   linkId: string;
   deviceSecret: string;
@@ -18,17 +20,21 @@ export interface DrivePair {
 
 export function normalizeServer(raw: string): string {
   let s = raw.trim();
-  if (!s) throw new Error("서버 주소를 입력하세요");
+  if (!s) throw new Error("Enter a server address");
   if (!/^https?:\/\//i.test(s)) s = "https://" + s;
   return s.replace(/\/+$/, "");
 }
 
 async function post<T>(server: string, path: string, body: unknown, cookie?: string): Promise<T> {
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (cookie) headers.cookie = `aindrive_session=${cookie}`;
+  // The server authenticates by cookie only (web/lib/session.ts). fetch()
+  // silently drops a hand-written `Cookie` header, so put the session in the
+  // native cookie jar and let CapacitorHttp attach it.
+  if (cookie) {
+    await CapacitorCookies.setCookie({ url: server, key: "aindrive_session", value: cookie });
+  }
   const res = await fetch(server + path, {
     method: "POST",
-    headers,
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
   const text = await res.text();
@@ -57,10 +63,10 @@ export async function pollCliLogin(
   });
   if (res.status === 202) return null;
   const text = await res.text();
-  if (res.status === 410) throw new Error("로그인 링크가 만료되었거나 이미 사용되었습니다");
+  if (res.status === 410) throw new Error("The login link has expired or was already used");
   if (!res.ok) throw new Error(`poll → ${res.status}: ${text}`);
   const { token, user } = JSON.parse(text);
-  if (!token) throw new Error("서버가 세션 토큰을 반환하지 않았습니다");
+  if (!token) throw new Error("The server did not return a session token");
   return { token, email: user?.email };
 }
 

@@ -95,7 +95,7 @@ final class AgentCore: NSObject {
     private func connect() {
         guard !stopping, let config else { return }
         guard let url = Self.wsUrl(server: config.serverUrl, driveId: config.driveId) else {
-            status.lastError = "잘못된 서버 주소"
+            status.lastError = "Invalid server address"
             emit()
             return
         }
