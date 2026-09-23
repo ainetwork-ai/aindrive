@@ -36,6 +36,7 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 | `agents/[agentId]/ask` | A2A ask; identity→policy→CLI execution. Tiered rate limit; outputs map to 200/401/402/429. |
 | `agents/[agentId]/.well-known/agent-card.json` | public A2A AgentCard (secrets stripped). |
 | `yjs` (GET/POST) | collaborative-doc read (viewer) / write (editor) via agent RPC. |
+| `mcp-tokens` (GET/POST), `mcp-tokens/[tokenId]` (DELETE) | remote-MCP PATs + OAuth-connected apps. Any member issues (scope clamped to role); owner sees/revokes all. See `app/mcp/README.md`. |
 
 File ops (`drives/[driveId]/fs/…`) — all go through the agent WS bridge, all
 gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
@@ -62,6 +63,14 @@ Payments / capabilities:
 | `token-lookup` (POST) | on-chain ERC-20 metadata for the token-policy editor. Login-gated (anti-amplification). |
 | `paymaster` (POST, CORS) | ERC-7677 proxy: sponsors a permit2 buyer's `approve(Permit2)` gas. Requires a `?g=` sponsor grant; validates the userOp is exactly the granted approve (lib/paymaster) before forwarding to `CDP_PAYMASTER_URL`. Called by the buyer's WALLET, not our pages. |
 | `paymaster/grant` (POST) | mint the sponsor grant for one permit2 sale (asset/amount/chain from the share's current quote, wallet-bound, 10-min TTL). Login-gated + rate-limited. |
+
+Remote-MCP OAuth (the flow is described in `app/mcp/README.md`):
+
+| Route | Notes |
+|-------|-------|
+| `oauth/register` (POST, CORS) | RFC 7591 dynamic client registration; public clients only; rate-limited per IP. |
+| `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. |
+| `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens. |
 
 Ops / dev:
 

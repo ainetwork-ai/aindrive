@@ -22,10 +22,18 @@ import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { drizzleDb } from "@/lib/db";
 import { drives as drivesTable } from "../drizzle/schema";
 import { callAgent, AgentError } from "@/lib/rpc";
+import { paidAccessDenial } from "@/lib/sale-access.js";
 import { normalizePath } from "@/lib/path";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
-export type SkillCtx = { userId: string };
+/**
+ * `driveId` pins every call to one drive (drive-scoped MCP endpoint /
+ * token): `drive_id` defaults to it, any other drive is forbidden, and
+ * `list_drives` is unavailable. `scope` is the token's ceiling — "read"
+ * forbids write_file regardless of the user's role. Both omitted = the
+ * legacy account-wide surface (A2A executor, session-auth /mcp).
+ */
+export type SkillCtx = { userId: string; driveId?: string; scope?: "read" | "write" };
 
 export type SkillOk = { kind: "ok"; structured: unknown; text: string };
 export type SkillErr = {
@@ -125,6 +133,28 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
   },
 ];
 
+/**
+ * Descriptors for a drive-pinned surface: no list_drives, no drive_id
+ * argument (the URL/token fixes the drive), and no write_file under a
+ * read scope — clients should not be offered a tool that always fails.
+ */
+export function driveScopedDescriptors(scope: "read" | "write"): SkillDescriptor[] {
+  return SKILL_DESCRIPTORS
+    .filter((d) => d.name !== "list_drives" && (scope === "write" || d.name !== "write_file"))
+    .map((d) => {
+      const schema = d.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+      const { drive_id: _omit, ...properties } = schema.properties ?? {};
+      return {
+        ...d,
+        inputSchema: {
+          ...schema,
+          properties,
+          ...(schema.required ? { required: schema.required.filter((r) => r !== "drive_id") } : {}),
+        },
+      };
+    });
+}
+
 export function isSkillName(s: string): s is SkillName {
   return (SKILL_NAMES as readonly string[]).includes(s);
 }
@@ -143,6 +173,9 @@ export async function runSkill(
   }
 
   if (name === "list_drives") {
+    if (ctx.driveId) {
+      return { kind: "err", code: "forbidden", message: "list_drives is unavailable on a drive-scoped endpoint" };
+    }
     const rows = drizzleDb
       .select({ id: drivesTable.id, name: drivesTable.name, owner_id: drivesTable.owner_id })
       .from(drivesTable)
@@ -154,7 +187,10 @@ export async function runSkill(
     return { kind: "ok", structured: { drives: rows }, text };
   }
 
-  const driveIdRaw = arg(args, "drive_id");
+  const driveIdRaw = arg(args, "drive_id") ?? ctx.driveId;
+  if (ctx.driveId && driveIdRaw !== ctx.driveId) {
+    return { kind: "err", code: "forbidden", message: "token is scoped to a different drive" };
+  }
   if (typeof driveIdRaw !== "string" || !driveIdRaw) {
     return { kind: "err", code: "invalid_params", message: "drive_id required" };
   }
@@ -172,9 +208,17 @@ export async function runSkill(
   // `.aindrive/` (agent token, drive secret, agent API keys) is off-limits to every role.
   if (isSystemPath(path)) return { kind: "err", code: "forbidden", message: "reserved path" };
   const need: Role = name === "write_file" ? "editor" : "viewer";
+  if (need === "editor" && ctx.scope === "read") {
+    return { kind: "err", code: "forbidden", message: "forbidden (token scope is read-only)" };
+  }
   const role = await resolveAccess(driveId, path, ctx.userId);
   if (!atLeast(role, need)) {
     return { kind: "err", code: "forbidden", message: `forbidden (need ${need}, have ${role})` };
+  }
+  // Paid carve-out, same as the fs/read HTTP gate: a bare viewer can't read
+  // a priced subtree's content without an entitlement.
+  if (name === "read_file" && paidAccessDenial(driveId, path, role, ctx.userId)) {
+    return { kind: "err", code: "forbidden", message: `payment required to read ${path}` };
   }
 
   try {

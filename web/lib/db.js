@@ -234,6 +234,50 @@ function open() {
     CREATE INDEX IF NOT EXISTS idx_sponsored_ops_created ON sponsored_ops(created_at);
     CREATE INDEX IF NOT EXISTS idx_sponsored_ops_user ON sponsored_ops(user_id, created_at);
   `);
+  // Remote MCP auth (lib/mcp-tokens, lib/oauth). mcp_tokens holds BOTH manually
+  // issued personal access tokens (kind='pat') and OAuth-issued access/refresh
+  // pairs (kind='oauth', one row per connected app, rotated in place). Only
+  // sha256 hashes are stored; every token is scoped to ONE drive + a scope
+  // ('read'|'write') that is clamped against the user's live role per call.
+  // oauth_clients = RFC 7591 dynamic registrations (public clients, PKCE only);
+  // oauth_codes = one-time authorization codes (10 min). Times are epoch ms.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      drive_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      client_id TEXT,
+      token_hash TEXT NOT NULL UNIQUE,
+      refresh_hash TEXT UNIQUE,
+      expires_at INTEGER,
+      refresh_expires_at INTEGER,
+      last_used_at INTEGER,
+      revoked_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_tokens_drive ON mcp_tokens(drive_id, user_id);
+    CREATE TABLE IF NOT EXISTS oauth_clients (
+      client_id TEXT PRIMARY KEY,
+      client_name TEXT NOT NULL,
+      redirect_uris TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS oauth_codes (
+      code_hash TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      drive_id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      code_challenge TEXT NOT NULL,
+      consumed INTEGER NOT NULL DEFAULT 0,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a
