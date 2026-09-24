@@ -41,13 +41,15 @@ interface SavedState {
   email?: string;
   /** Every folder the user has chosen to share, in the order they were added. */
   shares: SharedFolder[];
-  /** Agent sources: read for tasks, never served. Keyed by the fixed source id. */
-  sources?: Partial<Record<SourceId, PickedFolder>>;
+  /** Agent sources: folders the agent may read for its tasks, never served. */
+  sources?: AgentSource[];
 }
 
-type SourceId = "src-calls" | "src-photos";
-/** The two folders the agent asks to read: Samsung's call recordings and the camera roll. */
-const SOURCES: { id: SourceId; label: string; hint: string; initial: string }[] = [
+/** One folder the agent may read. `preset` marks the two suggested ones (call recordings, camera roll). */
+interface AgentSource { id: string; folder: PickedFolder; preset?: PresetId }
+type PresetId = "src-calls" | "src-photos";
+/** Suggested first: Samsung's call recordings and the camera roll. Any other folder can be added too. */
+const PRESETS: { id: PresetId; label: string; hint: string; initial: string }[] = [
   { id: "src-calls", label: "Call recordings", hint: "For \"who do I talk to most, and about what\" — the Call folder", initial: "Call" },
   { id: "src-photos", label: "Camera photos", hint: "For \"collect this month's food photos\" — DCIM", initial: "DCIM" },
 ];
@@ -107,6 +109,11 @@ async function load() {
   if (value) {
     try { state = { ...state, ...JSON.parse(value) }; } catch { /* corrupt → defaults */ }
     if (!Array.isArray(state.shares)) state.shares = [];
+    if (state.sources && !Array.isArray(state.sources)) {
+      // first shape: { "src-calls": folder, "src-photos": folder }
+      const old = state.sources as unknown as Record<string, PickedFolder>;
+      state.sources = Object.entries(old).map(([id, folder]) => ({ id, folder, preset: id as PresetId }));
+    }
     return;
   }
   // First launch after the multi-folder update: lift the single folder/drive
@@ -556,49 +563,93 @@ async function startAll() {
 
 // ---------------------------------------------------------------- agent sources
 
-function sourceStatus(id: SourceId): DriveStatus | undefined {
+function sourceStatus(id: string): DriveStatus | undefined {
   return status.drives.find((d) => d.driveId === id);
 }
 
-/** Let the agent read one of the phone's own folders. Not shared: it never gets a drive on the server. */
-async function addSource(id: SourceId) {
-  const def = SOURCES.find((s) => s.id === id)!;
+/**
+ * Let the agent read a folder on this phone. Not shared: it never gets a drive
+ * on the server. A preset keeps its fixed id (the native side treats
+ * "src-calls" specially); any other folder gets a fresh one.
+ */
+async function addSource(preset?: PresetId) {
+  const def = PRESETS.find((s) => s.id === preset);
   try {
-    const folder = await AindriveAgent.pickFolder({ initial: def.initial });
-    state.sources = { ...state.sources, [id]: folder };
+    const folder = await AindriveAgent.pickFolder(def ? { initial: def.initial } : {});
+    if (state.sources?.some((s) => s.folder.uri === folder.uri)) { notify(`The agent can already read "${folder.label}".`, true); return; }
+    const src: AgentSource = { id: def ? def.id : `src-${Date.now().toString(36)}`, folder, preset };
+    state.sources = [...(state.sources ?? []), src];
     await save();
-    log(`Agent may read ${folder.label} (${def.label})`);
-    await startSource(id);
+    log(`Agent may read ${folder.label}${def ? ` (${def.label})` : ""}`);
+    await startSource(src);
   } catch (e) {
     if (!/cancel/i.test(msgOf(e))) fail(e);
     render();
   }
 }
 
-async function startSource(id: SourceId) {
-  const folder = state.sources?.[id];
-  if (!folder) return;
-  busyShares.add(id); render();
+async function startSource(src: AgentSource) {
+  busyShares.add(src.id); render();
   try {
-    status = await AindriveAgent.start({ serverUrl: state.server, driveId: id, agentToken: "", driveSecret: "", folderUri: folder.uri, folderLabel: folder.label, indexOnStart: true, source: true });
+    status = await AindriveAgent.start({ serverUrl: state.server, driveId: src.id, agentToken: "", driveSecret: "", folderUri: src.folder.uri, folderLabel: src.folder.label, indexOnStart: true, source: true });
   } catch (e) {
     fail(e);
   } finally {
-    busyShares.delete(id);
+    busyShares.delete(src.id);
     render();
   }
 }
 
 async function startSources() {
-  for (const s of SOURCES) if (state.sources?.[s.id] && !sourceStatus(s.id)?.running) await startSource(s.id);
+  for (const s of state.sources ?? []) if (!sourceStatus(s.id)?.running) await startSource(s);
 }
 
-async function removeSource(id: SourceId) {
+async function removeSource(id: string) {
   await AindriveAgent.stop({ driveId: id }).catch(() => {});
-  if (state.sources) delete state.sources[id];
+  state.sources = (state.sources ?? []).filter((s) => s.id !== id);
   await save();
   try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
   render();
+}
+
+function sourceCard(src: AgentSource): string {
+  const def = PRESETS.find((p) => p.id === src.preset);
+  const d = sourceStatus(src.id);
+  const ix = d?.index;
+  const st = busyShares.has(src.id) ? "Starting…" : d?.running ? (ix?.running ? `Indexing ${ix.done}/${ix.total}` : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed` : "Ready") : "Off";
+  return `
+    <div class="card" data-source="${esc(src.id)}">
+      <div class="folder">
+        <div class="glyph">${src.preset === "src-calls" ? I.phone : I.folder}</div>
+        <div style="min-width:0;flex:1">
+          <div class="name">${esc(def ? def.label : src.folder.label)}${def ? ` <span class="hint">· ${esc(src.folder.label)}</span>` : ""}</div>
+          ${def ? `<div class="hint">${esc(def.hint)}</div>` : ""}
+          <div class="state"><span class="dot ${d?.running ? "on" : "off"}"></span>${esc(st)}</div>
+        </div>
+        <button class="btn secondary small" data-act="src-remove">Revoke</button>
+      </div>
+    </div>`;
+}
+
+function sourcesSection(): string {
+  const have = new Set((state.sources ?? []).map((s) => s.preset));
+  const suggested = PRESETS.filter((p) => !have.has(p.id)).map((p) => `
+    <div class="card" data-preset="${p.id}">
+      <div class="folder">
+        <div class="glyph">${p.id === "src-calls" ? I.phone : I.folder}</div>
+        <div style="min-width:0;flex:1">
+          <div class="name">${esc(p.label)}</div>
+          <div class="hint">${esc(p.hint)}</div>
+          <div class="state"><span class="dot off"></span>Not allowed</div>
+        </div>
+        <button class="btn small" data-act="src-add">Allow</button>
+      </div>
+    </div>`).join("");
+  return `
+    <div class="section"><h2>Agent can read</h2><button class="link" id="add-source">${I.plus} Add folder</button></div>
+    ${(state.sources ?? []).map(sourceCard).join("")}
+    ${suggested}
+    <p class="hint">Read only by the agent on this phone, for its tasks. Never shared. What it makes is saved into a shared folder.</p>`;
 }
 
 async function allowCallLog() {
@@ -607,30 +658,6 @@ async function allowCallLog() {
     notify(r.granted ? "Call log access allowed — asking again." : "Call log access was refused.", !r.granted);
     if (r.granted && askQuery) void ask(askQuery);
   } catch (e) { fail(e); }
-}
-
-function sourcesSection(): string {
-  return `
-    <div class="section"><h2>Agent can read</h2></div>
-    ${SOURCES.map((s) => {
-      const f = state.sources?.[s.id];
-      const d = sourceStatus(s.id);
-      const ix = d?.index;
-      const st = !f ? "Not allowed" : busyShares.has(s.id) ? "Starting…" : d?.running ? (ix?.running ? `Indexing ${ix.done}/${ix.total}` : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed` : "Ready") : "Off";
-      return `
-      <div class="card" data-source="${s.id}">
-        <div class="folder">
-          <div class="glyph">${s.id === "src-calls" ? I.phone : I.folder}</div>
-          <div style="min-width:0;flex:1">
-            <div class="name">${esc(s.label)}${f ? ` <span class="hint">· ${esc(f.label)}</span>` : ""}</div>
-            <div class="hint">${esc(s.hint)}</div>
-            <div class="state"><span class="dot ${d?.running ? "on" : "off"}"></span>${esc(st)}</div>
-          </div>
-          ${f ? `<button class="btn secondary small" data-act="src-remove">Revoke</button>` : `<button class="btn small" data-act="src-add">Allow</button>`}
-        </div>
-      </div>`;
-    }).join("")}
-    <p class="hint">Read only by the agent on this phone, for its tasks. Never shared. What it makes is saved into a shared folder.</p>`;
 }
 
 async function pollUntilApproved(server: string, linkId: string, deviceSecret: string) {
@@ -975,10 +1002,12 @@ function bindHome() {
   bind("add-first", addFolder);
   bind("toggle-search", openSearch);
   bind("start-all", startAll);
+  bind("add-source", () => void addSource());
+  for (const el of document.querySelectorAll<HTMLElement>("[data-preset]")) {
+    el.querySelector("[data-act=src-add]")?.addEventListener("click", () => void addSource(el.dataset.preset as PresetId));
+  }
   for (const el of document.querySelectorAll<HTMLElement>("[data-source]")) {
-    const id = el.dataset.source as SourceId;
-    el.querySelector("[data-act=src-add]")?.addEventListener("click", () => void addSource(id));
-    el.querySelector("[data-act=src-remove]")?.addEventListener("click", () => void removeSource(id));
+    el.querySelector("[data-act=src-remove]")?.addEventListener("click", () => void removeSource(el.dataset.source!));
   }
   bind("stop-all", stopAll);
   bind("logout", logout);
@@ -1297,7 +1326,7 @@ async function boot() {
   await load();
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
   // Sources come back by themselves (they need no login); shares wait for their switch.
-  if (state.sources && Object.keys(state.sources).length) void startSources();
+  if (state.sources?.length) void startSources();
   await AindriveAgent.addListener("statusChanged", (s) => {
     const before = new Map(status.drives.map((d) => [d.driveId, d]));
     status = s;
