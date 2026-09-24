@@ -141,11 +141,19 @@ function cardSurface(prefix: string, title: string, body: string, driveId?: stri
 }
 
 const MAX_PREVIEW_CHARS = 20_000;
+/** Inline image cap (base64 chars ≈ 1.5 MB of image) — larger ones get a note, not a data URL. */
+const MAX_INLINE_IMAGE_B64 = 2_000_000;
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
 
 function previewSurface(driveId: string, path: string, r: Record<string, unknown>): A2uiMessage[] {
-  const content = typeof r.content === "string" ? r.content : "";
-  const isImage = r.encoding === "base64" && IMAGE_EXT.test(path);
+  let content = typeof r.content === "string" ? r.content : "";
+  let encoding = r.encoding;
+  // An SVG read as text is still an image.
+  if (encoding !== "base64" && /\.svg$/i.test(path) && content.trimStart().startsWith("<")) {
+    content = typeof btoa === "function" ? btoa(unescape(encodeURIComponent(content))) : Buffer.from(content, "utf8").toString("base64");
+    encoding = "base64";
+  }
+  const isImage = encoding === "base64" && IMAGE_EXT.test(path) && content.length <= MAX_INLINE_IMAGE_B64;
   const comps: A2uiComponent[] = [
     column("root", ["title", "toolbar", "card"]),
     text("title", { path: "/title" }, "h3"),
@@ -162,9 +170,11 @@ function previewSurface(driveId: string, path: string, r: Record<string, unknown
     data.image_url = `data:${mime};base64,${content}`;
   } else {
     comps.push(text("body", { path: "/content" }));
-    const shown = r.encoding === "base64" ? `(binary file, ${humanSize(Math.floor(content.length * 3 / 4))})` : content;
+    const shown = encoding === "base64"
+      ? `(${IMAGE_EXT.test(path) ? "image too large to preview" : "binary file"}, ${humanSize(Math.floor(content.length * 3 / 4))})`
+      : content;
     const clipped = shown.length > MAX_PREVIEW_CHARS ? `${shown.slice(0, MAX_PREVIEW_CHARS)}\n…(truncated)` : shown;
-    data.content = /\.(md|markdown)$/i.test(path) || r.encoding === "base64" ? clipped : "```\n" + clipped + "\n```";
+    data.content = /\.(md|markdown)$/i.test(path) || encoding === "base64" ? clipped : "```\n" + clipped + "\n```";
   }
   return surface("preview", comps, data);
 }
@@ -269,7 +279,9 @@ export function actionToSkill(action: A2uiAction, fallbackDriveId?: string): Ski
     case "aindrive.open": {
       if (!drive_id) return { error: "aindrive.open needs context.drive_id" };
       const isDir = c.is_dir === true || c.is_dir === "true";
-      return { skill: isDir ? "list_files" : "read_file", args: { drive_id, path: str(c.path) } };
+      if (isDir) return { skill: "list_files", args: { drive_id, path: str(c.path) } };
+      // Images are previewed inline, so fetch their bytes.
+      return { skill: "read_file", args: { drive_id, path: str(c.path), ...(IMAGE_EXT.test(str(c.path)) ? { encoding: "base64" } : {}) } };
     }
     case "aindrive.search": {
       if (!drive_id) return { error: "aindrive.search needs context.drive_id" };

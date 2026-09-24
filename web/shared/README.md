@@ -21,7 +21,11 @@ Wire protocol (web ↔ CLI agent over the WebSocket RPC bridge — see
   `RES_QUEUE`/`HEARTBEAT_KEY` queue-key builders here are vestigial Redis-era
   helpers — unused; the live transport is WebSocket.)
 
-Agent skills (backing both MCP tools and A2A executor):
+Agent UI (one definition for every transport): `a2ui/` (see `a2ui/README.md`).
+`skill-descriptors.ts` is the pure skill catalog (names and JSON Schema) used by
+docs and clients. `agent-skills.ts` re-exports it.
+
+Agent skills (backing MCP tools, the A2A executor and AG-UI runs):
 - `agent-skills.ts` — `runSkill` + `SKILL_DESCRIPTORS` (JSON Schema). One backing
   fn for the MCP routes (`app/mcp/`, via `lib/mcp-http.ts`) and `lib/aindrive-agent.ts`.
   `SkillCtx.driveId`/`scope` pin a call to one drive + read/write ceiling

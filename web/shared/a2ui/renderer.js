@@ -25,11 +25,14 @@ function miniMarkdown(src) {
   return parts.map((chunk, i) => {
     if (i % 2 === 1) return `<pre><code>${escapeHtml(chunk.replace(/\n$/, ""))}</code></pre>`;
     return chunk.split(/\n{2,}/).filter((p) => p.trim()).map((p) => {
-      let h = escapeHtml(p.trim());
-      const m = h.match(/^(#{1,6})\s+(.*)$/);
-      if (m) return `<h${m[1].length}>${m[2]}</h${m[1].length}>`;
-      h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
-      return `<p>${h.replace(/\n/g, "<br>")}</p>`;
+      const inline = (t) => escapeHtml(t).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+      const block = p.trim();
+      const m = block.match(/^(#{1,6})\s+([^\n]*)(?:\n([\s\S]*))?$/);
+      if (m) return `<h${m[1].length}>${inline(m[2])}</h${m[1].length}>` + (m[3] ? miniMarkdown(m[3]) : "");
+      const lines = block.split("\n");
+      if (lines.every((l) => /^\s*[-*]\s+/.test(l))) return `<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("")}</ul>`;
+      if (lines.every((l) => /^\s*\d+[.)]\s+/.test(l))) return `<ol>${lines.map((l) => `<li>${inline(l.replace(/^\s*\d+[.)]\s+/, ""))}</li>`).join("")}</ol>`;
+      return `<p>${lines.map(inline).join("<br>")}</p>`;
     }).join("");
   }).join("");
 }
@@ -207,7 +210,7 @@ export const A2UI_RENDERER_CSS = `
 .a2ui-column,.a2ui-row,.a2ui-list{display:flex;gap:8px}
 .a2ui-list{gap:2px}
 .a2ui-card{border:1px solid #dce3ec;border-radius:12px;padding:12px;background:#fff;overflow:auto;max-height:480px}
-.a2ui-text p{margin:0 0 6px}.a2ui-text h1,.a2ui-text h2,.a2ui-text h3{margin:4px 0}
+.a2ui-text p,.a2ui-text ul,.a2ui-text ol{margin:0 0 6px}.a2ui-text ul{list-style:disc;padding-left:20px}.a2ui-text ol{list-style:decimal;padding-left:20px}.a2ui-text h1,.a2ui-text h2,.a2ui-text h3{margin:4px 0}
 .a2ui-text-h1{font-size:24px;font-weight:600}.a2ui-text-h2{font-size:20px;font-weight:600}.a2ui-text-h3{font-size:16px;font-weight:600}
 .a2ui-text-caption{font-size:12px;color:#54607a}.a2ui-text-caption p{margin:0}
 .a2ui-text pre{background:#f2f5f9;padding:8px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word}

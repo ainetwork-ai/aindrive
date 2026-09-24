@@ -73,6 +73,8 @@ describe("A2UI surfaces", () => {
   it("preview embeds images as data URLs and fences non-markdown text", () => {
     const img = a2uiForSkill("read_file", { path: "p.png" }, ok({ content: "AAAA", encoding: "base64" }), "d1");
     expect((img[2] as any).updateDataModel.value.image_url).toBe("data:image/png;base64,AAAA");
+    const svg = a2uiForSkill("read_file", { path: "d.svg" }, ok({ content: "<svg/>", encoding: "utf8" }), "d1");
+    expect((svg[2] as any).updateDataModel.value.image_url).toBe("data:image/svg+xml;base64,PHN2Zy8+");
     const txt = a2uiForSkill("read_file", { path: "a.ts" }, ok({ content: "x", encoding: "utf8" }), "d1");
     expect((txt[2] as any).updateDataModel.value.content).toBe("```\nx\n```");
   });
@@ -96,6 +98,8 @@ describe("A2UI actions → skills", () => {
       .toEqual({ skill: "list_files", args: { drive_id: "d3", path: "" } });
     expect(actionToSkill({ name: "aindrive.search", context: { drive_id: "d1", query: " q ", path: "" } }))
       .toEqual({ skill: "search", args: { drive_id: "d1", query: "q", path: "" } });
+    expect(actionToSkill({ name: "aindrive.open", context: { drive_id: "d1", path: "p/x.PNG", is_dir: false } }))
+      .toEqual({ skill: "read_file", args: { drive_id: "d1", path: "p/x.PNG", encoding: "base64" } });
     expect(actionToSkill({ name: "evil" })).toHaveProperty("error");
   });
 
