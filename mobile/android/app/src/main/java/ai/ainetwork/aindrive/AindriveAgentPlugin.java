@@ -458,11 +458,12 @@ public class AindriveAgentPlugin extends Plugin {
     @PluginMethod
     public void ask(PluginCall call) {
         String query = call.getString("query", "");
+        org.json.JSONObject context = call.getObject("context");
         AgentService svc = AgentService.get();
         if (svc == null) { call.reject("Turn a drive on first"); return; }
         // SQLite + parse: fast, but keep it off the WebView thread regardless.
         new Thread(() -> {
-            try { call.resolve(toJs(svc.ask(query))); }
+            try { call.resolve(toJs(svc.ask(query, context))); }
             catch (Exception e) { call.reject(e.getMessage() == null ? "ask failed" : e.getMessage()); }
         }, "aindrive-ask").start();
     }

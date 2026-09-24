@@ -53,6 +53,8 @@ public final class AskRunner {
         default void write(String rel, byte[] data) throws Exception { throw new UnsupportedOperationException("read-only"); }
         /** Open an indexed document for reading (transcription on demand). */
         default @Nullable android.os.ParcelFileDescriptor openFd(String docId) throws Exception { return null; }
+        /** False when there is nowhere to write right now (a source with no shared drive on): tasks are reported, not done. */
+        default boolean canWrite() { return true; }
     }
 
     private final FileIndex index;
@@ -78,12 +80,19 @@ public final class AskRunner {
         this.speech = speech;
     }
 
-    public JSONObject ask(String question) throws Exception {
+    public JSONObject ask(String question) throws Exception { return ask(question, null); }
+
+    /**
+     * `context` is the previous turn's filters (this method's own `context`
+     * output, kept by the shell) so a follow-up like "and share them" applies
+     * to the same files. The result carries the effective filters back.
+     */
+    public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
-        SearchQuery q = parser.parse(question, System.currentTimeMillis());
-        if (q.calls) return new CallReport(index, callLog, speech, ops).run(q, System.currentTimeMillis()).put("query", "calls");
+        SearchQuery q = parser.parse(question, System.currentTimeMillis(), SearchQuery.fromJson(context));
+        if (q.calls) return new CallReport(index, callLog, speech, ops).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context);
         int indexed = index.count();
-        JSONObject out = new JSONObject().put("query", q.toString());
+        JSONObject out = new JSONObject().put("query", q.toString()).put("context", q.toJson()).put("followUp", q.followUp);
 
         if (indexed == 0) {
             return out.put("answer", q.korean
@@ -134,7 +143,7 @@ public final class AskRunner {
             for (Hit h : ranked) files.put(h.row.path);
             out.put("action", new JSONObject().put("type", "delete").put("pending", true).put("count", exact ? ranked.size() : 0)
                     .put("files", files).put("skipped", !exact).put("reason", exact ? JSONObject.NULL : (ranked.isEmpty() ? "nothing matched" : "only loose matches")));
-        } else if (q.collect && ops != null && exact) {
+        } else if (q.collect && ops != null && ops.canWrite() && exact) {
             out.put("action", collect(q, ranked));
         } else if (q.collect) {
             out.put("action", new JSONObject().put("type", q.move ? "move" : "collect").put("skipped", true)

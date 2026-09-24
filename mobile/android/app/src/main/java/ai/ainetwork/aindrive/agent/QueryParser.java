@@ -134,7 +134,39 @@ public final class QueryParser {
 
     public static boolean isCallsTask(String question) { return question != null && CALLS_TASK.matcher(question).find(); }
 
-    public SearchQuery parse(String question, long nowMs) {
+    /**
+     * Follow-up cues: the question refers to the previous turn's results
+     * ("and share them", "only the ones from Paris", "그중 파리 사진만").
+     */
+    private static final Pattern FOLLOWUP = Pattern.compile(
+            "\\b(those|them|these|the ones|of those|of them|among them|the same|that one|this one|the rest|also|too)\\b|^(and|now|then|only|just|but)\\b"
+            + "|그중|그 중|그것|그거|그걸|이것들|그것들|얘네|걔네|나머지|거기서|거기에서|그리고|또|만$|중에서|중에", Pattern.CASE_INSENSITIVE);
+
+    public static boolean isFollowUp(String question) { return question != null && FOLLOWUP.matcher(question.trim()).find(); }
+
+    public SearchQuery parse(String question, long nowMs) { return parse(question, nowMs, null); }
+
+    /**
+     * `prev` is the previous turn's filters (SearchQuery.fromJson of the
+     * context the shell keeps). A question that only says what to DO — or that
+     * points back at "those" — is applied to them: missing filters are
+     * inherited, given ones override, keywords accumulate.
+     */
+    public SearchQuery parse(String question, long nowMs, @Nullable SearchQuery prev) {
+        SearchQuery q = parseOne(question, nowMs);
+        if (prev == null || q.calls) return q;
+        boolean refers = isFollowUp(question);
+        if (!q.isTaskOnly() && !refers) return q;
+        if (q.kind == null) q.kind = prev.kind;
+        if (q.city == null && q.country == null) { q.city = prev.city; q.country = prev.country; }
+        if (q.dateFrom == null && q.dateTo == null) { q.dateFrom = prev.dateFrom; q.dateTo = prev.dateTo; }
+        if (q.minSize == null) q.minSize = prev.minSize;
+        for (String k : prev.keywords) if (!q.keywords.contains(k)) q.keywords.add(0, k);
+        q.followUp = true;
+        return q;
+    }
+
+    private SearchQuery parseOne(String question, long nowMs) {
         SearchQuery q = new SearchQuery();
         q.korean = question.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
         if (isCallsTask(question)) {

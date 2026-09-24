@@ -33,6 +33,8 @@ interface SharedFolder {
   drive?: DriveCreds;
   /** Label of the folder this one lives in — agent-made folders are drives of their own but sit inside a picked folder. */
   parent?: string;
+  /** The switch was on when the app last ran: turn it back on at launch (a reinstall or reboot must not silently take drives offline). */
+  on?: boolean;
 }
 
 interface SavedState {
@@ -72,6 +74,13 @@ const busyShares = new Set<string>();
 let busy: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
+/** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
+interface Turn { q: string; r?: AskResult; error?: string; at: number }
+let thread: Turn[] = [];
+/** The last turn's effective filters (AskResult.context): what "them" / "those" mean next time. */
+let askContext: Record<string, unknown> | null = null;
+const THREAD_KEY = "aindrive.mobile.thread.v1";
+const THREAD_MAX = 40;
 let askBusy = false;
 let searchOpen = false;
 let menuFor: string | null = null;
@@ -102,6 +111,29 @@ let confirmSheet: { title: string; body: string; ok: string; danger?: boolean; r
 
 async function save() {
   await Preferences.set({ key: STORE_KEY, value: JSON.stringify(state) });
+}
+
+async function saveThread() {
+  thread = thread.slice(-THREAD_MAX);
+  try { await Preferences.set({ key: THREAD_KEY, value: JSON.stringify({ thread, context: askContext }) }); } catch { /* best effort */ }
+}
+
+async function loadThread() {
+  try {
+    const { value } = await Preferences.get({ key: THREAD_KEY });
+    if (!value) return;
+    const t = JSON.parse(value) as { thread?: Turn[]; context?: Record<string, unknown> | null };
+    thread = Array.isArray(t.thread) ? t.thread : [];
+    askContext = t.context ?? null;
+    askResult = thread.length ? thread[thread.length - 1].r ?? null : null;
+  } catch { thread = []; askContext = null; }
+}
+
+async function newChat() {
+  thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null;
+  await saveThread();
+  render();
+  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
 }
 
 async function load() {
@@ -544,6 +576,7 @@ async function startShare(share: SharedFolder) {
       excludeUris: state.shares.filter((s) => s !== share).map((s) => s.folder.uri),
     });
     log(`${share.folder.label} online`);
+    if (!share.on) { share.on = true; await save(); }
   } catch (e) {
     fail(e);
   } finally {
@@ -688,6 +721,7 @@ async function stopShare(share: SharedFolder) {
   busyShares.add(key); render();
   try {
     status = await AindriveAgent.stop({ driveId: share.drive.driveId });
+    share.on = false; await save();
     log(`${share.folder.label} offline`);
   } catch (e) { fail(e); }
   finally { busyShares.delete(key); render(); }
@@ -762,16 +796,25 @@ async function reindex() {
   render();
 }
 
+/** "share it" / "공유해줘" right after a folder was made: no new search, just the link. */
+const SHARE_AGAIN = /^(share (it|that|this|them|the folder)|make a (share )?link|공유(해|해줘|해 줘|하자)?|링크 (만들어|만들어줘|줘))[.!]?$/i;
+
 async function ask(q = askQuery) {
   q = q.trim();
   if (!q) return;
   askQuery = q;
+  if (SHARE_AGAIN.test(q) && askResult?.action?.folder !== undefined && !askResult.action.skipped) {
+    thread.push({ q, r: { answer: "Sharing the folder I just made.", sources: [], action: askResult.action }, at: Date.now() });
+    askQuery = ""; await saveThread(); render();
+    await shareCollected();
+    return;
+  }
   askBusy = true; actionShare = null; render();
   try {
     const localRunning = status.drives.some((d) => d.running);
     const targets = remotes.filter((d) => d.online);
     const [local, ...remoteResults] = await Promise.all([
-      localRunning ? AindriveAgent.ask({ query: q }) : Promise.resolve<AskResult | null>(null),
+      localRunning ? AindriveAgent.ask({ query: q, context: askContext ?? undefined }) : Promise.resolve<AskResult | null>(null),
       ...targets.map(async (d) => {
         try {
           const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
@@ -800,6 +843,10 @@ async function ask(q = askQuery) {
     if (!local && !targets.length) throw new Error("Turn a folder on, or have another device online, to ask.");
     merged.answer = parts.join("\n");
     askResult = merged;
+    if (local?.context && typeof local.context === "object") askContext = local.context as Record<string, unknown>;
+    thread.push({ q, r: merged, at: Date.now() });
+    askQuery = "";
+    await saveThread();
     log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}${targets.length ? ` across ${1 + targets.length} devices` : ""}`);
     const a = askResult.action;
     if (a?.folder) log(`Agent made folder "${a.folder}" with ${a.copied} file${a.copied === 1 ? "" : "s"}`);
@@ -808,6 +855,8 @@ async function ask(q = askQuery) {
   } catch (e) {
     fail(e);
     askResult = null;
+    thread.push({ q, error: msgOf(e), at: Date.now() });
+    await saveThread();
   } finally {
     askBusy = false;
     render();
@@ -1063,6 +1112,17 @@ function bindHome() {
 
 // ---- search
 
+/** Follow-ups offered under the last answer, when they make sense for it. */
+const FOLLOWUPS: { q: string; when: (r: AskResult | null) => boolean }[] = [
+  { q: "Collect them into a folder", when: (r) => !!r && r.sources.length > 0 && !r.action?.folder },
+  { q: "Share it", when: (r) => r?.action?.folder !== undefined && !r.action.skipped && !actionShare?.url },
+  { q: "How many are there?", when: (r) => !!r && r.sources.length > 0 && r.action?.type !== "count" },
+  { q: "Only the ones from this month", when: (r) => !!r && r.sources.length > 1 },
+  { q: "Show the oldest 3", when: (r) => !!r && r.sources.length > 3 },
+];
+/** Older turns show 3 hits; tapping "Show all" expands that turn. */
+const expandedTurns = new Set<number>();
+
 /** Tap-to-run examples, grouped by what the agent can do. Every one is a scenario the device tests cover. */
 const SUGGESTIONS: { title: string; items: string[] }[] = [
   { title: "Reports", items: [
@@ -1137,28 +1197,41 @@ function searchSheet(): string {
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
         ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
       </div>`;
-  const body = askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>`
-    : askResult ? `
-      ${actionCard}
-      <p class="answer">${esc(askResult.answer)}</p>
-      ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s, i) => {
-        const name = s.path.split("/").pop() ?? s.path;
-        const dir = s.path.split("/").slice(0, -1).join("/");
-        const how = s.matchedBy === "photo" ? "👁" : s.matchedBy === "speech" ? "🎙" : "";
-        const where = (s as { remoteName?: string }).remoteName;
-        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${s.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
-      }).join("")}</ul>` : ""}`
-    : `
+  const hitsList = (r: AskResult, turn: number, max: number) => !r.sources.length ? "" : `<ul class="hits">${r.sources.slice(0, max).map((src, i) => {
+    const name = src.path.split("/").pop() ?? src.path;
+    const dir = src.path.split("/").slice(0, -1).join("/");
+    const how = src.matchedBy === "photo" ? "👁" : src.matchedBy === "speech" ? "🎙" : "";
+    const where = (src as { remoteName?: string }).remoteName;
+    return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${src.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+  }).join("")}${r.sources.length > max ? `<li class="more" data-more="${turn}">Show all ${r.sources.length}</li>` : ""}</ul>`;
+  const turns = thread.map((t, i) => {
+    const last = i === thread.length - 1;
+    const open = last || expandedTurns.has(i);
+    return `
+      <div class="turn ${last ? "last" : ""}">
+        <div class="bubble">${esc(t.q)}</div>
+        ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
+          ${last ? actionCard : t.r.action?.folder ? `<p class="hint">${esc(t.r.action.label ?? t.r.action.folder)} · ${t.r.action.copied ?? 0} files</p>` : ""}
+          <p class="answer">${esc(t.r.answer)}</p>
+          ${hitsList(t.r, i, open ? 200 : 3)}` : ""}
+      </div>`;
+  }).join("");
+  const body = `
+    ${turns}
+    ${askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>` : ""}
+    ${!thread.length && !askBusy ? `
       ${SUGGESTIONS.map((g) => `
         <p class="note group">${esc(g.title)}</p>
         <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
-      <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Runs on this phone; only sharing needs the server.</p>`;
+      <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Follow-ups work: "…and share them", "only the ones from Paris". Runs on this phone; only sharing needs the server.</p>` : ""}
+    ${thread.length && !askBusy ? `<div class="chips followups">${FOLLOWUPS.filter((f) => f.when(askResult)).map((f) => `<button class="chip" data-suggest="${esc(f.q)}">${esc(f.q)}</button>`).join("")}</div>` : ""}`;
   return `
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="Ask or tell me what to do" value="${esc(askQuery)}" autocomplete="off" />
+        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
           ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
+        ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${I.plus}</button>` : ""}
       </div>
       <div class="body">
         ${modelsLine}
@@ -1172,13 +1245,17 @@ function bindSearch() {
   bind("close-search", () => { searchOpen = false; render(); });
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
-  bind("clear-ask", () => { askQuery = ""; askResult = null; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
+  bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
+  bind("new-chat", () => void newChat());
+  document.querySelectorAll<HTMLElement>("[data-more]").forEach((li) => li.addEventListener("click", () => { expandedTurns.add(Number(li.dataset.more)); render(); }));
+  const bodyEl = document.querySelector<HTMLElement>(".sheet .body");
+  if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
   input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { input.blur(); void ask(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
-    const hit = askResult?.sources[Number(li.dataset.hit)];
+    const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];
     if (!hit) return;
     const remote = remotes.find((d) => d.id === hit.driveId);
     if (remote) { void viewRemoteFile(remote, hit.path); return; }
@@ -1387,8 +1464,12 @@ function sleep(ms: number) {
 async function boot() {
   await load();
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
-  // Sources come back by themselves (they need no login); shares wait for their switch.
-  if (state.sources?.length) void startSources();
+  await loadThread();
+  // Everything that was on comes back by itself: sources, and the shares whose switch was on.
+  void (async () => {
+    for (const share of state.shares) if (share.on && state.sessionCookie && !driveStatus(share)?.running) await startShare(share);
+    await startSources();
+  })();
   await AindriveAgent.addListener("statusChanged", (s) => {
     const before = new Map(status.drives.map((d) => [d.driveId, d]));
     status = s;

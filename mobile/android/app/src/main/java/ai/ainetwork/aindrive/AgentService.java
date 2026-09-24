@@ -126,8 +126,9 @@ public class AgentService extends Service {
         }
         if (ACTION_ASK.equals(intent.getAction())) {
             String q = intent.getStringExtra("query");
+            String ctx = intent.getStringExtra("context");
             rpcPool.execute(() -> {
-                try { Log.i(TAG, "ask(" + q + ") → " + ask(q == null ? "" : q).toString(2)); }
+                try { Log.i(TAG, "ask(" + q + ") → " + ask(q == null ? "" : q, ctx == null ? null : new JSONObject(ctx)).toString(2)); }
                 catch (Exception e) { Log.w(TAG, "ask failed", e); }
             });
             return START_STICKY;
@@ -266,15 +267,21 @@ public class AgentService extends Service {
                 @Override public void write(String rel, byte[] data) throws Exception { fs.mkdirs(SafFs.parentOf(rel)); fs.importFile(SafFs.parentOf(rel), SafFs.baseName(rel), new java.io.ByteArrayInputStream(data)); }
                 @Override public android.os.ParcelFileDescriptor openFd(String docId) throws Exception { return fs.openFd(docId); }
             };
-            Conn out = outputConn();
-            if (out == null) return null;
+            // The output drive is looked up per call: the user may switch a share on after asking once.
             return new AskRunner.FileOps() {
+                private SafFs out() throws java.io.IOException {
+                    Conn out = outputConn();
+                    if (out == null) throw new java.io.IOException("no shared drive is on");
+                    return out.fs;
+                }
+                @Override public boolean canWrite() { return outputConn() != null; }
                 @Override public void copy(String docId, String destRel) throws Exception {
-                    try (java.io.InputStream in = fs.open(docId)) { out.fs.mkdirs(SafFs.parentOf(destRel)); out.fs.importFile(SafFs.parentOf(destRel), SafFs.baseName(destRel), in); }
+                    SafFs o = out();
+                    try (java.io.InputStream in = fs.open(docId)) { o.mkdirs(SafFs.parentOf(destRel)); o.importFile(SafFs.parentOf(destRel), SafFs.baseName(destRel), in); }
                 }
                 @Override public void move(String fromRel, String destRel) throws Exception { throw new java.io.IOException("a source folder is read-only"); }
-                @Override public String uriOf(String rel) throws Exception { return out.fs.uriFor(rel).toString(); }
-                @Override public void write(String rel, byte[] data) throws Exception { out.fs.mkdirs(SafFs.parentOf(rel)); out.fs.importFile(SafFs.parentOf(rel), SafFs.baseName(rel), new java.io.ByteArrayInputStream(data)); }
+                @Override public String uriOf(String rel) throws Exception { return out().uriFor(rel).toString(); }
+                @Override public void write(String rel, byte[] data) throws Exception { SafFs o = out(); o.mkdirs(SafFs.parentOf(rel)); o.importFile(SafFs.parentOf(rel), SafFs.baseName(rel), new java.io.ByteArrayInputStream(data)); }
                 @Override public android.os.ParcelFileDescriptor openFd(String docId) throws Exception { return fs.openFd(docId); }
             };
         }
@@ -523,7 +530,9 @@ public class AgentService extends Service {
         return out;
     }
 
-    JSONObject ask(String query) throws Exception {
+    JSONObject ask(String query) throws Exception { return ask(query, null); }
+
+    JSONObject ask(String query, @Nullable JSONObject context) throws Exception {
         java.util.List<Conn> targets;
         synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
@@ -533,7 +542,7 @@ public class AgentService extends Service {
             for (Conn t : targets) if (SOURCE_CALLS.equals(t.driveId) && t.fs != null) c = t;
             if (c == null) for (Conn t : targets) if (t.fs != null) { c = t; break; }
             if (c == null) throw new IllegalStateException("no drive is running");
-            JSONObject r = c.askRunner().ask(query);
+            JSONObject r = c.askRunner().ask(query, context);
             Conn out = c.source ? outputConn() : c;
             String outId = out == null ? c.driveId : out.driveId;
             JSONArray s = r.getJSONArray("sources");
@@ -542,7 +551,7 @@ public class AgentService extends Service {
             return r;
         }
         if (targets.size() == 1) {
-            JSONObject r = targets.get(0).askRunner().ask(query);
+            JSONObject r = targets.get(0).askRunner().ask(query, context);
             Conn only = targets.get(0), out = only.source ? outputConn() : only;
             JSONArray s = r.getJSONArray("sources");
             for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", only.driveId);
@@ -554,7 +563,7 @@ public class AgentService extends Service {
         JSONObject actionOut = new JSONObject();
         for (Conn c : targets) {
             if (c.fs == null) continue;
-            JSONObject r = c.askRunner().ask(query);
+            JSONObject r = c.askRunner().ask(query, context);
             JSONArray s = r.getJSONArray("sources");
             for (int i = 0; i < s.length(); i++) {
                 JSONObject src = s.getJSONObject(i);
@@ -569,7 +578,7 @@ public class AgentService extends Service {
                 actionOut = r.getJSONObject("action").put("driveId", out == null ? c.driveId : out.driveId);
             }
         }
-        if (answer.length() == 0) answer.append(targets.get(0).askRunner().ask(query).getString("answer"));
+        if (answer.length() == 0) answer.append(targets.get(0).askRunner().ask(query, context).getString("answer"));
         JSONObject merged = new JSONObject().put("answer", answer.toString()).put("sources", sources);
         if (actionOut.has("folder")) merged.put("action", actionOut);
         return merged;

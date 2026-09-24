@@ -158,6 +158,12 @@ input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .indexline .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; margin-top: 6px; }
 .indexline .progress i { display: block; height: 100%; background: var(--accent); transition: width 0.3s; }
 .answer { font-size: 15px; margin: 6px 0 10px; white-space: pre-line; }
+.turn { margin: 4px 0 18px; }
+.turn .bubble { display: inline-block; max-width: 88%; margin: 0 0 8px auto; padding: 9px 13px; border-radius: 16px 16px 4px 16px; background: var(--accent); color: #fff; font-size: 14px; float: right; clear: both; }
+.turn .bubble + * { clear: both; }
+.turn:not(.last) .answer { color: var(--muted); font-size: 14px; }
+.hits li.more { display: block; color: var(--accent); font-size: 13px; padding: 8px 6px; }
+.chips.followups { margin-top: 6px; }
 .hits { list-style: none; margin: 0; padding: 0; }
 .hits li { display: grid; grid-template-columns: 36px 1fr; gap: 12px; align-items: center; padding: 10px 6px; border-bottom: 1px solid var(--line); }
 .hits li:active { background: var(--panel); }

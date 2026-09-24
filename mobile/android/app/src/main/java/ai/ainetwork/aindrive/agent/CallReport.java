@@ -133,7 +133,7 @@ public final class CallReport {
             for (FileIndex.Row r : p.recordings) {
                 if (used >= RECORDINGS_PER_PERSON) break;
                 String t = r.transcript;
-                if (t == null && ops != null) {
+                if (t == null && ops != null) {   // reading needs no output drive
                     if (asr == null) asr = speech.get();
                     if (asr == null) break;
                     try (android.os.ParcelFileDescriptor pfd = ops.openFd(r.docId)) {
@@ -171,7 +171,7 @@ public final class CallReport {
         String folder = (ko ? "통화 요약 " : "Call summary ") + day;
         JSONObject action = new JSONObject().put("type", "collect").put("report", "calls").put("share", q.share).put("needsCallLog", !haveLog)
                 .put("people", peopleJson(top));
-        if (ops == null) {
+        if (ops == null || !ops.canWrite()) {
             action.put("skipped", true).put("reason", "no file access");
         } else {
             String file = folder + "/" + (ko ? "통화 요약.md" : "Call summary.md");

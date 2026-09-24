@@ -84,10 +84,14 @@ export interface FileEntry {
 
 export interface AskResult {
   answer: string;
+  /** The effective filters of this turn — pass back as `context` on the next ask. */
+  context?: Record<string, unknown> | null;
+  /** Filters were inherited from the previous turn. */
+  followUp?: boolean;
   sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo"; remoteName?: string }[];
   /** Present when the question was a task ("…모아서 폴더로 만들어줘"). */
   action?: {
-    type: "collect";
+    type: "collect" | "move" | "count" | "delete";
     driveId?: string;
     /** Drive-relative path of the folder that was created. */
     folder?: string;
@@ -165,8 +169,8 @@ export interface AindriveAgentPlugin {
   reindex(opts?: { driveId?: string }): Promise<AgentStatus>;
   /** Download the recognition models (≈230 MB, checksum-verified) and recognise indexed files. Progress via statusChanged. */
   ensureModels(): Promise<AgentStatus>;
-  /** Ask the on-device agent — fully offline (gazetteer + local index). */
-  ask(opts: { query: string }): Promise<AskResult>;
+  /** Ask the on-device agent — fully offline (gazetteer + local index). `context` is the previous answer's `context` so follow-ups ("…and share them") apply to the same files. */
+  ask(opts: { query: string; context?: Record<string, unknown> }): Promise<AskResult>;
   addListener(
     event: "statusChanged",
     cb: (s: AgentStatus) => void,
