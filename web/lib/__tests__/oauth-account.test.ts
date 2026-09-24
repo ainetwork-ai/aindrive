@@ -311,8 +311,9 @@ describe("(e) /mcp/d/[driveId] with an account token", () => {
 
   it("401 with the drive's resource_metadata for a bad/revoked account token", async () => {
     const t = issue("viewer1", "drives:read");
-    const [row] = acct.listAccountTokens("viewer1");
-    acct.revokeAccountToken("viewer1", row.id);
+    // Revoke exactly this token: viewer1 holds others from earlier tests, and
+    // same-millisecond created_at makes "the first listed" order unstable.
+    acct.revokeAccountToken("viewer1", acct.verifyAccountToken(t.access_token)!.id);
     const res = await rpc("d1", t.access_token, { jsonrpc: "2.0", id: 1, method: "tools/list" });
     expect(res.status).toBe(401);
     expect(res.headers.get("www-authenticate")).toContain(
