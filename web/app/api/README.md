@@ -51,7 +51,7 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
 | `download` | chunked stream, `Content-Disposition: attachment`, no size cap. |
 | `thumbnail` | 256px webp via sharp, disk cache keyed by `sha1(path)+mtime`. |
-| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. |
+| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. Deleting a file, or renaming onto an existing one, frees a slot in the owner's file count. |
 
 Payments / capabilities:
 

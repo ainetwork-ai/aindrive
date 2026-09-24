@@ -11,6 +11,14 @@
  * On the very first read for an owner the cache is empty (0/0). The
  * counts only become accurate as the owner writes through aindrive —
  * fine because the limits are *upper* bounds, not exact quotas.
+ *
+ * Deltas are signed: a create adds 1, a delete subtracts 1. The STORED
+ * total is clamped at 0, never the delta — deleting a file that predates
+ * the counter (created on the agent's disk directly) must not push it
+ * negative, but every counted delete has to free its slot. There is no
+ * recount from the agent's filesystem on purpose: files a user put in the
+ * shared folder outside aindrive were never counted, and a walk would
+ * suddenly count them against the cap.
  */
 
 import { db } from "./db.js";
@@ -25,12 +33,14 @@ db.exec(`
 `);
 
 const _get = db.prepare("SELECT files, folders FROM storage_usage WHERE owner_id = ?");
+// Both branches use the raw delta. `excluded.files` would be the INSERT value,
+// already clamped to 0, so adding it turned every delete into +0.
 const _upsert = db.prepare(`
   INSERT INTO storage_usage (owner_id, files, folders, updated_at)
-  VALUES (?, MAX(0, ?), MAX(0, ?), strftime('%s','now') * 1000)
+  VALUES (@owner, MAX(0, @files), MAX(0, @folders), strftime('%s','now') * 1000)
   ON CONFLICT(owner_id) DO UPDATE SET
-    files   = MAX(0, files   + excluded.files),
-    folders = MAX(0, folders + excluded.folders),
+    files   = MAX(0, files   + @files),
+    folders = MAX(0, folders + @folders),
     updated_at = strftime('%s','now') * 1000
 `);
 
@@ -43,6 +53,5 @@ export function bumpOwnerUsage(ownerId, delta = {}) {
   const dFiles = Number.isInteger(delta.files) ? delta.files : 0;
   const dFolders = Number.isInteger(delta.folders) ? delta.folders : 0;
   if (dFiles === 0 && dFolders === 0) return;
-  // INSERT path uses the deltas as initial values; clamp to 0 in SQL.
-  _upsert.run(ownerId, dFiles, dFolders);
+  _upsert.run({ owner: ownerId, files: dFiles, folders: dFolders });
 }

@@ -94,6 +94,11 @@ describe("rename destination is gated", () => {
     expect(calls).toEqual([]);
     const inside = await renameRoute.POST(post({ from: "docs/a.txt", to: "docs/b.txt" }), ctx);
     expect(inside.status).toBe(200);
-    expect(calls).toEqual([{ method: "rename", from: "docs/a.txt", to: "docs/b.txt" }]);
+    // The destination stat is the file-count bookkeeping (a rename onto an
+    // existing file frees its slot); it runs only after both gates pass.
+    expect(calls).toEqual([
+      { method: "stat", path: "docs/b.txt" },
+      { method: "rename", from: "docs/a.txt", to: "docs/b.txt" },
+    ]);
   });
 });
