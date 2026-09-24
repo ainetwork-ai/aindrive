@@ -4,6 +4,9 @@
  */
 import { AGUI_CORS, aguiInfo, serveAgui } from "@/lib/agui";
 
+// Never prerender: the module pulls in the DB-backed skill layer.
+export const dynamic = "force-dynamic";
+
 type Ctx = { params: Promise<{ driveId: string }> };
 
 export function OPTIONS() {

@@ -5,6 +5,9 @@
  */
 import { AGUI_CORS, aguiInfo, serveAgui } from "@/lib/agui";
 
+// Never prerender: the module pulls in the DB-backed skill layer.
+export const dynamic = "force-dynamic";
+
 export function OPTIONS() {
   return new Response(null, { status: 204, headers: AGUI_CORS });
 }
