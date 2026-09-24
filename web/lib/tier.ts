@@ -23,6 +23,7 @@
 import { db } from "@/lib/db";
 import { getWallet } from "@/lib/wallet";
 import { getActiveLiftExpiry } from "@/lib/paid-lifts.js";
+import { isUnlimitedOwner } from "@/lib/limits";
 
 export type Tier = "free" | "pro" | "max";
 
@@ -94,6 +95,8 @@ export function getAccountTier(userId: string): TierGrant {
 
 export type OwnerStorageCaps = {
   tier: Tier;
+  /** Listed in AINDRIVE_UNLIMITED_OWNERS: no file/folder count cap. */
+  exempt: boolean;
   fileLimit: number;
   folderLimit: number;
 };
@@ -104,8 +107,12 @@ export type OwnerStorageCaps = {
  * writes, since it reads nothing from the request.
  */
 export function getOwnerStorageCaps(ownerId: string): OwnerStorageCaps {
-  const { tier } = getAccountTier(ownerId);
-  return { tier, fileLimit: TIER_FILE_LIMIT[tier], folderLimit: TIER_FOLDER_LIMIT[tier] };
+  const wallets = accountWallets(ownerId);
+  const { tier } = tierForWallets(wallets);
+  if (isUnlimitedOwner(ownerId, wallets)) {
+    return { tier, exempt: true, fileLimit: Number.POSITIVE_INFINITY, folderLimit: Number.POSITIVE_INFINITY };
+  }
+  return { tier, exempt: false, fileLimit: TIER_FILE_LIMIT[tier], folderLimit: TIER_FOLDER_LIMIT[tier] };
 }
 
 export function tierBudget(tier: Tier, base: { limit: number; windowMs: number }) {

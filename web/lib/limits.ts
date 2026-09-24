@@ -14,3 +14,22 @@ export function getUserDriveLimit(_userId: string): number {
   const raw = parseInt(process.env.AINDRIVE_DEFAULT_DRIVE_LIMIT ?? "", 10);
   return Number.isFinite(raw) && raw > 0 ? raw : Infinity;
 }
+
+/**
+ * Operator exemption from the per-owner storage caps (lib/tier.ts
+ * getOwnerStorageCaps). AINDRIVE_UNLIMITED_OWNERS is a comma-separated list of
+ * user ids and/or wallet addresses; a drive whose owner matches — by id, or by
+ * any wallet linked to the owner's account — has no file/folder count cap.
+ * For service accounts that host many users' files in one drive (e.g. an
+ * app's operator drive written through a PAT). Read per call, so a restart
+ * is the only deploy step. Ids match exactly; addresses case-insensitively.
+ */
+export function isUnlimitedOwner(ownerId: string, ownerWallets: readonly string[] = []): boolean {
+  const entries = (process.env.AINDRIVE_UNLIMITED_OWNERS ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  if (entries.length === 0) return false;
+  const wallets = new Set(ownerWallets.map((w) => w.toLowerCase()));
+  return entries.some((e) => e === ownerId || (/^0x[0-9a-fA-F]{40}$/.test(e) && wallets.has(e.toLowerCase())));
+}

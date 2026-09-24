@@ -1,7 +1,8 @@
 // The per-owner file cap: resolved from the drive OWNER's account (never the
 // request's wallet cookie) for session, drive-PAT and account-token writes; the
-// owner usage counter moves both ways.
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+// owner usage counter moves both ways; AINDRIVE_UNLIMITED_OWNERS exempts an
+// operator's drives.
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,6 +85,7 @@ const deleteRoute = await import("../../app/api/drives/[driveId]/fs/delete/route
 const FREE_CAP = TIER_FILE_LIMIT.free;
 const PRO_WALLET = "0x00000000000000000000000000000000000000a1";
 const EDITOR_MAX_WALLET = "0x00000000000000000000000000000000000000b2";
+const OPERATOR_WALLET = "0x00000000000000000000000000000000000000C3";
 const DAY = 24 * 60 * 60 * 1000;
 
 let clientId = "";
@@ -140,9 +142,11 @@ beforeAll(async () => {
   u.run("free1", "free@example.com", "Free owner", "x");
   u.run("pro1", "pro@example.com", "Pro owner", "x");
   u.run("editor1", "ed@example.com", "Editor", "x");
+  u.run("operator1", "op@example.com", "Operator", "x");
   const d = db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)");
   d.run("dfree", "free1", "Free", "h", "s");
   d.run("dpro", "pro1", "Pro", "h", "s");
+  d.run("dop", "operator1", "Operator", "h", "s");
   db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES (?,?,?,?,?)")
     .run("m1", "dfree", "editor1", "", "editor");
 
@@ -152,11 +156,13 @@ beforeAll(async () => {
   // editor1 holds Max — which must never lift someone else's drive's cap.
   linkWalletToAccount("editor1", EDITOR_MAX_WALLET, "siwe");
   addLift({ wallet: EDITOR_MAX_WALLET, scope: "tier:max", ttlMs: 30 * DAY, paymentTx: "0xtx-max" });
+  linkWalletToAccount("operator1", OPERATOR_WALLET, "siwe");
 
   clientId = oauth.registerClient("Afan", ["https://afan.example/cb"]).client_id;
 });
 
 beforeEach(() => { cookieJar.clear(); });
+afterEach(() => { delete process.env.AINDRIVE_UNLIMITED_OWNERS; });
 
 describe("owner usage counter", () => {
   it("applies negative deltas and clamps the stored total at 0", () => {
@@ -211,7 +217,7 @@ describe("owner usage counter", () => {
 describe("file cap is the drive owner's, whoever calls", () => {
   it("drive PAT: a Pro owner writes past the free cap though the call carries no wallet cookie", async () => {
     setFiles("pro1", FREE_CAP);
-    expect(getOwnerStorageCaps("pro1")).toMatchObject({ tier: "pro", fileLimit: TIER_FILE_LIMIT.pro });
+    expect(getOwnerStorageCaps("pro1")).toMatchObject({ tier: "pro", exempt: false, fileLimit: TIER_FILE_LIMIT.pro });
     expect(await writeFile("dpro", pat("pro1", "dpro"), fresh())).toBe("");
     expect(getOwnerUsage("pro1").files).toBe(FREE_CAP + 1);
   });
@@ -257,5 +263,34 @@ describe("file cap is the drive owner's, whoever calls", () => {
     cookieJar.set("aindrive_session", await sign("pro1"));
     setFiles("pro1", FREE_CAP);
     expect((await route(writeRoute.POST, "dpro", "write", { path: fresh(), content: "x" })).status).toBe(200);
+  });
+});
+
+describe("AINDRIVE_UNLIMITED_OWNERS", () => {
+  it("exempts an owner listed by user id", async () => {
+    process.env.AINDRIVE_UNLIMITED_OWNERS = "someone-else, operator1";
+    setFiles("operator1", FREE_CAP * 5);
+    expect(getOwnerStorageCaps("operator1")).toMatchObject({ tier: "free", exempt: true, fileLimit: Infinity });
+    expect(await writeFile("dop", pat("operator1", "dop"), fresh())).toBe("");
+    expect(getOwnerUsage("operator1").files).toBe(FREE_CAP * 5 + 1);
+  });
+
+  it("exempts an owner listed by a linked wallet address, case-insensitively", async () => {
+    process.env.AINDRIVE_UNLIMITED_OWNERS = OPERATOR_WALLET.toLowerCase();
+    setFiles("operator1", FREE_CAP * 5);
+    expect(await writeFile("dop", accountToken("operator1"), fresh())).toBe("");
+  });
+
+  it("leaves unlisted free owners capped", async () => {
+    process.env.AINDRIVE_UNLIMITED_OWNERS = `operator1,${OPERATOR_WALLET}`;
+    expect(getOwnerStorageCaps("free1").exempt).toBe(false);
+    setFiles("free1", FREE_CAP);
+    expect(await writeFile("dfree", pat("free1", "dfree"), fresh())).toContain("file_limit_reached");
+  });
+
+  it("is off when unset", async () => {
+    setFiles("operator1", FREE_CAP);
+    expect(getOwnerStorageCaps("operator1").exempt).toBe(false);
+    expect(await writeFile("dop", pat("operator1", "dop"), fresh())).toContain("file_limit_reached");
   });
 });

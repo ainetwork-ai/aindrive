@@ -30,7 +30,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `sales.ts` — share-link create/edit/revoke, payout-wallet and token-policy validation, receipt paging. One implementation behind the `shares`/`payout`/drive-PATCH routes and the remote-MCP sale tools; returns `{ ok: false, status, error }` with the route's exact message.
 - `x402-ain.ts` — x402 v2 facilitator for AIN on ETH mainnet (build requirements, `verify`, `settle` via on-chain Transfer log).
 - `paid-lifts.js` — `paid_lifts` table: quota/tier lifts bought with AIN + tx-hash anti-replay (`txHashUsed`).
-- `tier.ts` — free/pro/max tiers from active lifts. Rate limits use the caller's tier (wallet cookie); storage caps use the drive owner's (`getOwnerStorageCaps`: lifts on any wallet linked to the owner), identical for session, PAT and account-token writes.
+- `tier.ts` — free/pro/max tiers from active lifts. Rate limits use the caller's tier (wallet cookie); storage caps use the drive owner's (`getOwnerStorageCaps`: lifts on any wallet linked to the owner, or `AINDRIVE_UNLIMITED_OWNERS`), identical for session, PAT and account-token writes.
 - `wallet.ts` — SIWE nonce/cookie, `linkWalletToAccount`, `resolveAccountForWallet` (wallet→durable account bridge).
 - `base-siwe.ts` — client helpers for Base Account `wallet_connect` + `signInWithEthereum` (single-popup passkey + SIWE; the popup-blocker rationale lives in its header).
 - `payment-hooks.ts` — `onPaymentSettled` extension point (Phase 2 stub).
@@ -71,7 +71,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - Config/boot: `env.ts`, `load-env.js`, `boot-checks.js`, `cookie-config.ts`.
 - Identity: `session.ts` (session JWT cookie).
 - Observability: `logger.js`, `trace.js` (stdout + ring buffer).
-- Guards/limits: `rate-limit.js`, `limits.ts`.
+- Guards/limits: `rate-limit.js`, `limits.ts` (drives-per-account cap, `AINDRIVE_UNLIMITED_OWNERS` storage-cap exemption).
 - Helpers: `path.js`, `mime.ts`, `zod-helpers.ts` (`zPath`), `sort-entries.ts`, `api-client.ts`, `wagmi-config.ts`, `eip6963-uuid-guard.ts` (stabilises misbehaving wallet-extension announces so the picker lists each wallet once).
 
 ## Contracts & invariants

@@ -39,7 +39,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // Only enforce on file creation — overwrites of existing files don't bump
   // the count. We approximate "is this a new file?" by asking the agent for
   // a stat first; if it errors as not-found, treat as create. The cap is the
-  // drive owner's tier, not the caller's.
+  // drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS), not the caller's.
   const ownerId = drive.owner_id as string;
   const { tier, fileLimit } = getOwnerStorageCaps(ownerId);
   let creating = false;

@@ -84,6 +84,7 @@ load-bearing ones:
 | `AINDRIVE_SESSION_SECRET` | 32+ random bytes | Required in prod (no file fallback). `openssl rand -hex 32`. |
 | `AINDRIVE_PUBLIC_URL` | `https://…` | Must be https; secure cookies refuse plain http. |
 | `AINDRIVE_DEFAULT_DRIVE_LIMIT` | **unset** (unlimited) | Positive integer caps drives per account (`POST /api/drives` → 429 `drive_limit_reached`). Every shared folder is a drive, so a low cap bites phone users first. |
+| `AINDRIVE_UNLIMITED_OWNERS` | **unset** (every owner capped by tier) | Comma-separated user ids and/or wallet addresses. Drives whose owner is listed (by id, or by any wallet linked to the owner's account) skip the per-owner file-count cap: free 1,000 / pro 100,000 files summed over all of that owner's drives, counted on every write path (browser, MCP PAT, account token). Set it for an app's operator account that stores many users' files in one drive through a PAT. Read per request; a restart applies it. |
 
 **Payout wallets are NOT an env var.** Each drive owner sets their own payout
 wallet in Settings → Payments; a paid share can't be created until they do.

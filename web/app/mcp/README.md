@@ -101,7 +101,7 @@ For third-party web apps: one token pair for the user, not one drive.
 - The `.aindrive/` subtree (agent token, drive secret, agent API keys) is refused for every role.
 - Paid rules match `fs/*`: a priced subtree can't be read or listed without an
   entitlement. Listed sales show as `locked`, unlisted sales are hidden, and `search` never descends into them.
-- `write_file` enforces the same size and file-count caps as `fs/write`. The count cap is the drive owner's tier, never the caller's: a PAT or account-token call sends no wallet cookie.
+- `write_file` enforces the same size and file-count caps as `fs/write`. The count cap is the drive owner's (their tier, or `AINDRIVE_UNLIMITED_OWNERS`), never the caller's: a PAT or account-token call sends no wallet cookie.
 
 ## Gotchas
 

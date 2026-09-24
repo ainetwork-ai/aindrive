@@ -189,8 +189,8 @@ export async function runSkill(
           const l = await callAgent(driveId, driveSecret, { method: "list", path: parent });
           creating = !((l.entries ?? []) as Entry[]).some((e) => e.name === base && !e.isDir);
         } catch { /* parent missing → create */ }
-        // The cap is the drive owner's tier, not the caller's: PAT /
-        // account-token calls carry no wallet cookie.
+        // The cap is the drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS),
+        // not the caller's: PAT / account-token calls carry no wallet cookie.
         const ownerId = drive.owner_id as string;
         if (creating) {
           const { tier, fileLimit: limit } = getOwnerStorageCaps(ownerId);
