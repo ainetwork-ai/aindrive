@@ -96,8 +96,11 @@ public final class SpeechRecognizer implements AutoCloseable {
     }
 
     /** Null when the file has no audio track. */
-    public Transcript transcribe(FileDescriptor fd) throws IOException {
-        AudioDecoder.Pcm pcm = AudioDecoder.decode(fd, MAX_SECONDS);
+    public Transcript transcribe(FileDescriptor fd) throws IOException { return transcribe(fd, MAX_SECONDS); }
+
+    /** Same, hearing at most `maxSeconds` — a quick look at a long call. */
+    public Transcript transcribe(FileDescriptor fd, int maxSeconds) throws IOException {
+        AudioDecoder.Pcm pcm = AudioDecoder.decode(fd, Math.min(maxSeconds, MAX_SECONDS));
         if (pcm == null) return null;
         StringBuilder sb = new StringBuilder();
         int win = WINDOW_SECONDS * AudioDecoder.TARGET_RATE;

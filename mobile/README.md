@@ -104,6 +104,29 @@ drive and a laptop drive are the same thing to the server.
   the shell mint a viewer link for that folder via `POST /api/drives/:id/shares`
   (the shell holds the session — the native side never does). Only exact
   matches are collected: a relaxed search reports `skipped` instead.
+- **A folder the agent makes is a drive of its own**, not a sub-folder of the
+  drive it was collected from. It sits physically inside that folder (the only
+  place with a SAF grant), but the shell registers it as its own share (root =
+  `buildDocumentUriUsingTree` URI, `SharedFolder.parent`), pairs it, and passes
+  every other share's root as `excludeUris` so the parent stops listing it
+  (`SafFs` hides excluded doc ids). Share links therefore point at the new
+  drive's root, and a file belongs to exactly one drive.
+- **Agent sources** (`AgentConfig.source`, drive ids `src-calls` / `src-photos`)
+  are folders the agent may *read* for its tasks — Samsung's `Call` recordings
+  and `DCIM` — without serving them: a `Conn` with no socket, indexed like a
+  drive. Anything made from a source (a collected folder, a report) is written
+  into the first shared drive that is on (`AgentService.outputConn`), and its
+  `action.driveId` names that drive. With no shared drive on, the task is
+  reported as `skipped: "no file access"`.
+- **The call report** ("who do I talk to most, and about what" —
+  `QueryParser.isCallsTask` → `agent/CallReport`) ranks people by the call log
+  (`READ_CALL_LOG`, asked from the action card; without it recordings are
+  counted instead), groups `통화 녹음 <who>_yymmdd_hhmmss.m4a` recordings by
+  person, transcribes the newest 3 per person on demand (first 3 minutes,
+  cached in the index — a call source is never transcribed at index time) and
+  writes `Call summary <date>/Call summary.md`. "Usually about" is TF-IDF
+  vocabulary across people plus one representative sentence, and the markdown
+  says so; there is no LLM on the phone.
 - **Files open in the app.** Images (downscaled via `readFile`) and audio show
   in an in-app viewer; everything else goes to the OS chooser (`openFile`).
 - **`agent-ask` is answered on the phone, offline.** Same `{answer, sources:

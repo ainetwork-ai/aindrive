@@ -40,6 +40,8 @@ public final class SearchQuery {
     public boolean oldestFirst;
     /** "큰 파일 5개": rank by size (with a limit) rather than a size floor. */
     public boolean bySize;
+    /** "통화내역 많이 통화한 순으로 / sort my calls by who I talk to most": the call-history report, not a file search. */
+    public boolean calls;
 
     public @Nullable String textQuery() {
         return keywords.isEmpty() ? null : String.join(" ", keywords);

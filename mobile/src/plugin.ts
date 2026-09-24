@@ -34,6 +34,14 @@ export interface AgentConfig {
   folderLabel?: string;
   /** Build the photo index right after connecting (first run can take minutes). */
   indexOnStart?: boolean;
+  /** Roots of the other drives; any that sit inside this folder are hidden from it. */
+  excludeUris?: string[];
+  /**
+   * An agent SOURCE, not a shared drive: the folder is indexed for the agent's
+   * tasks (call recordings, the camera roll) but never served to the web.
+   * driveId is "src-calls" or "src-photos"; no credentials needed.
+   */
+  source?: boolean;
 }
 
 /** Photo-index state for one drive; drives `Index photos` progress in the UI. */
@@ -83,6 +91,15 @@ export interface AskResult {
     driveId?: string;
     /** Drive-relative path of the folder that was created. */
     folder?: string;
+    /** Native handle of that folder (Android: document URI in the tree) — the shell turns it into a drive of its own. */
+    folderUri?: string;
+    /** Display name once the folder is its own drive (`folder` is then ""). */
+    label?: string;
+    /** "calls": the call-history report; `people` is the ranking. */
+    report?: "calls";
+    people?: { name: string; calls: number; seconds: number; recordings: number; topics: string[]; gist: string }[];
+    /** The report had no call log because READ_CALL_LOG is not granted — offer the permission. */
+    needsCallLog?: boolean;
     copied?: number;
     failed?: number;
     /** The user also asked to share it — the shell mints the link (it holds the session). */
@@ -94,6 +111,8 @@ export interface AskResult {
 
 export interface DriveStatus {
   driveId: string;
+  /** True for an agent source (see AgentConfig.source). */
+  source?: boolean;
   folderLabel: string | null;
   running: boolean;
   connected: boolean;
@@ -114,8 +133,10 @@ export interface AgentStatus {
 export const IDLE_STATUS: AgentStatus = { running: false, connected: false, drives: [] };
 
 export interface AindriveAgentPlugin {
-  /** Opens the system folder picker and takes a persistable read/write grant. */
-  pickFolder(): Promise<PickedFolder>;
+  /** Opens the system folder picker (at `initial`, e.g. "Call" or "DCIM", when given) and takes a persistable read/write grant. */
+  pickFolder(opts?: { initial?: string }): Promise<PickedFolder>;
+  /** Asks for READ_CALL_LOG (the call-history report ranks people by it). */
+  requestCallLog(): Promise<{ granted: boolean }>;
   /**
    * Opens the system file picker (multi-select) and copies the chosen files
    * into the folder — the phone's stand-in for dragging files into a share.

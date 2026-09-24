@@ -33,7 +33,8 @@ import org.json.JSONObject;
         name = "AindriveAgent",
         permissions = {
                 @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"}),
-                @Permission(alias = "mediaLocation", strings = {"android.permission.ACCESS_MEDIA_LOCATION"})
+                @Permission(alias = "mediaLocation", strings = {"android.permission.ACCESS_MEDIA_LOCATION"}),
+                @Permission(alias = "callLog", strings = {"android.permission.READ_CALL_LOG"})
         })
 public class AindriveAgentPlugin extends Plugin {
 
@@ -50,6 +51,12 @@ public class AindriveAgentPlugin extends Plugin {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        // "initial": open the picker AT a folder ("Call", "DCIM") so the user only has to confirm.
+        String initial = call.getString("initial");
+        if (initial != null && Build.VERSION.SDK_INT >= 26) {
+            Uri at = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + initial);
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, at);
+        }
         startActivityForResult(call, intent, "folderPicked");
     }
 
@@ -316,9 +323,22 @@ public class AindriveAgentPlugin extends Plugin {
 
     // ------------------------------------------------------------ agent
 
+    /** READ_CALL_LOG for the call-history report; resolves {granted}. */
+    @PluginMethod
+    public void requestCallLog(PluginCall call) {
+        if (getPermissionState("callLog") == com.getcapacitor.PermissionState.GRANTED) { call.resolve(new JSObject().put("granted", true)); return; }
+        requestPermissionForAlias("callLog", call, "afterCallLogPermission");
+    }
+
+    @com.getcapacitor.annotation.PermissionCallback
+    private void afterCallLogPermission(PluginCall call) {
+        call.resolve(new JSObject().put("granted", getPermissionState("callLog") == com.getcapacitor.PermissionState.GRANTED));
+    }
+
     @PluginMethod
     public void start(PluginCall call) {
-        String[] required = {"serverUrl", "driveId", "agentToken", "driveSecret", "folderUri"};
+        boolean source = Boolean.TRUE.equals(call.getBoolean("source", false));
+        String[] required = source ? new String[]{"driveId", "folderUri"} : new String[]{"serverUrl", "driveId", "agentToken", "driveSecret", "folderUri"};
         for (String k : required) {
             if (call.getString(k) == null) {
                 call.reject("missing " + k);
@@ -350,7 +370,12 @@ public class AindriveAgentPlugin extends Plugin {
                 .putExtra("driveSecret", call.getString("driveSecret"))
                 .putExtra("folderUri", call.getString("folderUri"))
                 .putExtra("folderLabel", call.getString("folderLabel", ""))
-                .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)));
+                .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)))
+                .putExtra("source", Boolean.TRUE.equals(call.getBoolean("source", false)));
+        java.util.ArrayList<String> exclude = new java.util.ArrayList<>();
+        com.getcapacitor.JSArray ex = call.getArray("excludeUris");
+        if (ex != null) for (int i = 0; i < ex.length(); i++) { try { exclude.add(ex.getString(i)); } catch (Exception ignored) { } }
+        svc.putStringArrayListExtra("excludeUris", exclude);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getContext().startForegroundService(svc);
         else getContext().startService(svc);
         call.resolve(currentStatus());

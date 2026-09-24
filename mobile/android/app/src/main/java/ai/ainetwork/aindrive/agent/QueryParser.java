@@ -101,11 +101,11 @@ public final class QueryParser {
     private static final String[] COLLECT_WORDS = {"모아", "모아서", "모아줘", "모으", "묶어", "정리", "폴더", "앨범", "collect", "gather", "folder", "album", "organize", "organise", "copy", "복사"};
     private static final String[] MOVE_WORDS = {"옮겨", "옮기", "이동", "move"};
     private static final String[] SHARE_WORDS = {"공유", "링크", "share", "link"};
-    private static final String[] DELETE_WORDS = {"삭제", "지워", "지우", "없애", "delete", "remove", "trash"};
-    private static final String[] COUNT_WORDS = {"몇", "개수", "갯수", "count", "how many"};
+    private static final String[] DELETE_WORDS = {"삭제", "지워", "지우", "없애", "delete", "remove", "trash", "rid"};
+    private static final String[] COUNT_WORDS = {"몇", "개수", "갯수", "count", "number", "how many"};
     private static final String[] OLDEST_WORDS = {"오래된", "옛날", "가장오래된", "oldest", "earliest"};
     private static final String[] TASK_FILLER = {"만들어", "만들고", "만들어서", "만들어줘", "만든", "새", "넣어", "넣고", "해줘", "해서", "하고", "줘", "그리고", "다음", "개야", "개나", "개", "있어", "있니", "있나", "있는지", "알려줘", "알려", "골라", "골라줘", "뽑아", "뽑아줘", "보여줘",
-            "then", "and", "make", "create", "put", "into", "new", "them", "it", "me", "there", "are", "is", "do", "i", "have", "tell", "pick", "top", "only"};
+            "then", "and", "make", "create", "put", "into", "new", "them", "it", "me", "there", "are", "is", "do", "i", "have", "tell", "pick", "top", "only", "did", "take", "took", "taken", "just", "to", "get", "of", "my", "ate", "eat", "eaten", "had"};
     private static final Pattern KO_COUNT = Pattern.compile("^(\\d{1,3})(개|장|건|개만|장만|건만)$");
     private static final Pattern EN_COUNT = Pattern.compile("^(\\d{1,3})$");
     /** Bare counters left behind by "몇 장", "몇 개". */
@@ -127,9 +127,21 @@ public final class QueryParser {
 
     public QueryParser(GeoLookup geo) { this.geo = geo; }
 
+    /** "통화 내역 / call history / who I call most": a report over the call log, not a file search. */
+    private static final Pattern CALLS_TASK = Pattern.compile(
+            "통화\\s*(내역|기록|녹음|목록|요약|많이)|통화한|통화했|(call|phone)\\s*(history|logs?|records?|recordings?)|\\bcalls\\b|who\\s+(do\\s+)?i\\s+(call|talk|phone)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SHARE_ASK = Pattern.compile("공유|링크|\\bshare|\\blink", Pattern.CASE_INSENSITIVE);
+
+    public static boolean isCallsTask(String question) { return question != null && CALLS_TASK.matcher(question).find(); }
+
     public SearchQuery parse(String question, long nowMs) {
         SearchQuery q = new SearchQuery();
         q.korean = question.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
+        if (isCallsTask(question)) {
+            q.calls = true;
+            q.share = SHARE_ASK.matcher(question).find();
+            return q;
+        }
         List<String> tokens = tokenize(question);
         Calendar now = Calendar.getInstance(TimeZone.getDefault());
         now.setTimeInMillis(nowMs);

@@ -150,9 +150,10 @@ public class AgentService extends Service {
                 intent.getStringExtra("agentToken"),
                 intent.getStringExtra("driveSecret"),
                 intent.getStringExtra("folderLabel"));
+        conn.source = intent.getBooleanExtra("source", false);
         try {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
-            conn.fs = new SafFs(this, tree);
+            conn.fs = new SafFs(this, tree, intent.getStringArrayListExtra("excludeUris"));
             conn.index = new FileIndex(this, driveId);
             conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
         } catch (Exception e) {
@@ -165,7 +166,7 @@ public class AgentService extends Service {
         Conn previous;
         synchronized (conns) { previous = conns.put(driveId, conn); }
         if (previous != null) previous.close();
-        conn.connect();
+        if (!conn.source) conn.connect();
         if (intent.getBooleanExtra("indexOnStart", false)) reindex(driveId);
         // START_STICKY: if Android reclaims us under memory pressure, come back
         // and reconnect rather than leaving the drive silently offline.
@@ -178,6 +179,13 @@ public class AgentService extends Service {
     private final class Conn {
         final String serverUrl, driveId, agentToken, driveSecret, folderLabel;
         final AtomicInteger rpcCount = new AtomicInteger();
+        /**
+         * An agent SOURCE: a folder the agent may read for its tasks (call
+         * recordings, the camera roll) that is NOT served to the web. No
+         * socket; anything the agent produces from it is written into a
+         * shared drive ({@link #outputConn()}).
+         */
+        boolean source;
         SafFs fs;
         RpcHandler rpc;
         FileIndex index;
@@ -245,17 +253,37 @@ public class AgentService extends Service {
         }
 
         synchronized AskRunner askRunner() {
-            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, new AskRunner.FileOps() {
+            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull);
+            return ask;
+        }
+
+        /** Where the agent writes: this drive, or for a source the first shared drive that is on (null → tasks are reported, not done). */
+        private AskRunner.FileOps fileOps() {
+            if (!source) return new AskRunner.FileOps() {
                 @Override public void copy(String docId, String destRel) throws Exception { fs.copy(docId, destRel); }
                 @Override public void move(String fromRel, String destRel) throws Exception { fs.rename(fromRel, destRel); }
-            });
-            return ask;
+                @Override public String uriOf(String rel) throws Exception { return fs.uriFor(rel).toString(); }
+                @Override public void write(String rel, byte[] data) throws Exception { fs.mkdirs(SafFs.parentOf(rel)); fs.importFile(SafFs.parentOf(rel), SafFs.baseName(rel), new java.io.ByteArrayInputStream(data)); }
+                @Override public android.os.ParcelFileDescriptor openFd(String docId) throws Exception { return fs.openFd(docId); }
+            };
+            Conn out = outputConn();
+            if (out == null) return null;
+            return new AskRunner.FileOps() {
+                @Override public void copy(String docId, String destRel) throws Exception {
+                    try (java.io.InputStream in = fs.open(docId)) { out.fs.mkdirs(SafFs.parentOf(destRel)); out.fs.importFile(SafFs.parentOf(destRel), SafFs.baseName(destRel), in); }
+                }
+                @Override public void move(String fromRel, String destRel) throws Exception { throw new java.io.IOException("a source folder is read-only"); }
+                @Override public String uriOf(String rel) throws Exception { return out.fs.uriFor(rel).toString(); }
+                @Override public void write(String rel, byte[] data) throws Exception { out.fs.mkdirs(SafFs.parentOf(rel)); out.fs.importFile(SafFs.parentOf(rel), SafFs.baseName(rel), new java.io.ByteArrayInputStream(data)); }
+                @Override public android.os.ParcelFileDescriptor openFd(String docId) throws Exception { return fs.openFd(docId); }
+            };
         }
 
         synchronized Indexer indexer() {
             if (indexer == null) indexer = new Indexer(fs, index, geo(), new Indexer.Recognisers() {
                 @Override public ClipEmbedder clip() { return clipOrNull(); }
-                @Override public SpeechRecognizer speech() { return speechOrNull(); }
+                // A call-recordings source is hours of audio: transcribe on demand (CallReport), not at index time.
+                @Override public SpeechRecognizer speech() { return source && SOURCE_CALLS.equals(driveId) ? null : speechOrNull(); }
             });
             return indexer;
         }
@@ -324,6 +352,7 @@ public class AgentService extends Service {
             JSONObject o = new JSONObject();
             try {
                 o.put("driveId", driveId);
+                o.put("source", source);
                 o.put("folderLabel", folderLabel == null ? JSONObject.NULL : folderLabel);
                 o.put("running", !closed && !stopping);
                 o.put("connected", connected);
@@ -470,15 +499,54 @@ public class AgentService extends Service {
      * Ask every running drive and merge, newest first. One phone, one user —
      * the folders are all theirs, so a question spans all of them.
      */
+    /** Drive ids of the agent sources (fixed: one folder of each kind). */
+    public static final String SOURCE_CALLS = "src-calls", SOURCE_PHOTOS = "src-photos";
+
+    /** The shared drive that receives what the agent makes out of a source. */
+    @Nullable Conn outputConn() {
+        synchronized (conns) {
+            for (Conn c : conns.values()) if (!c.source && c.fs != null && !c.closed) return c;
+        }
+        return null;
+    }
+
+    /** The phone's call log, newest first; null when READ_CALL_LOG was not granted. */
+    @Nullable java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> callLog() {
+        java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> out = new java.util.ArrayList<>();
+        String[] cols = {android.provider.CallLog.Calls.NUMBER, android.provider.CallLog.Calls.CACHED_NAME, android.provider.CallLog.Calls.DURATION, android.provider.CallLog.Calls.DATE};
+        try (android.database.Cursor c = getContentResolver().query(android.provider.CallLog.Calls.CONTENT_URI, cols, null, null, android.provider.CallLog.Calls.DATE + " DESC")) {
+            if (c == null) return null;
+            while (c.moveToNext()) out.add(new ai.ainetwork.aindrive.agent.CallReport.Call(c.getString(0) == null ? "" : c.getString(0), c.getString(1), c.getLong(2), c.getLong(3)));
+        } catch (SecurityException e) {
+            return null;
+        }
+        return out;
+    }
+
     JSONObject ask(String query) throws Exception {
         java.util.List<Conn> targets;
         synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
+        if (ai.ainetwork.aindrive.agent.QueryParser.isCallsTask(query)) {
+            // One report, over the call-recordings source when there is one (else the first drive: it may hold recordings).
+            Conn c = null;
+            for (Conn t : targets) if (SOURCE_CALLS.equals(t.driveId) && t.fs != null) c = t;
+            if (c == null) for (Conn t : targets) if (t.fs != null) { c = t; break; }
+            if (c == null) throw new IllegalStateException("no drive is running");
+            JSONObject r = c.askRunner().ask(query);
+            Conn out = c.source ? outputConn() : c;
+            String outId = out == null ? c.driveId : out.driveId;
+            JSONArray s = r.getJSONArray("sources");
+            for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", c.driveId).put("drive", c.folderLabel == null ? c.driveId : c.folderLabel);
+            if (r.has("action")) r.getJSONObject("action").put("driveId", outId);
+            return r;
+        }
         if (targets.size() == 1) {
             JSONObject r = targets.get(0).askRunner().ask(query);
+            Conn only = targets.get(0), out = only.source ? outputConn() : only;
             JSONArray s = r.getJSONArray("sources");
-            for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", targets.get(0).driveId);
-            if (r.has("action")) r.getJSONObject("action").put("driveId", targets.get(0).driveId);
+            for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", only.driveId);
+            if (r.has("action")) r.getJSONObject("action").put("driveId", out == null ? only.driveId : out.driveId);
             return r;
         }
         JSONArray sources = new JSONArray();
@@ -496,7 +564,10 @@ public class AgentService extends Service {
                 sources.put(src);
             }
             if (s.length() > 0) answer.append(answer.length() > 0 ? " " : "").append(c.folderLabel).append(": ").append(r.getString("answer"));
-            if (r.has("action") && !r.getJSONObject("action").optBoolean("skipped") && !actionOut.has("folder")) actionOut = r.getJSONObject("action").put("driveId", c.driveId);
+            if (r.has("action") && !r.getJSONObject("action").optBoolean("skipped") && !actionOut.has("folder")) {
+                Conn out = c.source ? outputConn() : c;
+                actionOut = r.getJSONObject("action").put("driveId", out == null ? c.driveId : out.driveId);
+            }
         }
         if (answer.length() == 0) answer.append(targets.get(0).askRunner().ask(query).getString("answer"));
         JSONObject merged = new JSONObject().put("answer", answer.toString()).put("sources", sources);

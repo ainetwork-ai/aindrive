@@ -5,6 +5,7 @@ import androidx.annotation.Nullable;
 import ai.ainetwork.aindrive.clip.ClipEmbedder;
 import ai.ainetwork.aindrive.index.FileIndex;
 import ai.ainetwork.aindrive.index.GeoLookup;
+import ai.ainetwork.aindrive.speech.SpeechRecognizer;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -46,6 +47,12 @@ public final class AskRunner {
         void copy(String docId, String destRel) throws Exception;
         /** Move the file at `fromRel` to `destRel` (parents created). */
         void move(String fromRel, String destRel) throws Exception;
+        /** Content URI of an existing folder — lets the shell serve it as a drive of its own. */
+        default @Nullable String uriOf(String rel) throws Exception { return null; }
+        /** Write a new file (parents created), e.g. a markdown report. */
+        default void write(String rel, byte[] data) throws Exception { throw new UnsupportedOperationException("read-only"); }
+        /** Open an indexed document for reading (transcription on demand). */
+        default @Nullable android.os.ParcelFileDescriptor openFd(String docId) throws Exception { return null; }
     }
 
     private final FileIndex index;
@@ -53,18 +60,28 @@ public final class AskRunner {
     private final QueryParser parser;
     private final Supplier<ClipEmbedder> clip;
     private final @Nullable FileOps ops;
+    private final @Nullable CallReport.CallLog callLog;
+    private final Supplier<SpeechRecognizer> speech;
 
     public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops) {
+        this(index, geo, clip, ops, null, () -> null);
+    }
+
+    public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops,
+                     @Nullable CallReport.CallLog callLog, Supplier<SpeechRecognizer> speech) {
         this.index = index;
         this.geo = geo;
         this.parser = new QueryParser(geo);
         this.clip = clip;
         this.ops = ops;
+        this.callLog = callLog;
+        this.speech = speech;
     }
 
     public JSONObject ask(String question) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
         SearchQuery q = parser.parse(question, System.currentTimeMillis());
+        if (q.calls) return new CallReport(index, callLog, speech, ops).run(q, System.currentTimeMillis()).put("query", "calls");
         int indexed = index.count();
         JSONObject out = new JSONObject().put("query", q.toString());
 
@@ -143,8 +160,10 @@ public final class AskRunner {
                 copied++; files.put(dest);
             } catch (Exception e) { failed++; }
         }
-        return new JSONObject().put("type", q.move ? "move" : "collect").put("folder", folder).put("copied", copied).put("failed", failed)
+        JSONObject r = new JSONObject().put("type", q.move ? "move" : "collect").put("folder", folder).put("copied", copied).put("failed", failed)
                 .put("share", q.share).put("files", files);
+        if (copied > 0) { try { r.putOpt("folderUri", ops.uriOf(folder)); } catch (Exception ignored) { } }
+        return r;
     }
 
     private String folderName(SearchQuery q) {

@@ -31,6 +31,8 @@ interface DriveCreds { driveId: string; agentToken: string; driveSecret: string;
 interface SharedFolder {
   folder: PickedFolder;
   drive?: DriveCreds;
+  /** Label of the folder this one lives in — agent-made folders are drives of their own but sit inside a picked folder. */
+  parent?: string;
 }
 
 interface SavedState {
@@ -39,7 +41,16 @@ interface SavedState {
   email?: string;
   /** Every folder the user has chosen to share, in the order they were added. */
   shares: SharedFolder[];
+  /** Agent sources: read for tasks, never served. Keyed by the fixed source id. */
+  sources?: Partial<Record<SourceId, PickedFolder>>;
 }
+
+type SourceId = "src-calls" | "src-photos";
+/** The two folders the agent asks to read: Samsung's call recordings and the camera roll. */
+const SOURCES: { id: SourceId; label: string; hint: string; initial: string }[] = [
+  { id: "src-calls", label: "Call recordings", hint: "For \"who do I talk to most, and about what\" — the Call folder", initial: "Call" },
+  { id: "src-photos", label: "Camera photos", hint: "For \"collect this month's food photos\" — DCIM", initial: "DCIM" },
+];
 
 interface LegacyState {
   server?: string;
@@ -358,22 +369,45 @@ function guessMime(name: string): string {
   return "application/octet-stream";
 }
 
-/** After "…공유해줘": mint a viewer link for the folder the agent just made. */
+/**
+ * A folder the agent made on this phone becomes a drive of its own — its own
+ * row, switch and share link — rather than a sub-folder of the drive it was
+ * collected from. The parent is restarted so it stops showing that folder.
+ */
+async function promoteCollected(a: NonNullable<AskResult["action"]>) {
+  const label = a.folder!;
+  const parent = shareByDrive(a.driveId);
+  let share = findShare(a.folderUri!);
+  if (!share) {
+    share = { folder: { uri: a.folderUri!, label }, parent: parent?.folder.label };
+    state.shares.push(share);
+    await save();
+    log(`Folder "${label}" added as its own drive`);
+  }
+  await startShare(share);
+  if (parent && driveStatus(parent)?.running) await startShare(parent);
+  a.label = label;
+  a.folder = "";
+  a.driveId = share.drive?.driveId;
+}
+
+/** After "…and share it": mint a viewer link for the folder the agent just made. */
 async function shareCollected() {
   const a = askResult?.action;
-  if (!a?.folder || !state.sessionCookie) return;
+  if (a?.folder === undefined || !state.sessionCookie) return;
+  const name = a.label ?? a.folder;
   const share = shareByDrive(a.driveId);
   const driveId = share?.drive?.driveId ?? (remotes.some((d) => d.id === a.driveId) ? a.driveId : undefined);
   if (!driveId) { notify("Turn the folder on to share it.", true); return; }
-  actionShare = { folder: a.folder, busy: true };
+  actionShare = { folder: name, busy: true };
   render();
   try {
     const r = await createShare(state.server, state.sessionCookie, driveId, a.folder);
-    actionShare = { folder: a.folder, url: r.url, busy: false };
-    log(`Shared ${a.folder}: ${r.url}`);
+    actionShare = { folder: name, url: r.url, busy: false };
+    log(`Shared ${name}: ${r.url}`);
     await navigator.clipboard?.writeText(r.url).then(() => notify("Link copied")).catch(() => {});
   } catch (e) {
-    actionShare = { folder: a.folder, busy: false, error: msgOf(e) };
+    actionShare = { folder: name, busy: false, error: msgOf(e) };
     log(`Error: ${msgOf(e)}`);
   }
   render();
@@ -500,6 +534,7 @@ async function startShare(share: SharedFolder) {
       folderUri: share.folder.uri,
       folderLabel: share.folder.label,
       indexOnStart: true,
+      excludeUris: state.shares.filter((s) => s !== share).map((s) => s.folder.uri),
     });
     log(`${share.folder.label} online`);
   } catch (e) {
@@ -516,6 +551,86 @@ async function startAll() {
     if (driveStatus(share)?.running) continue;
     await startShare(share);
   }
+  await startSources();
+}
+
+// ---------------------------------------------------------------- agent sources
+
+function sourceStatus(id: SourceId): DriveStatus | undefined {
+  return status.drives.find((d) => d.driveId === id);
+}
+
+/** Let the agent read one of the phone's own folders. Not shared: it never gets a drive on the server. */
+async function addSource(id: SourceId) {
+  const def = SOURCES.find((s) => s.id === id)!;
+  try {
+    const folder = await AindriveAgent.pickFolder({ initial: def.initial });
+    state.sources = { ...state.sources, [id]: folder };
+    await save();
+    log(`Agent may read ${folder.label} (${def.label})`);
+    await startSource(id);
+  } catch (e) {
+    if (!/cancel/i.test(msgOf(e))) fail(e);
+    render();
+  }
+}
+
+async function startSource(id: SourceId) {
+  const folder = state.sources?.[id];
+  if (!folder) return;
+  busyShares.add(id); render();
+  try {
+    status = await AindriveAgent.start({ serverUrl: state.server, driveId: id, agentToken: "", driveSecret: "", folderUri: folder.uri, folderLabel: folder.label, indexOnStart: true, source: true });
+  } catch (e) {
+    fail(e);
+  } finally {
+    busyShares.delete(id);
+    render();
+  }
+}
+
+async function startSources() {
+  for (const s of SOURCES) if (state.sources?.[s.id] && !sourceStatus(s.id)?.running) await startSource(s.id);
+}
+
+async function removeSource(id: SourceId) {
+  await AindriveAgent.stop({ driveId: id }).catch(() => {});
+  if (state.sources) delete state.sources[id];
+  await save();
+  try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
+  render();
+}
+
+async function allowCallLog() {
+  try {
+    const r = await AindriveAgent.requestCallLog();
+    notify(r.granted ? "Call log access allowed — asking again." : "Call log access was refused.", !r.granted);
+    if (r.granted && askQuery) void ask(askQuery);
+  } catch (e) { fail(e); }
+}
+
+function sourcesSection(): string {
+  return `
+    <div class="section"><h2>Agent can read</h2></div>
+    ${SOURCES.map((s) => {
+      const f = state.sources?.[s.id];
+      const d = sourceStatus(s.id);
+      const ix = d?.index;
+      const st = !f ? "Not allowed" : busyShares.has(s.id) ? "Starting…" : d?.running ? (ix?.running ? `Indexing ${ix.done}/${ix.total}` : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed` : "Ready") : "Off";
+      return `
+      <div class="card" data-source="${s.id}">
+        <div class="folder">
+          <div class="glyph">${s.id === "src-calls" ? I.phone : I.folder}</div>
+          <div style="min-width:0;flex:1">
+            <div class="name">${esc(s.label)}${f ? ` <span class="hint">· ${esc(f.label)}</span>` : ""}</div>
+            <div class="hint">${esc(s.hint)}</div>
+            <div class="state"><span class="dot ${d?.running ? "on" : "off"}"></span>${esc(st)}</div>
+          </div>
+          ${f ? `<button class="btn secondary small" data-act="src-remove">Revoke</button>` : `<button class="btn small" data-act="src-add">Allow</button>`}
+        </div>
+      </div>`;
+    }).join("")}
+    <p class="hint">Read only by the agent on this phone, for its tasks. Never shared. What it makes is saved into a shared folder.</p>`;
 }
 
 async function pollUntilApproved(server: string, linkId: string, deviceSecret: string) {
@@ -661,7 +776,8 @@ async function ask(q = askQuery) {
     log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}${targets.length ? ` across ${1 + targets.length} devices` : ""}`);
     const a = askResult.action;
     if (a?.folder) log(`Agent made folder "${a.folder}" with ${a.copied} file${a.copied === 1 ? "" : "s"}`);
-    if (a?.folder && a.share) void shareCollected();
+    if (a?.folder && a.folderUri && shareByDrive(a.driveId)) await promoteCollected(a);
+    if (a && a.label !== undefined && a.share) void shareCollected();
   } catch (e) {
     fail(e);
     askResult = null;
@@ -749,7 +865,7 @@ function bindLogin() {
 // ---- home
 
 function homeScreen(): string {
-  const running = status.drives.filter((d) => d.running).length;
+  const running = status.drives.filter((d) => d.running && !d.source).length;
   const anyPaired = state.shares.length > 0;
   const folders = state.shares.map(folderCard).join("");
   const empty = `
@@ -779,6 +895,8 @@ function homeScreen(): string {
       ${folders}
       <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; the notification is the off switch.</p>`
       : empty}
+
+    ${anyPaired ? sourcesSection() : ""}
 
     ${remotes.length ? `
       <div class="section"><h2>Other devices</h2><button class="link" id="refresh-remotes">Refresh</button></div>
@@ -836,6 +954,7 @@ function folderCard(share: SharedFolder): string {
         <div class="glyph" data-act="browse">${I.folder}</div>
         <div style="min-width:0" data-act="browse" role="button" aria-label="Open ${esc(share.folder.label)}">
           <div class="name">${esc(share.folder.label)}</div>
+          ${share.parent ? `<div class="hint">in ${esc(share.parent)} · made by the agent</div>` : ""}
           <div class="state"><span class="dot ${dot}"></span>${esc(stateText)}${esc(indexText)}</div>
         </div>
         <div class="controls">
@@ -856,6 +975,11 @@ function bindHome() {
   bind("add-first", addFolder);
   bind("toggle-search", openSearch);
   bind("start-all", startAll);
+  for (const el of document.querySelectorAll<HTMLElement>("[data-source]")) {
+    const id = el.dataset.source as SourceId;
+    el.querySelector("[data-act=src-add]")?.addEventListener("click", () => void addSource(id));
+    el.querySelector("[data-act=src-remove]")?.addEventListener("click", () => void removeSource(id));
+  }
   bind("stop-all", stopAll);
   bind("logout", logout);
   bind("more-activity", () => { showAllActivity = !showAllActivity; render(); });
@@ -912,13 +1036,14 @@ function searchSheet(): string {
       </div>`;
   const a = askResult?.action;
   const actionCard = !a ? "" : a.skipped
-    ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "This folder can't be written to.")}</p></div>`
+    ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "Turn a shared folder on so I have somewhere to save the result.")}</p>${a.needsCallLog ? `<p class="hint" style="margin-top:8px"><button class="link" id="action-calllog">Allow call log</button></p>` : ""}</div>`
     : `<div class="card action">
-        <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.folder ?? "")}</b><br><span class="hint">${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
+        <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.label ?? a.folder ?? "")}</b><br><span class="hint">${a.label !== undefined ? "Its own drive · " : ""}${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
         <div class="folder-foot">
           <button class="btn secondary small" id="action-open">Open folder</button>
           ${actionShare?.url ? `<button class="btn small" id="action-copy">${I.link} Copy link</button>` : `<button class="btn small" id="action-share" ${actionShare?.busy ? "disabled" : ""}>${actionShare?.busy ? "Sharing…" : `${I.link} Share link`}</button>`}
         </div>
+        ${a.needsCallLog ? `<p class="hint" style="margin-top:8px">Without call-log access the ranking counts recordings only. <button class="link" id="action-calllog">Allow call log</button></p>` : ""}
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
         ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
       </div>`;
@@ -970,9 +1095,10 @@ function bindSearch() {
     if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
   bind("action-share", shareCollected);
+  bind("action-calllog", allowCallLog);
   bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
   bind("action-open", () => {
-    const a = askResult?.action; if (!a?.folder) return;
+    const a = askResult?.action; if (a?.folder === undefined) return;
     const remote = remotes.find((d) => d.id === a.driveId);
     if (remote) { searchOpen = false; void openRemoteBrowser(remote, a.folder); return; }
     const share = shareByDrive(a.driveId);
@@ -1170,6 +1296,8 @@ function sleep(ms: number) {
 async function boot() {
   await load();
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
+  // Sources come back by themselves (they need no login); shares wait for their switch.
+  if (state.sources && Object.keys(state.sources).length) void startSources();
   await AindriveAgent.addListener("statusChanged", (s) => {
     const before = new Map(status.drives.map((d) => [d.driveId, d]));
     status = s;

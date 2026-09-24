@@ -45,6 +45,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Photo index: without this, Android 10+ redacts GPS EXIF from every stream we open. -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <!-- Only for the agent's call-history report ("who do I talk to most"); asked when that task is first run. -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
