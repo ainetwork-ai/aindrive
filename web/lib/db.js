@@ -183,6 +183,9 @@ function open() {
     "ALTER TABLE payment_receipts ADD COLUMN account_id TEXT",
     "ALTER TABLE payment_receipts ADD COLUMN currency TEXT",
     "ALTER TABLE account_wallets ADD COLUMN login_enabled INTEGER NOT NULL DEFAULT 0",
+    // the app that started a sign-in pairing (null = the aindrive CLI) — only
+    // to word the approval page; self-reported, never trusted for access
+    "ALTER TABLE cli_link_requests ADD COLUMN client_name TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;

@@ -19,6 +19,17 @@ export default function CliLoginByLinkPage({
   const { linkId } = use(params);
   const router = useRouter();
   const [mode, setMode] = useState<Mode>({ kind: "loading" });
+  // who started this pairing: null = the aindrive CLI, else an app's
+  // self-reported name (see /api/auth/cli/start)
+  const [client, setClient] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/auth/cli/request/${encodeURIComponent(linkId)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled && d?.clientName) setClient(d.clientName); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [linkId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,9 +99,11 @@ export default function CliLoginByLinkPage({
   if (mode.kind === "approved") {
     return (
       <Card>
-        <h1 className="text-xl font-semibold">CLI authorized ✓</h1>
+        <h1 className="text-xl font-semibold">{client ? "Connected ✓" : "CLI authorized ✓"}</h1>
         <p className="mt-2 text-sm text-drive-muted">
-          You can return to your terminal — it should now be signed in.
+          {client
+            ? "You can close this window and return to the app."
+            : "You can return to your terminal — it should now be signed in."}
         </p>
       </Card>
     );
@@ -102,11 +115,27 @@ export default function CliLoginByLinkPage({
 
   return (
     <Card>
-      <h1 className="text-xl font-semibold">Authorize the aindrive CLI</h1>
-      <p className="mt-2 text-sm text-drive-muted">
-        A terminal on this device is asking to sign in to your aindrive account.
-        Approve only if you started <code>aindrive login</code> just now.
-      </p>
+      {client ? (
+        <>
+          <h1 className="text-xl font-semibold">Connect “{client}” to aindrive</h1>
+          <p className="mt-2 text-sm text-drive-muted">
+            An app calling itself <strong>{client}</strong> is asking to use your
+            aindrive account: to list your drives and read and write files in them. It stays signed in
+            for up to 30 days.
+          </p>
+          <p className="mt-2 text-xs text-drive-muted">
+            The name is reported by the app itself. Approve only if you just pressed connect in that app.
+          </p>
+        </>
+      ) : (
+        <>
+          <h1 className="text-xl font-semibold">Authorize the aindrive CLI</h1>
+          <p className="mt-2 text-sm text-drive-muted">
+            A terminal on this device is asking to sign in to your aindrive account.
+            Approve only if you started <code>aindrive login</code> just now.
+          </p>
+        </>
+      )}
       <div className="mt-3 text-xs text-drive-muted font-mono break-all">
         link: {linkId}
       </div>
