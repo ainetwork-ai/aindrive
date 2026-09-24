@@ -103,7 +103,7 @@ public final class AskRunner {
             anyContent |= h.tier == 2;
             anySpeech |= h.tier == 1;
         }
-        String answer = answerFor(q, ranked, relaxed, anyContent, anySpeech);
+        String answer = answerFor(q, ranked, total, relaxed, anyContent, anySpeech);
         if (q.count) {
             answer = (q.korean ? "모두 " + total + "개예요. " : "There are " + total + ". ") + answer;
             out.put("action", new JSONObject().put("type", "count").put("count", total));
@@ -170,7 +170,7 @@ public final class AskRunner {
         base.dateFrom = q.dateFrom; base.dateTo = q.dateTo; base.minSize = q.minSize;
 
         if (q.keywords.isEmpty()) {
-            for (FileIndex.Row r : index.query(base, LIMIT)) out.put(r.docId, new Hit(r, 0, 0, "filter", null));
+            for (FileIndex.Row r : index.query(base, 0)) out.put(r.docId, new Hit(r, 0, 0, "filter", null));
             return out;
         }
 
@@ -259,7 +259,7 @@ public final class AskRunner {
         return s.toString();
     }
 
-    private String answerFor(SearchQuery q, List<Hit> rows, List<String> relaxed, boolean anyContent, boolean anySpeech) {
+    private String answerFor(SearchQuery q, List<Hit> rows, int total, List<String> relaxed, boolean anyContent, boolean anySpeech) {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
             return ko ? "조건에 맞는 파일을 찾지 못했어요." : "No files matched your question.";
@@ -279,7 +279,9 @@ public final class AskRunner {
         String noun = kindNoun(onlyKind, rows.size(), ko);
         String where = describeWhere(cities, countries, ko);
         String when = describeWhen(min, max, ko);
-        String n = rows.size() >= LIMIT ? (ko ? LIMIT + "개 이상" : LIMIT + "+") : String.valueOf(rows.size());
+        // The list is capped, the number is not: "사진 128장 (상위 50개 표시)".
+        String n = String.valueOf(total);
+        String shown = total > rows.size() ? (ko ? " (상위 " + rows.size() + "개 표시)" : ", showing " + rows.size()) : "";
 
         StringBuilder a = new StringBuilder();
         if (!relaxed.isEmpty()) {
@@ -293,13 +295,13 @@ public final class AskRunner {
             if (!where.isEmpty()) a.append(where).append(" ");
             if (!when.isEmpty()) a.append(when).append(" ");
             if (photoish && (!where.isEmpty() || !when.isEmpty())) a.append("찍은 ");
-            a.append(noun).append(" ").append(n).append(countKo(onlyKind)).append("를 찾았어요.");
+            a.append(noun).append(" ").append(n).append(countKo(onlyKind)).append("를 찾았어요.").append(shown);
             if (anyContent && anySpeech) a.append(" 사진 내용과 녹음 내용을 인식해서 찾았어요.");
             else if (anyContent) a.append(" 사진 내용을 인식해서 찾았어요.");
             else if (anySpeech) a.append(" 녹음 내용에서 찾았어요.");
         } else {
             a.append("Found ").append(n).append(" ").append(noun)
-             .append(where.isEmpty() ? "" : " taken in " + where).append(when.isEmpty() ? "" : " (" + when + ")").append(".");
+             .append(where.isEmpty() ? "" : " taken in " + where).append(when.isEmpty() ? "" : " (" + when + ")").append(shown).append(".");
             if (anyContent && anySpeech) a.append(" Matched by what the photos show and what the recordings say.");
             else if (anyContent) a.append(" Matched by what the photos show.");
             else if (anySpeech) a.append(" Matched by what the recordings say.");
