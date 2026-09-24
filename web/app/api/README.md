@@ -25,12 +25,13 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 | Route | Gate |
 |-------|------|
 | `drives` (GET/POST) | list user's drives / create (per-user drive limit). Auth. |
-| `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy. Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
+| `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy (validation shared with MCP `set_token_policy`). Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
 | `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. |
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |
-| `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path; `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. |
-| `receipts` | payment ledger, newest first. Owner only. |
+| `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path; `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. Gates live in `lib/sales.ts`, shared with the MCP sale tools. |
+| `payout` (GET/PUT/DELETE) | path-scoped payout wallets. Creator only. PUT validation shared with MCP `set_payout_wallet`. |
+| `receipts` | payment ledger, newest first. Owner only. (Paged over MCP: `list_receipts`.) |
 | `showcase` (GET), `showcase/[shareId]` (GET) | upsell list / purchase entry (302 → `/s/<token>`). Gated to accounts related to the drive (owner or any member row). |
 | `agents`, `agents/[agentId]` | owner CRUD over in-drive agents; `apiKey` stripped from all responses. |
 | `agents/[agentId]/ask` | A2A ask; identity→policy→CLI execution. Tiered rate limit; outputs map to 200/401/402/429. |
@@ -56,7 +57,7 @@ Payments / capabilities:
 
 | Route | Gate |
 |-------|------|
-| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. |
+| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. Optional `Authorization: Bearer aind_aat_…` (a relaying app, server-to-server): the purchase is credited to that account instead of the payer wallet's; a bad account token → 401 before any payment. No CORS. |
 | `s/[token]/accept` (POST) | redeem a free (or already-paid-covered) share into a `drive_members` grant. Login required; never settles payment. |
 | `x402/lift` (GET) | pay an AIN micropayment to lift a scoped limit / unlock a tier (`scope=tier:pro` etc.). |
 | `cap/verify` (POST) | decode + describe a Meadowcap capability token. |
@@ -71,7 +72,7 @@ Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md
 | `oauth/register` (POST, CORS) | RFC 7591 dynamic client registration; public clients only; rate-limited per IP. |
 | `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. |
 | `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
-| `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). |
+| `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). `drives:write` / `drives:sell` unlock tools on `/mcp/d/[id]` only. |
 | `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |
 
 Ops / dev:

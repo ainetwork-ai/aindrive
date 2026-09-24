@@ -30,6 +30,8 @@ ways a co-owner is NOT — these are **creator-only**, not "owner":
 - **payout wallets** (per-path) — `GET/PUT/DELETE /payout`;
 - **payment-token policy** — `PATCH /api/drives/:id`;
 - the **earnings ledger** — `GET /receipts`;
+- the remote-MCP **sale tools** (account grant `drives:sell`: share links,
+  payout wallets, token policy, receipts — `app/mcp/README.md`);
 - **drive deletion** + agent-token rotation; and the creator can't *leave*
   (they delete the drive instead).
 
@@ -69,7 +71,9 @@ explicit role change (PATCH) can lower a role.
   already accepted through it intact.
 - **Payment** (paid share, x402): a settled payment resolves the payer to an
   account (`resolveAccountForWallet`) and writes the grant + an append-only
-  `payment_receipts` row. See `README.md` and `docs/*payment*`.
+  `payment_receipts` row. A relaying app may name the buyer's account instead
+  by sending its account-grant token (`Authorization: Bearer aind_aat_…`).
+  See `README.md` and `docs/*payment*`.
 
 ## What a member sees on entry
 
