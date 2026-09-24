@@ -1,5 +1,6 @@
 // Account grant drives:write / drives:sell: scope parsing, which tools
-// /mcp/d/[driveId] lists per scope, and the creator-only sale tools.
+// /mcp/d/[driveId] lists per scope, the creator-only sale tools, and the
+// checkout relay crediting a bearer account on /api/s/[token].
 import { describe, it, expect, beforeAll, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +47,7 @@ const acct = await import("../account-tokens");
 const { TOKEN_PRESETS } = await import("../payment-tokens");
 const { runSkill } = await import("../../shared/agent-skills");
 const mcpRoute = await import("../../app/mcp/d/[driveId]/route.js");
+const shareRoute = await import("../../app/api/s/[token]/route.js");
 const asMetaRoute = await import("../../app/.well-known/oauth-authorization-server/route.js");
 
 const PAYOUT = "0x1111111111111111111111111111111111111111";
@@ -315,5 +317,50 @@ describe("sale tool validation matches the HTTP routes", () => {
       shareId: "s1", accountId: "buyer1", settledAt: "2020-01-01 00:00:05",
     });
     expect(errText(await call("d1", ownerSell, "list_receipts", { limit: 0 }))).toMatch(/limit must be an integer/);
+  });
+});
+
+describe("/api/s/[token]: a relayed bearer account gets the purchase", () => {
+  const PAYER = "0xpayerpayerpayerpayerpayerpayerpayer00009";
+  const sig = (from: string) => Buffer.from(JSON.stringify({ payload: { authorization: { from } } })).toString("base64");
+  const get = (headers: Record<string, string>) =>
+    shareRoute.GET(new Request("http://drive.test/api/s/tokrelay", { headers }), { params: Promise.resolve({ token: "tokrelay" }) });
+
+  beforeAll(() => {
+    db.prepare("INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency, listed) VALUES (?,?,?,?,?,?,?,?)")
+      .run("shrelay", "d1", "art/red.png", "viewer", "tokrelay", 4, "USDC", 1);
+  });
+
+  it("refuses an invalid account token before any payment; ignores other bearers", async () => {
+    cookieJar.clear();
+    const bad = await get({ authorization: "Bearer aind_aat_bogus", "PAYMENT-SIGNATURE": sig(PAYER) });
+    expect(bad.status).toBe(401);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM payment_receipts WHERE share_id = 'shrelay'").get()).toEqual({ n: 0 });
+    expect((await get({ authorization: "Bearer some.session.jwt" })).status).toBe(402);
+  });
+
+  it("credits the settled purchase to the bearer's account, not a wallet account", async () => {
+    cookieJar.clear();
+    const token = issue("buyer1", "profile");
+    expect((await get({ authorization: `Bearer ${token}` })).status).toBe(402);
+    const res = await get({ authorization: `Bearer ${token}`, "PAYMENT-SIGNATURE": sig(PAYER) });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: true, driveId: "d1", driveName: "D1", path: "art/red.png", role: "viewer" });
+    expect(body.txHash).toMatch(/^0xdev_bypass_/);
+
+    expect(db.prepare("SELECT account_id, wallet FROM payment_receipts WHERE tx_hash = ?").get(body.txHash))
+      .toEqual({ account_id: "buyer1", wallet: PAYER.toLowerCase() });
+    expect(db.prepare("SELECT role FROM drive_members WHERE drive_id = 'd1' AND user_id = 'buyer1' AND path = 'art/red.png'").get())
+      .toEqual({ role: "viewer" });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM account_wallets WHERE wallet_address = ?").get(PAYER.toLowerCase())).toEqual({ n: 0 });
+
+    // Already entitled: the same account is let through without paying again.
+    const again = await get({ authorization: `Bearer ${token}` });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ ok: true, role: "viewer" });
+    // The sale shows up in the owner's list_receipts.
+    const r = await call("d1", ownerSell, "list_receipts", { limit: 1 });
+    expect(r.structuredContent.receipts[0]).toMatchObject({ txHash: body.txHash, accountId: "buyer1", shareId: "shrelay", amount: 4 });
   });
 });

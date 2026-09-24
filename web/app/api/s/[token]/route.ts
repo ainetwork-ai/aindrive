@@ -7,6 +7,8 @@ import { createFacilitatorConfig } from "@coinbase/x402";
 import { db } from "@/lib/db";
 import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
+import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "@/lib/account-tokens";
+import { bearerFrom } from "@/lib/mcp-http";
 import { resolveRoleByUser, atLeast, type Role } from "@/lib/access";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace, payoutWalletFor } from "@/lib/drives";
@@ -72,9 +74,30 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     role: share.role,
   };
 
-  // Owner bypass
+  // A relaying app (server-to-server, no cookie) may send the buyer's
+  // account-grant token: the purchase is then credited to THAT account
+  // instead of the payer wallet's. Other Authorization values are ignored. A
+  // bad aind_aat_ token is refused before any payment moves, so a relayed
+  // purchase is never silently credited to a different account.
+  let bearerAccountId: string | null = null;
+  const bearer = bearerFrom(req);
+  if (bearer?.startsWith(ACCOUNT_ACCESS_PREFIX)) {
+    const grant = verifyAccountToken(bearer);
+    if (!grant) {
+      return NextResponse.json(
+        { error: "invalid_token", error_description: "account token is invalid, expired or revoked" },
+        { status: 401 },
+      );
+    }
+    bearerAccountId = grant.userId;
+  }
+
+  // The account this request buys for: the relayed bearer, else the session.
   const user = await getUser();
-  if (user && user.id === share.owner_id) return NextResponse.json(okBody);
+  const buyerId = bearerAccountId ?? user?.id ?? null;
+
+  // Owner bypass
+  if (buyerId && buyerId === share.owner_id) return NextResponse.json(okBody);
 
   // Free share: return okBody; the CONSUME flow (POST /accept) writes the
   // real drive_members grant. No cookie needed — login-first accept is the
@@ -88,8 +111,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // for. Compare against share.role (not a viewer floor) so a cheaper/free
   // grant at this path can't satisfy a higher-tier paid share — mirrors the
   // CONSUME accept gate.
-  if (user) {
-    const role = resolveRoleByUser(share.drive_id, user.id, share.path);
+  if (buyerId) {
+    const role = resolveRoleByUser(share.drive_id, buyerId, share.path);
     if (atLeast(role, share.role)) return NextResponse.json({ ...okBody, role });
   }
 
@@ -294,8 +317,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     txHash = settleRes.transaction;
   }
 
-  // Resolve the account this payment credits: a logged-in user wins; else the
-  // wallet's linked account; else a freshly minted wallet-only account.
+  // Resolve the account this payment credits: a relayed bearer account or a
+  // logged-in user wins; else the wallet's linked account; else a freshly
+  // minted wallet-only account.
   //
   // Crash-safe: the on-chain settle above is irreversible, so a throw here must
   // never surface as a 500 + partial state. We log and fall through so the
@@ -303,7 +327,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // runs (account_id may stay null — the column is nullable).
   let settleAccountId: string | null = null;
   try {
-    settleAccountId = user?.id ?? resolveAccountForWallet(payerWallet);
+    settleAccountId = buyerId ?? resolveAccountForWallet(payerWallet);
     // UPGRADE-ONLY grant: never downgrade a member who already holds a higher
     // role at this path (e.g. an owner-added editor paying through a viewer
     // share). mergeRoleUpgradeOnly returns the higher of current/incoming.
