@@ -890,7 +890,7 @@ function loginScreen(): string {
     <ul class="features">
       <li><span class="ic">${I.phone}</span><div><b>Files stay on your phone</b><span>Nothing is uploaded. The server only relays requests to this device.</span></div></li>
       <li><span class="ic">${I.lock}</span><div><b>Only the folders you pick</b><span>You choose each folder; the app can't see anything else.</span></div></li>
-      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"파리에서 찍은 사진", "last week's screenshots", "계약서 pdf" — answered on-device, offline.</span></div></li>
+      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"photos taken in Paris", "last week's screenshots", "the contract pdf" — answered on-device, offline.</span></div></li>
     </ul>
     <div class="card">
       <button class="btn" id="login" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : "Continue in browser"}</button>
@@ -1063,7 +1063,17 @@ function bindHome() {
 
 // ---- search
 
-const SUGGESTIONS = ["파리에서 찍은 사진", "강아지 사진", "이번달 음식 사진 모아서 폴더 만들고 공유해줘", "예산 얘기한 회의 녹음", "지난주 스크린샷", "계약서 pdf"];
+/** Tap-to-run examples: a search, a recognition search, and the tasks the agent can do. */
+const SUGGESTIONS = [
+  "Sort my call history by who I talk to most and summarize what we usually talk about, and share it",
+  "Collect this month's food photos into a folder and share it",
+  "Photos taken in Paris",
+  "Dog photos",
+  "Meeting recordings where we talked about the budget",
+  "How many photos do I have",
+  "The 5 biggest files",
+  "Last week's screenshots",
+];
 
 function searchSheet(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
