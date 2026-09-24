@@ -287,7 +287,7 @@ describe("(e) /mcp/d/[driveId] with an account token", () => {
   it("member drive: read tools only, write_file refused", async () => {
     const { access_token } = issue("viewer1", "drives:read");
     const list = await rpcResult(await rpc("d1", access_token, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
-    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["list_files", "read_file", "stat", "search"]);
+    expect(list.result.tools.map((t: { name: string }) => t.name)).toEqual(["list_files", "read_file", "stat", "search", "a2ui_action"]);
     const call = await rpcResult(await rpc("d1", access_token, {
       jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "write_file", arguments: { path: "a.txt", content: "x" } },
     }));
