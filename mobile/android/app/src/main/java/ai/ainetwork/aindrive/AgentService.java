@@ -245,7 +245,10 @@ public class AgentService extends Service {
         }
 
         synchronized AskRunner askRunner() {
-            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, (docId, destRel) -> fs.copy(docId, destRel));
+            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, new AskRunner.FileOps() {
+                @Override public void copy(String docId, String destRel) throws Exception { fs.copy(docId, destRel); }
+                @Override public void move(String fromRel, String destRel) throws Exception { fs.rename(fromRel, destRel); }
+            });
             return ask;
         }
 

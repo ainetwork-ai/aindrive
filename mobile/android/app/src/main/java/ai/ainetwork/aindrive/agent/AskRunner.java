@@ -36,14 +36,16 @@ import java.util.function.Supplier;
 public final class AskRunner {
     public static final int LIMIT = 50;
     /** CLIP cosine at/above which a photo "is" the query (calibrated on real photos: matches ≈ .19–.31, others ≈ .10–.15). */
-    public static final float CLIP_MIN = 0.17f;
+    public static final float CLIP_MIN = 0.18f;
     /** Also drop anything more than this below the best photo — the tail of near-misses. */
-    public static final float CLIP_MARGIN = 0.08f;
+    public static final float CLIP_MARGIN = 0.06f;
 
     /** What the agent may DO to the folder, provided by the service (SAF on Android). */
     public interface FileOps {
         /** Copy the document with `docId` to `destRel` (parents created). */
         void copy(String docId, String destRel) throws Exception;
+        /** Move the file at `fromRel` to `destRel` (parents created). */
+        void move(String fromRel, String destRel) throws Exception;
     }
 
     private final FileIndex index;
@@ -82,13 +84,17 @@ public final class AskRunner {
         if (hits.isEmpty() && q.kind != null) { q.kind = null; relaxed.add("kind"); hits = search(q); }
 
         List<Hit> ranked = new ArrayList<>(hits.values());
+        final boolean bySize = q.bySize, oldest = q.oldestFirst;
         ranked.sort((a, b) -> {
+            if (bySize) return Long.compare(b.row.size, a.row.size);
             if (a.tier != b.tier) return Integer.compare(a.tier, b.tier);
             if (a.tier != 0 && a.score != b.score) return Float.compare(b.score, a.score);
             long ta = a.row.whenMs == null ? 0 : a.row.whenMs, tb = b.row.whenMs == null ? 0 : b.row.whenMs;
-            return Long.compare(tb, ta);
+            return oldest ? Long.compare(ta, tb) : Long.compare(tb, ta);
         });
-        if (ranked.size() > LIMIT) ranked = ranked.subList(0, LIMIT);
+        int total = ranked.size();
+        int cap = q.limit > 0 ? Math.min(q.limit, LIMIT) : LIMIT;
+        if (ranked.size() > cap) ranked = ranked.subList(0, cap);
 
         JSONArray sources = new JSONArray();
         boolean anyContent = false, anySpeech = false;
@@ -97,11 +103,26 @@ public final class AskRunner {
             anyContent |= h.tier == 2;
             anySpeech |= h.tier == 1;
         }
-        out.put("answer", answerFor(q, ranked, relaxed, anyContent, anySpeech));
+        String answer = answerFor(q, ranked, relaxed, anyContent, anySpeech);
+        if (q.count) {
+            answer = (q.korean ? "모두 " + total + "개예요. " : "There are " + total + ". ") + answer;
+            out.put("action", new JSONObject().put("type", "count").put("count", total));
+        }
+        out.put("answer", answer);
         out.put("sources", sources);
-        if (q.collect && ops != null && !ranked.isEmpty() && relaxed.isEmpty()) out.put("action", collect(q, ranked, question));
-        else if (q.collect) out.put("action", new JSONObject().put("type", "collect").put("skipped", true)
-                .put("reason", ranked.isEmpty() ? "nothing matched" : !relaxed.isEmpty() ? "only loose matches" : "no file access"));
+        boolean exact = !ranked.isEmpty() && relaxed.isEmpty();
+        if (q.delete) {
+            // Never delete on the strength of a parse: list what would go and wait for a tap.
+            JSONArray files = new JSONArray();
+            for (Hit h : ranked) files.put(h.row.path);
+            out.put("action", new JSONObject().put("type", "delete").put("pending", true).put("count", exact ? ranked.size() : 0)
+                    .put("files", files).put("skipped", !exact).put("reason", exact ? JSONObject.NULL : (ranked.isEmpty() ? "nothing matched" : "only loose matches")));
+        } else if (q.collect && ops != null && exact) {
+            out.put("action", collect(q, ranked));
+        } else if (q.collect) {
+            out.put("action", new JSONObject().put("type", q.move ? "move" : "collect").put("skipped", true)
+                    .put("reason", ranked.isEmpty() ? "nothing matched" : !relaxed.isEmpty() ? "only loose matches" : "no file access"));
+        }
         return out;
     }
 
@@ -110,17 +131,19 @@ public final class AskRunner {
      * question, e.g. "음식 사진 2026-09". Sharing the folder needs the web
      * session, which lives in the shell, so that step is reported for it.
      */
-    private JSONObject collect(SearchQuery q, List<Hit> hits, String question) throws Exception {
+    private JSONObject collect(SearchQuery q, List<Hit> hits) throws Exception {
         String folder = folderName(q);
         int copied = 0, failed = 0;
         JSONArray files = new JSONArray();
         for (Hit h : hits) {
             String dest = folder + "/" + h.row.name;
             if (h.row.path.equals(dest)) continue;   // already there
-            try { ops.copy(h.row.docId, dest); copied++; files.put(dest); }
-            catch (Exception e) { failed++; }
+            try {
+                if (q.move) ops.move(h.row.path, dest); else ops.copy(h.row.docId, dest);
+                copied++; files.put(dest);
+            } catch (Exception e) { failed++; }
         }
-        return new JSONObject().put("type", "collect").put("folder", folder).put("copied", copied).put("failed", failed)
+        return new JSONObject().put("type", q.move ? "move" : "collect").put("folder", folder).put("copied", copied).put("failed", failed)
                 .put("share", q.share).put("files", files);
     }
 
