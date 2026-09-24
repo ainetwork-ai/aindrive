@@ -1,5 +1,6 @@
-// The per-owner usage counter moves both ways: a delete (or a rename onto an
-// existing file) frees a slot; an overwrite never adds one.
+// The per-owner file cap: resolved from the drive OWNER's account (never the
+// request's wallet cookie) for session, drive-PAT and account-token writes; the
+// owner usage counter moves both ways.
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,14 +69,24 @@ vi.mock("../rpc", () => {
 
 const { db } = await import("../db.js");
 const { sign } = await import("../session.js");
+const { signWallet, linkWalletToAccount } = await import("../wallet");
+const { addLift } = await import("../paid-lifts.js");
 const { bumpOwnerUsage, getOwnerUsage } = await import("../storage-usage.js");
+const { getOwnerStorageCaps, TIER_FILE_LIMIT } = await import("../tier");
 const tokens = await import("../mcp-tokens");
+const oauth = await import("../oauth");
+const acct = await import("../account-tokens");
 const mcpRoute = await import("../../app/mcp/d/[driveId]/route.js");
 const writeRoute = await import("../../app/api/drives/[driveId]/fs/write/route.js");
 const renameRoute = await import("../../app/api/drives/[driveId]/fs/rename/route.js");
 const deleteRoute = await import("../../app/api/drives/[driveId]/fs/delete/route.js");
 
+const FREE_CAP = TIER_FILE_LIMIT.free;
+const PRO_WALLET = "0x00000000000000000000000000000000000000a1";
+const EDITOR_MAX_WALLET = "0x00000000000000000000000000000000000000b2";
+const DAY = 24 * 60 * 60 * 1000;
 
+let clientId = "";
 let seq = 0;
 const fresh = (prefix = "f") => `${prefix}-${++seq}.txt`;
 
@@ -106,6 +117,9 @@ const writeFile = (driveId: string, token: string, path: string) =>
 const pat = (userId: string, driveId: string) =>
   tokens.issuePat({ userId, driveId, name: "t", scope: "write", ttlDays: null }).token;
 
+const accountToken = (userId: string) =>
+  acct.issueAccountTokens({ userId, clientId, clientName: "Afan", scopes: oauth.parseAccountScopes("drives:read drives:write") }).access_token;
+
 function route(handler: (req: Request, ctx: { params: Promise<{ driveId: string }> }) => Promise<Response>, driveId: string, op: string, body: unknown) {
   return handler(
     new Request(`http://drive.test/api/drives/${driveId}/fs/${op}`, {
@@ -121,11 +135,25 @@ function setFiles(ownerId: string, n: number) {
   expect(getOwnerUsage(ownerId).files).toBe(n);
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   const u = db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)");
   u.run("free1", "free@example.com", "Free owner", "x");
+  u.run("pro1", "pro@example.com", "Pro owner", "x");
+  u.run("editor1", "ed@example.com", "Editor", "x");
   const d = db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)");
   d.run("dfree", "free1", "Free", "h", "s");
+  d.run("dpro", "pro1", "Pro", "h", "s");
+  db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES (?,?,?,?,?)")
+    .run("m1", "dfree", "editor1", "", "editor");
+
+  // pro1's Pro lift was bought by a wallet linked to the account.
+  linkWalletToAccount("pro1", PRO_WALLET, "siwe");
+  addLift({ wallet: PRO_WALLET, scope: "tier:pro", ttlMs: 30 * DAY, paymentTx: "0xtx-pro" });
+  // editor1 holds Max — which must never lift someone else's drive's cap.
+  linkWalletToAccount("editor1", EDITOR_MAX_WALLET, "siwe");
+  addLift({ wallet: EDITOR_MAX_WALLET, scope: "tier:max", ttlMs: 30 * DAY, paymentTx: "0xtx-max" });
+
+  clientId = oauth.registerClient("Afan", ["https://afan.example/cb"]).client_id;
 });
 
 beforeEach(() => { cookieJar.clear(); });
@@ -177,5 +205,57 @@ describe("owner usage counter", () => {
     expect((await route(renameRoute.POST, "dfree", "rename", { from: c, to: b })).status).toBe(200);
     expect(diskOf("dfree").has(c)).toBe(false);
     expect(getOwnerUsage("free1").files).toBe(9);
+  });
+});
+
+describe("file cap is the drive owner's, whoever calls", () => {
+  it("drive PAT: a Pro owner writes past the free cap though the call carries no wallet cookie", async () => {
+    setFiles("pro1", FREE_CAP);
+    expect(getOwnerStorageCaps("pro1")).toMatchObject({ tier: "pro", fileLimit: TIER_FILE_LIMIT.pro });
+    expect(await writeFile("dpro", pat("pro1", "dpro"), fresh())).toBe("");
+    expect(getOwnerUsage("pro1").files).toBe(FREE_CAP + 1);
+  });
+
+  it("account token: a Pro owner writes past the free cap", async () => {
+    setFiles("pro1", FREE_CAP + 5);
+    expect(await writeFile("dpro", accountToken("pro1"), fresh())).toBe("");
+    expect(getOwnerUsage("pro1").files).toBe(FREE_CAP + 6);
+  });
+
+  it("drive PAT: a free owner at the cap gets file_limit_reached, even beside a Max wallet cookie", async () => {
+    cookieJar.set("aindrive_wallet", await signWallet(EDITOR_MAX_WALLET));
+    setFiles("free1", FREE_CAP - 1);
+    const t = pat("free1", "dfree");
+    expect(await writeFile("dfree", t, fresh())).toBe(""); // the 1000th file fits
+    const err = await writeFile("dfree", t, fresh());
+    expect(err).toContain("file_limit_reached");
+    expect(err).toContain(`tier free, limit ${FREE_CAP}`);
+    expect(getOwnerUsage("free1").files).toBe(FREE_CAP);
+    // Overwriting an existing file at the cap is still fine.
+    const existing = fresh();
+    diskOf("dfree").set(existing, "file");
+    expect(await writeFile("dfree", t, existing)).toBe("");
+  });
+
+  it("account token: a Max-tier editor can't lift a free owner's cap", async () => {
+    setFiles("free1", FREE_CAP);
+    const err = await writeFile("dfree", accountToken("editor1"), fresh());
+    expect(err).toContain("file_limit_reached");
+    expect(err).toContain("tier free");
+  });
+
+  it("session: fs/write measures the owner's tier, not the caller's wallet cookie", async () => {
+    setFiles("free1", FREE_CAP);
+    cookieJar.set("aindrive_session", await sign("editor1"));
+    cookieJar.set("aindrive_wallet", await signWallet(EDITOR_MAX_WALLET));
+    const res = await route(writeRoute.POST, "dfree", "write", { path: fresh(), content: "x" });
+    expect(res.status).toBe(429);
+    expect(await res.json()).toMatchObject({ error: "file_limit_reached", tier: "free", limit: FREE_CAP });
+
+    // And a Pro owner writing in a browser with no wallet cookie keeps Pro.
+    cookieJar.clear();
+    cookieJar.set("aindrive_session", await sign("pro1"));
+    setFiles("pro1", FREE_CAP);
+    expect((await route(writeRoute.POST, "dpro", "write", { path: fresh(), content: "x" })).status).toBe(200);
   });
 });

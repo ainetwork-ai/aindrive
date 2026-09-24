@@ -4,7 +4,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { getUser } from "@/lib/session";
 import { callAgent } from "@/lib/rpc";
 import { zPath } from "@/lib/zod-helpers";
-import { getUserTier, TIER_FILE_LIMIT, TIER_PRICE_AIN } from "@/lib/tier";
+import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage } from "@/lib/storage-usage.js";
 import { createUploadSession, sweepStaleSessions, PART_BYTES } from "@/lib/upload-sessions";
 
@@ -48,8 +48,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // `creating` is recorded on the session so completion bumps usage correctly
   // even if the target appears/disappears while parts are in flight.
   const ownerId = drive.owner_id as string;
-  const { tier } = await getUserTier(req);
-  const fileLimit = TIER_FILE_LIMIT[tier];
+  const { tier, fileLimit } = getOwnerStorageCaps(ownerId);
   let creating = false;
   try {
     const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path });

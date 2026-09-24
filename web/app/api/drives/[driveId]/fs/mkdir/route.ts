@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
-import { getUserTier, TIER_FOLDER_LIMIT, TIER_PRICE_AIN } from "@/lib/tier";
+import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
@@ -16,8 +16,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
   const ownerId = drive.owner_id as string;
-  const { tier } = await getUserTier(req);
-  const folderLimit = TIER_FOLDER_LIMIT[tier];
+  const { tier, folderLimit } = getOwnerStorageCaps(ownerId);
   if (Number.isFinite(folderLimit)) {
     const usage = getOwnerUsage(ownerId);
     if (usage.folders + 1 > folderLimit) {

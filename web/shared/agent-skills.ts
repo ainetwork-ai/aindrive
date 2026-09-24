@@ -23,7 +23,7 @@ import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { callAgent, AgentError } from "@/lib/rpc";
 import { paidAccessDenial, paidLocksForListing } from "@/lib/sale-access.js";
 import { normalizePath } from "@/lib/path";
-import { getUserTier, TIER_FILE_LIMIT } from "@/lib/tier";
+import { getOwnerStorageCaps } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
@@ -189,10 +189,11 @@ export async function runSkill(
           const l = await callAgent(driveId, driveSecret, { method: "list", path: parent });
           creating = !((l.entries ?? []) as Entry[]).some((e) => e.name === base && !e.isDir);
         } catch { /* parent missing → create */ }
+        // The cap is the drive owner's tier, not the caller's: PAT /
+        // account-token calls carry no wallet cookie.
         const ownerId = drive.owner_id as string;
         if (creating) {
-          const { tier } = await getUserTier();
-          const limit = TIER_FILE_LIMIT[tier];
+          const { tier, fileLimit: limit } = getOwnerStorageCaps(ownerId);
           if (Number.isFinite(limit) && getOwnerUsage(ownerId).files + 1 > limit) {
             return { kind: "err", code: "forbidden", message: `file_limit_reached (tier ${tier}, limit ${limit})` };
           }

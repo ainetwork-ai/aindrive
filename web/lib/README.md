@@ -30,7 +30,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `sales.ts` — share-link create/edit/revoke, payout-wallet and token-policy validation, receipt paging. One implementation behind the `shares`/`payout`/drive-PATCH routes and the remote-MCP sale tools; returns `{ ok: false, status, error }` with the route's exact message.
 - `x402-ain.ts` — x402 v2 facilitator for AIN on ETH mainnet (build requirements, `verify`, `settle` via on-chain Transfer log).
 - `paid-lifts.js` — `paid_lifts` table: quota/tier lifts bought with AIN + tx-hash anti-replay (`txHashUsed`).
-- `tier.ts` — free/pro/max tiers from active lifts; rate-limit + storage-cap multipliers.
+- `tier.ts` — free/pro/max tiers from active lifts. Rate limits use the caller's tier (wallet cookie); storage caps use the drive owner's (`getOwnerStorageCaps`: lifts on any wallet linked to the owner), identical for session, PAT and account-token writes.
 - `wallet.ts` — SIWE nonce/cookie, `linkWalletToAccount`, `resolveAccountForWallet` (wallet→durable account bridge).
 - `base-siwe.ts` — client helpers for Base Account `wallet_connect` + `signInWithEthereum` (single-popup passkey + SIWE; the popup-blocker rationale lives in its header).
 - `payment-hooks.ts` — `onPaymentSettled` extension point (Phase 2 stub).

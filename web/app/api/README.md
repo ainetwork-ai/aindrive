@@ -18,7 +18,7 @@ Auth / identity:
 | `wallet/{nonce,verify}` | SIWE login challenge + verify → sets wallet cookie (payment instrument only, never a login — see CLAUDE.md). |
 | `wallet/link` | bind a wallet to the logged-in account (origin+nonce bound; reclaims past receipts). Login required. |
 | `wallet/me` | current wallet address from cookie. |
-| `me/tier` | tier (free/pro/max) + prices + limits + upgrade URLs. |
+| `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
 
@@ -45,7 +45,7 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 | Route | Notes |
 |-------|-------|
 | `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). |
-| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). Tiered file-count cap on create. |
+| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. |
 | `upload` | single-POST raw octet-stream for files ≤ one part (8 MiB) → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. Aborts never publish a partial file. |
 | `upload-sessions` | chunked + resumable upload for larger files (tus-style). POST opens a session; PATCH `:uploadId` appends sequential ≤8 MiB parts (`X-Upload-Offset` must equal server `receivedBytes`, else 409 + authoritative offset); final part renames atomically. Recovery truth = agent temp's stat size, so a part that died mid-append never double-appends. ≤2 GiB. |
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
