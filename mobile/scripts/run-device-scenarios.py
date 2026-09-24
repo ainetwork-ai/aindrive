@@ -85,21 +85,29 @@ print(f"indexed {m.group(1)} files ({m.group(2)} failed); " + (f"recognition: {d
 # Ask in batches and harvest logcat after each: answers carry up to 50 sources
 # with snippets, and a hundred of them overflow the ring buffer.
 answers = {}
-def harvest():
+def harvest(clear):
     log = adb("logcat", "-d", "-s", "AindriveAgent").stdout
     log = re.sub(r"^.*?AindriveAgent: ", "", log, flags=re.M)
     for part in re.split(r"(?=ask\()", log):
         m = re.match(r"ask\((.*?)\) → (\{.*)", part, re.S)
         if not m: continue
-        try: answers[m.group(1)] = json.loads(m.group(2).strip())
+        try: answers[m.group(1)] = json.loads(m.group(2).strip())   # only complete JSON counts
         except json.JSONDecodeError: continue
-    adb("logcat", "-c")
+    if clear: adb("logcat", "-c")
+def ask_all(items):
+    for i, s in enumerate(items):
+        hook("ai.ainetwork.aindrive.ASK", query=s["q"])
+        time.sleep(1.5)
+        # Harvest without clearing (a clear could cut an answer mid-write); clear
+        # only every 16 questions, after a pause long enough for the last answer.
+        if (i + 1) % 16 == 0: time.sleep(3); harvest(clear=True)
+    time.sleep(4); harvest(clear=False)
 adb("logcat", "-c")
-for i, s in enumerate(scen["scenarios"]):
-    hook("ai.ainetwork.aindrive.ASK", query=s["q"])
-    time.sleep(1.3)
-    if (i + 1) % 8 == 0: time.sleep(1.5); harvest()
-time.sleep(3); harvest()
+ask_all(scen["scenarios"])
+# Anything still unanswered (a slow phone, a long answer) gets one retry.
+retry = [s for s in scen["scenarios"] if s["q"] not in answers]
+if retry:
+    adb("logcat", "-c"); ask_all(retry)
 
 passed, failed = 0, []
 for s in scen["scenarios"]:

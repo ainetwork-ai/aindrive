@@ -16,7 +16,7 @@ import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
-import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare } from "./api";
+import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
 const STORE_KEY = "aindrive.mobile.state.v2";
@@ -65,6 +65,8 @@ let menuFor: string | null = null;
 /** In-app file browser: which share, where in it, what we saw there. */
 let browse: {
   key: string;
+  /** Set when browsing a drive on another device (through the server relay). */
+  remote?: RemoteDrive;
   path: string;
   entries: FileEntry[] | null;
   error: string | null;
@@ -74,7 +76,12 @@ let browse: {
 } | null = null;
 let showAllActivity = false;
 /** In-app viewer: what is open (images and audio play here; everything else goes to the OS). */
-let viewer: { share: SharedFolder; path: string; name: string; mime: string; src?: string; loading: boolean } | null = null;
+let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: string; mime: string; src?: string; loading: boolean } | null = null;
+/** Drives this account has on OTHER devices (same login on another phone / laptop). */
+let remotes: RemoteDrive[] = [];
+let remotesAt = 0;
+/** agentId per remote drive, created on first ask (the record lives in that drive). */
+const remoteAgents = new Map<string, string>();
 /** Share link minted for the agent's last collected folder. */
 let actionShare: { folder: string; url?: string; busy: boolean; error?: string } | null = null;
 let toast: { msg: string; error?: boolean; timer?: number } | null = null;
@@ -165,6 +172,54 @@ function shareByDrive(driveId: string | undefined): SharedFolder | undefined {
   return running.length === 1 ? running[0] : undefined;
 }
 
+// ---------------------------------------------------------------- other devices
+
+function localDriveIds(): Set<string> {
+  return new Set(state.shares.map((s) => s.drive?.driveId).filter((x): x is string => !!x));
+}
+
+/** Drives owned by this account that this phone does not serve. Cached 30 s. */
+async function refreshRemotes(force = false) {
+  if (!state.sessionCookie) { remotes = []; return; }
+  if (!force && Date.now() - remotesAt < 30_000) return;
+  try {
+    const all = await listDrives(state.server, state.sessionCookie);
+    const mine = localDriveIds();
+    remotes = all.filter((d) => !mine.has(d.id));
+    remotesAt = Date.now();
+    render();
+  } catch (e) {
+    log(`Could not list other devices: ${msgOf(e)}`);
+  }
+}
+
+async function openRemoteBrowser(drive: RemoteDrive, path = "") {
+  menuFor = null;
+  browse = { key: "remote:" + drive.id, remote: drive, path, entries: null, error: null, loading: true, menu: null, plusMenu: false };
+  render();
+  await loadBrowse();
+}
+
+async function viewRemoteFile(drive: RemoteDrive, path: string, mime?: string) {
+  const name = path.split("/").pop() ?? path;
+  const m = mime || guessMime(name);
+  if (!(m.startsWith("image/") || m.startsWith("audio/"))) {
+    // Anything else: the web has the right viewer/download for it.
+    await Browser.open({ url: `${state.server}/d/${drive.id}?path=${encodeURIComponent(path.split("/").slice(0, -1).join("/"))}` });
+    return;
+  }
+  viewer = { remote: drive, path, name, mime: m, loading: true };
+  render();
+  try {
+    const r = await remoteRead(state.server, state.sessionCookie!, drive.id, path);
+    if (viewer && viewer.path === path) { viewer.src = `data:${r.mime || m};base64,${r.base64}`; viewer.mime = r.mime || m; viewer.loading = false; }
+  } catch (e) {
+    viewer = null;
+    notify(msgOf(e), true);
+  }
+  render();
+}
+
 // ---------------------------------------------------------------- actions
 
 async function addFolder() {
@@ -215,8 +270,13 @@ async function addFiles(share: SharedFolder, path = "") {
 // delete. Anything richer (sharing, selling, previews) is the web UI's job.
 
 function browseShare(): SharedFolder | undefined {
-  return browse ? findShare(browse.key) : undefined;
+  if (!browse) return undefined;
+  if (browse.remote) return REMOTE_SHARE;   // stand-in so the browser code paths stay shared
+  return findShare(browse.key);
 }
+
+/** A placeholder "share" for remote browsing; the folder handle is never used there. */
+const REMOTE_SHARE: SharedFolder = { folder: { uri: "remote", label: "" } };
 
 async function openBrowser(share: SharedFolder, path = "") {
   menuFor = null;
@@ -228,12 +288,19 @@ async function openBrowser(share: SharedFolder, path = "") {
 async function loadBrowse() {
   const share = browseShare();
   if (!browse || !share) return;
+  if (browse.remote) share.folder.label = browse.remote.name;
   browse.loading = true; browse.error = null; browse.menu = null; browse.plusMenu = false;
   render();
   try {
-    const r = await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: browse.path });
-    if (!browse) return;
-    browse.entries = r.entries;
+    if (browse.remote) {
+      const entries = await remoteList(state.server, state.sessionCookie!, browse.remote.id, browse.path);
+      if (!browse) return;
+      browse.entries = entries.map((e) => ({ name: e.name, path: e.path, isDir: e.isDir, size: e.size, mtimeMs: e.mtimeMs, mime: e.mime ?? guessMime(e.name) }));
+    } else {
+      const r = await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: browse.path });
+      if (!browse) return;
+      browse.entries = r.entries;
+    }
   } catch (e) {
     if (browse) { browse.entries = []; browse.error = msgOf(e); }
   } finally {
@@ -255,6 +322,7 @@ async function browseOpen(entry: FileEntry) {
   const share = browseShare();
   if (!browse || !share) return;
   if (entry.isDir) { browse.path = entry.path; await loadBrowse(); return; }
+  if (browse.remote) { await viewRemoteFile(browse.remote, entry.path, entry.mime); return; }
   await viewFile(share, entry.path, entry.mime);
 }
 
@@ -295,11 +363,12 @@ async function shareCollected() {
   const a = askResult?.action;
   if (!a?.folder || !state.sessionCookie) return;
   const share = shareByDrive(a.driveId);
-  if (!share?.drive) { notify("Turn the folder on to share it.", true); return; }
+  const driveId = share?.drive?.driveId ?? (remotes.some((d) => d.id === a.driveId) ? a.driveId : undefined);
+  if (!driveId) { notify("Turn the folder on to share it.", true); return; }
   actionShare = { folder: a.folder, busy: true };
   render();
   try {
-    const r = await createShare(state.server, state.sessionCookie, share.drive.driveId, a.folder);
+    const r = await createShare(state.server, state.sessionCookie, driveId, a.folder);
     actionShare = { folder: a.folder, url: r.url, busy: false };
     log(`Shared ${a.folder}: ${r.url}`);
     await navigator.clipboard?.writeText(r.url).then(() => notify("Link copied")).catch(() => {});
@@ -557,8 +626,39 @@ async function ask(q = askQuery) {
   askQuery = q;
   askBusy = true; actionShare = null; render();
   try {
-    askResult = await AindriveAgent.ask({ query: q });
-    log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}`);
+    const localRunning = status.drives.some((d) => d.running);
+    const targets = remotes.filter((d) => d.online);
+    const [local, ...remoteResults] = await Promise.all([
+      localRunning ? AindriveAgent.ask({ query: q }) : Promise.resolve<AskResult | null>(null),
+      ...targets.map(async (d) => {
+        try {
+          const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
+          remoteAgents.set(d.id, agentId);
+          const r = await askRemote(state.server, state.sessionCookie!, d.id, agentId, q);
+          return { drive: d, r, error: null as string | null, skipped: false };
+        } catch (e) {
+          // A drive shared TO this account (not owned) has no agent we may create: leave it out quietly.
+          if (/403|not_owner/.test(msgOf(e))) return { drive: d, r: null, error: null, skipped: true };
+          return { drive: d, r: null, error: msgOf(e) };
+        }
+      }),
+    ]);
+    // Merge: this phone first, then each other device, sources tagged with where they live.
+    const merged: AskResult = { answer: "", sources: [] };
+    const parts: string[] = [];
+    if (local) { parts.push(targets.length ? `This phone: ${local.answer}` : local.answer); merged.sources.push(...local.sources); merged.action = local.action; }
+    for (const rr of remoteResults) {
+      if ((rr as { skipped?: boolean }).skipped) continue;
+      if (rr.error) { parts.push(`${rr.drive.name}: couldn't ask (${rr.error})`); continue; }
+      const r = rr.r!;
+      parts.push(`${rr.drive.name}: ${r.answer}`);
+      merged.sources.push(...r.sources.map((s) => ({ ...s, driveId: rr.drive.id, remoteName: rr.drive.name, matchedBy: s.matchedBy as AskResult["sources"][number]["matchedBy"] })));
+      if (!merged.action && r.action && !r.action.skipped) merged.action = { ...(r.action as NonNullable<AskResult["action"]>), driveId: rr.drive.id };
+    }
+    if (!local && !targets.length) throw new Error("Turn a folder on, or have another device online, to ask.");
+    merged.answer = parts.join("\n");
+    askResult = merged;
+    log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}${targets.length ? ` across ${1 + targets.length} devices` : ""}`);
     const a = askResult.action;
     if (a?.folder) log(`Agent made folder "${a.folder}" with ${a.copied} file${a.copied === 1 ? "" : "s"}`);
     if (a?.folder && a.share) void shareCollected();
@@ -572,10 +672,11 @@ async function ask(q = askQuery) {
 }
 
 function openSearch() {
-  if (!status.drives.some((d) => d.running)) {
-    notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — search looks through your shared folders.", true);
+  if (!status.drives.some((d) => d.running) && !remotes.some((d) => d.online)) {
+    notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — the agent works across your shared folders.", true);
     return;
   }
+  void refreshRemotes();
   searchOpen = true;
   menuFor = null;
   render();
@@ -679,6 +780,21 @@ function homeScreen(): string {
       <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; the notification is the off switch.</p>`
       : empty}
 
+    ${remotes.length ? `
+      <div class="section"><h2>Other devices</h2><button class="link" id="refresh-remotes">Refresh</button></div>
+      ${remotes.map((d) => `
+        <div class="card remote" data-remote="${esc(d.id)}">
+          <div class="folder">
+            <div class="glyph">${I.phone}</div>
+            <div style="min-width:0">
+              <div class="name">${esc(d.name)}</div>
+              <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${d.online ? "Online" : "Offline"}${d.hostname ? ` · ${esc(d.hostname)}` : ""}</div>
+            </div>
+            <div class="controls"><button class="btn secondary small" data-act="browse" ${d.online ? "" : "disabled"}>Browse</button></div>
+          </div>
+        </div>`).join("")}
+      <p class="hint">Folders shared from other devices signed in as ${esc(state.email ?? "you")}. Browsing and asking go through the server; the files stay on that device.</p>` : ""}
+
     <div class="section"><h2>Recent activity</h2>${activity.length > 4 ? `<button class="link" id="more-activity">${showAllActivity ? "Show less" : "Show all"}</button>` : ""}</div>
     <div class="card">
       ${acts.length ? `<ul class="activity">${acts.map((a) => `<li><time>${esc(when(a.at))}</time><span class="msg">${esc(a.msg)}</span></li>`).join("")}</ul>`
@@ -743,6 +859,12 @@ function bindHome() {
   bind("stop-all", stopAll);
   bind("logout", logout);
   bind("more-activity", () => { showAllActivity = !showAllActivity; render(); });
+  bind("refresh-remotes", () => void refreshRemotes(true));
+  app.querySelectorAll<HTMLElement>("[data-remote]").forEach((card) => {
+    const d = remotes.find((r) => r.id === card.dataset.remote);
+    if (!d) return;
+    card.querySelector<HTMLButtonElement>("[data-act=browse]")?.addEventListener("click", () => void openRemoteBrowser(d));
+  });
   app.querySelectorAll<HTMLElement>("[data-share]").forEach((card) => {
     const share = findShare(card.dataset.share!);
     if (!share) return;
@@ -808,7 +930,8 @@ function searchSheet(): string {
         const name = s.path.split("/").pop() ?? s.path;
         const dir = s.path.split("/").slice(0, -1).join("/");
         const how = s.matchedBy === "photo" ? "👁" : s.matchedBy === "speech" ? "🎙" : "";
-        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${s.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+        const where = (s as { remoteName?: string }).remoteName;
+        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${s.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
       }).join("")}</ul>` : ""}`
     : `
       <p class="note" style="margin:0 0 8px">Try asking</p>
@@ -841,14 +964,19 @@ function bindSearch() {
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
     const hit = askResult?.sources[Number(li.dataset.hit)];
     if (!hit) return;
+    const remote = remotes.find((d) => d.id === hit.driveId);
+    if (remote) { void viewRemoteFile(remote, hit.path); return; }
     const share = shareByDrive(hit.driveId);
     if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
   bind("action-share", shareCollected);
   bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
   bind("action-open", () => {
-    const a = askResult?.action; const share = shareByDrive(a?.driveId);
-    if (share && a?.folder) { searchOpen = false; void openBrowser(share, a.folder); }
+    const a = askResult?.action; if (!a?.folder) return;
+    const remote = remotes.find((d) => d.id === a.driveId);
+    if (remote) { searchOpen = false; void openRemoteBrowser(remote, a.folder); return; }
+    const share = shareByDrive(a.driveId);
+    if (share) { searchOpen = false; void openBrowser(share, a.folder); }
   });
   bindOverlays();
 }
@@ -970,7 +1098,11 @@ function viewerSheet(): string {
 
 function bindViewer() {
   bind("viewer-close", () => { viewer = null; render(); });
-  bind("viewer-ext", () => { const v = viewer; if (!v) return; void AindriveAgent.openFile({ folderUri: v.share.folder.uri, path: v.path }).catch((e) => notify(msgOf(e), true)); });
+  bind("viewer-ext", () => {
+    const v = viewer; if (!v) return;
+    if (v.remote) { void Browser.open({ url: `${state.server}/d/${v.remote.id}?path=${encodeURIComponent(v.path.split("/").slice(0, -1).join("/"))}` }); return; }
+    if (v.share) void AindriveAgent.openFile({ folderUri: v.share.folder.uri, path: v.path }).catch((e) => notify(msgOf(e), true));
+  });
 }
 
 function overlays(): string {
@@ -1052,7 +1184,9 @@ async function boot() {
   }).catch(() => {});
   App.addListener("resume", () => {
     AindriveAgent.status().then((s) => { status = s; render(); }).catch(() => {});
+    void refreshRemotes();
   });
+  void refreshRemotes();
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
     else if (viewer) { viewer = null; render(); }

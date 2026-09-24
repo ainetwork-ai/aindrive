@@ -51,7 +51,7 @@ public final class QueryParser {
             "내", "나의", "우리", "그", "저", "것", "거", "들", "중", "중에", "중에서", "관련", "관련된", "모든", "전체", "다른", "제일", "가장", "좋은", "이름",
             // "X 얘기한 녹음" — the verbs around a topic word are not the topic
             "얘기한", "얘기", "이야기", "이야기한", "언급된", "언급한", "언급", "나온", "나왔던", "말한", "말했던", "관한", "대한", "다룬", "논의한", "토론한", "설명한", "들어간", "들어있는", "포함된", "나오는",
-            "먹은", "먹었던", "마신", "본", "봤던", "산", "샀던", "갔다온", "다녀온",
+            "먹은", "먹었던", "마신", "본", "봤던", "샀던", "갔다온", "다녀온",
             // English
             "find", "show", "search", "get", "open", "list", "me", "the", "a", "an", "of", "from", "in", "at", "on", "my", "our", "all", "any", "some", "with", "for", "that", "which",
             "taken", "took", "trip", "travel", "travelled", "traveled", "vacation", "holiday", "please", "i", "we", "were", "was", "named", "called", "about", "best", "good",

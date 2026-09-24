@@ -57,7 +57,7 @@ export type RpcResult =
   | { method: "download-chunk"; data: string; eof: boolean }
   | { method: "yjs-write"; ok: true; bytes: number }
   | { method: "yjs-read"; data: string; bytes: number }
-  | { method: "agent-ask"; answer: string; sources: AskSource[] };
+  | { method: "agent-ask"; answer: string; sources: AskSource[]; action?: Record<string, unknown> };
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;

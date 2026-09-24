@@ -76,7 +76,7 @@ export interface FileEntry {
 
 export interface AskResult {
   answer: string;
-  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo" }[];
+  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo"; remoteName?: string }[];
   /** Present when the question was a task ("…모아서 폴더로 만들어줘"). */
   action?: {
     type: "collect";

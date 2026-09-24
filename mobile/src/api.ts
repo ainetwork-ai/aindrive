@@ -100,3 +100,54 @@ export async function deleteDrive(server: string, sessionCookie: string, driveId
     if (!/→ 404:/.test(e instanceof Error ? e.message : String(e))) throw e;
   }
 }
+
+// ---------------------------------------------------------------- other devices (same account)
+
+export interface RemoteDrive { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null }
+
+/** Every drive this account owns — the ones served by THIS phone and by any other device. */
+export async function listDrives(server: string, sessionCookie: string): Promise<RemoteDrive[]> {
+  const r = await request<{ drives: RemoteDrive[] }>(server, "GET", "/api/drives", undefined, sessionCookie);
+  return r.drives;
+}
+
+export interface RemoteEntry { name: string; path: string; isDir: boolean; size: number; mtimeMs: number; mime?: string }
+
+export async function remoteList(server: string, sessionCookie: string, driveId: string, path: string): Promise<RemoteEntry[]> {
+  const r = await request<{ entries: RemoteEntry[] }>(server, "GET", `/api/drives/${encodeURIComponent(driveId)}/fs/list?path=${encodeURIComponent(path)}`, undefined, sessionCookie);
+  return r.entries;
+}
+
+/** File bytes from another device, via the server relay (capped by the agent's 8 MiB read limit). */
+export async function remoteRead(server: string, sessionCookie: string, driveId: string, path: string): Promise<{ base64: string; mime: string }> {
+  const r = await request<{ content: string; encoding: string; mime: string }>(server, "GET", `/api/drives/${encodeURIComponent(driveId)}/fs/read?path=${encodeURIComponent(path)}&encoding=base64`, undefined, sessionCookie);
+  return { base64: r.content, mime: r.mime };
+}
+
+/**
+ * The agent on another device is reached through the web's agent-ask, which
+ * needs an agent record on that drive. Phones ignore the record's LLM
+ * settings (they run their own recogniser), so any valid provider will do.
+ */
+export async function ensureRemoteAgent(server: string, sessionCookie: string, driveId: string): Promise<string> {
+  const list = await request<{ agents: { id: string; name: string }[] }>(server, "GET", `/api/drives/${encodeURIComponent(driveId)}/agents`, undefined, sessionCookie);
+  const mine = list.agents.find((a) => a.name === "Phone agent") ?? list.agents[0];
+  if (mine) return mine.id;
+  const made = await post<{ agent: { id: string } }>(server, `/api/drives/${encodeURIComponent(driveId)}/agents`, {
+    name: "Phone agent",
+    description: "Finds files on this device by asking — photos by what they show, recordings by what was said.",
+    knowledge: { strategy: "dump-all-text" },
+    llm: { provider: "openai", model: "on-device" },
+  }, sessionCookie);
+  return made.agent.id;
+}
+
+export interface RemoteAsk {
+  answer: string;
+  sources: { path: string; snippet: string; matchedBy?: string }[];
+  action?: { type: string; folder?: string; copied?: number; failed?: number; share?: boolean; skipped?: boolean; reason?: string };
+}
+
+export function askRemote(server: string, sessionCookie: string, driveId: string, agentId: string, q: string): Promise<RemoteAsk> {
+  return post<RemoteAsk>(server, `/api/drives/${encodeURIComponent(driveId)}/agents/${encodeURIComponent(agentId)}/ask`, { q }, sessionCookie);
+}
