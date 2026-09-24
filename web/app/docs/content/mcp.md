@@ -8,7 +8,10 @@ Each drive is a **remote MCP server** (Streamable HTTP, stateless):
 
 Tools are scoped to that one drive (no `drive_id` argument). A read token gets
 `list_files`, `read_file`, `stat`, `search`; a write token adds `write_file`
-and `delete_path`. Full argument list: [Skills](/docs/skills).
+and `delete_path`. An account grant with `drives:sell` also gets the
+[sale tools](/docs/skills#sale-tools) (share links, payout wallets, token
+policy, receipts) on drives the user created. Full argument list:
+[Skills](/docs/skills).
 
 ## Connect
 
