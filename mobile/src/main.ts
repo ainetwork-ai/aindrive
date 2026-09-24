@@ -847,9 +847,31 @@ const I = {
 
 // ---------------------------------------------------------------- render
 
+/** True while the user is typing somewhere in the app — a full re-render would drop the keyboard. */
+function typing(): boolean {
+  const el = document.activeElement;
+  return el instanceof HTMLInputElement && (el.type === "text" || el.type === "search" || el.type === "email" || el.type === "password") || el instanceof HTMLTextAreaElement;
+}
+
 function render() {
   const app = document.getElementById("app");
   if (!app) return;
+  // innerHTML replaces the focused input; put the caret (and the keyboard) back where it was.
+  const focused = typing() ? document.activeElement as HTMLInputElement | HTMLTextAreaElement : null;
+  const keep = focused ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
+  try { renderScreens(app); } finally {
+    if (keep?.id) {
+      const el = document.getElementById(keep.id) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (el) {
+        if (el.value !== keep.value) el.value = keep.value;
+        el.focus({ preventScroll: true });
+        try { el.setSelectionRange(keep.start, keep.end); } catch { /* not a text field */ }
+      }
+    }
+  }
+}
+
+function renderScreens(app: HTMLElement) {
   if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); return; }
   if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); return; }
   if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); return; }
@@ -1337,7 +1359,8 @@ async function boot() {
       if (!d.connected && prev?.connected) log(`${name}: disconnected — reconnecting`);
       if (d.lastError && d.lastError !== prev?.lastError) log(`${name}: ${d.lastError}`);
     }
-    render();
+    // Indexing progress ticks every few files; never redraw under someone's fingers.
+    if (!typing()) render();
   }).catch(() => {});
   App.addListener("resume", () => {
     AindriveAgent.status().then((s) => { status = s; render(); }).catch(() => {});
