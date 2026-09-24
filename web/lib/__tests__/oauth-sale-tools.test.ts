@@ -144,10 +144,11 @@ describe("account scopes drives:write / drives:sell", () => {
 
 describe("/mcp/d/[driveId] tools per account scope", () => {
   it("each drives:* scope adds exactly its tools", async () => {
-    expect(await toolNames("d1", issue("owner1", "drives:read"))).toEqual(READ_TOOLS);
+    // a2ui_action (app-only, for the MCP Apps view) rides along whenever a read tool exists.
+    expect(await toolNames("d1", issue("owner1", "drives:read"))).toEqual([...READ_TOOLS, "a2ui_action"]);
     expect(await toolNames("d1", issue("owner1", "drives:read drives:write")))
-      .toEqual(["list_files", "read_file", "write_file", "delete_path", "stat", "search"]);
-    expect(await toolNames("d1", issue("owner1", "drives:read drives:sell"))).toEqual([...READ_TOOLS, ...SALE_TOOLS]);
+      .toEqual(["list_files", "read_file", "write_file", "delete_path", "stat", "search", "a2ui_action"]);
+    expect(await toolNames("d1", issue("owner1", "drives:read drives:sell"))).toEqual([...READ_TOOLS, ...SALE_TOOLS, "a2ui_action"]);
     expect(await toolNames("d1", issue("owner1", "drives:sell"))).toEqual(SALE_TOOLS);
     expect(await toolNames("d1", issue("owner1", "drives:write"))).toEqual(["write_file", "delete_path"]);
   });

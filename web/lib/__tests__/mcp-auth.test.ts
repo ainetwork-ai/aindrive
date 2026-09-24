@@ -119,7 +119,7 @@ describe("/mcp/d/[driveId]", () => {
     const { token } = tokens.issuePat({ userId: "owner1", driveId: "d1", name: "t", scope: "read", ttlDays: null });
     const list = await rpcResult(await rpc("d1", token, { jsonrpc: "2.0", id: 1, method: "tools/list" }));
     const names = list.result.tools.map((t: { name: string }) => t.name);
-    expect(names).toEqual(["list_files", "read_file", "stat", "search"]);
+    expect(names).toEqual(["list_files", "read_file", "stat", "search", "a2ui_action"]);
     expect(JSON.stringify(list.result.tools)).not.toContain("drive_id");
 
     const call = await rpcResult(await rpc("d1", token, {

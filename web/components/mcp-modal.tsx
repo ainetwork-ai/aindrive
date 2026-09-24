@@ -116,7 +116,13 @@ export function McpModal({ driveId, onClose }: { driveId: string; onClose: () =>
             <CopyRow value={url} />
             <p className="text-caption text-drive-muted">
               Remote MCP (Streamable HTTP) for this drive only. Tools: list_files, read_file, stat, search
-              {info.canWrite ? ", write_file (write tokens)" : ""}. An app never gets more than your own access here.
+              {info.canWrite ? ", write_file, delete_path (write tokens)" : ""}. An app never gets more than your own access here.
+              Hosts with MCP Apps (Claude, ChatGPT, VS Code…) show results as an interactive file browser.
+            </p>
+            <p className="text-caption">
+              <a href="/docs" target="_blank" rel="noreferrer" className="text-drive-accent underline">
+                Integration guide: MCP, A2A, AG-UI and A2UI →
+              </a>
             </p>
           </Section>
 

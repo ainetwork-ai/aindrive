@@ -48,7 +48,10 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
   module, imported by `agents.js`). `sig.ts` is an unused duplicate — see the
   sig-consolidation note in `web/shared/README.md`.
 - `agent-stream.ts` — byte-range `ReadableStream` over sequential `download-chunk` RPCs (Range playback, downloads).
-- `aindrive-agent.ts` — A2A agent card + executor (runs `@/shared/agent-skills`).
+- `aindrive-agent.ts` — A2A agent card and executor. It handles skill DataParts, A2UI actions and text commands, and sends an A2UI DataPart when the extension is on. It runs `@/shared/agent-skills`.
+- `agui.ts` — AG-UI 1.0 agent (`/agui`, `/agui/d/[id]`): RunAgentInput in, one skill per run, events back (TOOL_CALL_*, `a2ui-surface` activity, state, text).
+- `agent-auth.ts` — one bearer → SkillCtx resolver for A2A and AG-UI (PAT, OAuth, account token, session JWT).
+- `mcp-http.ts` / `mcp-ui.ts` / `mcp-tokens.ts` / `oauth.ts` — remote MCP (tools, MCP Apps view, A2UI results), its tokens and the OAuth server. See `app/mcp/README.md`.
 
 **Storage / DB**
 - `db.js` — singleton better-sqlite3 + drizzle; bootstraps schema, runs idempotent ALTERs, starts maintenance.

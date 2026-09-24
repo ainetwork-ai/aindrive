@@ -14,9 +14,21 @@ panel from the drive sidebar → **MCP** (`components/mcp-modal.tsx`).
 | `/mcp` | session JWT as bearer, or session cookie | legacy, account-wide (all drives). Not advertised. |
 
 Drive endpoint tools: `list_files`, `read_file`, `stat`, `search`, plus
-`write_file` / `delete_path` for write tokens, plus the sale tools for an
-account grant with `drives:sell` (below). There is no `drive_id` argument; the
-URL fixes it.
+`write_file` / `delete_path` for write tokens, the sale tools for an
+account grant with `drives:sell` (below), plus the app-only `a2ui_action`.
+There is no `drive_id` argument; the URL fixes it.
+
+## UI (MCP Apps + A2UI) — `lib/mcp-http.ts`, `lib/mcp-ui.ts`
+
+- Every tool carries `_meta.ui.resourceUri = "ui://aindrive/browser"`, an MCP Apps
+  view: the official ext-apps App bundle + `shared/a2ui/renderer.js`, inlined
+  into one HTML file (read from `node_modules`/`shared` at runtime).
+- Every result carries its A2UI surface in `_meta["ai.aindrive/a2ui"]`, which is
+  UI-only; the model sees the text. With `X-A2UI: 1` (or `?a2ui=1`) the result
+  also embeds the surface as an `application/a2ui+json` resource.
+- Clicks in the view come back as `tools/call a2ui_action {action}`. That tool
+  is limited to the same tool allow-list as the token.
+- Public guide: `/docs/mcp`, `/docs/a2ui` (source `app/docs/content/`).
 
 ## Tokens (`lib/mcp-tokens.ts`, table `mcp_tokens`)
 
