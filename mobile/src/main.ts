@@ -1063,16 +1063,45 @@ function bindHome() {
 
 // ---- search
 
-/** Tap-to-run examples: a search, a recognition search, and the tasks the agent can do. */
-const SUGGESTIONS = [
-  "Sort my call history by who I talk to most and summarize what we usually talk about, and share it",
-  "Collect this month's food photos into a folder and share it",
-  "Photos taken in Paris",
-  "Dog photos",
-  "Meeting recordings where we talked about the budget",
-  "How many photos do I have",
-  "The 5 biggest files",
-  "Last week's screenshots",
+/** Tap-to-run examples, grouped by what the agent can do. Every one is a scenario the device tests cover. */
+const SUGGESTIONS: { title: string; items: string[] }[] = [
+  { title: "Reports", items: [
+    "Sort my call history by who I talk to most and summarize what we usually talk about, and share it",
+    "Who do I call the most?",
+  ] },
+  { title: "Collect into a folder & share", items: [
+    "Collect this month's food photos into a folder and share it",
+    "Collect the photos I took in Paris into a folder",
+    "Make a folder of sunset photos",
+    "Collect the recordings and share them",
+    "Put all the dog pictures in one folder",
+    "Collect the receipt photos",
+  ] },
+  { title: "Find by place & time", items: [
+    "Photos taken in Paris",
+    "Photos from Japan last year",
+    "Photos taken this month",
+    "Last week's screenshots",
+    "Videos from Seoul",
+  ] },
+  { title: "Find by what it shows or says", items: [
+    "Dog photos",
+    "Pizza photos",
+    "Photos of the beach",
+    "Meeting recordings where we talked about the budget",
+    "Recordings where someone mentions a contract",
+  ] },
+  { title: "Counts & rankings", items: [
+    "How many photos do I have",
+    "How many photos from Korea",
+    "The 5 biggest files",
+    "Show me just the 3 most recent photos",
+    "The 2 oldest photos",
+  ] },
+  { title: "Move & delete (asks first)", items: [
+    "Move the Nice photos into a folder",
+    "Delete the Tokyo photos",
+  ] },
 ];
 
 function searchSheet(): string {
@@ -1120,8 +1149,9 @@ function searchSheet(): string {
         return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${s.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
       }).join("")}</ul>` : ""}`
     : `
-      <p class="note" style="margin:0 0 8px">Try asking</p>
-      <div class="chips">${SUGGESTIONS.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>
+      ${SUGGESTIONS.map((g) => `
+        <p class="note group">${esc(g.title)}</p>
+        <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
       <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Runs on this phone; only sharing needs the server.</p>`;
   return `
     <div class="sheet">
