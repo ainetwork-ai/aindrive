@@ -8,7 +8,7 @@
  * Two kinds of grant:
  *   - drive   — `resource` = mcpUrlFor(driveId) (RFC 8707); scope wire format
  *               "drive:read" | "drive:write" ↔ McpScope "read"|"write".
- *   - account — NO `resource`, only account scopes ("profile", "drives:read");
+ *   - account — NO `resource`, only account scopes (ACCOUNT_SCOPES);
  *               "Sign in with aindrive" for third-party apps. Codes/tokens
  *               live in account_oauth_codes / lib/account-tokens.ts.
  */
@@ -19,8 +19,12 @@ import { hashToken, mcpUrlFor, type McpScope } from "./mcp-tokens";
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const DRIVE_SCOPES = ["drive:read", "drive:write"] as const;
-/** Account grant scopes: profile → /api/oauth/userinfo; drives:read → /api/oauth/drives + read-only /mcp/d/*. */
-export const ACCOUNT_SCOPES = ["profile", "drives:read"] as const;
+/**
+ * Account grant scopes: profile → /api/oauth/userinfo; drives:read →
+ * /api/oauth/drives + the read tools on /mcp/d/*; drives:write → write_file /
+ * delete_path there (role editor+); drives:sell → the owner-only sale tools.
+ */
+export const ACCOUNT_SCOPES = ["profile", "drives:read", "drives:write", "drives:sell"] as const;
 export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
 export const SCOPES_SUPPORTED = [...DRIVE_SCOPES, ...ACCOUNT_SCOPES] as const;
 
@@ -179,9 +183,10 @@ export type ValidAuthorize =
   | (ValidAuthorizeBase & { driveId: string; requestedScope: McpScope })
   | (ValidAuthorizeBase & { driveId: null; accountScopes: AccountScope[] });
 
+const ACCOUNT_SCOPE_LIST = ACCOUNT_SCOPES.join(", ");
 const MISSING_RESOURCE =
   "Missing or unknown `resource` — use the drive's MCP URL (…/mcp/d/<driveId>), " +
-  "or omit it and request only account scopes (profile, drives:read).";
+  `or omit it and request only account scopes (${ACCOUNT_SCOPE_LIST}).`;
 
 /**
  * Scope of a request WITHOUT `resource` (account grant): strict — only
@@ -194,7 +199,7 @@ function accountScopesFrom(raw: string | null | undefined): { ok: true; scopes: 
   const scopes = parseAccountScopes(raw);
   if (scopes.length === 0) return { ok: false, error: MISSING_RESOURCE };
   if (scopes.length !== new Set(parts).size) {
-    return { ok: false, error: "drive:read / drive:write need a drive `resource` and can't be combined with account scopes (profile, drives:read)." };
+    return { ok: false, error: `drive:read / drive:write need a drive \`resource\` and can't be combined with account scopes (${ACCOUNT_SCOPE_LIST}).` };
   }
   return { ok: true, scopes };
 }

@@ -42,8 +42,11 @@ function pointerGet(obj, pointer) {
   return pointer.replace(/^\//, "").split("/").reduce((o, k) => (o == null ? undefined : o[k.replace(/~1/g, "/").replace(/~0/g, "~")]), obj);
 }
 
+const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function pointerSet(obj, pointer, value) {
   const keys = pointer.replace(/^\//, "").split("/").filter(Boolean);
+  if (keys.some((k) => UNSAFE_KEYS.has(k))) return obj;
   if (!keys.length) return value;
   let o = obj;
   keys.slice(0, -1).forEach((k) => { if (o[k] == null || typeof o[k] !== "object") o[k] = {}; o = o[k]; });

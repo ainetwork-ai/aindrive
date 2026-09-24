@@ -95,6 +95,11 @@ describe("AG-UI", () => {
     const w = sseEvents(await (await agui(runInput({ forwardedProps: { skill: "write_file", args: { path: "x", content: "y" } } }))).text());
     expect(JSON.parse(w.find((e) => e.type === "TOOL_CALL_RESULT").content).error.code).toBe("forbidden");
     expect((await agui(runInput(), "")).status).toBe(401);
+    // bearer only: a session cookie alone is not a credential here (no blind same-site forgery)
+    const cookieOnly = await aguiDrive.POST(new Request("http://drive.test/agui/d/d1", {
+      method: "POST", headers: { "content-type": "text/plain", cookie: "aindrive_session=whatever" }, body: JSON.stringify(runInput()),
+    }), dctx("d1"));
+    expect(cookieOnly.status).toBe(401);
     expect((await agui(runInput(), otherTok)).status).toBe(403);
     expect((await agui({ nope: true })).status).toBe(400);
     const info = await (await aguiRoot.GET()).json();

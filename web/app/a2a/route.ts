@@ -2,7 +2,8 @@
  * POST /a2a — root-level A2A v0.3 JSON-RPC endpoint.
  *
  * Uses @a2a-js/sdk's framework-agnostic `JsonRpcTransportHandler`. Each request:
- *   1. authenticate (lib/agent-auth: MCP/OAuth/account tokens, or session JWT)
+ *   1. authenticate (lib/agent-auth: bearer only — MCP/OAuth/account tokens,
+ *      or a session JWT as bearer; the cookie is not accepted)
  *   2. read requested extensions from `X-A2A-Extensions` (e.g. A2UI)
  *   3. hand body + ServerCallContext to the transport handler
  *   4. reply JSON (message/send, tasks/*) or SSE (message/stream), echoing the
@@ -20,6 +21,7 @@ import {
 } from "@a2a-js/sdk/server";
 import { aindriveAgentCard, AindriveExecutor, AindriveUser } from "@/lib/aindrive-agent";
 import { resolveAgentAuth } from "@/lib/agent-auth";
+import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { A2UI_A2A_EXTENSION } from "@/shared/a2ui";
 
 const CORS = {
@@ -56,6 +58,13 @@ function extensionsHeader(requested: string[]): Record<string, string> {
 }
 
 export async function POST(req: Request) {
+  const rl = tryConsume({ name: "a2a", key: clientKey(req, "a2a"), limit: 120, windowMs: 60 * 1000 });
+  if (!rl.ok) {
+    return NextResponse.json(
+      { jsonrpc: "2.0", id: null, error: { code: -32000, message: "rate limited" } },
+      { status: 429, headers: { ...CORS, "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } },
+    );
+  }
   let body: unknown;
   try {
     body = await req.json();
@@ -67,7 +76,7 @@ export async function POST(req: Request) {
   }
 
   const auth = await resolveAgentAuth(req);
-  const user = auth.ok ? new AindriveUser(auth.ctx) : new UnauthenticatedUser();
+  const user = auth.ok ? new AindriveUser(auth) : new UnauthenticatedUser();
   const requested = (req.headers.get("x-a2a-extensions") ?? "")
     .split(",").map((s) => s.trim()).filter(Boolean);
   const callContext = new ServerCallContext(requested, user);

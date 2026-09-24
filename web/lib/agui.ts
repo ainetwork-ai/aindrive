@@ -16,6 +16,8 @@
  */
 import { EventType, contentToText, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { runSkill, isSkillName, type SkillCtx } from "@/shared/agent-skills";
+import { resolveAgentAuth, skillPermitted, type AgentAuth } from "./agent-auth";
+import { tryConsume, clientKey } from "./rate-limit";
 import {
   AGUI_A2UI_ACTIVITY, AGUI_A2UI_OPERATIONS_KEY, a2uiForSkill, actionToSkill, commandToSkill, parseA2uiAction,
   type SkillCall,
@@ -41,13 +43,19 @@ export function planRun(input: RunAgentInput, ctx: SkillCtx): SkillCall | { erro
   return commandToSkill(text, driveId);
 }
 
-export async function* runEvents(input: RunAgentInput, ctx: SkillCtx): AsyncGenerator<BaseEvent> {
+export async function* runEvents(input: RunAgentInput, auth: Extract<AgentAuth, { ok: true }>): AsyncGenerator<BaseEvent> {
   const { threadId, runId } = input;
+  const ctx = auth.ctx;
   yield { type: EventType.RUN_STARTED, threadId, runId } as BaseEvent;
 
   const call = planRun(input, ctx);
   if ("error" in call) {
     yield { type: EventType.RUN_ERROR, message: call.error, code: "bad_request" } as BaseEvent;
+    return;
+  }
+  const denied = skillPermitted(auth, call.skill);
+  if (denied) {
+    yield { type: EventType.RUN_ERROR, message: denied, code: "forbidden" } as BaseEvent;
     return;
   }
   const { skill, args } = call;
@@ -122,8 +130,9 @@ export function aguiInfo(driveId?: string) {
 export async function serveAgui(req: Request, pinDriveId?: string): Promise<Response> {
   const { RunAgentInputSchema } = await import("@ag-ui/core/schemas");
   const { EventEncoder } = await import("@ag-ui/encoder");
-  const { resolveAgentAuth } = await import("./agent-auth");
 
+  const rl = tryConsume({ name: "agui", key: clientKey(req, "agui"), limit: 120, windowMs: 60 * 1000 });
+  if (!rl.ok) return Response.json({ error: "slow_down" }, { status: 429, headers: { ...AGUI_CORS, "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } });
   const auth = await resolveAgentAuth(req, pinDriveId);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, {
@@ -138,7 +147,7 @@ export async function serveAgui(req: Request, pinDriveId?: string): Promise<Resp
 
   const encoder = new EventEncoder({ accept: req.headers.get("accept") ?? undefined });
   const binary = encoder.getContentType() !== "text/event-stream";
-  const events = runEvents(parsed.data as RunAgentInput, auth.ctx);
+  const events = runEvents(parsed.data as RunAgentInput, auth);
   const te = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {

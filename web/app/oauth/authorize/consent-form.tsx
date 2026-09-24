@@ -92,9 +92,11 @@ export function ConsentForm({ params, clientName, redirectHost, driveName, userE
 const ACCOUNT_SCOPE_LINES: Record<AccountScope, string[]> = {
   profile: ["See your profile (email, name, wallet address)"],
   "drives:read": ["List your drives", "Read files in your drives (read-only)"],
+  "drives:write": ["Upload and delete files in your drives"],
+  "drives:sell": ["List files for sale, set prices and your payout wallet, and read your sales"],
 };
 
-/** Consent for an account grant ("Sign in with aindrive"): no drive, fixed read-only scopes. */
+/** Consent for an account grant ("Sign in with aindrive"): no drive; lists every requested scope. */
 export function AccountConsentForm({ params, clientName, redirectHost, userEmail, scopes }: {
   params: AuthorizeParams;
   clientName: string;
@@ -119,7 +121,10 @@ export function AccountConsentForm({ params, clientName, redirectHost, userEmail
       <RedirectNotice redirectHost={redirectHost} />
       <p className="mt-2 text-caption text-drive-muted">Signed in as {userEmail}.</p>
       <p className="mt-3 text-caption text-drive-muted">
-        The app can&apos;t create, change or delete files, and never gets more than your own access.
+        {scopes.includes("drives:write")
+          ? "The app never gets more than your own access in each drive."
+          : "The app can't create, change or delete files, and never gets more than your own access."}
+        {scopes.includes("drives:sell") && " Sales can only be managed on drives you created."}
       </p>
 
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}

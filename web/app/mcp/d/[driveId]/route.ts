@@ -9,8 +9,9 @@
  * ChatGPT, …) discover the OAuth flow. See ./README.md.
  *
  * Also accepted: an account-grant access token (`aind_aat_…`, lib/account-tokens)
- * with the `drives:read` scope, on any drive the user is a member of — served
- * exactly like a drive token with scope "read" (no write tools).
+ * on any drive the user is a member of. Each drives:* scope adds its tools:
+ * drives:read the read tools, drives:write write_file + delete_path (still
+ * editor+ per call), drives:sell the sale tools (creator-only per call).
  */
 
 import { getDrive } from "@/lib/drives";
@@ -18,7 +19,7 @@ import { env } from "@/lib/env";
 import { maxRoleInDrive, verifyMcpToken } from "@/lib/mcp-tokens";
 import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "@/lib/account-tokens";
 import { MCP_CORS, bearerFrom, serveMcp } from "@/lib/mcp-http";
-import { driveScopedDescriptors } from "@/shared/agent-skills";
+import { driveScopedDescriptors, skillGroup } from "@/shared/agent-skills";
 
 type Ctx = { params: Promise<{ driveId: string }> };
 
@@ -47,13 +48,23 @@ function forbidden(description: string): Response {
   );
 }
 
-/** Account grant: drives:read → read-only on any drive the user belongs to. */
+const GROUP_SCOPE = { read: "drives:read", write: "drives:write", sell: "drives:sell" } as const;
+
+/**
+ * Account grant on any drive the user belongs to. Only the tools of the
+ * granted drives:* scopes are listed — and serveMcp refuses any unlisted tool.
+ */
 function handleAccountToken(req: Request, driveId: string, bearer: string): Promise<Response> | Response {
   const token = verifyAccountToken(bearer);
   if (!token) return unauthorized(driveId, "invalid_token", "token is invalid, expired or revoked");
-  if (!token.scopes.includes("drives:read")) return forbidden("token lacks the drives:read scope");
+  const has = (g: keyof typeof GROUP_SCOPE) => token.scopes.includes(GROUP_SCOPE[g]);
+  if (!has("read") && !has("write") && !has("sell")) {
+    return forbidden("token lacks a drives:read, drives:write or drives:sell scope");
+  }
   if (maxRoleInDrive(driveId, token.userId) === "none") return forbidden("the account has no access to this drive");
-  return serveMcp(req, { userId: token.userId, driveId, scope: "read" }, driveScopedDescriptors("read"));
+  const scope = has("write") ? "write" : "read";
+  const tools = driveScopedDescriptors(scope, { sell: has("sell") }).filter((t) => has(skillGroup(t.name)));
+  return serveMcp(req, { userId: token.userId, driveId, scope, sell: has("sell") }, tools);
 }
 
 async function handle(req: Request, { params }: Ctx) {

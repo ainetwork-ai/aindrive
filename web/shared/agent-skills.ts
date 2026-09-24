@@ -9,14 +9,16 @@
  *
  * Auth: ctx.userId is supplied by the caller (route handlers extract
  * the JWT before invoking). resolveAccess + atLeast gate every drive
- * op per-path.
+ * op per-path; the sale tools (ctx.sell only) are drive-creator-only and
+ * run the HTTP routes' validation from lib/sales.ts.
  *
  * Descriptors include JSON Schema for tool/skill inputs so MCP can
  * emit them verbatim in tools/list and A2A can use them to validate
  * DataParts in v1.1.
  */
 
-import { getDrive, listUserDrives } from "@/lib/drives";
+import { maxRoleInDrive } from "@/lib/mcp-tokens";
+import { getDrive, listUserDrives, listPayoutWallets, setDriveAllowedTokens, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { callAgent, AgentError } from "@/lib/rpc";
 import { paidAccessDenial, paidLocksForListing } from "@/lib/sale-access.js";
@@ -24,13 +26,19 @@ import { normalizePath } from "@/lib/path";
 import { getUserTier, TIER_FILE_LIMIT } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
+import { resolveDriveTokens } from "@/lib/payment-tokens";
 import {
-  SKILL_DESCRIPTORS, driveScopedDescriptors, isSkillName,
-  type SkillDescriptor, type SkillName,
-  MUTATING,
+  ShareCreateBody, ShareEditBody, applyPayoutWallet, createShare, editShare, listReceipts, listShares,
+  revokeShare, shareUrl, tokenPolicyFromList, type SaleErr,
+} from "@/lib/sales";
+import {
+  MUTATING, isSaleSkill, isSkillName, type SaleSkillName,
 } from "./skill-descriptors";
-export { SKILL_DESCRIPTORS, driveScopedDescriptors, isSkillName, type SkillDescriptor, type SkillName };
+export * from "./skill-descriptors";
 
+
+/** search walks one agent RPC per folder; bound the walk, not just the matches. */
+const MAX_SEARCH_DIRS = 1000;
 
 // Mirrors fs/write/route.ts (AINDRIVE_MAX_WRITE_BYTES).
 const MAX_WRITE_BYTES = parseInt(process.env.AINDRIVE_MAX_WRITE_BYTES ?? String(100 * 1024 * 1024), 10);
@@ -46,8 +54,10 @@ function splitPath(p: string): { parent: string; base: string } {
  * `list_drives` is unavailable. `scope` is the token's ceiling — "read"
  * forbids write_file regardless of the user's role. Both omitted = the
  * legacy account-wide surface (A2A executor, session-auth /mcp).
+ * `sell` (account grant with `drives:sell`) unlocks the sale tools; they
+ * are refused everywhere else.
  */
-export type SkillCtx = { userId: string; driveId?: string; scope?: "read" | "write" };
+export type SkillCtx = { userId: string; driveId?: string; scope?: "read" | "write"; sell?: boolean };
 
 export type SkillOk = { kind: "ok"; structured: unknown; text: string };
 export type SkillErr = {
@@ -75,11 +85,16 @@ export async function runSkill(
       return { kind: "err", code: "forbidden", message: "list_drives is unavailable on a drive-scoped endpoint" };
     }
     // Owned AND member drives (same set as /api/oauth/drives).
-    const rows = listUserDrives(ctx.userId).map((d) => ({ id: d.id, name: d.name, owner_id: d.owner_id }));
+    // No owner_id: other users' internal ids stay private (as /api/oauth/drives).
+    const rows = listUserDrives(ctx.userId).map((d) => ({ id: d.id, name: d.name, role: maxRoleInDrive(d.id, ctx.userId) }));
     const text = rows.length === 0
       ? "(no drives)"
       : rows.map((r) => `${r.id} — ${r.name}`).join("\n");
     return { kind: "ok", structured: { drives: rows }, text };
+  }
+
+  if (isSaleSkill(name) && !ctx.sell) {
+    return { kind: "err", code: "forbidden", message: "forbidden (token lacks the drives:sell scope)" };
   }
 
   const driveIdRaw = arg(args, "drive_id") ?? ctx.driveId;
@@ -92,6 +107,7 @@ export async function runSkill(
   const driveId: string = driveIdRaw;
   const drive = getDrive(driveId);
   if (!drive) return { kind: "err", code: "not_found", message: "drive_not_found" };
+  if (isSaleSkill(name)) return runSaleSkill(ctx.userId, name, drive, args);
   const driveSecret: string = drive.drive_secret;
 
   // Canonicalize ONCE and use the same string for every check and the agent
@@ -222,8 +238,10 @@ export async function runSkill(
         const lim = arg(args, "limit");
         const limit = Math.min(typeof lim === "number" ? lim : 50, 500);
         const matches: Array<{ path: string; isDir: boolean; locked?: boolean }> = [];
+        let visited = 0;
         const walk = async (dir: string): Promise<void> => {
-          if (matches.length >= limit) return;
+          if (matches.length >= limit || visited >= MAX_SEARCH_DIRS) return;
+          visited++;
           const r = await callAgent(driveId, driveSecret, { method: "list", path: dir });
           for (const e of visibleEntries(dir, (r.entries ?? []) as Entry[])) {
             if (matches.length >= limit) return;
@@ -237,7 +255,7 @@ export async function runSkill(
         const text = matches.length === 0
           ? `(no matches for "${qRaw}")`
           : matches.map((m) => `${m.isDir ? "📁" : "📄"} ${m.path}${m.locked ? " 🔒" : ""}`).join("\n");
-        return { kind: "ok", structured: { matches, truncated: matches.length >= limit }, text };
+        return { kind: "ok", structured: { matches, truncated: matches.length >= limit || visited >= MAX_SEARCH_DIRS }, text };
       }
     }
   } catch (e) {
@@ -246,4 +264,125 @@ export async function runSkill(
   }
 
   return { kind: "err", code: "internal", message: "unreachable" };
+}
+
+function saleErr(e: SaleErr): SkillErr {
+  const code = e.status === 400 ? "invalid_params" : e.status === 403 ? "forbidden" : e.status === 404 ? "not_found" : "internal";
+  return { kind: "err", code, message: e.error };
+}
+
+function invalidInput(issues: { path: (string | number)[]; message: string }[]): SkillErr {
+  const first = issues[0];
+  const field = first?.path.join(".").replace(/^price_usdc$/, "price");
+  return { kind: "err", code: "invalid_params", message: `invalid input${field ? ` (${field})` : ""}: ${first?.message ?? "bad arguments"}` };
+}
+
+const optionalString = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
+/**
+ * The sale tools: thin adapters over lib/sales.ts, which holds the same
+ * validation the HTTP routes run. Creator-only like the payout / token-policy
+ * / receipts routes (docs/PERMISSIONS.md) — checked on every call, so a
+ * token stops working here the moment its user no longer created the drive.
+ */
+async function runSaleSkill(
+  userId: string,
+  name: SaleSkillName,
+  drive: DriveRow,
+  args: Record<string, unknown>,
+): Promise<SkillResult> {
+  if (drive.owner_id !== userId) {
+    return { kind: "err", code: "forbidden", message: "forbidden (only the drive's creator can manage its sales)" };
+  }
+  const driveId = drive.id;
+  switch (name) {
+    case "list_shares": {
+      const shares = listShares(driveId).map((s) => ({
+        id: s.id, token: s.token, url: shareUrl(s.token), path: s.path, role: s.role,
+        price: s.price_usdc, currency: s.currency, listed: s.listed === 1,
+        expiresAt: s.expires_at, createdAt: s.created_at,
+      }));
+      const text = shares.length === 0
+        ? "(no share links)"
+        : shares.map((s) => `${s.id} ${s.path || "/"} ${s.price === null ? "free" : `${s.price} ${s.currency}`}${s.listed ? " listed" : ""} ${s.url}`).join("\n");
+      return { kind: "ok", structured: { shares }, text };
+    }
+    case "create_share": {
+      // No default path: a forgotten path must not put the whole drive on sale.
+      if (typeof arg(args, "path") !== "string") {
+        return { kind: "err", code: "invalid_params", message: "path required ('' sells the whole drive)" };
+      }
+      const body = ShareCreateBody.safeParse({
+        path: arg(args, "path"),
+        role: arg(args, "role") ?? "viewer",
+        expiresAt: arg(args, "expiresAt"),
+        price_usdc: arg(args, "price"),
+        currency: arg(args, "currency"),
+        listed: arg(args, "listed") ?? true,
+      });
+      if (!body.success) return invalidInput(body.error.issues);
+      if (body.data.price_usdc === undefined) return { kind: "err", code: "invalid_params", message: "price required" };
+      const r = await createShare(drive, userId, body.data);
+      if (!r.ok) return saleErr(r);
+      return { kind: "ok", structured: { id: r.id, token: r.token, url: r.url }, text: `on sale: ${r.url}` };
+    }
+    case "update_share": {
+      const shareId = optionalString(arg(args, "shareId"));
+      if (!shareId) return { kind: "err", code: "invalid_params", message: "shareId required" };
+      const body = ShareEditBody.safeParse({
+        price_usdc: arg(args, "price"),
+        currency: arg(args, "currency"),
+        listed: arg(args, "listed"),
+      });
+      if (!body.success) return invalidInput(body.error.issues);
+      const r = editShare(drive, userId, shareId, body.data);
+      if (!r.ok) return saleErr(r);
+      return { kind: "ok", structured: { ok: true }, text: `updated ${shareId}` };
+    }
+    case "delete_share": {
+      const shareId = optionalString(arg(args, "shareId"));
+      if (!shareId) return { kind: "err", code: "invalid_params", message: "shareId required" };
+      const r = revokeShare(driveId, userId, shareId);
+      if (!r.ok) return saleErr(r);
+      return { kind: "ok", structured: { ok: true }, text: `revoked ${shareId}` };
+    }
+    case "get_sale_settings": {
+      const payoutWallets = listPayoutWallets(driveId);
+      const allowedTokens = resolveDriveTokens(drive.allowed_tokens);
+      const text = [
+        ...payoutWallets.map((w) => `payout ${w.path || "/"} → ${w.wallet}`),
+        `tokens: ${allowedTokens.map((t) => `${t.symbol} (${t.chain})`).join(", ")}`,
+      ].join("\n");
+      return { kind: "ok", structured: { payoutWallets, allowedTokens }, text };
+    }
+    case "set_payout_wallet": {
+      const r = applyPayoutWallet(driveId, { path: arg(args, "path"), wallet: arg(args, "wallet") });
+      if (!r.ok) return saleErr(r);
+      return { kind: "ok", structured: { ok: true }, text: "payout wallet set" };
+    }
+    case "set_token_policy": {
+      const r = tokenPolicyFromList(arg(args, "tokens"));
+      if (!r.ok) return saleErr(r);
+      setDriveAllowedTokens(driveId, r.json);
+      return { kind: "ok", structured: { ok: true }, text: "token policy set" };
+    }
+    case "list_receipts": {
+      const lim = arg(args, "limit") ?? 50;
+      if (typeof lim !== "number" || !Number.isInteger(lim) || lim < 1 || lim > 500) {
+        return { kind: "err", code: "invalid_params", message: "limit must be an integer from 1 to 500" };
+      }
+      const before = arg(args, "before");
+      if (before !== undefined && typeof before !== "string") {
+        return { kind: "err", code: "invalid_params", message: "before must be a settledAt string" };
+      }
+      const receipts = listReceipts(driveId, { limit: lim, before }).map((r) => ({
+        txHash: r.tx_hash, path: r.path, wallet: r.wallet, amount: r.amount_usdc, currency: r.currency,
+        network: r.network, shareId: r.share_id, accountId: r.account_id, settledAt: r.settled_at,
+      }));
+      const text = receipts.length === 0
+        ? "(no receipts)"
+        : receipts.map((r) => `${r.settledAt} ${r.amount ?? "?"} ${r.currency ?? ""} ${r.path || "/"} ${r.txHash}`).join("\n");
+      return { kind: "ok", structured: { receipts }, text };
+    }
+  }
 }

@@ -29,7 +29,8 @@ Agent skills (backing MCP tools, the A2A executor and AG-UI runs):
 - `agent-skills.ts` — `runSkill` + `SKILL_DESCRIPTORS` (JSON Schema). One backing
   fn for the MCP routes (`app/mcp/`, via `lib/mcp-http.ts`) and `lib/aindrive-agent.ts`.
   `SkillCtx.driveId`/`scope` pin a call to one drive + read/write ceiling
-  (`driveScopedDescriptors`). Pulls in `@/lib/*` (drives,
+  (`driveScopedDescriptors`); `SkillCtx.sell` (account grant `drives:sell`) adds
+  the creator-only sale tools, thin adapters over `@/lib/sales`. Pulls in `@/lib/*` (drives,
   access, db, rpc), so it is web-bound, not pure domain.
 
 HTTP contracts (cross-track frozen agreement):

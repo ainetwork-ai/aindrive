@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { isAddress } from "viem";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { listPayoutWallets, setPayoutWallet } from "@/lib/drives";
+import { applyPayoutWallet } from "@/lib/sales";
 import { normalizePath } from "@/lib/path";
 import { zPath } from "@/lib/zod-helpers";
 import { z } from "zod";
@@ -16,12 +16,10 @@ import { z } from "zod";
  *   PUT    { path, wallet } → set/replace one folder's wallet
  *   DELETE { path }          → clear one folder's wallet
  *
- * Creator-only (owner_id), matching the other payment settings.
+ * Creator-only (owner_id), matching the other payment settings. PUT's
+ * validation (lib/sales.ts applyPayoutWallet) is shared with the MCP
+ * set_payout_wallet tool.
  */
-const PutBody = z.object({
-  path: zPath.default(""),
-  wallet: z.string().refine((v) => isAddress(v), "invalid address"),
-});
 const DeleteBody = z.object({ path: zPath.default("") });
 
 async function gate(driveId: string) {
@@ -45,9 +43,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ driveId:
   const { driveId } = await params;
   const g = await gate(driveId);
   if ("error" in g) return g.error;
-  const body = PutBody.safeParse(await req.json().catch(() => null));
-  if (!body.success) return NextResponse.json({ error: body.error.issues[0]?.message ?? "invalid input" }, { status: 400 });
-  setPayoutWallet(driveId, normalizePath(body.data.path), body.data.wallet.toLowerCase());
+  const r = applyPayoutWallet(driveId, await req.json().catch(() => null));
+  if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
   return NextResponse.json({ ok: true });
 }
 

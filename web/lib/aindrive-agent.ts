@@ -23,15 +23,17 @@ import type {
 } from "@a2a-js/sdk/server";
 import type { AgentCard, Message, Part } from "@a2a-js/sdk";
 import { env } from "./env";
+import { skillPermitted, type AgentAuth } from "./agent-auth";
 import { runSkill, SKILL_DESCRIPTORS, isSkillName, type SkillCtx } from "@/shared/agent-skills";
 import {
   A2UI_A2A_EXTENSION, A2UI_BASIC_CATALOG, A2UI_MIME, a2uiForSkill, actionToSkill, commandToSkill, parseA2uiAction,
   type SkillCall,
 } from "@/shared/a2ui";
 
-/** A `User` carrying the resolved SkillCtx (lib/agent-auth). */
+/** A `User` carrying the resolved grant (lib/agent-auth). */
 export class AindriveUser implements User {
-  constructor(readonly ctx: SkillCtx) {}
+  constructor(readonly auth: Extract<AgentAuth, { ok: true }>) {}
+  get ctx(): SkillCtx { return this.auth.ctx; }
   get isAuthenticated() { return true; }
   get userName() { return this.ctx.userId; }
 }
@@ -129,7 +131,8 @@ export function interpretMessage(message: Message, ctx: SkillCtx): { call: Skill
 export class AindriveExecutor implements AgentExecutor {
   async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
     const user = requestContext.context?.user;
-    const ctx = user instanceof AindriveUser ? user.ctx : null;
+    const auth = user instanceof AindriveUser ? user.auth : null;
+    const ctx = auth?.ctx ?? null;
     const message = requestContext.userMessage as Message | undefined;
     const contextId = requestContext.contextId;
     const msgId = randomMessageId();
@@ -141,6 +144,8 @@ export class AindriveExecutor implements AgentExecutor {
     const interpreted = interpretMessage(message, ctx);
     if ("error" in interpreted) return done(errMessage(msgId, contextId, interpreted.error));
     const { call, fromA2ui } = interpreted;
+    const denied = skillPermitted(auth!, call.skill);
+    if (denied) return done(errMessage(msgId, contextId, `[forbidden] ${denied}`));
 
     const result = await runSkill(ctx, call.skill, call.args);
 

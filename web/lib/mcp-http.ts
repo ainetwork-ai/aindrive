@@ -75,11 +75,13 @@ export async function serveMcp(
     { capabilities: { tools: { listChanged: false }, resources: { listChanged: false } } },
   );
   const embedA2ui = wantsA2uiResource(req);
+  // Clicks only ever lead to read skills; offer the action tool only when one exists.
+  const offerAction = tools.some((t) => ["list_files", "read_file", "search"].includes(t.name));
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       ...tools.map((s) => ({ name: s.name, description: s.description, inputSchema: s.inputSchema, _meta: MCP_APP_TOOL_META })),
-      { ...A2UI_ACTION_TOOL, _meta: MCP_APP_ONLY_META },
+      ...(offerAction ? [{ ...A2UI_ACTION_TOOL, _meta: MCP_APP_ONLY_META }] : []),
     ],
   }));
 
@@ -107,7 +109,7 @@ export async function serveMcp(
     }
     let name = call.params.name;
     let args = (call.params.arguments ?? {}) as Record<string, unknown>;
-    if (name === A2UI_ACTION_TOOL.name) {
+    if (name === A2UI_ACTION_TOOL.name && offerAction) {
       const action = parseA2uiAction(args.action ?? args);
       const mapped = action ? actionToSkill(action, ctx.driveId) : { error: "missing action" };
       if ("error" in mapped) return { isError: true, content: [{ type: "text" as const, text: mapped.error }] };

@@ -14,7 +14,8 @@ panel from the drive sidebar → **MCP** (`components/mcp-modal.tsx`).
 | `/mcp` | session JWT as bearer, or session cookie | legacy, account-wide (all drives). Not advertised. |
 
 Drive endpoint tools: `list_files`, `read_file`, `stat`, `search`, plus
-`write_file` / `delete_path` for write tokens, plus the app-only `a2ui_action`.
+`write_file` / `delete_path` for write tokens, the sale tools for an
+account grant with `drives:sell` (below), plus the app-only `a2ui_action`.
 There is no `drive_id` argument; the URL fixes it.
 
 ## UI (MCP Apps + A2UI) — `lib/mcp-http.ts`, `lib/mcp-ui.ts`
@@ -59,17 +60,38 @@ on the wire are `drive:read` / `drive:write`.
 For third-party web apps: one token pair for the user, not one drive.
 
 - Request `/oauth/authorize` with **no `resource`** and only account scopes:
-  `profile` and/or `drives:read`. Mixing in `drive:*` or any unknown scope is
-  rejected. Consent lists what the app gets; login redirect as usual.
+  `profile`, `drives:read`, `drives:write`, `drives:sell` (any non-empty
+  subset). Mixing in `drive:*` or any unknown scope is rejected. Consent lists
+  one line per requested scope; login redirect as usual.
 - Same DCR, PKCE and `/api/oauth/token` exchange/refresh as the drive flow
-  (the code's table decides the kind); `scope` comes back as e.g. `"profile drives:read"`.
+  (the code's table decides the kind); `scope` comes back as the granted set,
+  e.g. `"profile drives:read drives:sell"`.
 - Tokens (table `account_tokens`): access `aind_aat_…` (1h) + refresh
   `aind_art_…` (30d, rotated; reuse revokes the grant). Hashes only.
 - `GET /api/oauth/userinfo` (`profile`) → `{ sub, email, email_verified, name, wallet_address }`.
   Wallet-only accounts have a placeholder email and `email_verified: false`, so don't show that email.
 - `GET /api/oauth/drives` (`drives:read`) → `{ drives: [{ id, name, online, role }] }`.
-- `/mcp/d/[id]` accepts the access token (`drives:read`) on any drive the user
-  is a member of, read-only (no write tools); a non-member drive → 403.
+- `/mcp/d/[id]` accepts the access token on any drive the user is a member of
+  (non-member → 403; no `drives:*` scope → 403). Each scope adds its tools, and
+  unlisted tools are refused:
+  - `drives:read` → `list_files`, `read_file`, `stat`, `search`
+  - `drives:write` → `write_file`, `delete_path` (the user still needs editor at the path)
+  - `drives:sell` → the sale tools, **creator-only** (`drives.owner_id`, checked on every
+    call; a member or co-owner gets `[forbidden]`). Same validation and messages as the
+    HTTP routes (`lib/sales.ts`):
+
+    | Tool | Input → output |
+    |------|----------------|
+    | `list_shares` | `{}` → `{ shares: [{ id, token, url, path, role, price, currency, listed, expiresAt, createdAt }] }` |
+    | `create_share` | `{ path, price, currency, listed?=true, role?='viewer', expiresAt? }` → `{ id, token, url }` (payout wallet required, currency in policy, non-root path needs the agent online) |
+    | `update_share` | `{ shareId, price?, currency?, listed? }` → `{ ok }` (a free share can't become paid) |
+    | `delete_share` | `{ shareId }` → `{ ok }` |
+    | `get_sale_settings` | `{}` → `{ payoutWallets: [{ path, wallet }], allowedTokens }` (effective policy) |
+    | `set_payout_wallet` | `{ path?='', wallet }` → `{ ok }` (stored lowercased) |
+    | `set_token_policy` | `{ tokens: [{ symbol, chain, asset, name?, version?, decimals, transferMethod }] }` → `{ ok }` (chain `base`/`base-sepolia`, asset a contract address) |
+    | `list_receipts` | `{ limit?=50, before? }` → `{ receipts: [{ txHash, path, wallet, amount, currency, network, shareId, accountId, settledAt }] }`, newest first; page with `before` = last `settledAt` |
+- Checkout relay: `GET /api/s/<token>` with `Authorization: Bearer aind_aat_…`
+  credits the purchase to that account (see `app/api/README.md`).
 - Connected apps: `GET /api/oauth/account-tokens`, `DELETE /api/oauth/account-tokens/[id]`
   (session + same-origin). There is no UI for this yet.
 
@@ -90,4 +112,4 @@ For third-party web apps: one token pair for the user, not one drive.
 - Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`).
 - The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing.
 - Redirect URIs: https, loopback http, or a private-use scheme (`cursor://`); never `javascript:`/`data:`/`file:`.
-- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.
+- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`, `lib/__tests__/oauth-sale-tools.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.
