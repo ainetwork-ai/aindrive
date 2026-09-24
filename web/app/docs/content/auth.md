@@ -10,15 +10,21 @@ downgrading them) takes effect immediately for every token they hold.
 |---|---|---|---|
 | Personal access token | `aind_pat_` | one drive, `read` or `write` | drive → sidebar **MCP** → *Generate* (shown once; 30d / 90d / never) |
 | OAuth drive token | `aind_oat_` (+ refresh `aind_ort_`) | one drive, `drive:read` / `drive:write` | OAuth 2.1 with `resource` = the drive's MCP URL |
-| OAuth account token | `aind_aat_` (+ refresh `aind_art_`) | every drive the user belongs to, **read-only** (`drives:read`), and/or `profile` | OAuth 2.1 with **no** `resource` ("Sign in with aindrive") |
+| OAuth account token | `aind_aat_` (+ refresh `aind_art_`) | every drive the user belongs to, per scope: `drives:read`, `drives:write`, `drives:sell`, and/or `profile` | OAuth 2.1 with **no** `resource` ("Sign in with aindrive") |
 
 Where each token works:
 
 | | `/mcp/d/<id>` | `/a2a` | `/agui` | `/agui/d/<id>` | `/api/oauth/userinfo` · `/api/oauth/drives` |
 |---|---|---|---|---|---|
 | `aind_pat_` / `aind_oat_` | its drive | its drive (pinned) | its drive (pinned) | its drive | — |
-| `aind_aat_` + `drives:read` | any member drive (read) | member drives (read) | member drives (read) | any member drive (read) | drives ✓ |
+| `aind_aat_` + `drives:read` | read tools, any member drive | read skills | read skills | read skills | drives ✓ |
+| `aind_aat_` + `drives:write` | + `write_file`, `delete_path` | + write skills | + write skills | + write skills | — |
+| `aind_aat_` + `drives:sell` | + [sale tools](/docs/skills#sale-tools) (drive creator only) | — | — | — | — |
 | `aind_aat_` + `profile` | — | — | — | — | userinfo ✓ |
+
+Each account scope adds exactly its skills; a skill outside the granted scopes
+is refused. Write skills still need the user's editor role at the path, and sale
+tools only work for the drive's creator.
 
 ## OAuth 2.1
 
@@ -32,7 +38,7 @@ automatically). You only need this if you write your own client.
 | Dynamic client registration | `POST {{BASE}}/api/oauth/register` (RFC 7591 — public clients only) |
 | Authorize | `GET {{BASE}}/oauth/authorize` — **PKCE S256 required** |
 | Token | `POST {{BASE}}/api/oauth/token` — `authorization_code`, `refresh_token` |
-| Scopes | `drive:read`, `drive:write`, `drives:read`, `profile` |
+| Scopes | per drive: `drive:read`, `drive:write` · account: `profile`, `drives:read`, `drives:write`, `drives:sell` |
 
 ### 1. Register
 
@@ -55,7 +61,7 @@ private-use scheme (`myapp://…`). Registration is rate-limited.
   &redirect_uri=https://myapp.example/callback
   &code_challenge=<BASE64URL(SHA256(verifier))>&code_challenge_method=S256
   &state=<random>
-  &scope=drive:read%20drive:write
+  &scope=drive:read%20drive:write          ← account grant: e.g. profile%20drives:read
   &resource={{BASE}}/mcp/d/<driveId>       ← omit for an account grant
 ```
 
