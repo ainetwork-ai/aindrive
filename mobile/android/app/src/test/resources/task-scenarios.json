@@ -1,0 +1,1687 @@
+{
+ "generatedAt": "2026-09-24T10:15:49.957078",
+ "scenarios": [
+  {
+   "id": "T001",
+   "q": "파리에서 찍은 사진 모아서 폴더로 만들어줘",
+   "action": {
+    "type": "collect",
+    "folder": "파리 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T002",
+   "q": "니스 사진 폴더로 정리해줘",
+   "action": {
+    "type": "collect",
+    "folder": "니스 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg"
+   ]
+  },
+  {
+   "id": "T003",
+   "q": "도쿄 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "도쿄 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T004",
+   "q": "오사카 사진을 앨범으로 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "오사카 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg"
+   ]
+  },
+  {
+   "id": "T005",
+   "q": "서울 사진 모아서 폴더 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "서울특별시 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T006",
+   "q": "부산 사진 폴더에 넣어줘",
+   "action": {
+    "type": "collect",
+    "folder": "부산광역시 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg"
+   ]
+  },
+  {
+   "id": "T007",
+   "q": "제주 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "제주시 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg"
+   ]
+  },
+  {
+   "id": "T008",
+   "q": "뉴욕 사진 모아서 폴더로",
+   "action": {
+    "type": "collect",
+    "folder": "뉴욕 시 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "newyork_1.jpg",
+    "newyork_2.jpg",
+    "newyork_3.jpg",
+    "newyork_4.jpg"
+   ]
+  },
+  {
+   "id": "T009",
+   "q": "런던 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "런던 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T010",
+   "q": "방콕 사진 앨범 만들어줘",
+   "action": {
+    "type": "collect",
+    "folder": "방콕 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "bangkok_1.jpg",
+    "bangkok_2.jpg",
+    "bangkok_3.jpg",
+    "bangkok_4.jpg"
+   ]
+  },
+  {
+   "id": "T011",
+   "q": "프랑스 사진 전부 모아서 폴더 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "프랑스 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg",
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T012",
+   "q": "일본 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "일본 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg",
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T013",
+   "q": "한국 사진 폴더로 정리",
+   "action": {
+    "type": "collect",
+    "folder": "대한민국 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg",
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg",
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T014",
+   "q": "collect my Paris photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "Paris photos",
+    "share": false
+   },
+   "folderFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T015",
+   "q": "gather the photos from Tokyo into an album",
+   "action": {
+    "type": "collect",
+    "folder": "Tokyo photos",
+    "share": false
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T016",
+   "q": "put all the Korea photos in a folder",
+   "action": {
+    "type": "collect",
+    "folder": "South Korea photos",
+    "share": false
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg",
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg",
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T017",
+   "q": "녹음 파일 모아서 폴더 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "녹음",
+    "share": false
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T018",
+   "q": "recordings into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "recordings",
+    "share": false
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T019",
+   "q": "이번달 프랑스 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "프랑스 사진 2026-09",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg",
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T020",
+   "q": "이번달에 찍은 런던 사진 모아서 폴더로",
+   "action": {
+    "type": "collect",
+    "folder": "런던 사진 2026-09",
+    "share": false
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T021",
+   "q": "강아지 사진 모아서 폴더 만들어줘",
+   "action": {
+    "type": "collect",
+    "folder": "강아지 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T022",
+   "q": "고양이 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "고양이 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "cat_1.jpg",
+    "cat_2.jpg",
+    "cat_3.jpg",
+    "cat_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T023",
+   "q": "피자 사진 폴더로 정리해",
+   "action": {
+    "type": "collect",
+    "folder": "피자 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T024",
+   "q": "라면 사진 모아서 앨범 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "라면 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "ramen_1.jpg",
+    "ramen_2.jpg",
+    "ramen_3.jpg",
+    "ramen_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T025",
+   "q": "바다 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "바다 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T026",
+   "q": "노을 사진 폴더 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "노을 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "sunset_1.jpg",
+    "sunset_2.jpg",
+    "sunset_3.jpg",
+    "sunset_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T027",
+   "q": "벚꽃 사진 모아서 폴더로",
+   "action": {
+    "type": "collect",
+    "folder": "벚꽃 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "flowers_1.jpg",
+    "flowers_2.jpg",
+    "flowers_3.jpg",
+    "flowers_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T028",
+   "q": "영수증 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "영수증 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "sunset_1.jpg",
+    "sunset_2.jpg",
+    "sunset_3.jpg",
+    "sunset_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T029",
+   "q": "스포츠카 사진 모아서 폴더 만들어",
+   "action": {
+    "type": "collect",
+    "folder": "스포츠카 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T030",
+   "q": "케이크 사진 폴더로 정리",
+   "action": {
+    "type": "collect",
+    "folder": "케이크 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "cake_1.jpg",
+    "cake_2.jpg",
+    "cake_3.jpg",
+    "cake_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T031",
+   "q": "커피 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "커피 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "coffee_1.jpg",
+    "coffee_2.jpg",
+    "coffee_3.jpg",
+    "coffee_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T032",
+   "q": "결혼식 사진 앨범 만들어줘",
+   "action": {
+    "type": "collect",
+    "folder": "결혼식 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "wedding_1.jpg",
+    "wedding_2.jpg",
+    "wedding_3.jpg",
+    "wedding_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T033",
+   "q": "아기 사진 모아서 폴더로",
+   "action": {
+    "type": "collect",
+    "folder": "아기 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "baby_1.jpg",
+    "baby_2.jpg",
+    "baby_3.jpg",
+    "baby_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T034",
+   "q": "콘서트 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "콘서트 사진",
+    "share": false
+   },
+   "folderMustInclude": [
+    "concert_1.jpg",
+    "concert_2.jpg",
+    "concert_3.jpg",
+    "concert_4.jpg"
+   ],
+   "folderMustExclude": [
+    "cat_1.jpg",
+    "cat_2.jpg",
+    "cat_3.jpg",
+    "cat_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T035",
+   "q": "collect the dog photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "dog photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T036",
+   "q": "이번달에 먹은 음식사진만 모아서 폴더로 만들어줘",
+   "action": {
+    "type": "collect",
+    "folder": "음식 사진 2026-09",
+    "share": false
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "ramen_1.jpg",
+    "ramen_2.jpg",
+    "ramen_3.jpg",
+    "ramen_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T037",
+   "q": "파리 사진 모아서 폴더 만들고 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "파리 사진",
+    "share": true
+   },
+   "folderFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T038",
+   "q": "도쿄 사진 모아서 공유 링크 만들어줘",
+   "action": {
+    "type": "collect",
+    "folder": "도쿄 사진",
+    "share": true
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T039",
+   "q": "일본 사진 폴더로 만들어서 공유해",
+   "action": {
+    "type": "collect",
+    "folder": "일본 사진",
+    "share": true
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg",
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T040",
+   "q": "녹음 파일 모아서 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "녹음",
+    "share": true
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T041",
+   "q": "share my London photos as a folder",
+   "action": {
+    "type": "collect",
+    "folder": "London photos",
+    "share": true
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T042",
+   "q": "collect Korea photos into a folder and share it",
+   "action": {
+    "type": "collect",
+    "folder": "South Korea photos",
+    "share": true
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg",
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg",
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T043",
+   "q": "강아지 사진 모아서 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "강아지 사진",
+    "share": true
+   },
+   "folderMustInclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T044",
+   "q": "피자 사진 폴더로 만들어서 공유",
+   "action": {
+    "type": "collect",
+    "folder": "피자 사진",
+    "share": true
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T045",
+   "q": "이번달에 먹은 음식사진만 모아서 폴더로 만들어서 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "음식 사진 2026-09",
+    "share": true
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "ramen_1.jpg",
+    "ramen_2.jpg",
+    "ramen_3.jpg",
+    "ramen_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T046",
+   "q": "벚꽃 사진 모아서 링크로 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "벚꽃 사진",
+    "share": true
+   },
+   "folderMustInclude": [
+    "flowers_1.jpg",
+    "flowers_2.jpg",
+    "flowers_3.jpg",
+    "flowers_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T047",
+   "q": "부산 사진 모아서 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "부산광역시 사진",
+    "share": true
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg"
+   ]
+  },
+  {
+   "id": "T048",
+   "q": "이번달 도쿄 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "folder": "도쿄 사진 2026-09",
+    "share": false
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T049",
+   "q": "커피 사진 폴더로 만들고 공유",
+   "action": {
+    "type": "collect",
+    "folder": "커피 사진",
+    "share": true
+   },
+   "folderMustInclude": [
+    "coffee_1.jpg",
+    "coffee_2.jpg",
+    "coffee_3.jpg",
+    "coffee_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T050",
+   "q": "노을 사진 모아서 공유해줘",
+   "action": {
+    "type": "collect",
+    "folder": "노을 사진",
+    "share": true
+   },
+   "folderMustInclude": [
+    "sunset_1.jpg",
+    "sunset_2.jpg",
+    "sunset_3.jpg",
+    "sunset_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T051",
+   "q": "파리 사진 몇 장 있어?",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T052",
+   "q": "도쿄 사진 몇 개야",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T053",
+   "q": "프랑스 사진 개수 알려줘",
+   "action": {
+    "type": "count",
+    "count": 16
+   }
+  },
+  {
+   "id": "T054",
+   "q": "일본 사진 몇 장",
+   "action": {
+    "type": "count",
+    "count": 8
+   }
+  },
+  {
+   "id": "T055",
+   "q": "한국에서 찍은 사진 몇 개 있어",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T056",
+   "q": "녹음 파일 몇 개야",
+   "action": {
+    "type": "count",
+    "count": 7
+   }
+  },
+  {
+   "id": "T057",
+   "q": "영상 몇 개 있어?",
+   "action": {
+    "type": "count",
+    "count": 1
+   }
+  },
+  {
+   "id": "T058",
+   "q": "사진 몇 장 있어",
+   "action": {
+    "type": "count"
+   },
+   "countAtLeast": 128
+  },
+  {
+   "id": "T059",
+   "q": "how many photos from Paris",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T060",
+   "q": "how many recordings do I have",
+   "action": {
+    "type": "count",
+    "count": 7
+   }
+  },
+  {
+   "id": "T061",
+   "q": "how many photos from Korea",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T062",
+   "q": "how many videos",
+   "action": {
+    "type": "count",
+    "count": 1
+   }
+  },
+  {
+   "id": "T063",
+   "q": "니스 사진 몇 장",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T064",
+   "q": "방콕 사진 몇 장 있어",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T065",
+   "q": "런던 사진 개수",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T066",
+   "q": "오사카 사진 몇 장",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T067",
+   "q": "how many photos from France",
+   "action": {
+    "type": "count",
+    "count": 16
+   }
+  },
+  {
+   "id": "T068",
+   "q": "가장 최근 사진 3장만 보여줘",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "newest"
+  },
+  {
+   "id": "T069",
+   "q": "최근 사진 5개",
+   "action": {
+    "type": null
+   },
+   "listLength": 5,
+   "order": "newest"
+  },
+  {
+   "id": "T070",
+   "q": "가장 큰 파일 5개",
+   "action": {
+    "type": null
+   },
+   "listLength": 5,
+   "order": "size"
+  },
+  {
+   "id": "T071",
+   "q": "가장 큰 사진 3장",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "size"
+  },
+  {
+   "id": "T072",
+   "q": "가장 오래된 사진 2장",
+   "action": {
+    "type": null
+   },
+   "listLength": 2,
+   "order": "oldest"
+  },
+  {
+   "id": "T073",
+   "q": "녹음 파일 2개만",
+   "action": {
+    "type": null
+   },
+   "listLength": 2,
+   "order": "newest"
+  },
+  {
+   "id": "T074",
+   "q": "latest 4 photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 4,
+   "order": "newest"
+  },
+  {
+   "id": "T075",
+   "q": "5 largest files",
+   "action": {
+    "type": null
+   },
+   "listLength": 5,
+   "order": "size"
+  },
+  {
+   "id": "T076",
+   "q": "3 biggest photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "size"
+  },
+  {
+   "id": "T077",
+   "q": "oldest 3 photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "oldest"
+  },
+  {
+   "id": "T078",
+   "q": "최근 녹음 3개",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "newest"
+  },
+  {
+   "id": "T079",
+   "q": "가장 오래된 녹음 2개",
+   "action": {
+    "type": null
+   },
+   "listLength": 2,
+   "order": "oldest"
+  },
+  {
+   "id": "T080",
+   "q": "파리 사진 삭제해줘",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T081",
+   "q": "니스 사진 지워줘",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg"
+   ]
+  },
+  {
+   "id": "T082",
+   "q": "녹음 파일 전부 삭제",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T083",
+   "q": "영상 지워",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "회의_영상_2026-09-15.mp4"
+   ]
+  },
+  {
+   "id": "T084",
+   "q": "delete the Tokyo photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T085",
+   "q": "remove my London photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T086",
+   "q": "방콕 사진 없애줘",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "bangkok_1.jpg",
+    "bangkok_2.jpg",
+    "bangkok_3.jpg",
+    "bangkok_4.jpg"
+   ]
+  },
+  {
+   "id": "T087",
+   "q": "오사카 사진 삭제",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg"
+   ]
+  },
+  {
+   "id": "T088",
+   "q": "delete recordings",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T089",
+   "q": "제주 사진 지워줘",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg"
+   ]
+  },
+  {
+   "id": "T090",
+   "q": "모스크바 사진 모아서 폴더 만들어줘",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T091",
+   "q": "2019년 사진 모아줘",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T092",
+   "q": "베를린 사진 삭제해줘",
+   "action": {
+    "type": "delete",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T093",
+   "q": "collect my Madrid photos into a folder",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T094",
+   "q": "스크린샷 모아서 폴더로",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T095",
+   "q": "2020년 녹음 삭제해줘",
+   "action": {
+    "type": "delete",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T096",
+   "q": "니스 사진 폴더로 옮겨줘",
+   "action": {
+    "type": "move",
+    "folder": "니스 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg"
+   ]
+  },
+  {
+   "id": "T097",
+   "q": "오사카 사진 옮겨서 폴더 만들어",
+   "action": {
+    "type": "move",
+    "folder": "오사카 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg"
+   ]
+  },
+  {
+   "id": "T098",
+   "q": "방콕 사진 이동해서 폴더로",
+   "action": {
+    "type": "move",
+    "folder": "방콕 사진",
+    "share": false
+   },
+   "folderFiles": [
+    "bangkok_1.jpg",
+    "bangkok_2.jpg",
+    "bangkok_3.jpg",
+    "bangkok_4.jpg"
+   ]
+  },
+  {
+   "id": "T099",
+   "q": "move the London photos into a folder",
+   "action": {
+    "type": "move",
+    "folder": "London photos",
+    "share": false
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T100",
+   "q": "녹음 파일 폴더로 옮겨",
+   "action": {
+    "type": "move",
+    "folder": "녹음",
+    "share": false
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  }
+ ]
+}
