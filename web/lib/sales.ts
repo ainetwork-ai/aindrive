@@ -232,3 +232,61 @@ export function validateTokenPolicy(json: string): { ok: true; policy: PaymentTo
   }
   return { ok: true, policy };
 }
+
+const BASE_CHAINS = ["base", "base-sepolia"];
+
+/**
+ * A token list from a client (MCP set_token_policy) → the policy JSON to
+ * store. Same checks as the drive PATCH, plus every token must be a contract
+ * on Base (or Base Sepolia, where the testnet USDC preset lives): a token the
+ * 402 can't quote would only surface as a failed checkout.
+ */
+export function tokenPolicyFromList(tokens: unknown): { ok: true; json: string } | SaleErr {
+  if (!Array.isArray(tokens)) return { ok: false, status: 400, error: "invalid token policy" };
+  const normalized = tokens.map((t) =>
+    t && typeof t === "object" ? { name: null, version: null, ...(t as Record<string, unknown>) } : t,
+  );
+  const v = validateTokenPolicy(JSON.stringify(normalized));
+  if (!v.ok) return v;
+  const offBase = v.policy.find((t) => !BASE_CHAINS.includes(t.chain) || !isAddress(t.asset));
+  if (offBase) {
+    return { ok: false, status: 400, error: `${offBase.symbol}: asset must be a token contract address on Base (chain base or base-sepolia)` };
+  }
+  return { ok: true, json: JSON.stringify(v.policy) };
+}
+
+// ── Receipts ─────────────────────────────────────────────────────────────
+
+export type ReceiptRow = {
+  tx_hash: string;
+  path: string;
+  wallet: string;
+  amount_usdc: number | null;
+  currency: string | null;
+  network: string;
+  share_id: string | null;
+  account_id: string | null;
+  settled_at: string;
+};
+
+/**
+ * One page of a drive's receipts, newest first, settled strictly before
+ * `before` (a previous page's last settled_at). settled_at has one-second
+ * resolution, so a full page is extended to take every receipt sharing its
+ * last timestamp — the next page (`< before`) then never skips one.
+ */
+export function listReceipts(driveId: string, opts: { limit: number; before?: string }): ReceiptRow[] {
+  const cols = "rowid, tx_hash, path, wallet, amount_usdc, currency, network, share_id, account_id, settled_at";
+  const rows = (opts.before === undefined
+    ? db.prepare(`SELECT ${cols} FROM payment_receipts WHERE drive_id = ? ORDER BY settled_at DESC, rowid DESC LIMIT ?`)
+      .all(driveId, opts.limit)
+    : db.prepare(`SELECT ${cols} FROM payment_receipts WHERE drive_id = ? AND settled_at < ? ORDER BY settled_at DESC, rowid DESC LIMIT ?`)
+      .all(driveId, opts.before, opts.limit)) as (ReceiptRow & { rowid: number })[];
+  const last = rows[rows.length - 1];
+  if (last && rows.length === opts.limit) {
+    rows.push(...(db
+      .prepare(`SELECT ${cols} FROM payment_receipts WHERE drive_id = ? AND settled_at = ? AND rowid < ? ORDER BY rowid DESC`)
+      .all(driveId, last.settled_at, last.rowid) as (ReceiptRow & { rowid: number })[]));
+  }
+  return rows.map(({ rowid: _rowid, ...r }) => r);
+}

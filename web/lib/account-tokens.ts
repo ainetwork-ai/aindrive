@@ -4,8 +4,10 @@
  * A drive grant (lib/mcp-tokens.ts) is bound to ONE drive; an account grant
  * is bound to the user and carries account scopes (lib/oauth.ts ACCOUNT_SCOPES):
  *   - profile      → GET /api/oauth/userinfo
- *   - drives:read  → GET /api/oauth/drives, and read-only `/mcp/d/<id>` on any
- *                    drive the user is a member of
+ *   - drives:read  → GET /api/oauth/drives, and the read tools on `/mcp/d/<id>`
+ *                    for any drive the user is a member of
+ *   - drives:write → write_file / delete_path there (the user's role must be editor+)
+ *   - drives:sell  → the sale tools there, on drives the user created
  * Tokens live in `account_tokens` (lib/db.js): access `aind_aat_…` (1h) +
  * refresh `aind_art_…` (30d), rotated in place on every refresh with the same
  * reuse-revokes-the-grant rule as drive OAuth tokens. Only sha256 hashes are
