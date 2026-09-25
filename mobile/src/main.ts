@@ -361,6 +361,7 @@ async function loadBrowse() {
     }
   } catch (e) {
     if (browse) { browse.entries = []; browse.error = msgOf(e); }
+    if (browse && !browse.remote && !browse.path && isGone(msgOf(e))) { browse = null; await pruneMissing(); return; }
   } finally {
     if (browse) browse.loading = false;
     render();
@@ -846,6 +847,32 @@ async function openDrive(share: SharedFolder, path?: string) {
  * (so the account gets its drive-limit slot back), and drops the credentials.
  * Files in the folder are untouched.
  */
+/**
+ * A folder deleted on the phone (in Files, or by the user) simply disappears
+ * from the list: its drive is taken offline and deleted on the server,
+ * quietly. Checked at launch, on resume and before the list is shown.
+ */
+async function pruneMissing() {
+  const gone: SharedFolder[] = [];
+  for (const share of state.shares) {
+    try { await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: "" }); }
+    catch (e) { if (isGone(msgOf(e))) gone.push(share); }
+  }
+  if (!gone.length) return;
+  for (const share of gone) {
+    if (share.drive) {
+      await AindriveAgent.stop({ driveId: share.drive.driveId }).catch(() => {});
+      if (state.sessionCookie) await deleteDrive(state.server, state.sessionCookie, share.drive.driveId).catch(() => {});
+    }
+    log(`${share.folder.label} was deleted on the phone — removed from the list`);
+  }
+  state.shares = state.shares.filter((s) => !gone.includes(s));
+  await save();
+  try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
+  if (browse && gone.some((s) => browse && shareKey(s) === browse.key)) browse = null;
+  render();
+}
+
 async function removeShare(share: SharedFolder) {
   const ok = await confirmAsync(
     `Stop sharing "${share.folder.label}"?`,
@@ -1572,6 +1599,7 @@ async function boot() {
   await load();
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
   await loadThread();
+  await pruneMissing();
   // Everything that was on comes back by itself: sources, and the shares whose switch was on.
   void (async () => {
     for (const share of state.shares) if (share.on && state.sessionCookie && !driveStatus(share)?.running) await startShare(share);
@@ -1591,6 +1619,7 @@ async function boot() {
     if (!typing()) render();
   }).catch(() => {});
   App.addListener("resume", () => {
+    void pruneMissing();
     AindriveAgent.status().then((s) => { status = s; render(); }).catch(() => {});
     void refreshRemotes();
   });
