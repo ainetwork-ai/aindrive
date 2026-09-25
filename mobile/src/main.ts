@@ -1139,7 +1139,7 @@ async function ask(q = askQuery) {
       }),
     ]);
     // Merge: this phone first, then each other device, sources tagged with where they live.
-    const merged: AskResult = { answer: "", sources: [] };
+    const merged: AskResult = { answer: "", sources: [], query: local?.query };
     const parts: string[] = [];
     if (local) { parts.push(targets.length ? `This phone: ${local.answer}` : local.answer); merged.sources.push(...local.sources); merged.action = local.action; }
     for (const rr of remoteResults) {
@@ -1465,13 +1465,48 @@ function bindHome() {
 // ---- search
 
 /** Follow-ups offered under the last answer, when they make sense for it. */
-const FOLLOWUPS: { q: string; when: (r: AskResult | null) => boolean }[] = [
-  { q: "Collect them into a folder", when: (r) => !!r && r.sources.length > 0 && r.action?.folder === undefined },
-  { q: "Share it", when: (r) => r?.action?.folder !== undefined && !r.action.skipped && !actionShare?.url },
-  { q: "How many are there?", when: (r) => !!r && r.sources.length > 0 && r.action?.type !== "count" },
-  { q: "Only the ones from this month", when: (r) => !!r && r.sources.length > 1 },
-  { q: "Show the oldest 3", when: (r) => !!r && r.sources.length > 3 },
-];
+/**
+ * Follow-up chips worked out from the last answer: what would narrow THESE results, or act on them.
+ * Nothing when nothing fits (small talk, a count, a folder already shared).
+ */
+function followUps(r: AskResult | null, ctx: Record<string, unknown> | null): string[] {
+  if (!r || r.query === "chat" || r.query === "out") return [];
+  const a = r.action;
+  if (a?.report === "calls" || (a?.folder !== undefined && !a.skipped)) return actionShare?.url ? [] : ["Share it"];
+  if (a && ["count", "delete", "move"].includes(a.type)) return [];
+  if (!r.sources.length) {
+    // "No food photos in Tokyo. Photos here are from Seoul (65), Zürich (57)…" → try those places.
+    const from = /are from ([^.]+)\./.exec(r.answer);
+    if (from) return from[1].split(/,\s*/).map((p) => p.replace(/\s*\(\d+\)$/, "").replace(/^\+\d+ more$/, "").trim()).filter(Boolean).slice(0, 2).map((p) => `Photos from ${p}`);
+    const none = /There are \d+ (\w+) taken in ([^,]+), but none/.exec(r.answer);
+    if (none) return [`All ${none[1]} taken in ${none[2]}`];
+    return [];
+  }
+  const out: string[] = [];
+  if (r.sources.length >= 2) out.push("Collect them into a folder");
+  // Where and when the results are from — each file's snippet starts "2026-09-12 · Seoul, KR …".
+  const cities = new Map<string, number>(), months = new Set<string>(), years = new Map<string, number>();
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  let inThisMonth = 0;
+  for (const src of r.sources) {
+    const m = /^(\d{4})-(\d{2})-\d{2}(?: · ([^,·“]+?)(?:, [A-Z]{2})?(?: ·|$))?/.exec(src.snippet ?? "");
+    if (!m) continue;
+    months.add(`${m[1]}-${m[2]}`);
+    years.set(m[1], (years.get(m[1]) ?? 0) + 1);
+    if (`${m[1]}-${m[2]}` === thisMonth) inThisMonth++;
+    const c = m[3]?.trim();
+    if (c && !/^[A-Z]{2}$/.test(c) && !/^(photo|video|audio|document|pdf|screenshot|spreadsheet|presentation|archive|other)$/.test(c)) cities.set(c, (cities.get(c) ?? 0) + 1);
+  }
+  if (!ctx?.city && !ctx?.country && cities.size >= 2) {
+    const [top] = [...cities.entries()].sort((x, y) => y[1] - x[1]);
+    out.push(`Only the ones from ${top[0]}`);
+  }
+  if (!ctx?.dateFrom && months.size >= 2) {
+    if (inThisMonth > 0 && inThisMonth < r.sources.length) out.push("Only the ones from this month");
+    else if (years.size >= 2) out.push(`Only the ones from ${[...years.entries()].sort((x, y) => y[1] - x[1])[0][0]}`);
+  }
+  return out.slice(0, 3);
+}
 /** Turns whose photo grid / file list the user expanded ("+N", "Show all"). */
 const expandedPhotos = new Set<number>();
 const expandedFiles = new Set<number>();
@@ -1651,7 +1686,7 @@ function searchSheet(): string {
         <p class="note group">${esc(g.title)}</p>
         <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
       <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Follow-ups work: "…and share them", "only the ones from Paris". Runs on this phone; only sharing needs the server.</p>` : ""}
-    ${thread.length && !askBusy ? `<div class="chips followups">${FOLLOWUPS.filter((f) => askResult?.action?.report !== "calls" || f.q === "Share it").filter((f) => f.when(askResult)).map((f) => `<button class="chip" data-suggest="${esc(f.q)}">${esc(f.q)}</button>`).join("")}</div>` : ""}`;
+    ${thread.length && !askBusy ? (() => { const chips = followUps(askResult, askContext); return chips.length ? `<div class="chips followups">${chips.map((q) => `<button class="chip" data-suggest="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""; })() : ""}`;
   return `
     <div class="sheet">
       <div class="bar">
