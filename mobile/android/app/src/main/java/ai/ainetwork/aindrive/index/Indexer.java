@@ -122,6 +122,9 @@ public final class Indexer {
         // Newest first: the calls people ask about are the recent ones, and a long archive is heard over days.
         todo.sort((a, b) -> Long.compare(b.mtimeMs, a.mtimeMs));
         if (recognisers.callArchive()) {
+            // Only the last year is ever reported on: don't spend hours hearing older calls.
+            long since = System.currentTimeMillis() - ai.ainetwork.aindrive.agent.CallReport.WINDOW_MS;
+            todo.removeIf(e -> { Long d = ai.ainetwork.aindrive.agent.CallReport.dateOf(e.name); return (d != null ? d : e.mtimeMs) < since; });
             // Round-robin by person (each one's newest call, then each one's second…), contacts before bare
             // numbers — so after an hour every contact has something heard, not just whoever called last week.
             java.util.Map<String, Integer> seen = new java.util.HashMap<>();

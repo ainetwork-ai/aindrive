@@ -21,6 +21,9 @@ public class CallReportTest {
         assertEquals("양성욱", CallReport.personOf("통화 양성욱_260925_081724.m4a"));
         assertEquals("+16502071596", CallReport.personOf("통화 녹음 +16502071596_220228_140036.m4a"));
         assertNull(CallReport.personOf("meeting-2026-09-01.m4a"));
+        java.util.Calendar c = java.util.Calendar.getInstance(); c.setTimeInMillis(CallReport.dateOf("통화 #엄유준_260805_085943.m4a"));
+        assertEquals(2026, c.get(java.util.Calendar.YEAR)); assertEquals(7, c.get(java.util.Calendar.MONTH)); assertEquals(5, c.get(java.util.Calendar.DAY_OF_MONTH));
+        assertNull(CallReport.dateOf("IMG_1234.jpg"));
         assertTrue(CallReport.isContact("엄유준")); assertTrue(CallReport.isContact("Amy Jang")); assertTrue(CallReport.isContact("KT 클라우드 마케팅 조현수님"));
         assertFalse(CallReport.isContact("01074441320")); assertFalse(CallReport.isContact("+16502071596")); assertFalse(CallReport.isContact("010-4135-4162"));
         assertNull(CallReport.personOf("IMG_1234.jpg"));

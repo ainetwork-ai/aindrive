@@ -46,6 +46,8 @@ public final class CallReport {
     }
 
     static final int TOP_PEOPLE = 10;
+    /** The report looks at the last year only: older calls say little about who you talk to now. */
+    public static final long WINDOW_MS = 365L * 24 * 3600 * 1000;
     /** Recordings heard on demand per person when the archive has not been transcribed yet (the indexer does the rest in the background). */
     static final int RECORDINGS_PER_PERSON = 3;
     /** Transcripts per person the summary reads (newest first). */
@@ -101,6 +103,16 @@ public final class CallReport {
         return normName(m.group(1));
     }
 
+    /** When the call happened, from Samsung's file name (yymmdd_hhmmss); null when the name has no date. */
+    public static @Nullable Long dateOf(String fileName) {
+        Matcher m = RECORDING.matcher(fileName.trim());
+        if (!m.matches()) return null;
+        try {
+            SimpleDateFormat f = new SimpleDateFormat("yyMMddHHmmss", Locale.US);
+            return f.parse(m.group(2) + m.group(3)).getTime();
+        } catch (Exception e) { return null; }
+    }
+
     /** A saved contact has a name; an unsaved caller shows up as digits (with +, -, spaces). */
     public static boolean isContact(String name) {
         return name != null && !name.replaceAll("[\\s+\\-()#]", "").matches("\\d*");
@@ -119,7 +131,11 @@ public final class CallReport {
         List<Call> calls = callLog == null ? null : callLog.calls();
         boolean haveLog = calls != null;
         long logSince = Long.MAX_VALUE;
+        long since = nowMs - WINDOW_MS;
         if (haveLog) {
+            List<Call> recent = new ArrayList<>();
+            for (Call c : calls) if (c.whenMs >= since) recent.add(c);
+            calls = recent;
             for (Call c : calls) logSince = Math.min(logSince, c.whenMs);
             for (Call c : calls) {
                 String key = c.name != null && !c.name.trim().isEmpty() ? normName(c.name) : normNumber(c.number);
@@ -133,13 +149,15 @@ public final class CallReport {
         // Recordings: by contact name; a name the call log does not know (or no log at all) still gets a row.
         FileIndex.Filter f = new FileIndex.Filter();
         f.kind = FileIndex.AUDIO;
-        int recordings = 0, transcribed = 0;
+        int recordings = 0, transcribed = 0, inWindow = 0;
         List<FileIndex.Row> all = new ArrayList<>();
         java.util.Set<String> ownIds = new HashSet<>();
         for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) { all.add(r); if (ix == index) ownIds.add(r.docId); }
         for (FileIndex.Row r : all) {
             String who = personOf(r.name);
             if (who == null) continue;
+            if (when(r) < since) continue;
+            inWindow++;
             recordings++;
             if (r.transcript != null) transcribed++;
             Person p = people.get(who);
@@ -247,7 +265,10 @@ public final class CallReport {
         return out.put("action", action);
     }
 
-    private static long when(FileIndex.Row r) { return r.whenMs == null ? r.mtimeMs : r.whenMs; }
+    private static long when(FileIndex.Row r) {
+        Long d = dateOf(r.name);   // the file's own date can be a copy date; the name is when the call was
+        return d != null ? d : r.whenMs == null ? r.mtimeMs : r.whenMs;
+    }
 
     /** Real summaries when the on-device LLM is present; cached per person + transcript set so re-runs are quick. */
     private void summarise(List<Person> people, boolean ko) {
@@ -342,9 +363,9 @@ public final class CallReport {
         StringBuilder md = new StringBuilder();
         md.append(ko ? "# 통화 요약 — " : "# Call summary — ").append(day).append("\n\n");
         md.append(ko
-                ? "이 폰의 통화 기록" + (haveLog ? "(" + logSinceText + " 이후)" : "(접근 불가)") + "과 통화 녹음 " + recordings + "개를 바탕으로, 많이 통화한 사람 순으로 정리했어요. 통화 기록보다 오래된 녹음은 통화 1회로 셌어요. "
+                ? "최근 12개월의 통화만 봤어요. 이 폰의 통화 기록" + (haveLog ? "(" + logSinceText + " 이후)" : "(접근 불가)") + "과 통화 녹음 " + recordings + "개를 바탕으로, 많이 통화한 사람 순으로 정리했어요. "
                   + (hasSummaries ? "요약은 폰에서 실행되는 소형 언어 모델이 받아쓴 녹음을 읽고 쓴 것이고, \"자주 나온 말\"은 그 사람과의 대화에서 특히 자주 나온 낱말이에요.\n\n" : "\"주로 나누는 이야기\"는 폰에서 받아쓴 녹음 내용 중 그 사람과의 대화에서 특히 자주 나온 말과 대표 문장이에요 — AI 요약이 아니라 통계입니다.\n\n")
-                : "From this phone's call log" + (haveLog ? " (since " + logSinceText + ")" : " (not accessible)") + " and " + recordings + " call recordings, ranked by how often you talk. Recordings older than the log count as one call each. "
+                : "Calls from the last 12 months only, from this phone's call log" + (haveLog ? " (since " + logSinceText + ")" : " (not accessible)") + " and " + recordings + " call recordings, ranked by how often you talk. "
                   + (hasSummaries ? "Summaries are written by a small language model on this phone from the recordings (transcribed on the phone); \"usually about\" is the vocabulary that stands out in that person's calls.\n\n" : "\"Usually about\" is the vocabulary that stands out in that person's recordings (transcribed on the phone) plus one representative sentence — a statistic, not an AI summary.\n\n"));
         if (transcribed < recordings) md.append(ko
                 ? "녹음 " + recordings + "개 중 " + transcribed + "개를 들었어요" + (busy ? " — 나머지는 지금 백그라운드에서 받아쓰는 중이에요. 나중에 다시 실행하면 더 많은 사람의 요약이 채워져요." : " — 나머지는 앱에서 '통화 녹음' 소스가 인덱싱될 때 받아쓰기됩니다.") + "\n\n"
