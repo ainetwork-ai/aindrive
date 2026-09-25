@@ -228,6 +228,17 @@ public class AindriveAgentPlugin extends Plugin {
         withFs(call, (fs) -> { fs.rename(call.getString("from", ""), call.getString("to", "")); return null; });
     }
 
+    /** Save text (UTF-8) to a file in the folder, replacing it — the in-app editor's Save. */
+    @PluginMethod
+    public void writeText(PluginCall call) {
+        withFs(call, (fs) -> {
+            String path = call.getString("path", "");
+            byte[] bytes = call.getString("text", "").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            fs.importFile(SafFs.parentOf(path), SafFs.baseName(path), new java.io.ByteArrayInputStream(bytes));
+            return null;
+        });
+    }
+
     @PluginMethod
     public void delete(PluginCall call) {
         withFs(call, (fs) -> { fs.delete(call.getString("path", "")); return null; });

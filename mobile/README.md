@@ -22,9 +22,12 @@ drive and a laptop drive are the same thing to the server.
 
 | Path | Role |
 |------|------|
-| `src/main.ts` | shell UI: log in, add folders, pair/start/stop each one, status, and an in-app file browser per folder (navigate, open, new folder, add files, rename, delete). |
-| `src/api.ts` | pairing calls — `/api/auth/cli/start`, `/poll`, `/api/drives` |
+| `src/main.ts` | shell UI and state: log in, folders on this phone (pair/start/stop), agent sources, other devices + shared-with-me drives, the 🤖 agent sheet, the file browser (list/grid + thumbnails, sort, search in folder, breadcrumbs, new folder, upload, rename, move, download, delete, "For sale"), the viewer (image/video/audio, markdown/text with edit + save), and the host for module sheets |
+| `src/{share,manage,agents,account}-sheet.ts` | the web's drive features, one module each: Share drawer (people, links, sell — `share-dialog`), Manage (members, links, sales, payments, delete — `drive-manage`), Chat with drive agents + Create agent + MCP tokens (`folder-chat`, `create-agent-modal`, `mcp-modal`), Account (add email, wallet sign-in, sign out). They talk to the shell only through `kit.ts` (`Ctx`, `Sheet`) |
+| `src/web.ts` | typed client for those web endpoints (members, shares, receipts, payout, token policy, agents, MCP tokens, fs/* for drives on other devices), with the session cookie |
+| `src/api.ts` | pairing calls — `/api/auth/cli/start`, `/poll`, `/api/drives` — and the shared `request()` |
 | `src/plugin.ts` | typed face of the native `AindriveAgent` plugin |
+| `src/ui.css`, `src/icons.ts` | the web's design language: tokens mirror `web/tailwind.config.ts` (cool-gray page, white cards, `#0b57d0`, Inter bundled via `@fontsource-variable/inter`, pill buttons, soft slate shadows, light only) and lucide icons like `web/components`. Change the web tokens → change these |
 | `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
 | `android/…/SafFs.java` | filesystem over the picked SAF tree (real device storage) |
 | `android/…/RpcHandler.java` | RPC method dispatch, mirroring `cli/src/rpc.js` |
@@ -71,6 +74,13 @@ drive and a laptop drive are the same thing to the server.
   read outside the folders the user picked.
 
 ## Gotchas
+
+- **Web parity is by endpoint, not by code.** The sheets call the same
+  `/api/drives/:id/*` routes as `web/components`; when a web route's body
+  changes, update `src/web.ts`. MCP token routes check `Origin` like a browser
+  form post, so the app sends `origin: <server>`. Buying from a showcase and
+  wallet sign-in open the web (they need a wallet app); editing text saves the
+  whole file (no Yjs live collaboration on the phone).
 
 - **Use the fp32 MobileCLIP vision export.** The int8 export gives random
   rankings and the fp16 one computes wrong vectors on Android's CPU execution

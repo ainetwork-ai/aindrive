@@ -93,7 +93,9 @@ export interface AskResult {
   context?: Record<string, unknown> | null;
   /** Filters were inherited from the previous turn. */
   followUp?: boolean;
-  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo"; remoteName?: string }[];
+  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo"; remoteName?: string;
+    /** Call recordings: who it was with, when (ms), and a one-line summary of what was said. */
+    caller?: string; callAt?: number; summary?: string }[];
   /** Present when the question was a task ("…모아서 폴더로 만들어줘"). */
   action?: {
     type: "collect" | "move" | "count" | "delete";
@@ -153,6 +155,8 @@ export interface AindriveAgentPlugin {
   addFiles(opts: { folderUri: string; path?: string }): Promise<{ added: string[]; failed: string[] }>;
   mkdir(opts: { folderUri: string; path: string }): Promise<void>;
   rename(opts: { folderUri: string; from: string; to: string }): Promise<void>;
+  /** Save text (UTF-8), replacing the file — the in-app editor. */
+  writeText(opts: { folderUri: string; path: string; text: string }): Promise<void>;
   /** Recursive, idempotent — like `rm -rf`. */
   delete(opts: { folderUri: string; path: string }): Promise<void>;
   /** List a directory inside a shared folder, read locally (no network). `path` "" = root. */

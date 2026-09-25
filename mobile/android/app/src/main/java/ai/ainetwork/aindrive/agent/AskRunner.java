@@ -97,6 +97,8 @@ public final class AskRunner {
      */
     public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
+        String chat = smallTalk(question);
+        if (chat != null) return new JSONObject().put("answer", chat).put("sources", new JSONArray()).put("query", "chat");
         SearchQuery q = parser.parse(question, System.currentTimeMillis(), SearchQuery.fromJson(context));
         if (q.calls) {
             try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
@@ -114,11 +116,25 @@ public final class AskRunner {
 
         List<String> relaxed = new ArrayList<>();
         Map<String, Hit> hits = search(q);
+        // A bare word that matches nothing ("hi", a typo) is not a request for every file:
+        // relax it only when something else (a kind, place, date, size, task) narrows the search.
+        boolean onlyWords = q.kind == null && q.country == null && q.city == null && q.dateFrom == null && q.dateTo == null
+                && q.minSize == null && !q.collect && !q.delete && !q.count && q.limit == 0 && !q.bySize && !q.oldestFirst;
+        if (hits.isEmpty() && !q.keywords.isEmpty() && onlyWords) {
+            String w = String.join(" ", q.keywords);
+            return out.put("answer", q.korean
+                    ? "“" + w + "”와 관련된 파일을 찾지 못했어요. 사진 속 내용(예: 강아지 사진), 장소·날짜(예: 파리에서 찍은 사진), 파일 종류(예: 지난주 스크린샷)로 물어보세요."
+                    : "Nothing here matches “" + w + "”. Try what a photo shows (\"dog photos\"), a place or date (\"photos from Paris\"), or a kind of file (\"last week's screenshots\").")
+                    .put("sources", new JSONArray());
+        }
         if (hits.isEmpty() && !q.keywords.isEmpty()) { q.keywords.clear(); relaxed.add("keyword"); hits = search(q); }
-        if (hits.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed.add("date"); hits = search(q); }
-        if (hits.isEmpty() && q.city != null) { q.city = null; relaxed.add("city"); hits = search(q); }
-        if (hits.isEmpty() && q.country != null) { q.country = null; relaxed.add("country"); hits = search(q); }
-        if (hits.isEmpty() && q.kind != null) { q.kind = null; relaxed.add("kind"); hits = search(q); }
+        // A place or a date the person named is never dropped: "photos taken in Paris" with no Paris
+        // photos must say so, not show photos from everywhere else. Only the kind is loosened
+        // ("Paris videos" → Paris photos), and only while the place/date still hold.
+        if (hits.isEmpty() && q.kind != null && (q.city != null || q.country != null || q.dateFrom != null)) {
+            String kind = q.kind; q.kind = null; relaxed.add("kind"); hits = search(q);
+            if (hits.isEmpty()) { q.kind = kind; relaxed.remove("kind"); }
+        }
 
         List<Hit> ranked = new ArrayList<>(hits.values());
         final boolean bySize = q.bySize, oldest = q.oldestFirst;
@@ -136,7 +152,7 @@ public final class AskRunner {
         JSONArray sources = new JSONArray();
         boolean anyContent = false, anySpeech = false;
         for (Hit h : ranked) {
-            sources.put(new JSONObject().put("path", h.row.path).put("snippet", snippet(h)).put("matchedBy", h.how));
+            sources.put(CallReport.describeCall(new JSONObject().put("path", h.row.path).put("snippet", snippet(h)).put("matchedBy", h.how), h.row, h.excerpt, null));
             anyContent |= h.tier == 2;
             anySpeech |= h.tier == 1;
         }
@@ -148,6 +164,8 @@ public final class AskRunner {
         out.put("answer", answer);
         out.put("sources", sources);
         boolean exact = !ranked.isEmpty() && relaxed.isEmpty();
+        // Lets the service drop this folder's loose matches when another folder matched exactly.
+        out.put("relaxed", !relaxed.isEmpty());
         if (q.delete) {
             // Never delete on the strength of a parse: list what would go and wait for a tap.
             JSONArray files = new JSONArray();
@@ -184,6 +202,41 @@ public final class AskRunner {
                 .put("share", q.share).put("files", files);
         if (copied > 0) { try { r.putOpt("folderUri", ops.uriOf(folder)); } catch (Exception ignored) { } }
         return r;
+    }
+
+    /** " Photos here are from Tokyo (120), Seoul (80), …" — so a miss says where to look instead. */
+    private String knownPlaces(@Nullable String kind, boolean ko) {
+        FileIndex.Filter f = new FileIndex.Filter();
+        f.kind = kind == null ? FileIndex.PHOTO : kind;
+        Map<String, Integer> byPlace = new LinkedHashMap<>();
+        for (FileIndex.Row r : index.query(f, 0)) {
+            if (r.city == null) continue;
+            String name = ko && geo.cityKo(r.city) != null ? geo.cityKo(r.city) : r.city;
+            byPlace.merge(name, 1, Integer::sum);
+        }
+        if (byPlace.isEmpty()) return ko ? " 이 폴더의 사진에는 위치 정보가 없어요." : " Photos in this folder have no location.";
+        List<Map.Entry<String, Integer>> top = new ArrayList<>(byPlace.entrySet());
+        top.sort((a, b) -> b.getValue() - a.getValue());
+        StringBuilder sb = new StringBuilder(ko ? " 여기 사진은 이런 곳에서 찍었어요: " : " Photos here are from ");
+        for (int i = 0; i < Math.min(5, top.size()); i++) sb.append(i > 0 ? ", " : "").append(top.get(i).getKey()).append(" (").append(top.get(i).getValue()).append(")");
+        return sb.append(".").toString();
+    }
+
+    private static final java.util.regex.Pattern GREETING = java.util.regex.Pattern.compile(
+            "^(hi+|hello+|hey+|yo|hiya|good (morning|afternoon|evening)|thanks?( you)?|thank u|ty|ok(ay)?|cool|nice|great|help|what can you do\\??|who are you\\??|"
+            + "안녕(하세요)?|ㅎㅇ|하이|헬로|반가워(요)?|고마워(요)?|감사(합니다|해요)?|ㄱㅅ|좋아(요)?|오케이|ㅇㅋ|도움말|도와줘|뭐 할 수 있어\\??|뭘 할 수 있어\\??|넌 누구야\\??|누구세요\\??)[.!~ ]*$",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Greetings, thanks and "what can you do": a short reply, never a file search. Null when it is a real question. */
+    static @Nullable String smallTalk(String question) {
+        String t = question.trim();
+        if (!GREETING.matcher(t).matches()) return null;
+        boolean ko = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0x3131 && cp <= 0x318E);
+        boolean thanks = t.toLowerCase(Locale.ROOT).matches("^(thanks?|thank|ty|고마|감사|ㄱㅅ).*");
+        if (thanks) return ko ? "천만에요! 더 찾을 게 있으면 말씀하세요." : "You're welcome — ask me anything else about your files.";
+        return ko
+                ? "안녕하세요! 이 폰의 파일을 찾고 정리해 드려요. 예를 들면:\n· 파리에서 찍은 사진\n· 이번달 음식 사진을 폴더로 모아서 공유해줘\n· 예산 얘기한 회의 녹음\n· 많이 통화한 사람 순으로 정리하고 요약해줘"
+                : "Hi! I find and organise the files on this phone. Try:\n· photos taken in Paris\n· collect this month's food photos into a folder and share it\n· meeting recordings about the budget\n· sort my call history by who I talk to most and summarize it";
     }
 
     private String folderName(SearchQuery q) {
@@ -301,6 +354,16 @@ public final class AskRunner {
     private String answerFor(SearchQuery q, List<Hit> rows, int total, List<String> relaxed, boolean anyContent, boolean anySpeech) {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
+            String where = q.city != null ? (ko && geo.cityKo(q.city) != null ? geo.cityKo(q.city) : q.city) : q.country != null ? geo.countryName(q.country, ko) : null;
+            if (where != null || q.dateFrom != null) {
+                String what = kindNoun(q.kind, 2, ko);
+                String when = q.dateFrom != null ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(q.dateFrom) + (q.dateTo != null ? " ~ " + new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(q.dateTo - 1) : "") : null;
+                String none = ko
+                        ? (where != null ? where + "에서 찍은 " : "") + (when != null ? when + " " : "") + what + "이 없어요."
+                        : "No " + what + (where != null ? " taken in " + where : "") + (when != null ? " from " + when : "") + " here.";
+                String places = where != null ? knownPlaces(q.kind, ko) : "";
+                return none + places;
+            }
             return ko ? "조건에 맞는 파일을 찾지 못했어요." : "No files matched your question.";
         }
         Set<String> cities = new LinkedHashSet<>();

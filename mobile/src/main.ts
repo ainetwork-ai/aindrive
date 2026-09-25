@@ -17,6 +17,14 @@ import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
 import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
+import "./ui.css";
+import { I, icon, fileGlyph } from "./icons";
+import { Web } from "./web";
+import type { Ctx, Sheet } from "./kit";
+import { ShareSheet } from "./share-sheet";
+import { ManageSheet } from "./manage-sheet";
+import { ChatSheet, McpSheet } from "./agents-sheet";
+import { AccountSheet } from "./account-sheet";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
 const STORE_KEY = "aindrive.mobile.state.v2";
@@ -96,10 +104,24 @@ let browse: {
   loading: boolean;
   menu: string | null;   // entry path whose ⋯ menu is open
   plusMenu: boolean;      // "+" menu (new folder / add files)
+  /** "Search in this folder" filter, like the web header's search box. */
+  query?: string;
+  searching?: boolean;
+  /** "For sale" items at the root of a drive shared with you (web: ShowcaseSection). */
+  showcase?: { shareId: string; leafName: string; price: number; currency: string | null }[];
 } | null = null;
+/** List/grid and sort, remembered like the web's (localStorage there, Preferences here). */
+let browseView: "list" | "grid" = "list";
+let browseSort: { by: "name" | "modified" | "size"; dir: 1 | -1 } = { by: "name", dir: 1 };
+/** Thumbnails for the grid view, by folder-uri + path (data URLs, small). */
+const thumbs = new Map<string, string | null>();
+/** A module-owned sheet (share, manage, chat, MCP, account, move) on top of whatever is open. */
+let sheet: Sheet | null = null;
+/** Text typed into sheet fields survives re-renders (status ticks, list reloads). */
+const drafts = new Map<string, string>();
 let showAllActivity = false;
 /** In-app viewer: what is open (images and audio play here; everything else goes to the OS). */
-let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: string; mime: string; src?: string; text?: string; loading: boolean } | null = null;
+let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: string; mime: string; src?: string; text?: string; loading: boolean; editing?: boolean; draft?: string; saving?: boolean } | null = null;
 /** Drives this account has on OTHER devices (same login on another phone / laptop). */
 let remotes: RemoteDrive[] = [];
 let remotesAt = 0;
@@ -134,7 +156,6 @@ async function newChat() {
   thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null;
   await saveThread();
   render();
-  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
 }
 
 async function load() {
@@ -196,6 +217,88 @@ function confirmAsync(title: string, body: string, ok: string, danger = false): 
   });
 }
 
+// ---------------------------------------------------------------- sheets (share, manage, chat, MCP, account)
+
+function web(): Web { return new Web(state.server, state.sessionCookie ?? ""); }
+
+/** What a sheet module may do to the shell — see kit.ts. */
+function sheetCtx(): Ctx {
+  return {
+    web: web(),
+    server: state.server,
+    notify,
+    // Sheets redraw even while a field has focus (render() puts focus and caret back);
+    // only background status ticks hold off while someone types.
+    rerender: () => render(),
+    confirm: confirmAsync,
+    close: closeSheet,
+    copy: async (text, what = "Copied") => {
+      try { await navigator.clipboard.writeText(text); notify(`${what} copied`); } catch { notify(text); }
+    },
+    openUrl: (url) => Browser.open({ url }),
+    forget: (...ids) => { for (const id of ids) drafts.delete(id); },
+  };
+}
+
+function openSheet(make: (ctx: Ctx) => Sheet) {
+  menuFor = null;
+  if (browse) { browse.menu = null; browse.plusMenu = false; }
+  sheet = make(sheetCtx());
+  render();
+}
+
+function closeSheet() { sheet = null; drafts.clear(); render(); }
+
+function sheetHtml(): string {
+  if (!sheet) return "";
+  return sheet.kind === "drawer" ? `<div class="scrim" id="sheet-scrim">${sheet.render()}</div>` : sheet.render();
+}
+
+function bindSheet() {
+  const host = document.getElementById("sheet-host");
+  if (!sheet || !host) return;
+  sheet.bind(host);
+  document.getElementById("sheet-scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) closeSheet(); });
+}
+
+/** The drive id a share or remote drive is known by on the server. */
+function driveIdOf(share?: SharedFolder, remote?: RemoteDrive): string | undefined { return remote?.id ?? share?.drive?.driveId; }
+
+function openShareFor(driveId: string | undefined, path: string, name: string) {
+  if (!driveId) { notify("Turn the folder on first so it has a drive to share.", true); return; }
+  openSheet((ctx) => new ShareSheet(ctx, driveId, path, name));
+}
+
+function openManage(driveId: string | undefined, name: string) {
+  if (!driveId) { notify("Turn the folder on first.", true); return; }
+  openSheet((ctx) => new ManageSheet(ctx, driveId, name, () => {
+    sheet = null;
+    const local = state.shares.find((s) => s.drive?.driveId === driveId);
+    if (local) { void AindriveAgent.stop({ driveId }).catch(() => {}); state.shares = state.shares.filter((s) => s !== local); void save(); }
+    remotes = remotes.filter((d) => d.id !== driveId);
+    browse = null; render();
+  }));
+}
+
+function openChat(driveId: string | undefined, name: string, folder: string, owned: boolean) {
+  if (!driveId) { notify("Turn the folder on first.", true); return; }
+  openSheet((ctx) => new ChatSheet(ctx, driveId, name, folder, owned, (path) => {
+    sheet = null;
+    const local = state.shares.find((s) => s.drive?.driveId === driveId);
+    const remote = remotes.find((d) => d.id === driveId);
+    if (local) void viewFile(local, path); else if (remote) void viewRemoteFile(remote, path); else render();
+  }));
+}
+
+function openMcp(driveId: string | undefined, name: string) {
+  if (!driveId) { notify("Turn the folder on first.", true); return; }
+  openSheet((ctx) => new McpSheet(ctx, driveId, name));
+}
+
+function openAccount() {
+  openSheet((ctx) => new AccountSheet(ctx, () => { sheet = null; void logout(); }));
+}
+
 // ---------------------------------------------------------------- helpers
 
 function driveUrl(share: SharedFolder): string | null {
@@ -244,6 +347,14 @@ async function refreshRemotes(force = false) {
   }
 }
 
+/** Leave a drive someone shared with you (web: LeaveDriveButton). */
+async function leaveDrive(d: RemoteDrive) {
+  if (!(await confirmAsync(`Leave “${d.name}”?`, "You lose access until the owner invites you again.", "Leave", true))) return;
+  try { await web().leave(d.id); remotes = remotes.filter((x) => x.id !== d.id); notify(`Left ${d.name}`); }
+  catch (e) { notify(msgOf(e), true); }
+  render();
+}
+
 async function openRemoteBrowser(drive: RemoteDrive, path = "") {
   menuFor = null;
   browse = { key: "remote:" + drive.id, remote: drive, path, entries: null, error: null, loading: true, menu: null, plusMenu: false };
@@ -254,7 +365,7 @@ async function openRemoteBrowser(drive: RemoteDrive, path = "") {
 async function viewRemoteFile(drive: RemoteDrive, path: string, mime?: string) {
   const name = path.split("/").pop() ?? path;
   const m = mime || guessMime(name);
-  if (!(m.startsWith("image/") || m.startsWith("audio/") || isText(m, name))) {
+  if (!(m.startsWith("image/") || m.startsWith("audio/") || m.startsWith("video/") || isText(m, name))) {
     // Anything else: the web has the right viewer/download for it.
     await Browser.open({ url: `${state.server}/d/${drive.id}?path=${encodeURIComponent(path.split("/").slice(0, -1).join("/"))}` });
     return;
@@ -352,6 +463,10 @@ async function loadBrowse() {
   render();
   try {
     if (browse.remote) {
+      if (!browse.path && browse.remote.owned === false) {
+        const b = browse;
+        void web().showcase(b.remote!.id).then((items) => { b.showcase = items; if (!typing()) render(); }).catch(() => {});
+      }
       const entries = await remoteList(state.server, state.sessionCookie!, browse.remote.id, browse.path);
       if (!browse) return;
       browse.entries = entries.map((e) => ({ name: e.name, path: e.path, isDir: e.isDir, size: e.size, mtimeMs: e.mtimeMs, mime: e.mime ?? guessMime(e.name) }));
@@ -393,7 +508,7 @@ async function browseOpen(entry: FileEntry) {
 async function viewFile(share: SharedFolder, path: string, mime?: string) {
   const name = path.split("/").pop() ?? path;
   const m = mime || guessMime(name);
-  if (m.startsWith("image/") || m.startsWith("audio/") || isText(m, name)) {
+  if (m.startsWith("image/") || m.startsWith("audio/") || m.startsWith("video/") || isText(m, name)) {
     viewer = { share, path, name, mime: m, loading: true };
     render();
     try {
@@ -405,6 +520,8 @@ async function viewFile(share: SharedFolder, path: string, mime?: string) {
       }
     } catch (e) {
       viewer = null;
+      // Too big to play in the app (> 25 MB): hand it to the phone's player.
+      if (m.startsWith("video/") || m.startsWith("audio/")) { render(); try { await AindriveAgent.openFile({ folderUri: share.folder.uri, path }); } catch (e2) { notify(msgOf(e2), true); } return; }
       notify(msgOf(e), true);
     }
     render();
@@ -436,6 +553,7 @@ function renderMarkdown(md: string): string {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     .replace(/(^|[^*])\*([^*]+)\*/g, "$1<i>$2</i>")
+    .replace(/(^|[\s(])_([^_]+)_(?=$|[\s).,!?])/g, "$1<i>$2</i>")
     .replace(/(https?:\/\/[^\s<]+)/g, `<a href="$1" target="_blank" rel="noopener">$1</a>`);
   const lines = md.replace(/\r/g, "").split("\n");
   const out: string[] = [];
@@ -546,7 +664,8 @@ async function browseNewFolder() {
   const name = validName(prompt("New folder name"));
   if (!name) return render();
   try {
-    await AindriveAgent.mkdir({ folderUri: share.folder.uri, path: joinPath(browse.path, name) });
+    if (browse.remote) await web().mkdir(browse.remote.id, joinPath(browse.path, name));
+    else await AindriveAgent.mkdir({ folderUri: share.folder.uri, path: joinPath(browse.path, name) });
     log(`Created folder ${name} in ${share.folder.label}`);
   } catch (e) { notify(msgOf(e), true); }
   await loadBrowse();
@@ -560,7 +679,8 @@ async function browseRename(entry: FileEntry) {
   if (!name || name === entry.name) return render();
   if (browse.entries?.some((e) => e.name === name)) { notify(`"${name}" already exists here`, true); return; }
   try {
-    await AindriveAgent.rename({ folderUri: share.folder.uri, from: entry.path, to: joinPath(browse.path, name) });
+    if (browse.remote) await web().rename(browse.remote.id, entry.path, joinPath(browse.path, name));
+    else await AindriveAgent.rename({ folderUri: share.folder.uri, from: entry.path, to: joinPath(browse.path, name) });
     log(`Renamed ${entry.name} → ${name}`);
   } catch (e) { notify(msgOf(e), true); }
   await loadBrowse();
@@ -572,12 +692,14 @@ async function browseDelete(entry: FileEntry) {
   browse.menu = null; render();
   const ok = await confirmAsync(
     `Delete "${entry.name}"?`,
-    entry.isDir ? "The folder and everything inside it is deleted from this phone." : "The file is deleted from this phone.",
+    browse.remote ? `It is deleted on ${browse.remote.hostname ?? "the device that serves this drive"}.`
+      : entry.isDir ? "The folder and everything inside it is deleted from this phone." : "The file is deleted from this phone.",
     "Delete", true,
   );
   if (!ok) return;
   try {
-    await AindriveAgent.delete({ folderUri: share.folder.uri, path: entry.path });
+    if (browse.remote) await web().remove(browse.remote.id, entry.path);
+    else await AindriveAgent.delete({ folderUri: share.folder.uri, path: entry.path });
     log(`Deleted ${entry.name}`);
   } catch (e) { notify(msgOf(e), true); }
   await loadBrowse();
@@ -1002,28 +1124,12 @@ function openSearch() {
   void refreshRemotes();
   searchOpen = true;
   menuFor = null;
-  render();
-  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
+  render();   // no autofocus: the conversation and suggestions come first, the keyboard on tap
   // First open with nothing indexed yet: start it, nobody wants to find a button first.
   const ix = status.drives.map((d) => d.index).filter((i) => !!i);
   if (ix.length && ix.every((i) => i && i.indexed === 0 && !i.running)) void reindex();
 }
 
-// ---------------------------------------------------------------- icons
-
-const I = {
-  search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>`,
-  plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
-  close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>`,
-  more: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`,
-  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`,
-  phone: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="2.5" width="10" height="19" rx="2"/><path d="M11 18h2"/></svg>`,
-  lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
-  sparkle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>`,
-  back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>`,
-  agent: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v3"/><rect x="4" y="6" width="16" height="12" rx="4"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><path d="M9.5 15.5h5M2 11v3M22 11v3M8 18v2.5M16 18v2.5"/></svg>`,
-  link: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>`,
-};
 
 // ---------------------------------------------------------------- render
 
@@ -1052,11 +1158,28 @@ function render() {
 }
 
 function renderScreens(app: HTMLElement) {
-  if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); return; }
-  if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); return; }
-  if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); return; }
-  app.innerHTML = homeScreen() + overlays();
-  bindHome();
+  if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); bindOverlays(); return; }
+  if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); }
+  else if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); }
+  else { app.innerHTML = homeScreen() + overlays(); bindHome(); }
+  // Viewer, toast and confirm sit on every screen: bind them once, here.
+  bindOverlays();
+  // Sheets render last so they sit on top; fields keep what was typed.
+  if (sheet) {
+    const host = document.createElement("div");
+    host.id = "sheet-host";
+    host.innerHTML = sheetHtml();
+    app.appendChild(host);
+    for (const [id, v] of drafts) {
+      const el = host.querySelector<HTMLInputElement | HTMLTextAreaElement>("#" + CSS.escape(id));
+      if (el && !el.value && el.type !== "checkbox") el.value = v;
+    }
+    host.addEventListener("input", (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.id && t.type !== "checkbox") drafts.set(t.id, t.value);
+    });
+    bindSheet();
+  }
 }
 
 // ---- login
@@ -1064,7 +1187,7 @@ function renderScreens(app: HTMLElement) {
 function loginScreen(): string {
   return `
     <div class="hero">
-      <h1>aindrive</h1>
+      <div class="brand">${I.drive} aindrive</div>
       <p>Turn a folder on this phone into a shared drive — and find anything in it by asking.</p>
     </div>
     <ul class="features">
@@ -1088,7 +1211,6 @@ function bindLogin() {
   bind("login", login);
   const serverInput = document.getElementById("server") as HTMLInputElement | null;
   serverInput?.addEventListener("change", () => { state.server = serverInput.value; void save(); });
-  bindOverlays();
 }
 
 // ---- home
@@ -1102,12 +1224,15 @@ function homeScreen(): string {
       <div class="art">${I.folder}</div>
       <h3>Share your first folder</h3>
       <p>Pick a folder on this phone. It becomes a drive you can open on the web, share with people, and search by asking.</p>
-      <button class="btn" id="add-first">${I.plus} Choose a folder</button>
+      <button class="btn" id="add-first" style="max-width:280px">${I.plus} Choose a folder</button>
     </div>`;
   const acts = activity.slice(0, showAllActivity ? 30 : 4);
+  const others = remotes.filter((d) => d.owned !== false);
+  const sharedWithMe = remotes.filter((d) => d.owned === false);
+  const who = state.email ?? "Account";
   return `
     <div class="topbar">
-      <h1>aindrive</h1>
+      <div class="brand">${I.drive} aindrive</div>
       <div class="actions">
         ${anyPaired ? `<button class="iconbtn" id="add" aria-label="Add folder" title="Add folder">${I.plus}</button>` : ""}
         <button class="iconbtn primary" id="toggle-search" aria-label="Agent" title="Agent">${I.agent}</button>
@@ -1116,7 +1241,7 @@ function homeScreen(): string {
 
     ${anyPaired ? `
       <div class="section">
-        <h2>Shared folders</h2>
+        <h2>On this phone</h2>
         ${state.shares.length > 1 ? (running < state.shares.length
           ? `<button class="link" id="start-all">Turn all on</button>`
           : `<button class="link" id="stop-all">Turn all off</button>`) : ""}
@@ -1127,20 +1252,13 @@ function homeScreen(): string {
 
     ${anyPaired ? sourcesSection() : ""}
 
-    ${remotes.length ? `
-      <div class="section"><h2>Other devices</h2><button class="link" id="refresh-remotes">Refresh</button></div>
-      ${remotes.map((d) => `
-        <div class="card remote" data-remote="${esc(d.id)}">
-          <div class="folder">
-            <div class="glyph">${I.phone}</div>
-            <div style="min-width:0">
-              <div class="name">${esc(d.name)}</div>
-              <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${d.online ? "Online" : "Offline"}${d.hostname ? ` · ${esc(d.hostname)}` : ""}</div>
-            </div>
-            <div class="controls"><button class="btn secondary small" data-act="browse" ${d.online ? "" : "disabled"}>Browse</button></div>
-          </div>
-        </div>`).join("")}
-      <p class="hint">Folders shared from other devices signed in as ${esc(state.email ?? "you")}. Browsing and asking go through the server; the files stay on that device.</p>` : ""}
+    ${others.length ? `
+      <div class="section"><h2>My drives on other devices</h2><button class="link" id="refresh-remotes">${icon("refresh", 16)} Refresh</button></div>
+      ${others.map(remoteCard).join("")}` : ""}
+
+    ${sharedWithMe.length ? `
+      <div class="section"><h2>Shared with me</h2></div>
+      ${sharedWithMe.map(remoteCard).join("")}` : ""}
 
     <div class="section"><h2>Recent activity</h2>${activity.length > 4 ? `<button class="link" id="more-activity">${showAllActivity ? "Show less" : "Show all"}</button>` : ""}</div>
     <div class="card">
@@ -1149,11 +1267,37 @@ function homeScreen(): string {
     </div>
 
     <div class="section"><h2>Account</h2></div>
-    <div class="card">
-      <div class="kv"><span class="k">Signed in as</span><span class="v">${esc(state.email ?? "—")}</span></div>
-      <div class="kv"><span class="k">Server</span><span class="v mono">${esc(state.server.replace(/^https?:\/\//, ""))}</span></div>
-      <button class="btn secondary" id="logout" ${running > 0 ? "disabled" : ""}>Log out</button>
-      ${running > 0 ? `<p class="hint">Turn every folder off to log out.</p>` : ""}
+    <button class="card account" id="account" style="width:100%;text-align:left">
+      <div class="avatar">${esc(who.slice(0, 1).toUpperCase())}</div>
+      <div style="flex:1;min-width:0"><div style="font-weight:500">${esc(who)}</div><div class="hint" style="margin:0">${esc(state.server.replace(/^https?:\/\//, ""))}</div></div>
+      ${I.chevron}
+    </button>`;
+}
+
+/** A drive this account can reach that another device serves (or that someone shared with you). */
+function remoteCard(d: RemoteDrive): string {
+  // The server stores "YYYY-MM-DD HH:MM:SS" in UTC with no zone marker.
+  const seenAt = d.lastSeenAt ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(d.lastSeenAt) ? d.lastSeenAt : d.lastSeenAt.replace(" ", "T") + "Z") : null;
+  const seen = d.online ? "Online" : seenAt && !isNaN(seenAt.getTime()) ? `Last seen ${seenAt.toLocaleString()}` : "Offline";
+  const menu = menuFor === "remote:" + d.id ? `
+    <div class="menu">
+      <button data-act="share">${icon("share", 18)} Share…</button>
+      ${d.owned !== false ? `<button data-act="manage">${icon("settings", 18)} Manage</button>` : ""}
+      <button data-act="chat">${icon("chat", 18)} Chat with agents</button>
+      <button data-act="mcp">${icon("plug", 18)} MCP</button>
+      <button data-act="web">${icon("external", 18)} Open on the web</button>
+      ${d.owned === false ? `<div class="sep"></div><button class="danger" data-act="leave">${icon("logout", 18)} Leave drive</button>` : ""}
+    </div>` : "";
+  return `
+    <div class="card remote" data-remote="${esc(d.id)}">
+      <div class="folder">
+        <div class="glyph" data-act="browse">${d.owned === false ? I.users : I.drive}</div>
+        <div style="min-width:0" data-act="browse" role="button">
+          <div class="name">${esc(d.name)}</div>
+          <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${esc(seen)}${d.hostname ? ` · ${esc(d.hostname)}` : ""}</div>
+        </div>
+        <div class="controls"><div class="menu-wrap"><button class="iconbtn ghost" data-act="menu" aria-label="More">${I.more}</button>${menu}</div></div>
+      </div>
     </div>`;
 }
 
@@ -1171,11 +1315,16 @@ function folderCard(share: SharedFolder): string {
   const indexText = on && ix ? (ix.running ? ` · indexing ${ix.done}/${ix.total}` : ix.indexed ? ` · ${ix.indexed.toLocaleString()} files` : "") : "";
   const menu = menuFor === key ? `
     <div class="menu">
-      <button data-act="addfiles">Add files from this phone…</button>
-      ${driveUrl(share) ? `<button data-act="open">Open on the web</button>` : ""}
-      ${share.drive ? `<button data-act="copy">Copy drive ID</button>` : ""}
+      ${share.drive ? `<button data-act="share">${icon("share", 18)} Share…</button>
+      <button data-act="manage">${icon("settings", 18)} Manage</button>
+      <button data-act="chat">${icon("chat", 18)} Chat with agents</button>
+      <button data-act="mcp">${icon("plug", 18)} MCP</button>
+      <div class="sep"></div>` : ""}
+      <button data-act="addfiles">${icon("upload", 18)} Add files from this phone…</button>
+      ${driveUrl(share) ? `<button data-act="open">${icon("external", 18)} Open on the web</button>` : ""}
+      ${share.drive ? `<button data-act="copy">${icon("copy", 18)} Copy drive ID</button>` : ""}
       <div class="sep"></div>
-      <button class="danger" data-act="remove" ${on ? "disabled" : ""}>Remove folder${on ? " · turn off first" : ""}</button>
+      <button class="danger" data-act="remove" ${on ? "disabled" : ""}>${icon("trash", 18)} Remove folder${on ? " · turn off first" : ""}</button>
     </div>` : "";
   return `
     <div class="card" data-share="${esc(key)}">
@@ -1189,7 +1338,7 @@ function folderCard(share: SharedFolder): string {
         <div class="controls">
           <button class="switch ${isBusy ? "busy" : ""}" role="switch" aria-checked="${on}" aria-label="Share ${esc(share.folder.label)}" data-act="toggle" ${isBusy ? "disabled" : ""}></button>
           <div class="menu-wrap">
-            <button class="iconbtn" style="border:0;background:none;width:38px" data-act="menu" aria-label="More">${I.more}</button>
+            <button class="iconbtn ghost" data-act="menu" aria-label="More">${I.more}</button>
             ${menu}
           </div>
         </div>
@@ -1212,13 +1361,25 @@ function bindHome() {
     el.querySelector("[data-act=src-remove]")?.addEventListener("click", () => void removeSource(el.dataset.source!));
   }
   bind("stop-all", stopAll);
-  bind("logout", logout);
+  bind("account", openAccount);
   bind("more-activity", () => { showAllActivity = !showAllActivity; render(); });
   bind("refresh-remotes", () => void refreshRemotes(true));
   app.querySelectorAll<HTMLElement>("[data-remote]").forEach((card) => {
     const d = remotes.find((r) => r.id === card.dataset.remote);
     if (!d) return;
-    card.querySelector<HTMLButtonElement>("[data-act=browse]")?.addEventListener("click", () => void openRemoteBrowser(d));
+    card.querySelectorAll<HTMLElement>("[data-act]").forEach((el) => el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const act = el.dataset.act;
+      if (act === "browse") { if (d.online) void openRemoteBrowser(d); else notify(`${d.name} is offline — its device isn't connected.`, true); return; }
+      if (act === "menu") { menuFor = menuFor === "remote:" + d.id ? null : "remote:" + d.id; render(); return; }
+      menuFor = null;
+      if (act === "share") openShareFor(d.id, "", d.name);
+      else if (act === "manage") openManage(d.id, d.name);
+      else if (act === "chat") openChat(d.id, d.name, "", d.owned !== false);
+      else if (act === "mcp") openMcp(d.id, d.name);
+      else if (act === "web") void Browser.open({ url: `${state.server}/d/${d.id}` });
+      else if (act === "leave") void leaveDrive(d);
+    }));
   });
   app.querySelectorAll<HTMLElement>("[data-share]").forEach((card) => {
     const share = findShare(card.dataset.share!);
@@ -1234,11 +1395,14 @@ function bindHome() {
         else if (act === "addfiles") { menuFor = null; void addFiles(share); }
         else if (act === "copy") { menuFor = null; void navigator.clipboard?.writeText(share.drive!.driveId).then(() => notify("Drive ID copied")); }
         else if (act === "remove") { menuFor = null; void removeShare(share); }
+        else if (act === "share") openShareFor(share.drive?.driveId, "", share.folder.label);
+        else if (act === "manage") openManage(share.drive?.driveId, share.folder.label);
+        else if (act === "chat") openChat(share.drive?.driveId, share.folder.label, "", true);
+        else if (act === "mcp") openMcp(share.drive?.driveId, share.folder.label);
       });
     });
   });
   if (menuFor) app.addEventListener("click", () => { menuFor = null; render(); }, { once: true });
-  bindOverlays();
 }
 
 // ---- search
@@ -1251,8 +1415,45 @@ const FOLLOWUPS: { q: string; when: (r: AskResult | null) => boolean }[] = [
   { q: "Only the ones from this month", when: (r) => !!r && r.sources.length > 1 },
   { q: "Show the oldest 3", when: (r) => !!r && r.sources.length > 3 },
 ];
-/** Older turns show 3 hits; tapping "Show all" expands that turn. */
-const expandedTurns = new Set<number>();
+/** Turns whose photo grid / file list the user expanded ("+N", "Show all"). */
+const expandedPhotos = new Set<number>();
+const expandedFiles = new Set<number>();
+/** Agent-result thumbnails (small JPEGs read on the phone), by drive + path. */
+const askThumbs = new Map<string, string | null>();
+
+function thumbId(src: { driveId?: string; path: string }): string { return `${src.driveId ?? ""}|${src.path}`; }
+
+/** The folder a result lives in on this phone: a shared folder or an agent source (DCIM, Call…). */
+function localFolderFor(driveId?: string): SharedFolder | undefined {
+  const share = shareByDrive(driveId);
+  if (share) return share;
+  const src = state.sources?.find((x) => x.id === driveId);
+  return src ? { folder: src.folder } : undefined;
+}
+
+async function loadAskThumbs() {
+  const want = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].map((el) => el.dataset.thumb!).filter((k) => !askThumbs.has(k));
+  if (!want.length) return;
+  for (const k of want) askThumbs.set(k, null);
+  // Three at a time, each shown as soon as it's ready (a camera photo takes a few seconds to decode).
+  let redraw = 0;
+  const one = async (k: string) => {
+    const [driveId, ...rest] = k.split("|");
+    const folder = localFolderFor(driveId || undefined);
+    if (!folder) return;   // other devices: keep the icon (a full read per thumbnail is too heavy)
+    try {
+      const r = await AindriveAgent.readFile({ folderUri: folder.folder.uri, path: rest.join("|"), maxPx: 256 });
+      askThumbs.set(k, `data:${r.mime};base64,${r.base64}`);
+      // Patch the tile in place: no full re-render, so scrolling and typing are left alone.
+      const el = document.querySelector<HTMLElement>(`[data-thumb="${CSS.escape(k)}"]`);
+      const img = document.createElement("img"); img.src = askThumbs.get(k)!; img.alt = "";
+      if (el) { el.querySelector("span.ft-image")?.remove(); el.prepend(img); } else redraw++;
+    } catch { /* keep the icon */ }
+  };
+  const queue = [...want];
+  await Promise.all([0, 1, 2].map(async () => { while (queue.length) await one(queue.shift()!); }));
+  if (redraw && !typing()) render();
+}
 
 /** Tap-to-run examples, grouped by what the agent can do. Every one is a scenario the device tests cover. */
 const SUGGESTIONS: { title: string; items: string[] }[] = [
@@ -1328,23 +1529,45 @@ function searchSheet(): string {
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
         ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
       </div>`;
-  const hitsList = (r: AskResult, turn: number, max: number) => !r.sources.length ? "" : `<ul class="hits">${r.sources.slice(0, max).map((src, i) => {
-    const name = src.path.split("/").pop() ?? src.path;
-    const dir = src.path.split("/").slice(0, -1).join("/");
-    const how = src.matchedBy === "photo" ? "👁" : src.matchedBy === "speech" ? "🎙" : "";
-    const where = (src as { remoteName?: string }).remoteName;
-    return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${src.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
-  }).join("")}${r.sources.length > max ? `<li class="more" data-more="${turn}">Show all ${r.sources.length}</li>` : ""}</ul>`;
+  // Photos as a real thumbnail grid (a few, then "+N" expands); everything else a short list.
+  const hitsList = (r: AskResult, turn: number, last: boolean) => {
+    if (!r.sources.length) return "";
+    const idx = r.sources.map((src, i) => ({ src, i }));
+    const photos = idx.filter(({ src }) => guessMime(src.path).startsWith("image/"));
+    const files = idx.filter(({ src }) => !guessMime(src.path).startsWith("image/"));
+    const pMax = expandedPhotos.has(turn) ? photos.length : last ? 6 : 3;
+    const fMax = expandedFiles.has(turn) ? files.length : last ? 5 : 3;
+    const grid = photos.length ? `<div class="photo-grid">${photos.slice(0, pMax).map(({ src, i }) => {
+      const t = askThumbs.get(thumbId(src));
+      const how = src.matchedBy === "photo" ? `<span class="badge-how" title="matched by what the photo shows">${icon("sparkle", 12)}</span>` : "";
+      return `<button class="ph" data-turn="${turn}" data-hit="${i}" data-thumb="${esc(thumbId(src))}" aria-label="${esc(src.path.split("/").pop() ?? "")}">${t ? `<img src="${t}" alt="" />` : `<span class="ft-image">${icon("fileImage", 24)}</span>`}${how}</button>`;
+    }).join("")}${photos.length > pMax ? `<button class="ph more" data-more-photos="${turn}">+${photos.length - pMax}</button>` : ""}</div>` : "";
+    const list = files.length ? `<ul class="hits">${files.slice(0, fMax).map(({ src, i }) => {
+      if (src.caller) {
+        // A call recording reads as "who — what", not as its file name.
+        const at = src.callAt ? new Date(src.callAt) : null;
+        const whenTxt = at ? `${at.toLocaleDateString()} ${at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : "";
+        return `<li data-turn="${turn}" data-hit="${i}" class="call"><span class="kind ft-audio">${icon("call", 20)}</span><div style="min-width:0">
+          <div class="name">${esc(src.caller)} <span class="when">${esc(whenTxt)}</span></div>
+          <div class="summary">${esc(src.summary ?? src.snippet)}</div></div></li>`;
+      }
+      const name = src.path.split("/").pop() ?? src.path;
+      const dir = src.path.split("/").slice(0, -1).join("/");
+      const how = src.matchedBy === "speech" ? "🎙 " : "";
+      const where = (src as { remoteName?: string }).remoteName;
+      return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${fileGlyph(name, false).cls}">${fileGlyph(name, false).svg}</span><div style="min-width:0"><div class="name">${how}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+    }).join("")}${files.length > fMax ? `<li class="more" data-more-files="${turn}">Show all ${files.length}</li>` : ""}</ul>` : "";
+    return grid + list;
+  };
   const turns = thread.map((t, i) => {
     const last = i === thread.length - 1;
-    const open = last || expandedTurns.has(i);
     return `
       <div class="turn ${last ? "last" : ""}">
         <div class="bubble">${esc(t.q)}</div>
         ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
           ${last ? actionCard : t.r.action?.folder ? `<p class="hint">${esc(t.r.action.label ?? t.r.action.folder)} · ${t.r.action.copied ?? 0} files</p>` : ""}
           <p class="answer">${esc(t.r.answer)}</p>
-          ${hitsList(t.r, i, open ? 200 : 3)}` : ""}
+          ${hitsList(t.r, i, last)}` : ""}
       </div>`;
   }).join("");
   const body = `
@@ -1359,16 +1582,21 @@ function searchSheet(): string {
   return `
     <div class="sheet">
       <div class="bar">
-        <button class="iconbtn" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
-          ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
-        ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${I.plus}</button>` : ""}
+        <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
+        <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : "offline"}</div></div>
+        ${thread.length ? `<button class="btn small secondary" id="new-chat" aria-label="New chat">${icon("plus", 16)} New chat</button>` : ""}
       </div>
-      <div class="body">
+      <div class="body" id="ask-body">
         ${modelsLine}
         ${indexLine}
         ${modelsSection()}
         ${body}
+      </div>
+      <!-- Composer at the bottom, like a chat: the conversation stays in view above the keyboard. -->
+      <div class="bar composer">
+        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
+          ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
+        <button class="iconbtn primary" id="ask-send" aria-label="Send" ${askBusy ? "disabled" : ""}>${icon("up", 20)}</button>
       </div>
     </div>`;
 }
@@ -1379,21 +1607,28 @@ function bindSearch() {
   bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
+  bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; i.blur(); } void ask(); });
+  document.getElementById("ask-input")?.addEventListener("focus", () => {
+    // The keyboard shrinks the view: keep the newest turn visible above the composer.
+    setTimeout(() => { const b = document.getElementById("ask-body"); if (b) b.scrollTop = b.scrollHeight; }, 250);
+  });
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
-  document.querySelectorAll<HTMLElement>("[data-more]").forEach((li) => li.addEventListener("click", () => { expandedTurns.add(Number(li.dataset.more)); render(); }));
-  const bodyEl = document.querySelector<HTMLElement>(".sheet .body");
+  document.querySelectorAll<HTMLElement>("[data-more-photos]").forEach((el) => el.addEventListener("click", () => { expandedPhotos.add(Number(el.dataset.morePhotos)); render(); }));
+  document.querySelectorAll<HTMLElement>("[data-more-files]").forEach((el) => el.addEventListener("click", () => { expandedFiles.add(Number(el.dataset.moreFiles)); render(); }));
+  void loadAskThumbs();
+  const bodyEl = document.getElementById("ask-body");
   if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
-  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { input.blur(); void ask(); } });
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; input.blur(); void ask(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
     const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];
     if (!hit) return;
     const remote = remotes.find((d) => d.id === hit.driveId);
     if (remote) { void viewRemoteFile(remote, hit.path); return; }
-    const share = shareByDrive(hit.driveId);
+    const share = localFolderFor(hit.driveId);
     if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
   bind("action-share", shareCollected);
@@ -1406,17 +1641,8 @@ function bindSearch() {
     const share = shareByDrive(a.driveId);
     if (share) { searchOpen = false; void openBrowser(share, a.folder); }
   });
-  bindOverlays();
 }
 
-function kindClass(name: string): string {
-  const e = ext(name).toLowerCase();
-  if (["jpg", "jpeg", "png", "heic", "webp", "gif"].includes(e)) return "photo";
-  if (["mp4", "mov", "mkv", "webm"].includes(e)) return "video";
-  if (e === "pdf") return "pdf";
-  if (["doc", "docx", "txt", "md", "hwp", "xlsx", "xls", "csv", "ppt", "pptx"].includes(e)) return "doc";
-  return "";
-}
 
 function ext(name: string): string {
   const i = name.lastIndexOf(".");
@@ -1426,114 +1652,286 @@ function ext(name: string): string {
 
 // ---- file browser
 
+function sortedEntries(entries: FileEntry[]): FileEntry[] {
+  const q = (browse?.query ?? "").trim().toLowerCase();
+  const list = q ? entries.filter((e) => e.name.toLowerCase().includes(q)) : entries.slice();
+  const { by, dir } = browseSort;
+  list.sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;   // folders first, like the web
+    const c = by === "size" ? (a.size - b.size) : by === "modified" ? (a.mtimeMs - b.mtimeMs) : a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    return c * dir;
+  });
+  return list;
+}
+
+function entryMenu(e: FileEntry, remote: boolean): string {
+  return `
+      <div class="menu">
+        <button data-op="open">${icon(e.isDir ? "folder" : "external", 18)} ${e.isDir ? "Open" : "Open"}</button>
+        <button data-op="share">${icon("share", 18)} Share…</button>
+        ${e.isDir ? `<button data-op="chat">${icon("chat", 18)} Chat about this folder</button>` : `<button data-op="download">${icon("download", 18)} ${remote ? "Download" : "Open with…"}</button>`}
+        <div class="sep"></div>
+        <button data-op="rename">${icon("edit", 18)} Rename</button>
+        <button data-op="move">${icon("move", 18)} Move…</button>
+        <button class="danger" data-op="delete">${icon("trash", 18)} Delete</button>
+      </div>`;
+}
+
 function browseSheet(): string {
   const share = browseShare();
   if (!browse || !share) return "";
-  const crumbs = browse.path ? browse.path.split("/") : [];
-  const title = crumbs.length ? crumbs[crumbs.length - 1] : share.folder.label;
-  const sub = crumbs.length ? [share.folder.label, ...crumbs.slice(0, -1)].join(" / ") : (driveStatus(share)?.connected ? "Online" : "On this phone");
-  const isBusy = busyShares.has(browse.key);
-  const plus = browse.plusMenu ? `
-    <div class="menu">
-      <button data-op="newfolder">New folder</button>
-      <button data-op="addfiles">Add files from this phone…</button>
-      ${driveUrl(share) ? `<div class="sep"></div><button data-op="web">Open on the web</button>` : ""}
-    </div>` : "";
+  const b = browse;
+  const crumbs = b.path ? b.path.split("/") : [];
+  const root = b.remote ? b.remote.name : share.folder.label;
+  const title = crumbs.length ? crumbs[crumbs.length - 1] : root;
+  const trail = [root, ...crumbs.slice(0, -1)];
+  const isBusy = busyShares.has(b.key);
+  const remote = !!b.remote;
   let body: string;
-  if (browse.loading && !browse.entries) body = `<div class="searching"><span class="spinner"></span> Loading…</div>`;
-  else if (browse.error && isGone(browse.error) && !browse.path && !browse.remote) body = `<div class="empty"><h3>This folder no longer exists</h3><p>It was deleted or moved on the phone. Remove it from your shared folders, or ask the agent again to make a new one.</p><button class="btn secondary" id="browse-forget">Remove from list</button></div>`;
-  else if (browse.error) body = `<div class="empty"><h3>Couldn’t read this folder</h3><p>${esc(browse.error)}</p><button class="btn secondary" id="browse-retry">Try again</button></div>`;
-  else if (!browse.entries?.length) body = `<div class="empty"><div class="art">${I.folder}</div><h3>Empty folder</h3><p>Add files from this phone or create a folder with the + button.</p></div>`;
-  else body = `<ul class="hits files">${browse.entries.map((e) => {
-    const menu = browse!.menu === e.path ? `
-      <div class="menu">
-        <button data-op="open">${e.isDir ? "Open" : "Open with…"}</button>
-        <button data-op="rename">Rename</button>
-        <div class="sep"></div>
-        <button class="danger" data-op="delete">Delete</button>
-      </div>` : "";
-    const meta = e.isDir ? "Folder" : [prettyBytes(e.size), e.mtimeMs ? new Date(e.mtimeMs).toLocaleDateString() : ""].filter(Boolean).join(" · ");
-    return `<li data-entry="${esc(e.path)}">
-      <span class="kind ${e.isDir ? "dir" : kindClass(e.name)}" data-op="open">${e.isDir ? I.folder : esc(ext(e.name))}</span>
-      <div style="min-width:0" data-op="open"><div class="name">${esc(e.name)}</div><div class="meta">${esc(meta)}</div></div>
-      <div class="menu-wrap"><button class="iconbtn" style="border:0;background:none;width:38px" data-op="menu" aria-label="More">${I.more}</button>${menu}</div>
-    </li>`;
-  }).join("")}</ul>`;
+  if (b.loading && !b.entries) body = `<div class="searching"><span class="spinner"></span> Loading…</div>`;
+  else if (b.error && isGone(b.error) && !b.path && !remote) body = `<div class="empty"><h3>This folder no longer exists</h3><p>It was deleted or moved on the phone.</p><button class="btn secondary" id="browse-forget">Remove from list</button></div>`;
+  else if (b.error) body = `<div class="empty"><div class="art">${I.info}</div><h3>Couldn’t read this folder</h3><p>${esc(b.error)}</p><button class="btn secondary" id="browse-retry" style="max-width:220px">${I.refresh} Try again</button></div>`;
+  else {
+    const list = sortedEntries(b.entries ?? []);
+    if (!list.length) body = b.query ? `<div class="empty"><div class="art">${I.search}</div><h3>No matches</h3><p>Nothing in this folder is called “${esc(b.query)}”.</p></div>`
+      : `<div class="empty"><div class="art">${I.folder}</div><h3>This folder is empty</h3><p>Upload files or create a folder.</p></div>`;
+    else if (browseView === "grid") body = `<div class="tiles">${list.map((e) => {
+      const g = fileGlyph(e.name, e.isDir);
+      const t = !e.isDir && !remote ? thumbs.get(thumbKey(e.path)) : undefined;
+      return `<div class="tile" data-entry="${esc(e.path)}">
+        <div class="thumb" data-op="open">${t ? `<img src="${t}" alt="" />` : `<span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="44" height="44"')}</span>`}</div>
+        <div class="cap"><span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="16" height="16"')}</span><div class="name" data-op="open">${esc(e.name)}</div>
+          <div class="menu-wrap"><button class="iconbtn ghost" data-op="menu" aria-label="More">${I.more}</button>${b.menu === e.path ? entryMenu(e, remote) : ""}</div></div>
+      </div>`;
+    }).join("")}</div>`;
+    else body = `<ul class="hits files">${list.map((e) => {
+      const g = fileGlyph(e.name, e.isDir);
+      const meta = e.isDir ? (e.mtimeMs ? new Date(e.mtimeMs).toLocaleDateString() : "Folder") : [prettyBytes(e.size), e.mtimeMs ? new Date(e.mtimeMs).toLocaleDateString() : ""].filter(Boolean).join(" · ");
+      return `<li data-entry="${esc(e.path)}" class="${b.menu === e.path ? "selected" : ""}">
+        <span class="kind ${g.cls}" data-op="open">${g.svg}</span>
+        <div style="min-width:0" data-op="open"><div class="name">${esc(e.name)}</div><div class="meta">${esc(meta)}</div></div>
+        <div class="menu-wrap"><button class="iconbtn ghost" data-op="menu" aria-label="More">${I.more}</button>${b.menu === e.path ? entryMenu(e, remote) : ""}</div>
+      </li>`;
+    }).join("")}</ul>`;
+  }
+  const sortBtn = (by: typeof browseSort.by, label: string) =>
+    `<button data-sort="${by}" aria-pressed="${browseSort.by === by}">${label}${browseSort.by === by ? icon(browseSort.dir === 1 ? "up" : "down", 14) : ""}</button>`;
   return `
     <div class="sheet">
       <div class="bar">
-        <button class="iconbtn" id="browse-back" aria-label="Back">${I.back}</button>
-        <div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${esc(sub)}</div></div>
-        <div class="menu-wrap">
-          <button class="iconbtn primary" id="browse-plus" aria-label="Add" ${isBusy ? "disabled" : ""}>${isBusy ? `<span class="spinner"></span>` : I.plus}</button>
-          ${plus}
-        </div>
+        <button class="iconbtn ghost" id="browse-back" aria-label="Back">${I.back}</button>
+        ${b.searching ? `<div class="field">${I.search}<input id="browse-q" type="search" placeholder="Search in this folder" value="${esc(b.query ?? "")}" autocomplete="off" /><button id="browse-q-close" aria-label="Close search">${I.close}</button></div>`
+          : `<div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${crumbs.length ? trail.map((t, i) => `<button data-crumb="${i}">${esc(t)}</button>`).join(" / ") : (remote ? esc(b.remote!.hostname ?? (b.remote!.online ? "Online" : "Offline")) : (driveStatus(share)?.connected ? "Online" : "On this phone"))}</div></div>
+        <button class="iconbtn ghost" id="browse-search" aria-label="Search in this folder">${I.search}</button>`}
+        <button class="iconbtn primary" id="browse-share" aria-label="Share">${I.share}</button>
+        <button class="iconbtn" id="browse-chat" aria-label="Chat">${I.chat}</button>
       </div>
-      <div class="body" id="browse-body">${body}</div>
+      <div class="toolbar">
+        <div class="seg"><button id="view-list" aria-pressed="${browseView === "list"}" aria-label="List">${icon("list", 18)}</button><button id="view-grid" aria-pressed="${browseView === "grid"}" aria-label="Grid">${icon("grid", 18)}</button></div>
+        <div class="grow"></div>
+        <button class="btn small secondary" id="browse-newfolder" ${isBusy ? "disabled" : ""}>${icon("folderPlus", 16)} New folder</button>
+        ${remote ? "" : `<button class="btn small secondary" id="browse-upload" ${isBusy ? "disabled" : ""}>${isBusy ? `<span class="spinner"></span>` : icon("upload", 16)} Upload</button>`}
+      </div>
+      <div class="body" id="browse-body">
+        ${!b.path && b.showcase?.length ? `<div class="section" style="margin-top:4px"><h2>${icon("lock", 14)} For sale</h2></div>
+          <div class="tiles" style="margin-bottom:16px">${b.showcase.map((it) => { const g = fileGlyph(it.leafName, false); return `<div class="tile" data-buy="${esc(it.shareId)}">
+            <div class="thumb"><span class="${g.cls}">${icon("lock", 36)}</span></div>
+            <div class="cap"><div class="name">${esc(it.leafName)}</div><span class="badge accent">${it.price.toFixed(2)} ${esc(it.currency ?? "USDC")}</span></div></div>`; }).join("")}</div>` : ""}
+        ${b.entries?.length ? `<div class="sorthead">${sortBtn("name", "Name")} · ${sortBtn("modified", "Modified")} · ${sortBtn("size", "Size")}</div>` : ""}
+        ${body}
+      </div>
     </div>`;
+}
+
+function thumbKey(path: string): string { return `${browse?.key ?? ""}|${path}`; }
+
+/** Grid view: small JPEGs for photos, read on the phone and cached for the session. */
+async function loadThumbs() {
+  const share = browseShare();
+  if (!browse || !share || browse.remote || browseView !== "grid" || !browse.entries) return;
+  const want = browse.entries.filter((e) => !e.isDir && guessMime(e.name).startsWith("image/") && !thumbs.has(thumbKey(e.path))).slice(0, 60);
+  for (const e of want) {
+    thumbs.set(thumbKey(e.path), null);
+    try {
+      const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path: e.path, maxPx: 320 });
+      thumbs.set(thumbKey(e.path), `data:${r.mime};base64,${r.base64}`);
+    } catch { /* leave the icon */ }
+  }
+  if (want.length && !typing()) render();
 }
 
 function bindBrowse() {
   const share = browseShare();
   if (!browse || !share) return;
+  const b = browse;
   bind("browse-back", browseBack);
   bind("browse-retry", () => void loadBrowse());
   bind("browse-forget", () => { const sh = browseShare(); browse = null; render(); if (sh) void removeShare(sh); });
-  bind("browse-plus", () => { if (browse) { browse.plusMenu = !browse.plusMenu; browse.menu = null; render(); } });
-  document.querySelectorAll<HTMLElement>("#browse-plus ~ .menu [data-op]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const op = btn.dataset.op;
-      if (op === "newfolder") void browseNewFolder();
-      else if (op === "addfiles") { if (browse) browse.plusMenu = false; void addFiles(share, browse!.path); }
-      else if (op === "web") { if (browse) browse.plusMenu = false; void openDrive(share, browse!.path ? `${browse!.path}/x` : undefined); }
-    });
-  });
+  bind("browse-search", () => { b.searching = true; render(); (document.getElementById("browse-q") as HTMLInputElement | null)?.focus(); });
+  bind("browse-q-close", () => { b.searching = false; b.query = ""; render(); });
+  const q = document.getElementById("browse-q") as HTMLInputElement | null;
+  q?.addEventListener("input", () => { b.query = q.value; const pos = q.selectionStart; render(); const n = document.getElementById("browse-q") as HTMLInputElement | null; n?.focus(); n?.setSelectionRange(pos, pos); });
+  bind("view-list", () => { browseView = "list"; void Preferences.set({ key: "aindrive.mobile.view", value: "list" }); render(); });
+  bind("view-grid", () => { browseView = "grid"; void Preferences.set({ key: "aindrive.mobile.view", value: "grid" }); render(); void loadThumbs(); });
+  document.querySelectorAll<HTMLElement>("[data-sort]").forEach((el) => el.addEventListener("click", () => {
+    const by = el.dataset.sort as typeof browseSort.by;
+    browseSort = browseSort.by === by ? { by, dir: browseSort.dir === 1 ? -1 : 1 } : { by, dir: by === "name" ? 1 : -1 };
+    void Preferences.set({ key: "aindrive.mobile.sort", value: JSON.stringify(browseSort) });
+    render();
+  }));
+  document.querySelectorAll<HTMLElement>("[data-crumb]").forEach((el) => el.addEventListener("click", () => {
+    const i = Number(el.dataset.crumb);
+    b.path = b.path.split("/").slice(0, i).join("/");
+    void loadBrowse();
+  }));
+  bind("browse-newfolder", () => void browseNewFolder());
+  bind("browse-upload", () => void addFiles(share, b.path));
+  bind("browse-share", () => openShareFor(driveIdOf(share, b.remote), b.path, b.path ? b.path.split("/").pop()! : (b.remote?.name ?? share.folder.label)));
+  bind("browse-chat", () => openChat(driveIdOf(share, b.remote), b.remote?.name ?? share.folder.label, b.path, b.remote ? b.remote.owned !== false : true));
   document.querySelectorAll<HTMLElement>("[data-entry]").forEach((li) => {
-    const entry = browse!.entries?.find((e) => e.path === li.dataset.entry);
+    const entry = b.entries?.find((e) => e.path === li.dataset.entry);
     if (!entry) return;
     li.querySelectorAll<HTMLElement>("[data-op]").forEach((el) => {
       el.addEventListener("click", (ev) => {
         ev.stopPropagation();
         const op = el.dataset.op;
-        if (op === "open") { if (browse) browse.menu = null; void browseOpen(entry); }
-        else if (op === "menu") { if (browse) { browse.menu = browse.menu === entry.path ? null : entry.path; browse.plusMenu = false; render(); } }
+        if (op === "menu") { b.menu = b.menu === entry.path ? null : entry.path; b.plusMenu = false; render(); return; }
+        b.menu = null;
+        if (op === "open") void browseOpen(entry);
         else if (op === "rename") void browseRename(entry);
         else if (op === "delete") void browseDelete(entry);
+        else if (op === "move") openMove(entry);
+        else if (op === "share") openShareFor(driveIdOf(share, b.remote), entry.path, entry.name);
+        else if (op === "chat") openChat(driveIdOf(share, b.remote), b.remote?.name ?? share.folder.label, entry.path, b.remote ? b.remote.owned !== false : true);
+        else if (op === "download") void downloadEntry(entry);
       });
     });
   });
   // Tap anywhere else closes open menus.
   document.getElementById("browse-body")?.addEventListener("click", () => {
-    if (browse && (browse.menu || browse.plusMenu)) { browse.menu = null; browse.plusMenu = false; render(); }
+    if (b.menu || b.plusMenu) { b.menu = null; b.plusMenu = false; render(); }
   });
+  document.querySelectorAll<HTMLElement>("[data-buy]").forEach((el) => el.addEventListener("click", () => {
+    // Buying needs a wallet: the web's paywall (/s/:token) handles x402 payment.
+    if (b.remote) void Browser.open({ url: `${state.server}/api/drives/${b.remote.id}/showcase/${el.dataset.buy}` });
+  }));
+  if (browseView === "grid") void loadThumbs();
+}
+
+/** Local: hand the file to the phone's apps (share/open with). Remote: a signed download link in the browser, like the web. */
+async function downloadEntry(entry: FileEntry) {
+  const share = browseShare();
+  if (!browse || !share) return;
+  try {
+    if (browse.remote) await Browser.open({ url: await web().downloadUrl(browse.remote.id, entry.path) });
+    else await AindriveAgent.openFile({ folderUri: share.folder.uri, path: entry.path });
+  } catch (e) { notify(msgOf(e), true); }
+}
+
+/** Move = rename into another folder (web: drag onto a folder or breadcrumb). A folder picker sheet. */
+function openMove(entry: FileEntry) {
+  const share = browseShare();
+  if (!browse || !share) return;
+  const remote = browse.remote;
+  let at = browse.path;
+  let dirs: FileEntry[] | null = null;
+  let err: string | null = null;
+  const list = async () => {
+    dirs = null; err = null; render();
+    try {
+      const all = remote
+        ? (await remoteList(state.server, state.sessionCookie!, remote.id, at)).map((e) => ({ ...e, mime: e.mime ?? "" })) as FileEntry[]
+        : (await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: at })).entries;
+      dirs = all.filter((e) => e.isDir && e.path !== entry.path);
+    } catch (e) { err = msgOf(e); dirs = []; }
+    render();
+  };
+  const parentOf = (p: string) => p.split("/").slice(0, -1).join("/");
+  openSheet(() => ({
+    kind: "drawer",
+    render: () => `<div class="drawer"><div class="grab"></div>
+      <div class="head"><h3>Move “${esc(entry.name)}”</h3><button class="iconbtn ghost" id="mv-close" aria-label="Close">${I.close}</button></div>
+      <p class="sub">${esc((remote?.name ?? share.folder.label) + (at ? " / " + at.split("/").join(" / ") : ""))}</p>
+      <ul class="hits files">
+        ${at ? `<li data-up><span class="kind ft-folder">${icon("back", 20)}</span><div class="name">Up one level</div><span></span></li>` : ""}
+        ${dirs === null ? `<li><div class="searching" style="grid-column:1/-1"><span class="spinner"></span></div></li>`
+          : (dirs as FileEntry[]).map((d) => `<li data-dir="${esc(d.path)}"><span class="kind ft-folder">${icon("folder", 22)}</span><div class="name">${esc(d.name)}</div>${icon("chevron", 18)}</li>`).join("")}
+        ${err ? `<li><span class="meta" style="grid-column:1/-1;color:var(--err)">${esc(err)}</span></li>` : ""}
+      </ul>
+      <button class="btn" id="mv-here" ${parentOf(entry.path) === at ? "disabled" : ""}>${I.move} Move here</button></div>`,
+    bind: (root) => {
+      root.querySelector("#mv-close")?.addEventListener("click", closeSheet);
+      root.querySelector("[data-up]")?.addEventListener("click", () => { at = parentOf(at); void list(); });
+      root.querySelectorAll<HTMLElement>("[data-dir]").forEach((el) => el.addEventListener("click", () => { at = el.dataset.dir!; void list(); }));
+      root.querySelector("#mv-here")?.addEventListener("click", () => void (async () => {
+        const to = joinPath(at, entry.name);
+        try {
+          if (remote) await web().rename(remote.id, entry.path, to);
+          else await AindriveAgent.rename({ folderUri: share.folder.uri, from: entry.path, to });
+          log(`Moved ${entry.name} → /${at}`); notify(`Moved to /${at || ""}`);
+          closeSheet(); await loadBrowse();
+        } catch (e) { notify(msgOf(e), true); }
+      })());
+    },
+  }));
+  void list();
 }
 
 // ---- overlays
 
 function viewerSheet(): string {
   if (!viewer) return "";
-  const media = viewer.loading ? `<div class="searching"><span class="spinner"></span> Loading…</div>`
-    : viewer.text !== undefined ? `<div class="doc">${/\.(md|markdown)$/i.test(viewer.name) ? renderMarkdown(viewer.text) : `<pre>${esc(viewer.text)}</pre>`}</div>`
-    : viewer.mime.startsWith("image/") ? `<img src="${viewer.src}" alt="${esc(viewer.name)}" />`
-    : `<audio controls autoplay src="${viewer.src}"></audio>`;
+  const v = viewer;
+  const isDoc = v.text !== undefined;
+  const md = /\.(md|markdown)$/i.test(v.name);
+  const media = v.loading ? `<div class="searching"><span class="spinner"></span> Loading…</div>`
+    : isDoc ? (v.editing ? `<textarea class="editor" id="viewer-edit" spellcheck="false">${esc(v.draft ?? v.text ?? "")}</textarea>`
+      : `<div class="doc">${md ? renderMarkdown(v.text ?? "") : `<pre>${esc(v.text ?? "")}</pre>`}</div>`)
+    : v.mime.startsWith("image/") ? `<img src="${v.src}" alt="${esc(v.name)}" />`
+    : v.mime.startsWith("video/") ? `<video controls autoplay playsinline src="${v.src}"></video>`
+    : `<audio controls autoplay src="${v.src}"></audio>`;
   return `
-    <div class="viewer" id="viewer">
+    <div class="viewer ${isDoc ? "paper" : ""}" id="viewer">
       <div class="bar">
         <button class="iconbtn" id="viewer-close" aria-label="Close">${I.back}</button>
-        <div class="title">${esc(viewer.name)}</div>
-        <button class="iconbtn" id="viewer-ext" aria-label="Open with another app" title="Open with another app">${I.more}</button>
+        <div class="title">${esc(v.name)}</div>
+        ${isDoc && !v.loading ? (v.editing
+          ? `<button class="btn small" id="viewer-save" ${v.saving ? "disabled" : ""}>${v.saving ? `<span class="spinner"></span>` : I.save} Save</button>`
+          : `<button class="iconbtn" id="viewer-editbtn" aria-label="Edit">${I.edit}</button>`) : ""}
+        <button class="iconbtn" id="viewer-ext" aria-label="Open with another app" title="Open with another app">${v.remote ? I.download : I.external}</button>
       </div>
       <div class="stage">${media}</div>
     </div>`;
 }
 
 function bindViewer() {
-  bind("viewer-close", () => { viewer = null; render(); });
+  bind("viewer-close", async () => {
+    if (viewer?.editing && viewer.draft !== undefined && viewer.draft !== viewer.text
+      && !(await confirmAsync("Discard changes?", "Your edits to this file haven't been saved.", "Discard", true))) return;
+    viewer = null; render();
+  });
+  bind("viewer-editbtn", () => { if (viewer) { viewer.editing = true; viewer.draft = viewer.text; render(); (document.getElementById("viewer-edit") as HTMLTextAreaElement | null)?.focus(); } });
+  const ta = document.getElementById("viewer-edit") as HTMLTextAreaElement | null;
+  ta?.addEventListener("input", () => { if (viewer) viewer.draft = ta.value; });
+  bind("viewer-save", () => void saveViewer());
   bind("viewer-ext", () => {
     const v = viewer; if (!v) return;
-    if (v.remote) { void Browser.open({ url: `${state.server}/d/${v.remote.id}?path=${encodeURIComponent(v.path.split("/").slice(0, -1).join("/"))}` }); return; }
+    if (v.remote) { void web().downloadUrl(v.remote.id, v.path).then((url) => Browser.open({ url })).catch((e) => notify(msgOf(e), true)); return; }
     if (v.share) void AindriveAgent.openFile({ folderUri: v.share.folder.uri, path: v.path }).catch((e) => notify(msgOf(e), true));
   });
+}
+
+/** Save the edited text: on this phone through the plugin, elsewhere through the web's fs/write (like the web editors' Save). */
+async function saveViewer() {
+  const v = viewer; if (!v || v.draft === undefined) return;
+  v.saving = true; render();
+  try {
+    if (v.remote) await web().writeText(v.remote.id, v.path, v.draft);
+    else if (v.share) await AindriveAgent.writeText({ folderUri: v.share.folder.uri, path: v.path, text: v.draft });
+    v.text = v.draft; v.editing = false;
+    log(`Saved ${v.name}`); notify("Saved");
+  } catch (e) { notify(msgOf(e), true); }
+  v.saving = false; render();
 }
 
 function overlays(): string {
@@ -1600,6 +1998,12 @@ function sleep(ms: number) {
 
 async function boot() {
   await load();
+  try {
+    const v = (await Preferences.get({ key: "aindrive.mobile.view" })).value;
+    if (v === "grid" || v === "list") browseView = v;
+    const so = (await Preferences.get({ key: "aindrive.mobile.sort" })).value;
+    if (so) browseSort = JSON.parse(so);
+  } catch { /* defaults */ }
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
   await loadThread();
   await pruneMissing();
@@ -1629,6 +2033,7 @@ async function boot() {
   void refreshRemotes();
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
+    else if (sheet) closeSheet();
     else if (viewer) { viewer = null; render(); }
     else if (searchOpen) { searchOpen = false; render(); }
     else if (browse) browseBack();
