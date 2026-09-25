@@ -153,6 +153,8 @@ export interface AindriveAgentPlugin {
   addFiles(opts: { folderUri: string; path?: string }): Promise<{ added: string[]; failed: string[] }>;
   mkdir(opts: { folderUri: string; path: string }): Promise<void>;
   rename(opts: { folderUri: string; from: string; to: string }): Promise<void>;
+  /** Save text (UTF-8), replacing the file — the in-app editor. */
+  writeText(opts: { folderUri: string; path: string; text: string }): Promise<void>;
   /** Recursive, idempotent — like `rm -rf`. */
   delete(opts: { folderUri: string; path: string }): Promise<void>;
   /** List a directory inside a shared folder, read locally (no network). `path` "" = root. */

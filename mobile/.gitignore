@@ -10,3 +10,4 @@ ios/App/build
 *.aab
 *.keystore
 !debug.keystore
+.harness/

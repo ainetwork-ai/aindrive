@@ -29,7 +29,7 @@ async function post<T>(server: string, path: string, body: unknown, cookie?: str
   return request<T>(server, "POST", path, body, cookie);
 }
 
-async function request<T>(server: string, method: string, path: string, body: unknown, cookie?: string): Promise<T> {
+export async function request<T>(server: string, method: string, path: string, body: unknown, cookie?: string, extraHeaders?: Record<string, string>): Promise<T> {
   // The server authenticates by cookie only (web/lib/session.ts). fetch()
   // silently drops a hand-written `Cookie` header, so put the session in the
   // native cookie jar and let CapacitorHttp attach it.
@@ -38,7 +38,7 @@ async function request<T>(server: string, method: string, path: string, body: un
   }
   const res = await fetch(server + path, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...extraHeaders },
     body: body === undefined ? undefined : JSON.stringify(body ?? {}),
   });
   const text = await res.text();
@@ -103,7 +103,7 @@ export async function deleteDrive(server: string, sessionCookie: string, driveId
 
 // ---------------------------------------------------------------- other devices (same account)
 
-export interface RemoteDrive { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null }
+export interface RemoteDrive { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null; owned?: boolean }
 
 /** Every drive this account owns — the ones served by THIS phone and by any other device. */
 export async function listDrives(server: string, sessionCookie: string): Promise<RemoteDrive[]> {

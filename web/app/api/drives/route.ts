@@ -20,6 +20,8 @@ export async function GET() {
       lastSeenAt: d.last_seen_at,
       createdAt: d.created_at,
       online: isOnline(d.id),
+      // Owned vs shared-with-me: the mobile app offers "Leave" only on the latter.
+      owned: d.owner_id === user.id,
     })),
   });
 }
