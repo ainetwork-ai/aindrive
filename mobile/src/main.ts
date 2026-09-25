@@ -1616,11 +1616,13 @@ function searchSheet(): string {
       <div class="bar">
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
         <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : "offline"}</div></div>
-        ${pastChats.length ? `<button class="iconbtn" id="chat-history" aria-label="Past chats" title="Past chats">${icon("list", 18)}</button>` : ""}
+        <!-- Always shown (with a label) so past conversations are findable even before the first "New chat". -->
+        <button class="btn small secondary" id="chat-history" aria-label="Past chats">${icon("history", 16)} History${pastChats.length ? ` · ${pastChats.length}` : ""}</button>
         ${thread.length ? `<button class="btn small secondary" id="new-chat" aria-label="New chat">${icon("plus", 16)} New chat</button>` : ""}
       </div>
       ${historyOpen ? `<div class="scrim" id="history-scrim"><div class="drawer"><div class="grab"></div>
         <div class="head"><h3>Past chats</h3><button class="iconbtn ghost" id="history-close" aria-label="Close">${I.close}</button></div>
+        ${pastChats.length ? "" : `<p class="note" style="padding:12px 16px">No past chats yet. Tapping “New chat” saves the current conversation here.</p>`}
         <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ft-doc">${icon("chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s">${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
       <div class="body" id="ask-body">
         ${modelsLine}
