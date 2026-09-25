@@ -156,7 +156,6 @@ async function newChat() {
   thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null;
   await saveThread();
   render();
-  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
 }
 
 async function load() {
@@ -1125,8 +1124,7 @@ function openSearch() {
   void refreshRemotes();
   searchOpen = true;
   menuFor = null;
-  render();
-  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
+  render();   // no autofocus: the conversation and suggestions come first, the keyboard on tap
   // First open with nothing indexed yet: start it, nobody wants to find a button first.
   const ix = status.drives.map((d) => d.index).filter((i) => !!i);
   if (ix.length && ix.every((i) => i && i.indexed === 0 && !i.running)) void reindex();
@@ -1525,16 +1523,21 @@ function searchSheet(): string {
   return `
     <div class="sheet">
       <div class="bar">
-        <button class="iconbtn" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
-          ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
-        ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${I.plus}</button>` : ""}
+        <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
+        <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : "offline"}</div></div>
+        ${thread.length ? `<button class="btn small secondary" id="new-chat" aria-label="New chat">${icon("plus", 16)} New chat</button>` : ""}
       </div>
-      <div class="body">
+      <div class="body" id="ask-body">
         ${modelsLine}
         ${indexLine}
         ${modelsSection()}
         ${body}
+      </div>
+      <!-- Composer at the bottom, like a chat: the conversation stays in view above the keyboard. -->
+      <div class="bar composer">
+        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
+          ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
+        <button class="iconbtn primary" id="ask-send" aria-label="Send" ${askBusy ? "disabled" : ""}>${icon("up", 20)}</button>
       </div>
     </div>`;
 }
@@ -1545,10 +1548,15 @@ function bindSearch() {
   bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
+  bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; i.blur(); } void ask(); });
+  document.getElementById("ask-input")?.addEventListener("focus", () => {
+    // The keyboard shrinks the view: keep the newest turn visible above the composer.
+    setTimeout(() => { const b = document.getElementById("ask-body"); if (b) b.scrollTop = b.scrollHeight; }, 250);
+  });
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
   document.querySelectorAll<HTMLElement>("[data-more]").forEach((li) => li.addEventListener("click", () => { expandedTurns.add(Number(li.dataset.more)); render(); }));
-  const bodyEl = document.querySelector<HTMLElement>(".sheet .body");
+  const bodyEl = document.getElementById("ask-body");
   if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
