@@ -12,6 +12,7 @@
  * overflow menu for the rare and destructive actions, no developer detail on
  * the surface, and feedback via toasts instead of boxes that appear mid-page.
  */
+import { Capacitor } from "@capacitor/core";
 import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
@@ -1119,9 +1120,11 @@ async function ask(q = askQuery) {
   askBusy = true; actionShare = null; render();
   try {
     const localRunning = status.drives.some((d) => d.running);
-    const targets = remotes.filter((d) => d.online);
-    const [local, ...remoteResults] = await Promise.all([
-      localRunning ? AindriveAgent.ask({ query: q, context: askContext ?? undefined }) : Promise.resolve<AskResult | null>(null),
+    const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined }) : null;
+    // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
+    const offTopic = local?.query === "chat" || local?.query === "out";
+    const targets = offTopic ? [] : remotes.filter((d) => d.online);
+    const remoteResults = await Promise.all([
       ...targets.map(async (d) => {
         try {
           const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
@@ -1489,15 +1492,15 @@ async function loadAskThumbs() {
   const want = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].map((el) => el.dataset.thumb!).filter((k) => !askThumbs.has(k));
   if (!want.length) return;
   for (const k of want) askThumbs.set(k, null);
-  // Three at a time, each shown as soon as it's ready (a camera photo takes a few seconds to decode).
+  // The phone's cached thumbnails, served as local files: several at once, each shown as it lands.
   let redraw = 0;
   const one = async (k: string) => {
     const [driveId, ...rest] = k.split("|");
     const folder = localFolderFor(driveId || undefined);
     if (!folder) return;   // other devices: keep the icon (a full read per thumbnail is too heavy)
     try {
-      const r = await AindriveAgent.readFile({ folderUri: folder.folder.uri, path: rest.join("|"), maxPx: 256 });
-      askThumbs.set(k, `data:${r.mime};base64,${r.base64}`);
+      const r = await AindriveAgent.thumbnail({ folderUri: folder.folder.uri, path: rest.join("|"), px: 256 });
+      askThumbs.set(k, Capacitor.convertFileSrc(r.path));
       // Patch the tile in place: no full re-render, so scrolling and typing are left alone.
       const el = document.querySelector<HTMLElement>(`[data-thumb="${CSS.escape(k)}"]`);
       const img = document.createElement("img"); img.src = askThumbs.get(k)!; img.alt = "";
@@ -1505,7 +1508,7 @@ async function loadAskThumbs() {
     } catch { /* keep the icon */ }
   };
   const queue = [...want];
-  await Promise.all([0, 1, 2].map(async () => { while (queue.length) await one(queue.shift()!); }));
+  await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map(async () => { while (queue.length) await one(queue.shift()!); }));
   if (redraw && !typing()) render();
 }
 
@@ -1817,17 +1820,17 @@ function thumbKey(path: string): string { return `${browse?.key ?? ""}|${path}`;
 async function loadThumbs() {
   const share = browseShare();
   if (!browse || !share || browse.remote || viewOf(browse) !== "grid" || !browse.entries) return;
-  const want = browse.entries.filter((e) => !e.isDir && guessMime(e.name).startsWith("image/") && !thumbs.has(thumbKey(e.path))).slice(0, 120);
+  const want = browse.entries.filter((e) => !e.isDir && isMedia(e.name) && !thumbs.has(thumbKey(e.path)));
   const key = browse.key;
-  // Three at a time, each patched into its tile as it lands — no full re-render per photo.
+  // Eight at a time, each patched into its tile as it lands — no full re-render per photo.
+  for (const e of want) thumbs.set(thumbKey(e.path), null);   // claimed now: a re-render won't queue them twice
   let next = 0;
   const worker = async () => {
     while (next < want.length) {
       const e = want[next++];
-      thumbs.set(thumbKey(e.path), null);
       try {
-        const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path: e.path, maxPx: 320 });
-        const url = `data:${r.mime};base64,${r.base64}`;
+        const r = await AindriveAgent.thumbnail({ folderUri: share.folder.uri, path: e.path, px: 320 });
+        const url = Capacitor.convertFileSrc(r.path);
         thumbs.set(`${key}|${e.path}`, url);
         if (browse?.key !== key) continue;
         const el = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].find((x) => x.dataset.thumb === e.path);
@@ -1835,7 +1838,7 @@ async function loadThumbs() {
       } catch { /* leave the icon */ }
     }
   };
-  await Promise.all([worker(), worker(), worker()]);
+  await Promise.all(Array.from({ length: 8 }, worker));
 }
 
 function bindBrowse() {

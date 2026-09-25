@@ -361,6 +361,19 @@ public final class QueryParser {
         return false;
     }
 
+    /** The file-kind words a question uses ("photos", "사진을" → "사진", "음식사진" → "사진"), lowercased. */
+    public static List<String> kindWords(String question) {
+        List<String> out = new ArrayList<>();
+        for (String raw : tokenize(question)) {
+            String lower = raw.toLowerCase(Locale.ROOT), stripped = stripParticles(raw).toLowerCase(Locale.ROOT);
+            if (KIND_WORDS.containsKey(stripped)) { out.add(stripped); continue; }
+            if (KIND_WORDS.containsKey(lower)) { out.add(lower); continue; }
+            for (String kw : new String[]{"사진", "영상", "동영상", "문서", "녹음", "스크린샷"})
+                if (stripped.length() > kw.length() && stripped.endsWith(kw)) { out.add(kw); break; }
+        }
+        return out;
+    }
+
     private static List<String> tokenize(String s) {
         List<String> out = new ArrayList<>();
         s = s.replaceAll("(?i)'s\\b", "");   // "this year's" → "this year"

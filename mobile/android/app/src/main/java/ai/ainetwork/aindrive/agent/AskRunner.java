@@ -92,15 +92,32 @@ public final class AskRunner {
     public JSONObject ask(String question) throws Exception { return ask(question, null); }
 
     /**
+     * The reply for a turn that is not a file or call question (small talk, out of scope — see
+     * {@link Router}), or null when it is one. Cheap: no index access, so the shell can ask it once
+     * before fanning a question out to every folder and device.
+     */
+    public @Nullable JSONObject route(String question, @Nullable JSONObject context) throws Exception {
+        boolean wasOut = context != null && "out".equals(context.optString("scope"));
+        Router.Decision d = Router.route(parser, question, System.currentTimeMillis(), wasOut ? null : SearchQuery.fromJson(context), wasOut);
+        if (d.route == Router.Route.CHAT)
+            return new JSONObject().put("answer", d.reply).put("sources", new JSONArray()).put("query", "chat").put("context", context == null ? JSONObject.NULL : context);
+        if (d.route == Router.Route.OUT)
+            return new JSONObject().put("answer", d.reply).put("sources", new JSONArray()).put("query", "out").put("context", new JSONObject().put("scope", "out"));
+        return null;
+    }
+
+    /**
      * `context` is the previous turn's filters (this method's own `context`
      * output, kept by the shell) so a follow-up like "and share them" applies
      * to the same files. The result carries the effective filters back.
      */
     public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
-        String chat = smallTalk(question);
-        if (chat != null) return new JSONObject().put("answer", chat).put("sources", new JSONArray()).put("query", "chat");
-        SearchQuery q = parser.parse(question, System.currentTimeMillis(), SearchQuery.fromJson(context));
+        JSONObject routed = route(question, context);
+        if (routed != null) return routed;
+        boolean wasOut = context != null && "out".equals(context.optString("scope"));
+        SearchQuery q = Router.route(parser, question, System.currentTimeMillis(), wasOut ? null : SearchQuery.fromJson(context), wasOut).query;
+        if (q == null) q = parser.parse(question, System.currentTimeMillis());
         if (q.calls) {
             try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
@@ -235,6 +252,10 @@ public final class AskRunner {
         boolean ko = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0x3131 && cp <= 0x318E);
         boolean thanks = t.toLowerCase(Locale.ROOT).matches("^(thanks?|thank|ty|고마|감사|ㄱㅅ).*");
         if (thanks) return ko ? "천만에요! 더 찾을 게 있으면 말씀하세요." : "You're welcome — ask me anything else about your files.";
+        return greeting(ko);
+    }
+
+    static String greeting(boolean ko) {
         return ko
                 ? "안녕하세요! 이 폰의 파일을 찾고 정리해 드려요. 예를 들면:\n· 파리에서 찍은 사진\n· 이번달 음식 사진을 폴더로 모아서 공유해줘\n· 예산 얘기한 회의 녹음\n· 많이 통화한 사람 순으로 정리하고 요약해줘"
                 : "Hi! I find and organise the files on this phone. Try:\n· photos taken in Paris\n· collect this month's food photos into a folder and share it\n· meeting recordings about the budget\n· sort my call history by who I talk to most and summarize it";

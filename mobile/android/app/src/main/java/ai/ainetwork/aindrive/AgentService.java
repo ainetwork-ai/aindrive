@@ -660,6 +660,8 @@ public class AgentService extends Service {
         java.util.List<Conn> targets;
         synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
+        // Small talk and out-of-scope turns are answered once, before any folder is searched.
+        for (Conn t : targets) if (t.fs != null) { JSONObject r = t.askRunner().route(query, context); if (r != null) return r; break; }
         if (ai.ainetwork.aindrive.agent.QueryParser.isCallsTask(query)) {
             // One report, over the call-recordings source when there is one (else the first drive: it may hold recordings).
             Conn c = null;
@@ -740,6 +742,8 @@ public class AgentService extends Service {
             answer.append(best == null ? "" : best);
         }
         JSONObject merged = new JSONObject().put("answer", answer.toString()).put("sources", sources);
+        // The effective filters are the same in every folder: carry them so "and share them" works next turn.
+        for (JSONObject r : results.values()) if (r.has("context")) { merged.put("context", r.get("context")); break; }
         if (actionOut.has("folder")) merged.put("action", actionOut);
         return merged;
     }
