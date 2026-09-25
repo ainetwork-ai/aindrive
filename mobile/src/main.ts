@@ -98,7 +98,7 @@ let browse: {
 } | null = null;
 let showAllActivity = false;
 /** In-app viewer: what is open (images and audio play here; everything else goes to the OS). */
-let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: string; mime: string; src?: string; loading: boolean } | null = null;
+let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: string; mime: string; src?: string; text?: string; loading: boolean } | null = null;
 /** Drives this account has on OTHER devices (same login on another phone / laptop). */
 let remotes: RemoteDrive[] = [];
 let remotesAt = 0;
@@ -253,7 +253,7 @@ async function openRemoteBrowser(drive: RemoteDrive, path = "") {
 async function viewRemoteFile(drive: RemoteDrive, path: string, mime?: string) {
   const name = path.split("/").pop() ?? path;
   const m = mime || guessMime(name);
-  if (!(m.startsWith("image/") || m.startsWith("audio/"))) {
+  if (!(m.startsWith("image/") || m.startsWith("audio/") || isText(m, name))) {
     // Anything else: the web has the right viewer/download for it.
     await Browser.open({ url: `${state.server}/d/${drive.id}?path=${encodeURIComponent(path.split("/").slice(0, -1).join("/"))}` });
     return;
@@ -262,7 +262,10 @@ async function viewRemoteFile(drive: RemoteDrive, path: string, mime?: string) {
   render();
   try {
     const r = await remoteRead(state.server, state.sessionCookie!, drive.id, path);
-    if (viewer && viewer.path === path) { viewer.src = `data:${r.mime || m};base64,${r.base64}`; viewer.mime = r.mime || m; viewer.loading = false; }
+    if (viewer && viewer.path === path) {
+      if (isText(m, name)) viewer.text = decodeUtf8(r.base64); else viewer.src = `data:${r.mime || m};base64,${r.base64}`;
+      viewer.mime = r.mime || m; viewer.loading = false;
+    }
   } catch (e) {
     viewer = null;
     notify(msgOf(e), true);
@@ -383,12 +386,16 @@ async function browseOpen(entry: FileEntry) {
 async function viewFile(share: SharedFolder, path: string, mime?: string) {
   const name = path.split("/").pop() ?? path;
   const m = mime || guessMime(name);
-  if (m.startsWith("image/") || m.startsWith("audio/")) {
+  if (m.startsWith("image/") || m.startsWith("audio/") || isText(m, name)) {
     viewer = { share, path, name, mime: m, loading: true };
     render();
     try {
       const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path, maxPx: 1600 });
-      if (viewer && viewer.path === path) { viewer.src = `data:${r.mime};base64,${r.base64}`; viewer.mime = r.mime; viewer.loading = false; }
+      if (viewer && viewer.path === path) {
+        if (isText(m, name)) viewer.text = decodeUtf8(r.base64);
+        else viewer.src = `data:${r.mime};base64,${r.base64}`;
+        viewer.mime = r.mime; viewer.loading = false;
+      }
     } catch (e) {
       viewer = null;
       notify(msgOf(e), true);
@@ -400,11 +407,74 @@ async function viewFile(share: SharedFolder, path: string, mime?: string) {
   catch (e) { notify(msgOf(e), true); }
 }
 
+/** Markdown and plain text render in the app: the agent's reports are .md files. */
+function isText(mime: string, name: string): boolean {
+  const e = (name.split(".").pop() ?? "").toLowerCase();
+  return mime.startsWith("text/") || ["md", "markdown", "txt", "log", "csv", "json"].includes(e);
+}
+
+function decodeUtf8(base64: string): string {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Just enough Markdown for the agent's own reports: headings, tables, lists,
+ * quotes, bold/italic/code, paragraphs. Everything is escaped first.
+ */
+function renderMarkdown(md: string): string {
+  const inline = (t: string) => esc(t)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*])\*([^*]+)\*/g, "$1<i>$2</i>")
+    .replace(/(https?:\/\/[^\s<]+)/g, `<a href="$1" target="_blank" rel="noopener">$1</a>`);
+  const lines = md.replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\|/.test(l) && /^\|?\s*:?-{2,}/.test(lines[i + 1] ?? "")) {
+      const cells = (row: string) => row.replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, "|").trim());
+      const head = cells(l); i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\|/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<div class="tablewrap"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(l)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
+      out.push(`<ul>${items.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`); continue;
+    }
+    if (/^\s*\d+\.\s+/.test(l)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+\.\s+/, ""));
+      out.push(`<ol>${items.map((x) => `<li>${inline(x)}</li>`).join("")}</ol>`); continue;
+    }
+    if (/^>\s?/.test(l)) {
+      const q: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) q.push(lines[i++].replace(/^>\s?/, ""));
+      out.push(`<blockquote>${inline(q.join(" "))}</blockquote>`); continue;
+    }
+    const p: string[] = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\||\s*[-*]\s|\s*\d+\.\s|>)/.test(lines[i])) p.push(lines[i++]);
+    out.push(`<p>${inline(p.join(" "))}</p>`);
+  }
+  return out.join("");
+}
+
 function guessMime(name: string): string {
   const e = (name.split(".").pop() ?? "").toLowerCase();
   if (["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp"].includes(e)) return "image/" + (e === "jpg" ? "jpeg" : e);
   if (["mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac", "amr"].includes(e)) return "audio/" + e;
   if (["mp4", "mov", "mkv", "webm", "3gp"].includes(e)) return "video/" + e;
+  if (["md", "markdown"].includes(e)) return "text/markdown";
+  if (["txt", "log", "csv"].includes(e)) return "text/plain";
   return "application/octet-stream";
 }
 
@@ -1377,6 +1447,7 @@ function bindBrowse() {
 function viewerSheet(): string {
   if (!viewer) return "";
   const media = viewer.loading ? `<div class="searching"><span class="spinner"></span> Loading…</div>`
+    : viewer.text !== undefined ? `<div class="doc">${/\.(md|markdown)$/i.test(viewer.name) ? renderMarkdown(viewer.text) : `<pre>${esc(viewer.text)}</pre>`}</div>`
     : viewer.mime.startsWith("image/") ? `<img src="${viewer.src}" alt="${esc(viewer.name)}" />`
     : `<audio controls autoplay src="${viewer.src}"></audio>`;
   return `
