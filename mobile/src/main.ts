@@ -338,6 +338,11 @@ async function openBrowser(share: SharedFolder, path = "") {
   await loadBrowse();
 }
 
+/** SAF's ways of saying "that document is gone". */
+function isGone(msg: string): boolean {
+  return /FileNotFound|No such file|not found|Missing file|does not exist|ENOENT|is child of/i.test(msg);
+}
+
 async function loadBrowse() {
   const share = browseShare();
   if (!browse || !share) return;
@@ -1406,6 +1411,7 @@ function browseSheet(): string {
     </div>` : "";
   let body: string;
   if (browse.loading && !browse.entries) body = `<div class="searching"><span class="spinner"></span> Loading…</div>`;
+  else if (browse.error && isGone(browse.error) && !browse.path && !browse.remote) body = `<div class="empty"><h3>This folder no longer exists</h3><p>It was deleted or moved on the phone. Remove it from your shared folders, or ask the agent again to make a new one.</p><button class="btn secondary" id="browse-forget">Remove from list</button></div>`;
   else if (browse.error) body = `<div class="empty"><h3>Couldn’t read this folder</h3><p>${esc(browse.error)}</p><button class="btn secondary" id="browse-retry">Try again</button></div>`;
   else if (!browse.entries?.length) body = `<div class="empty"><div class="art">${I.folder}</div><h3>Empty folder</h3><p>Add files from this phone or create a folder with the + button.</p></div>`;
   else body = `<ul class="hits files">${browse.entries.map((e) => {
@@ -1442,6 +1448,7 @@ function bindBrowse() {
   if (!browse || !share) return;
   bind("browse-back", browseBack);
   bind("browse-retry", () => void loadBrowse());
+  bind("browse-forget", () => { const sh = browseShare(); browse = null; render(); if (sh) void removeShare(sh); });
   bind("browse-plus", () => { if (browse) { browse.plusMenu = !browse.plusMenu; browse.menu = null; render(); } });
   document.querySelectorAll<HTMLElement>("#browse-plus ~ .menu [data-op]").forEach((btn) => {
     btn.addEventListener("click", () => {
