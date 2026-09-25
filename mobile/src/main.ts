@@ -1477,6 +1477,8 @@ const expandedPhotos = new Set<number>();
 const expandedFiles = new Set<number>();
 /** Agent-result thumbnails (small JPEGs read on the phone), by drive + path. */
 const askThumbs = new Map<string, string | null>();
+/** Where the reader is in the agent chat, kept across re-renders. */
+const askScroll = { top: 0, atBottom: true, turns: -1, busy: false };
 
 function thumbId(src: { driveId?: string; path: string }): string { return `${src.driveId ?? ""}|${src.path}`; }
 
@@ -1577,11 +1579,25 @@ function searchSheet(): string {
         ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
         <button class="btn small" id="ensure-models">Download models</button>
       </div>`;
+  const photoTile = (src: AskResult["sources"][number], i: number, turn: number, mini: boolean) => {
+    const t = askThumbs.get(thumbId(src));
+    const how = !mini && src.matchedBy === "photo" ? `<span class="badge-how" title="matched by what the photo shows">${icon("sparkle", 12)}</span>` : "";
+    return `<button class="ph${mini ? " mini" : ""}" data-turn="${turn}" data-hit="${i}" data-thumb="${esc(thumbId(src))}" aria-label="${esc(src.path.split("/").pop() ?? "")}">${t ? `<img src="${t}" alt="" />` : `<span class="ft-image">${icon("fileImage", mini ? 16 : 24)}</span>`}${how}</button>`;
+  };
+  // A collected folder shows what went into it as a small strip inside its own card — no second, full-size grid.
+  const folderStrip = (r: AskResult, turn: number) => {
+    const photos = r.sources.map((src, i) => ({ src, i })).filter(({ src }) => guessMime(src.path).startsWith("image/"));
+    if (!photos.length) return "";
+    const max = expandedPhotos.has(turn) ? photos.length : 7;
+    return `<div class="mini-strip">${photos.slice(0, max).map(({ src, i }) => photoTile(src, i, turn, true)).join("")}${photos.length > max ? `<button class="ph mini more" data-more-photos="${turn}">+${photos.length - max}</button>` : ""}</div>`;
+  };
+  const collected = (r?: AskResult) => !!r?.action && r.action.folder !== undefined && !r.action.skipped;
   const a = askResult?.action;
   const actionCard = !a ? "" : a.skipped
     ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "Turn a shared folder on so I have somewhere to save the result.")}</p>${a.needsCallLog ? `<p class="hint" style="margin-top:8px"><button class="link" id="action-calllog">Allow call log</button></p>` : ""}</div>`
     : `<div class="card action">
         <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.label ?? a.folder ?? "")}</b><br><span class="hint">${a.label !== undefined ? "Its own drive · " : ""}${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
+        ${askResult ? folderStrip(askResult, thread.length - 1) : ""}
         <div class="folder-foot">
           <button class="btn secondary small" id="action-open">Open folder</button>
           ${actionShare?.url ? `<button class="btn small" id="action-copy">${I.link} Copy link</button>` : `<button class="btn small" id="action-share" ${actionShare?.busy ? "disabled" : ""}>${actionShare?.busy ? "Sharing…" : `${I.link} Share link`}</button>`}
@@ -1594,15 +1610,11 @@ function searchSheet(): string {
   const hitsList = (r: AskResult, turn: number, last: boolean) => {
     if (!r.sources.length) return "";
     const idx = r.sources.map((src, i) => ({ src, i }));
-    const photos = idx.filter(({ src }) => guessMime(src.path).startsWith("image/"));
+    const photos = collected(r) ? [] : idx.filter(({ src }) => guessMime(src.path).startsWith("image/"));
     const files = idx.filter(({ src }) => !guessMime(src.path).startsWith("image/"));
     const pMax = expandedPhotos.has(turn) ? photos.length : last ? 6 : 3;
     const fMax = expandedFiles.has(turn) ? files.length : last ? 5 : 3;
-    const grid = photos.length ? `<div class="photo-grid">${photos.slice(0, pMax).map(({ src, i }) => {
-      const t = askThumbs.get(thumbId(src));
-      const how = src.matchedBy === "photo" ? `<span class="badge-how" title="matched by what the photo shows">${icon("sparkle", 12)}</span>` : "";
-      return `<button class="ph" data-turn="${turn}" data-hit="${i}" data-thumb="${esc(thumbId(src))}" aria-label="${esc(src.path.split("/").pop() ?? "")}">${t ? `<img src="${t}" alt="" />` : `<span class="ft-image">${icon("fileImage", 24)}</span>`}${how}</button>`;
-    }).join("")}${photos.length > pMax ? `<button class="ph more" data-more-photos="${turn}">+${photos.length - pMax}</button>` : ""}</div>` : "";
+    const grid = photos.length ? `<div class="photo-grid">${photos.slice(0, pMax).map(({ src, i }) => photoTile(src, i, turn, false)).join("")}${photos.length > pMax ? `<button class="ph more" data-more-photos="${turn}">+${photos.length - pMax}</button>` : ""}</div>` : "";
     const list = files.length ? `<ul class="hits">${files.slice(0, fMax).map(({ src, i }) => {
       if (src.caller) {
         // A call recording reads as "who — what", not as its file name.
@@ -1626,7 +1638,7 @@ function searchSheet(): string {
       <div class="turn ${last ? "last" : ""}">
         <div class="bubble">${esc(t.q)}</div>
         ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
-          ${last ? actionCard : t.r.action?.folder ? `<p class="hint">${esc(t.r.action.label ?? t.r.action.folder)} · ${t.r.action.copied ?? 0} files</p>` : ""}
+          ${last ? actionCard : collected(t.r) ? `<div class="card action compact"><div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(t.r.action!.label ?? t.r.action!.folder ?? "")}</b> <span class="hint">· ${t.r.action!.copied ?? 0} files</span></span></div>${folderStrip(t.r, i)}</div>` : ""}
           <p class="answer">${esc(t.r.answer)}</p>
           ${hitsList(t.r, i, last)}` : ""}
       </div>`;
@@ -1677,7 +1689,7 @@ function bindSearch() {
   bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; i.blur(); } void ask(); });
   document.getElementById("ask-input")?.addEventListener("focus", () => {
     // The keyboard shrinks the view: keep the newest turn visible above the composer.
-    setTimeout(() => { const b = document.getElementById("ask-body"); if (b) b.scrollTop = b.scrollHeight; }, 250);
+    setTimeout(() => { const b = document.getElementById("ask-body"); if (b && askScroll.atBottom) b.scrollTop = b.scrollHeight; }, 250);
   });
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
@@ -1688,8 +1700,19 @@ function bindSearch() {
   document.querySelectorAll<HTMLElement>("[data-more-photos]").forEach((el) => el.addEventListener("click", () => { expandedPhotos.add(Number(el.dataset.morePhotos)); render(); }));
   document.querySelectorAll<HTMLElement>("[data-more-files]").forEach((el) => el.addEventListener("click", () => { expandedFiles.add(Number(el.dataset.moreFiles)); render(); }));
   void loadAskThumbs();
+  // Re-renders (status, index progress) must not yank someone reading older messages back down:
+  // jump to the newest turn only when one arrived, a question is running, or they were at the bottom.
   const bodyEl = document.getElementById("ask-body");
-  if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
+  if (bodyEl) {
+    const grew = thread.length !== askScroll.turns || askBusy !== askScroll.busy;
+    if (thread.length && (grew || askScroll.atBottom)) bodyEl.scrollTop = bodyEl.scrollHeight;
+    else bodyEl.scrollTop = askScroll.top;
+    askScroll.turns = thread.length; askScroll.busy = askBusy;
+    bodyEl.addEventListener("scroll", () => {
+      askScroll.top = bodyEl.scrollTop;
+      askScroll.atBottom = bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight < 40;
+    }, { passive: true });
+  }
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
   input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; input.blur(); void ask(); } });

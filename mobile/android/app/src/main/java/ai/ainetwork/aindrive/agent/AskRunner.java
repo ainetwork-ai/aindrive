@@ -97,13 +97,40 @@ public final class AskRunner {
      * before fanning a question out to every folder and device.
      */
     public @Nullable JSONObject route(String question, @Nullable JSONObject context) throws Exception {
-        boolean wasOut = context != null && "out".equals(context.optString("scope"));
-        Router.Decision d = Router.route(parser, question, System.currentTimeMillis(), wasOut ? null : SearchQuery.fromJson(context), wasOut);
-        if (d.route == Router.Route.CHAT)
-            return new JSONObject().put("answer", d.reply).put("sources", new JSONArray()).put("query", "chat").put("context", context == null ? JSONObject.NULL : context);
-        if (d.route == Router.Route.OUT)
-            return new JSONObject().put("answer", d.reply).put("sources", new JSONArray()).put("query", "out").put("context", new JSONObject().put("scope", "out"));
-        return null;
+        Router.Turn t = Router.understand(parser, question, System.currentTimeMillis(), context);
+        if (t.social) {
+            String said = chatReply(question);
+            if (said != null) return replyOf(t).put("answer", said);
+        }
+        return replyOf(t);
+    }
+
+    /** Chit-chat answered by the on-device LLM when it's there (null → the template reply). */
+    private @Nullable String chatReply(String question) {
+        if (summarizer == null) return null;
+        ai.ainetwork.aindrive.llm.Summarizer llm = null;
+        try {
+            llm = summarizer.get();
+            if (llm == null) return null;
+            String out = llm.generate(
+                    "You are the aindrive assistant, a friendly helper that lives on the user's phone. You can find, collect and share the files on "
+                    + "this phone (photos, videos, recordings, documents) and summarise its call history — nothing else. Chat warmly and naturally in "
+                    + "one or two short sentences, in the user's language. Never pretend to be human or to do things you can't. Only when it fits, "
+                    + "suggest one thing you could find for them.",
+                    question, "chat");
+            return out == null ? null : out.trim();
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            if (llm != null && releaseSummarizer != null) releaseSummarizer.run();
+        }
+    }
+
+    private static @Nullable JSONObject replyOf(Router.Turn t) throws Exception {
+        if (t.route != Router.Route.CHAT && t.route != Router.Route.OUT) return null;
+        return new JSONObject().put("answer", t.reply).put("sources", new JSONArray())
+                .put("query", t.route == Router.Route.CHAT ? "chat" : "out")
+                .put("context", t.nextContext == null ? JSONObject.NULL : t.nextContext);
     }
 
     /**
@@ -113,11 +140,14 @@ public final class AskRunner {
      */
     public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
-        JSONObject routed = route(question, context);
+        Router.Turn turn = Router.understand(parser, question, System.currentTimeMillis(), context);
+        if (turn.social) {
+            String said = chatReply(question);
+            if (said != null) return replyOf(turn).put("answer", said);
+        }
+        JSONObject routed = replyOf(turn);
         if (routed != null) return routed;
-        boolean wasOut = context != null && "out".equals(context.optString("scope"));
-        SearchQuery q = Router.route(parser, question, System.currentTimeMillis(), wasOut ? null : SearchQuery.fromJson(context), wasOut).query;
-        if (q == null) q = parser.parse(question, System.currentTimeMillis());
+        SearchQuery q = turn.query;
         if (q.calls) {
             try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
@@ -141,8 +171,8 @@ public final class AskRunner {
         if (hits.isEmpty() && !q.keywords.isEmpty() && onlyWords) {
             String w = String.join(" ", q.keywords);
             return out.put("answer", q.korean
-                    ? "“" + w + "”와 관련된 파일을 찾지 못했어요. 사진 속 내용(예: 강아지 사진), 장소·날짜(예: 파리에서 찍은 사진), 파일 종류(예: 지난주 스크린샷)로 물어보세요."
-                    : "Nothing here matches “" + w + "”. Try what a photo shows (\"dog photos\"), a place or date (\"photos from Paris\"), or a kind of file (\"last week's screenshots\").")
+                    ? "“" + w + "”와 관련된 파일을 찾지 못했어요. 사진 속 내용(예: 강아지 사진), 장소·날짜(예: 도쿄에서 찍은 사진), 파일 종류(예: 지난주 스크린샷)로 물어보세요."
+                    : "Nothing here matches “" + w + "”. Try what a photo shows (\"dog photos\"), a place or date (\"photos from Tokyo\"), or a kind of file (\"last week's screenshots\").")
                     .put("sources", new JSONArray());
         }
         // What the person asked about is never dropped either: "food photos this month" with no food
@@ -246,8 +276,46 @@ public final class AskRunner {
             java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /** Greetings, thanks and "what can you do": a short reply, never a file search. Null when it is a real question. */
+    /** Everyday social turns and a friendly answer to each: {pattern, English, Korean}. */
+    private static final String[][] SOCIAL = {
+            {"(hi|hey|hello)?[, ]*(how are you|how're you|how are you doing|how's it going|how is it going|how have you been|how do you do|what's up|whats up|sup|wassup)( today)?( doing)?",
+             "I'm doing well, thanks for asking! How are you? I'm here whenever you want to find or sort something on your phone.",
+             "잘 지내요, 물어봐 줘서 고마워요! 당신은요? 폰에서 찾거나 정리할 게 있으면 언제든 말해 주세요."},
+            {"(i'?m|i am) (good|great|fine|ok|okay|well|doing well|doing good|not bad|alright)( too| as well)?(,? thanks?( you)?)?( and you)?|not bad|pretty good|all good",
+             "Glad to hear it! What can I help you find?", "다행이에요! 뭘 찾아 드릴까요?"},
+            {"(i'?m|i am|feeling) (tired|sad|bored|stressed|down|not great|not good)|bad day|rough day",
+             "Sorry to hear that. If it helps, I can pull up some happy photos — try “photos from last summer”.",
+             "그랬군요, 힘내요. 기분 전환이 필요하면 “작년 여름 사진”처럼 좋은 추억을 찾아 드릴게요."},
+            {"(what'?s|what is) your name|who are you|who r u|what are you|are you (a )?(bot|robot|ai|human|real)",
+             "I'm the aindrive agent. I run right here on your phone and help you find, collect and share your files.",
+             "저는 aindrive 에이전트예요. 이 폰에서 직접 돌아가면서 파일을 찾고 모으고 공유하는 걸 도와드려요."},
+            {"nice to meet you|pleased to meet you|good to meet you", "Nice to meet you too! Ask me about your photos, recordings or documents.", "저도 반가워요! 사진, 녹음, 문서에 대해 물어보세요."},
+            {"(good|great|nice|awesome|amazing) (job|work)|well done|you'?re (great|awesome|amazing|the best|smart|helpful)|love (it|you)|i like you",
+             "Thank you, that's kind! Happy to help anytime.", "고마워요! 언제든 도와드릴게요."},
+            {"sorry|my bad|oops|never mind|nevermind|forget it", "No problem at all. What would you like to do next?", "괜찮아요. 다음엔 뭘 해 드릴까요?"},
+            {"(lol|haha+|hehe+|lmao)", "😄 Anything I can find for you?", "😄 찾아 드릴 게 있을까요?"},
+            {"good ?night|see you( later| tomorrow)?|talk (to you )?later|bye( bye)?|goodbye|take care", "Bye for now — see you soon!", "다음에 또 봐요!"},
+            {"what can you do|what do you do|help|how does this work|how do i use (you|this)", null, null},
+            {"잘 지내(요|세요|니|셨어요)?|어떻게 지내(요|세요)?|뭐해\\??|뭐 해\\??|기분 어때(요)?", "I'm doing well, thanks for asking! How are you?", "잘 지내요, 물어봐 줘서 고마워요! 당신은요? 찾을 게 있으면 말씀하세요."},
+            {"(너|넌|당신은?) (누구|뭐)(야|예요|니|세요)?|이름이 뭐(야|예요)?", "I'm the aindrive agent, running on your phone.", "저는 aindrive 에이전트예요. 이 폰에서 파일을 찾고 정리해 드려요."},
+            {"(잘했어|최고야|고마워|수고했어|좋아)(요)?", "Thank you!", "고마워요! 언제든 불러 주세요."},
+            {"미안(해|해요)?|죄송(해요|합니다)?", "No problem at all.", "괜찮아요!"},
+            {"잘 ?자|잘 ?가|안녕히 (가세요|계세요)|또 (봐|만나)", "Bye for now!", "다음에 또 봐요!"},
+    };
+    private static final java.util.regex.Pattern[] SOCIAL_P = new java.util.regex.Pattern[SOCIAL.length];
+    static {
+        for (int i = 0; i < SOCIAL.length; i++)
+            SOCIAL_P[i] = java.util.regex.Pattern.compile("^(" + SOCIAL[i][0] + ")[\\s.!?~,]*(\\s*(:\\)|😊|🙂|😄))?[\\s.!?~]*$", java.util.regex.Pattern.CASE_INSENSITIVE);
+    }
+
     static @Nullable String smallTalk(String question) {
         String t = question.trim();
+        boolean hangul = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0x3131 && cp <= 0x318E);
+        for (int i = 0; i < SOCIAL.length; i++) {
+            if (!SOCIAL_P[i].matcher(t).matches()) continue;
+            if (SOCIAL[i][1] == null) return greeting(hangul);
+            return hangul ? SOCIAL[i][2] : SOCIAL[i][1];
+        }
         if (!GREETING.matcher(t).matches()) return null;
         boolean ko = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0x3131 && cp <= 0x318E);
         boolean thanks = t.toLowerCase(Locale.ROOT).matches("^(thanks?|thank|ty|고마|감사|ㄱㅅ).*");
@@ -257,8 +325,8 @@ public final class AskRunner {
 
     static String greeting(boolean ko) {
         return ko
-                ? "안녕하세요! 이 폰의 파일을 찾고 정리해 드려요. 예를 들면:\n· 파리에서 찍은 사진\n· 이번달 음식 사진을 폴더로 모아서 공유해줘\n· 예산 얘기한 회의 녹음\n· 많이 통화한 사람 순으로 정리하고 요약해줘"
-                : "Hi! I find and organise the files on this phone. Try:\n· photos taken in Paris\n· collect this month's food photos into a folder and share it\n· meeting recordings about the budget\n· sort my call history by who I talk to most and summarize it";
+                ? "안녕하세요! 이 폰의 파일을 찾고 정리해 드려요. 예를 들면:\n· 도쿄에서 찍은 사진\n· 이번달 음식 사진을 폴더로 모아서 공유해줘\n· 예산 얘기한 회의 녹음\n· 많이 통화한 사람 순으로 정리하고 요약해줘"
+                : "Hi! I find and organise the files on this phone. Try:\n· photos taken in Tokyo\n· collect this month's food photos into a folder and share it\n· meeting recordings about the budget\n· sort my call history by who I talk to most and summarize it";
     }
 
     private String folderName(SearchQuery q) {

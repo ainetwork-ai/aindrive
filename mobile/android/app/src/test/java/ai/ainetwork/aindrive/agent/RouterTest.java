@@ -48,21 +48,15 @@ public class RouterTest {
         try (InputStream raw = getClass().getResourceAsStream("/sgd-user-turns.tsv.gz");
              BufferedReader r = new BufferedReader(new InputStreamReader(new GZIPInputStream(raw), StandardCharsets.UTF_8))) {
             String line, dialogue = null;
-            SearchQuery prev = null;
-            boolean wasOut = false;
+            JSONObject context = null;
             while ((line = r.readLine()) != null) {
                 String[] c = line.split("\t", -1);
-                if (!c[0].equals(dialogue)) { dialogue = c[0]; prev = null; wasOut = false; dialogues++; }
+                if (!c[0].equals(dialogue)) { dialogue = c[0]; context = null; dialogues++; }
                 turns++;
-                Router.Decision d = Router.route(parser, c[3], NOW, prev, wasOut);
-                if (d.route == Router.Route.FILES || d.route == Router.Route.CALLS) {
-                    failures.add(d.route + "\t" + c[1] + "\t" + c[3]);
-                    prev = d.query;
-                    wasOut = false;
-                } else {
-                    if (d.route == Router.Route.CHAT) chat++;
-                    else wasOut = true;
-                }
+                Router.Turn d = Router.understand(parser, c[3], NOW, context);
+                context = d.nextContext;
+                if (d.route == Router.Route.FILES || d.route == Router.Route.CALLS) failures.add(d.route + "\t" + c[1] + "\t" + c[3]);
+                else if (d.route == Router.Route.CHAT) chat++;
             }
         }
         assertEquals(22825, dialogues);
@@ -71,6 +65,40 @@ public class RouterTest {
         for (int i = 0; i < Math.min(80, failures.size()); i++) sb.append('\n').append(failures.get(i));
         System.out.println("SGD: " + turns + " turns, " + chat + " small talk, " + failures.size() + " reached the index");
         assertTrue(failures.size() + " of " + turns + " out-of-scope turns reached the index:" + sb, failures.isEmpty());
+    }
+
+    /**
+     * persona-chat-turns.tsv.gz: one speaker's turns from every conversation of Synthetic-Persona-Chat
+     * (github.com/google-research-datasets/Synthetic-Persona-Chat, CC BY 4.0) — 21,907 conversations of
+     * people getting to know each other. None may reach the index or the call report, and nearly all
+     * must get a friendly reply rather than "that's not something I can do".
+     */
+    @Test
+    public void personaChatIsConversationNotSearch() throws Exception {
+        List<String> searched = new ArrayList<>(), refused = new ArrayList<>();
+        int conversations = 0, turns = 0;
+        try (InputStream raw = getClass().getResourceAsStream("/persona-chat-turns.tsv.gz");
+             BufferedReader r = new BufferedReader(new InputStreamReader(new GZIPInputStream(raw), StandardCharsets.UTF_8))) {
+            String line, conv = null;
+            JSONObject context = null;
+            while ((line = r.readLine()) != null) {
+                String[] c = line.split("\t", -1);
+                if (!c[0].equals(conv)) { conv = c[0]; context = null; conversations++; }
+                turns++;
+                Router.Turn t = Router.understand(parser, c[2], NOW, context);
+                context = t.nextContext;
+                if (t.route == Router.Route.FILES || t.route == Router.Route.CALLS) searched.add(t.route + "\t" + c[2]);
+                else if (t.route == Router.Route.OUT) refused.add(c[2]);
+            }
+        }
+        double social = 1 - (double) (searched.size() + refused.size()) / turns;
+        StringBuilder sb = new StringBuilder(String.format(java.util.Locale.US, "persona chat: %d conversations, %d turns, %.4f answered socially, %d searched, %d refused",
+                conversations, turns, social, searched.size(), refused.size()));
+        for (int i = 0; i < Math.min(40, searched.size()); i++) sb.append("\n  SEARCHED ").append(searched.get(i));
+        for (int i = 0; i < Math.min(40, refused.size()); i++) sb.append("\n  REFUSED ").append(refused.get(i));
+        System.out.println(sb);
+        java.nio.file.Files.write(java.nio.file.Paths.get("build", "persona-report.txt"), sb.toString().getBytes(StandardCharsets.UTF_8));
+        assertTrue(sb.toString(), searched.isEmpty() && social >= 0.97);
     }
 
     @Test

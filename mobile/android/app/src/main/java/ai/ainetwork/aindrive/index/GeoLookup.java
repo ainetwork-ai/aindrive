@@ -115,6 +115,7 @@ public final class GeoLookup {
                 {"불란서", "FR"}, {"홀랜드", "NL"}, {"holland", "NL"}, {"네덜란드", "NL"},
                 {"czechia", "CZ"}, {"체코", "CZ"}, {"러시아", "RU"}, {"vietnam", "VN"}, {"베트남", "VN"},
                 {"taiwan", "TW"}, {"대만", "TW"}, {"uae", "AE"}, {"dubai", "AE"},
+                {"turkey", "TR"}, {"터키", "TR"}, {"튀르키예", "TR"}, {"czech republic", "CZ"}, {"the netherlands", "NL"},
         };
         for (String[] a : aliases) countryByName.put(a[0], a[1]);
     }
