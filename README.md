@@ -898,6 +898,12 @@ merge live with the human's keystrokes — no overwrites.
 
 ## MCP server (`aindrive mcp`) <a id="mcp-server"></a>
 
+> **Integration guide (MCP, A2A, AG-UI, A2UI):** https://aindrive.ainetwork.ai/docs (source: [`web/app/docs/`](web/app/docs/)).
+>
+> **Remote MCP (no install):** each drive also has a hosted MCP URL
+> (`https://<host>/mcp/d/<driveId>`) with OAuth or a revocable access token.
+> Open a drive → sidebar **MCP**. Details: [`web/app/mcp/README.md`](web/app/mcp/README.md).
+
 Every aindrive install ships an [MCP](https://modelcontextprotocol.io)
 stdio server bundled into the same single binary. AI assistants
 (Claude Code, Claude Desktop, Cursor, …) can drive every drive operation

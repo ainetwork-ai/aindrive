@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { safeNextPath } from "@/lib/safe-next";
 
 // Verify-before-create: (1) enter email → a 6-digit code is emailed; (2) enter
 // the code + name + password to create the account. Every account therefore has
@@ -11,7 +12,7 @@ function SignupForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next");
-  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  const safeNext = safeNextPath(next);
   const loginHref = next ? `/login?next=${encodeURIComponent(next)}` : "/login";
 
   const [step, setStep] = useState<"email" | "details">("email");

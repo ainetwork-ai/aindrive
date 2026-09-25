@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { parse as parseUrl } from "node:url";
 import next from "next";
 import { WebSocketServer } from "ws";
-import { onAgentConnect } from "./lib/agents.js";
+import { onAgentConnect, startRotationSweeper } from "./lib/agents.js";
 import { onDocConnect } from "./lib/dochub.js";
 import { log } from "./lib/logger.js";
 import { runBootChecks } from "./lib/boot-checks.js";
@@ -69,6 +69,7 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(port, hostname, () => {
   const shown = hostname === "0.0.0.0" ? "localhost" : hostname;
   log.info({ url: `http://${shown}:${port}` }, "▲ aindrive");
+  startRotationSweeper();
 });
 
 // Graceful shutdown: stop accepting new connections, drain in-flight

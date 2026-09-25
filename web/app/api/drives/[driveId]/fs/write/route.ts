@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
-import { getUserTier, TIER_FILE_LIMIT, TIER_PRICE_AIN } from "@/lib/tier";
+import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
@@ -38,10 +38,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   // Tiered file-count cap (per owner, summed across all of their drives).
   // Only enforce on file creation — overwrites of existing files don't bump
   // the count. We approximate "is this a new file?" by asking the agent for
-  // a stat first; if it errors as not-found, treat as create.
+  // a stat first; if it errors as not-found, treat as create. The cap is the
+  // drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS), not the caller's.
   const ownerId = drive.owner_id as string;
-  const { tier } = await getUserTier(req);
-  const fileLimit = TIER_FILE_LIMIT[tier];
+  const { tier, fileLimit } = getOwnerStorageCaps(ownerId);
   let creating = false;
   try {
     const list = await callAgent(driveId, drive.drive_secret, { method: "list", path: dirOf(body.data.path) });

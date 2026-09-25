@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
-import { getUserTier, TIER_FILE_LIMIT, TIER_PRICE_AIN } from "@/lib/tier";
+import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 
 /**
@@ -53,8 +53,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
 
   // Tiered file-count cap — mirrors fs/write (only file CREATION counts).
   const ownerId = drive.owner_id as string;
-  const { tier } = await getUserTier(req);
-  const fileLimit = TIER_FILE_LIMIT[tier];
+  const { tier, fileLimit } = getOwnerStorageCaps(ownerId);
   let creating = false;
   try {
     const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as

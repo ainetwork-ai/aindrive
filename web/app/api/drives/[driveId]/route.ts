@@ -3,7 +3,7 @@ import { z } from "zod";
 import { isAddress } from "viem";
 import { getUser } from "@/lib/session";
 import { getDrive, setDrivePayoutWallet, setDriveAllowedTokens, getDriveRootPayoutWallet, listPayoutWallets } from "@/lib/drives";
-import { parseTokenPolicy, policyChainViolation } from "@/lib/payment-tokens";
+import { validateTokenPolicy } from "@/lib/sales";
 import { db } from "@/lib/db";
 import { disconnectAgent } from "@/lib/agents.js";
 
@@ -27,7 +27,7 @@ const Body = z.object({
     .nullable()
     .optional(),
   // Serialized policy — zod can't see inside the string, so the PaymentToken[]
-  // shape is checked below with parseTokenPolicy (strict: garbage → 400).
+  // shape is checked below with validateTokenPolicy (strict: garbage → 400).
   allowed_tokens: z.string().nullable().optional(),
 });
 
@@ -44,17 +44,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ driveI
   // Validate everything before writing anything — a 400 must not leave a
   // half-applied multi-field PATCH.
   if (body.data.allowed_tokens != null) {
-    const policy = parseTokenPolicy(body.data.allowed_tokens);
-    if (!policy) {
-      return NextResponse.json({ error: "invalid token policy" }, { status: 400 });
-    }
-    const badChain = policyChainViolation(policy);
-    if (badChain) {
-      return NextResponse.json(
-        { error: `${badChain} tokens cannot be accepted on a mainnet deployment` },
-        { status: 400 },
-      );
-    }
+    const policy = validateTokenPolicy(body.data.allowed_tokens);
+    if (!policy.ok) return NextResponse.json({ error: policy.error }, { status: policy.status });
   }
   const updated: { payout_wallet?: string | null; allowed_tokens?: string | null } = {};
   if (body.data.payout_wallet !== undefined) {
@@ -92,8 +83,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ driveId
  * DELETE /api/drives/:driveId — delete a drive for good. Creator only (a
  * co-owner can manage the drive but not end it — `leave` is their exit).
  *
- * Removes the drive row; members, shares, invites, receipts, payout wallets
- * and upload sessions go with it via ON DELETE CASCADE (lib/db.js). The files
+ * Removes the drive row; members, shares, invites, receipts, payout wallets,
+ * upload sessions and remote-MCP tokens/codes go with it via ON DELETE CASCADE
+ * (lib/db.js). The files
  * themselves are untouched: they live on the agent's machine, which is simply
  * disconnected and refused on its next reconnect. Counts against the
  * per-user drive limit (POST /api/drives) are freed immediately — this is the

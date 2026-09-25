@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizePath, PathError, type NormalizedPath } from "./path";
+import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
 /**
  * Zod field for a drive-relative path. Accepts any user input and either:
@@ -9,10 +10,18 @@ import { normalizePath, PathError, type NormalizedPath } from "./path";
  *
  * Use this wherever an API accepts a path in a JSON body. For URL search
  * params, call normalizePath directly inside the route handler.
+ *
+ * Also rejects the reserved `.aindrive/` subtree: no user-supplied path
+ * (file op, share, member grant, payout) may point into it.
  */
 export const zPath = z.string().transform((v, ctx) => {
   try {
-    return normalizePath(v);
+    const p = normalizePath(v);
+    if (isSystemPath(p)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "reserved path" });
+      return z.NEVER;
+    }
+    return p;
   } catch (e) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

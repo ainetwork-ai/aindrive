@@ -18,24 +18,26 @@ Auth / identity:
 | `wallet/{nonce,verify}` | SIWE login challenge + verify → sets wallet cookie (payment instrument only, never a login — see CLAUDE.md). |
 | `wallet/link` | bind a wallet to the logged-in account (origin+nonce bound; reclaims past receipts). Login required. |
 | `wallet/me` | current wallet address from cookie. |
-| `me/tier` | tier (free/pro/max) + prices + limits + upgrade URLs. |
+| `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
 
 | Route | Gate |
 |-------|------|
 | `drives` (GET/POST) | list user's drives / create (per-user drive limit). Auth. |
-| `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy. Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
+| `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy (validation shared with MCP `set_token_policy`). Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
 | `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. |
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |
-| `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path; `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. |
-| `receipts` | payment ledger, newest first. Owner only. |
+| `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path; `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. Gates live in `lib/sales.ts`, shared with the MCP sale tools. |
+| `payout` (GET/PUT/DELETE) | path-scoped payout wallets. Creator only. PUT validation shared with MCP `set_payout_wallet`. |
+| `receipts` | payment ledger, newest first. Owner only. (Paged over MCP: `list_receipts`.) |
 | `showcase` (GET), `showcase/[shareId]` (GET) | upsell list / purchase entry (302 → `/s/<token>`). Gated to accounts related to the drive (owner or any member row). |
 | `agents`, `agents/[agentId]` | owner CRUD over in-drive agents; `apiKey` stripped from all responses. |
 | `agents/[agentId]/ask` | A2A ask; identity→policy→CLI execution. Tiered rate limit; outputs map to 200/401/402/429. |
 | `agents/[agentId]/.well-known/agent-card.json` | public A2A AgentCard (secrets stripped). |
 | `yjs` (GET/POST) | collaborative-doc read (viewer) / write (editor) via agent RPC. |
+| `mcp-tokens` (GET/POST), `mcp-tokens/[tokenId]` (DELETE) | remote-MCP PATs + OAuth-connected apps. Any member issues (scope clamped to role); owner sees/revokes all. See `app/mcp/README.md`. |
 
 File ops (`drives/[driveId]/fs/…`) — all go through the agent WS bridge, all
 gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
@@ -43,25 +45,35 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 | Route | Notes |
 |-------|-------|
 | `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). |
-| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). Tiered file-count cap on create. |
+| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. |
 | `upload` | single-POST raw octet-stream for files ≤ one part (8 MiB) → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. Aborts never publish a partial file. |
 | `upload-sessions` | chunked + resumable upload for larger files (tus-style). POST opens a session; PATCH `:uploadId` appends sequential ≤8 MiB parts (`X-Upload-Offset` must equal server `receivedBytes`, else 409 + authoritative offset); final part renames atomically. Recovery truth = agent temp's stat size, so a part that died mid-append never double-appends. ≤2 GiB. |
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
 | `download` | chunked stream, `Content-Disposition: attachment`, no size cap. |
 | `thumbnail` | 256px webp via sharp, disk cache keyed by `sha1(path)+mtime`. |
-| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. |
+| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. Deleting a file, or renaming onto an existing one, frees a slot in the owner's file count. |
 
 Payments / capabilities:
 
 | Route | Gate |
 |-------|------|
-| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. |
+| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. Optional `Authorization: Bearer aind_aat_…` (a relaying app, server-to-server): the purchase is credited to that account instead of the payer wallet's; a bad account token → 401 before any payment. No CORS. |
 | `s/[token]/accept` (POST) | redeem a free (or already-paid-covered) share into a `drive_members` grant. Login required; never settles payment. |
 | `x402/lift` (GET) | pay an AIN micropayment to lift a scoped limit / unlock a tier (`scope=tier:pro` etc.). |
 | `cap/verify` (POST) | decode + describe a Meadowcap capability token. |
 | `token-lookup` (POST) | on-chain ERC-20 metadata for the token-policy editor. Login-gated (anti-amplification). |
 | `paymaster` (POST, CORS) | ERC-7677 proxy: sponsors a permit2 buyer's `approve(Permit2)` gas. Requires a `?g=` sponsor grant; validates the userOp is exactly the granted approve (lib/paymaster) before forwarding to `CDP_PAYMASTER_URL`. Called by the buyer's WALLET, not our pages. |
 | `paymaster/grant` (POST) | mint the sponsor grant for one permit2 sale (asset/amount/chain from the share's current quote, wallet-bound, 10-min TTL). Login-gated + rate-limited. |
+
+Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md`):
+
+| Route | Notes |
+|-------|-------|
+| `oauth/register` (POST, CORS) | RFC 7591 dynamic client registration; public clients only; rate-limited per IP. |
+| `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. |
+| `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
+| `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). `drives:write` / `drives:sell` unlock tools on `/mcp/d/[id]` only. |
+| `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |
 
 Ops / dev:
 
@@ -75,7 +87,9 @@ Ops / dev:
 
 - **Every drive route resolves access before touching the agent.** Mutations
   require editor+, reads viewer+; `requireDriveRole` returns a `NextResponse`
-  on failure (handlers early-return it). Member/share/owner-scoped routes use
+  on failure (handlers early-return it). It also 403s the reserved `.aindrive/`
+  subtree for every role. `zPath` rejects it in JSON bodies, and `rename` gates
+  both `from` and `to`. Member/share/owner-scoped routes use
   `resolveRole`/`getDrive.owner_id` directly.
 - **Grants are upgrade-only** on paid-settle, share-accept, and re-invite
   (`mergeRoleUpgradeOnly`); the drive creator's member row is immutable.

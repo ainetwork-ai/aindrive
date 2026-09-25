@@ -21,9 +21,16 @@ Wire protocol (web ↔ CLI agent over the WebSocket RPC bridge — see
   `RES_QUEUE`/`HEARTBEAT_KEY` queue-key builders here are vestigial Redis-era
   helpers — unused; the live transport is WebSocket.)
 
-Agent skills (backing both MCP tools and A2A executor):
+Agent UI (one definition for every transport): `a2ui/` (see `a2ui/README.md`).
+`skill-descriptors.ts` is the pure skill catalog (names and JSON Schema) used by
+docs and clients. `agent-skills.ts` re-exports it.
+
+Agent skills (backing MCP tools, the A2A executor and AG-UI runs):
 - `agent-skills.ts` — `runSkill` + `SKILL_DESCRIPTORS` (JSON Schema). One backing
-  fn for `app/mcp/route.ts` and `lib/aindrive-agent.ts`. Pulls in `@/lib/*` (drives,
+  fn for the MCP routes (`app/mcp/`, via `lib/mcp-http.ts`) and `lib/aindrive-agent.ts`.
+  `SkillCtx.driveId`/`scope` pin a call to one drive + read/write ceiling
+  (`driveScopedDescriptors`); `SkillCtx.sell` (account grant `drives:sell`) adds
+  the creator-only sale tools, thin adapters over `@/lib/sales`. Pulls in `@/lib/*` (drives,
   access, db, rpc), so it is web-bound, not pure domain.
 
 HTTP contracts (cross-track frozen agreement):
@@ -56,9 +63,11 @@ Display (pure, no I/O):
   two key-orderings of the same object verify identically. Don't add new sig files.
 - **`contracts/http.ts` is frozen**: shapes are a cross-track agreement; changing
   one requires a multi-track sync, not a solo edit.
-- **`.aindrive/` is a single failure point**: cap-bearer fs reads MUST go through a
-  check that rejects `isSystemPath` paths, or `llm.apiKey` leaks. Enforcement lives
-  in HTTP middleware / fs routes, not here. Server-internal callers intentionally bypass it.
+- **`.aindrive/` is a single failure point**: it holds `config.json` (agentToken +
+  driveSecret, enough to impersonate the agent) and `llm.apiKey`. Every user-supplied
+  path must be rejected by `isSystemPath`. The enforcement points are listed in
+  `domain/policy/system-paths.ts`. Server-internal callers (agent repo, upload temp
+  parts) bypass them on purpose.
 - **`registry.ts` must stay in sync with CLI factories**: a name listed here but
   missing from CLI's resolvers surfaces as `agent_misconfigured` at ask time.
 - **Secrets boundary**: web holds no LLM secrets; agent execution (and `llm.apiKey`

@@ -27,29 +27,38 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 **Payments / x402**
 - `payment-tokens.ts` — allowed-token presets, network switch, policy parse/rebind, `toAtomicAmount` (BigInt decimal scaling).
+- `sales.ts` — share-link create/edit/revoke, payout-wallet and token-policy validation, receipt paging. One implementation behind the `shares`/`payout`/drive-PATCH routes and the remote-MCP sale tools; returns `{ ok: false, status, error }` with the route's exact message.
 - `x402-ain.ts` — x402 v2 facilitator for AIN on ETH mainnet (build requirements, `verify`, `settle` via on-chain Transfer log).
 - `paid-lifts.js` — `paid_lifts` table: quota/tier lifts bought with AIN + tx-hash anti-replay (`txHashUsed`).
-- `tier.ts` — free/pro/max tiers from active lifts; rate-limit + storage-cap multipliers.
+- `tier.ts` — free/pro/max tiers from active lifts. Rate limits use the caller's tier (wallet cookie); storage caps use the drive owner's (`getOwnerStorageCaps`: lifts on any wallet linked to the owner, or `AINDRIVE_UNLIMITED_OWNERS`), identical for session, PAT and account-token writes.
 - `wallet.ts` — SIWE nonce/cookie, `linkWalletToAccount`, `resolveAccountForWallet` (wallet→durable account bridge).
 - `base-siwe.ts` — client helpers for Base Account `wallet_connect` + `signInWithEthereum` (single-popup passkey + SIWE; the popup-blocker rationale lives in its header).
 - `payment-hooks.ts` — `onPaymentSettled` extension point (Phase 2 stub).
 
 **Agent bridge / RPC**
 - `agents.js` — in-memory registry of connected agent WebSockets; `sendRpc`, `onAgentConnect`, heartbeat, multi-device fan-out.
+  `rotateAgentLive` rotates a drive's agent token + secret over the live socket
+  without disconnecting it (the CLI half is `cli/src/rotation.js`). Set
+  `drives.rotation_pending = 1` to queue a drive: it rotates on its next connect,
+  or within 5 min if it is online (`startRotationSweeper`). Multi-device drives
+  and older agents stay pending; `rotate-token` (manual) clears the flag.
 - `rpc.ts` — typed `callAgent<M>()` wrapper + `AgentError`.
 - `protocol.ts` — RPC method/params/result types + `DriveEntry` (mirrored to `cli/`).
 - `sig.js` — HMAC sign/verify of RPC frames with the drive_secret (the live
   module, imported by `agents.js`). `sig.ts` is an unused duplicate — see the
   sig-consolidation note in `web/shared/README.md`.
 - `agent-stream.ts` — byte-range `ReadableStream` over sequential `download-chunk` RPCs (Range playback, downloads).
-- `aindrive-agent.ts` — A2A agent card + executor (runs `@/shared/agent-skills`).
+- `aindrive-agent.ts` — A2A agent card and executor. It handles skill DataParts, A2UI actions and text commands, and sends an A2UI DataPart when the extension is on. It runs `@/shared/agent-skills`.
+- `agui.ts` — AG-UI 1.0 agent (`/agui`, `/agui/d/[id]`): RunAgentInput in, one skill per run, events back (TOOL_CALL_*, `a2ui-surface` activity, state, text).
+- `agent-auth.ts` — one bearer → SkillCtx resolver for A2A and AG-UI (PAT, OAuth, account token, session JWT).
+- `mcp-http.ts` / `mcp-ui.ts` / `mcp-tokens.ts` / `oauth.ts` — remote MCP (tools, MCP Apps view, A2UI results), its tokens and the OAuth server. See `app/mcp/README.md`.
 
 **Storage / DB**
 - `db.js` — singleton better-sqlite3 + drizzle; bootstraps schema, runs idempotent ALTERs, starts maintenance.
 - `drives.ts` — drive CRUD, token rotation, payout/token-policy setters, Willow namespace keypair.
 - `payout.ts` — pure path-scoped payout resolution (nearest-ancestor wallet, mirrors role inheritance); `drives.ts` wraps it with DB access.
 - `upload-sessions.ts` — chunked/resumable upload sessions: session rows, agent temp pump (4 MiB RPC re-chunk), per-session lock. Protocol + recovery invariants live in the route: `app/api/drives/[driveId]/fs/upload-sessions/`.
-- `storage-usage.js` — per-owner cached file/folder counts for tier-cap enforcement (upper bound, not exact).
+- `storage-usage.js` — per-owner cached file/folder counts for tier-cap enforcement (upper bound, not exact). Signed deltas: creates add, deletes subtract; the stored total is clamped at 0.
 - `sqlite-maintenance.js` — periodic WAL checkpoint / VACUUM / optimize.
 - `migrations/` — one-shot idempotent migrations (`run.js` runs all at startup).
 
@@ -62,7 +71,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - Config/boot: `env.ts`, `load-env.js`, `boot-checks.js`, `cookie-config.ts`.
 - Identity: `session.ts` (session JWT cookie).
 - Observability: `logger.js`, `trace.js` (stdout + ring buffer).
-- Guards/limits: `rate-limit.js`, `limits.ts`.
+- Guards/limits: `rate-limit.js`, `limits.ts` (drives-per-account cap, `AINDRIVE_UNLIMITED_OWNERS` storage-cap exemption).
 - Helpers: `path.js`, `mime.ts`, `zod-helpers.ts` (`zPath`), `sort-entries.ts`, `api-client.ts`, `wagmi-config.ts`, `eip6963-uuid-guard.ts` (stabilises misbehaving wallet-extension announces so the picker lists each wallet once).
 
 ## Contracts & invariants

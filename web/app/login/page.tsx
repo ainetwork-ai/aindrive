@@ -3,6 +3,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { safeNextPath } from "@/lib/safe-next";
 import { Wallet } from "lucide-react";
 
 // The wallet stack (wagmi + RainbowKit, ~300-600KB) is code-split behind this
@@ -31,7 +32,7 @@ function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next");
-  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+  const safeNext = safeNextPath(next);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 

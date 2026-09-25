@@ -98,6 +98,8 @@ export async function rotateAgentToken(driveId: string) {
     .set({ agent_token_hash: hash, drive_secret: driveSecret })
     .where(eq(drives.id, driveId))
     .run();
+  // A manual rotation supersedes any pending live one.
+  db.prepare("UPDATE drives SET rotation_pending = 0 WHERE id = ?").run(driveId);
   return { agentToken, driveSecret };
 }
 
