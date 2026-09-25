@@ -152,7 +152,35 @@ async function loadThread() {
   } catch { thread = []; askContext = null; }
 }
 
+/** Past conversations (newest first): "New chat" files the current one here instead of throwing it away. */
+interface PastChat { at: number; title: string; thread: Turn[] }
+let pastChats: PastChat[] = [];
+let historyOpen = false;
+const HISTORY_KEY = "aindrive.mobile.history.v1";
+
+async function loadHistory() {
+  try { const { value } = await Preferences.get({ key: HISTORY_KEY }); pastChats = value ? JSON.parse(value) : []; } catch { pastChats = []; }
+}
+
+async function saveHistory() {
+  // Keep the text, drop heavy source lists beyond what the screen shows.
+  pastChats = pastChats.slice(0, 30).map((c) => ({ ...c, thread: c.thread.map((t) => ({ ...t, r: t.r ? { ...t.r, sources: t.r.sources.slice(0, 30) } : t.r })) }));
+  try { await Preferences.set({ key: HISTORY_KEY, value: JSON.stringify(pastChats) }); } catch { /* best effort */ }
+}
+
+async function openPastChat(i: number) {
+  const c = pastChats[i]; if (!c) return;
+  if (thread.length) pastChats.unshift({ at: Date.now(), title: thread[0].q, thread });
+  pastChats = pastChats.filter((x) => x !== c);
+  thread = c.thread; askResult = thread[thread.length - 1]?.r ?? null; askContext = null; historyOpen = false;
+  expandedPhotos.clear(); expandedFiles.clear();
+  await Promise.all([saveThread(), saveHistory()]);
+  render();
+}
+
 async function newChat() {
+  if (thread.length) { pastChats.unshift({ at: Date.now(), title: thread[0].q, thread }); await saveHistory(); }
+  expandedPhotos.clear(); expandedFiles.clear();
   thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null;
   await saveThread();
   render();
@@ -1499,12 +1527,16 @@ const SUGGESTIONS: { title: string; items: string[] }[] = [
 function searchSheet(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
   const indexed = ix.reduce((n, i) => n + i.indexed, 0);
-  const active = ix.find((i) => i.running);
+  // Photo recognition is what the agent needs now; a call archive transcribing for hours is shown after it.
+  const runningDrives = status.drives.filter((d) => d.index?.running);
+  const activeDrive = runningDrives.find((d) => !d.driveId.startsWith("src-calls")) ?? runningDrives[0];
+  const active = activeDrive?.index;
+  const activeName = activeDrive ? (activeDrive.folderLabel || "a folder") : "";
   const recognised = ix.reduce((n, i) => n + (i.recognisedTotal ?? 0), 0);
   const models = status.models;
   const indexLine = active
     ? (active.phase === "recognising"
-      ? `<div class="indexline"><div style="flex:1">Recognising photos & recordings… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
+      ? `<div class="indexline"><div style="flex:1">${activeDrive?.driveId.startsWith("src-calls") ? "Transcribing calls" : "Recognising photos & recordings"} in ${esc(activeName)}… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
       : `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`)
     : `<div class="indexline"><span>${indexed ? `${indexed.toLocaleString()} files indexed${recognised ? ` · ${recognised.toLocaleString()} recognised` : ""}` : "Not indexed yet"}</span><button class="btn secondary small" id="reindex">${indexed ? "Refresh" : "Index now"}</button></div>`;
   const modelsLine = !models ? "" : models.downloading
@@ -1584,8 +1616,12 @@ function searchSheet(): string {
       <div class="bar">
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
         <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : "offline"}</div></div>
+        ${pastChats.length ? `<button class="iconbtn" id="chat-history" aria-label="Past chats" title="Past chats">${icon("list", 18)}</button>` : ""}
         ${thread.length ? `<button class="btn small secondary" id="new-chat" aria-label="New chat">${icon("plus", 16)} New chat</button>` : ""}
       </div>
+      ${historyOpen ? `<div class="scrim" id="history-scrim"><div class="drawer"><div class="grab"></div>
+        <div class="head"><h3>Past chats</h3><button class="iconbtn ghost" id="history-close" aria-label="Close">${I.close}</button></div>
+        <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ft-doc">${icon("chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s">${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
       <div class="body" id="ask-body">
         ${modelsLine}
         ${indexLine}
@@ -1614,6 +1650,10 @@ function bindSearch() {
   });
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
+  bind("chat-history", () => { historyOpen = true; render(); });
+  bind("history-close", () => { historyOpen = false; render(); });
+  document.getElementById("history-scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { historyOpen = false; render(); } });
+  document.querySelectorAll<HTMLElement>("[data-past]").forEach((el) => el.addEventListener("click", () => void openPastChat(Number(el.dataset.past))));
   document.querySelectorAll<HTMLElement>("[data-more-photos]").forEach((el) => el.addEventListener("click", () => { expandedPhotos.add(Number(el.dataset.morePhotos)); render(); }));
   document.querySelectorAll<HTMLElement>("[data-more-files]").forEach((el) => el.addEventListener("click", () => { expandedFiles.add(Number(el.dataset.moreFiles)); render(); }));
   void loadAskThumbs();
@@ -2006,6 +2046,7 @@ async function boot() {
   } catch { /* defaults */ }
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
   await loadThread();
+  await loadHistory();
   await pruneMissing();
   // Everything that was on comes back by itself: sources, and the shares whose switch was on.
   void (async () => {
@@ -2034,6 +2075,7 @@ async function boot() {
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
     else if (sheet) closeSheet();
+    else if (historyOpen) { historyOpen = false; render(); }
     else if (viewer) { viewer = null; render(); }
     else if (searchOpen) { searchOpen = false; render(); }
     else if (browse) browseBack();

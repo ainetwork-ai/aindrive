@@ -29,6 +29,20 @@ public class CallReportTest {
         assertNull(CallReport.personOf("IMG_1234.jpg"));
     }
 
+    @Test public void warmWordsAreRealWarmth() {
+        java.util.regex.Pattern w = CallReport.warmPattern();
+        for (String t : new String[]{"보고 싶어", "고마워 진짜", "사랑해", "여보 어디야", "잘 자.", "love you too", "힘내!"}) assertTrue(t, w.matcher(t).find());
+        for (String t : new String[]{"여보세요", "제가 여쭤보고 싶은 거는", "이거 보고 싶고 가치가", "너 되고마워 해야", "감사합니다", "Thank you for calling"}) assertFalse(t, w.matcher(t).find());
+    }
+
+    @Test public void likesQuestionIsACallsTask() {
+        for (String q : new String[]{"who likes me the most and proof?", "who loves me?", "Who cares about me the most", "누가 나를 제일 좋아해?", "나를 가장 좋아하는 사람은?", "날 제일 아끼는 사람"}) {
+            assertTrue(q, QueryParser.isLikesTask(q));
+            assertTrue(q, QueryParser.isCallsTask(q));
+        }
+        assertFalse(QueryParser.isLikesTask("photos I like"));
+    }
+
     @Test public void callsTaskIsDetectedInBothLanguages() {
         for (String q : new String[]{
                 "내 통화내역을 많이 통화한 사람 순으로 정렬하고 보통 어떤 얘기를 나누는지 요약해줘",

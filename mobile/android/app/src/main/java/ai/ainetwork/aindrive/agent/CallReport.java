@@ -42,7 +42,10 @@ public final class CallReport {
 
     public static final class Call {
         public final String number; public final @Nullable String name; public final long seconds, whenMs;
-        public Call(String number, @Nullable String name, long seconds, long whenMs) { this.number = number; this.name = name; this.seconds = seconds; this.whenMs = whenMs; }
+        /** android.provider.CallLog.Calls.TYPE: 1 incoming, 2 outgoing, 3 missed (0 = unknown). */
+        public final int type;
+        public Call(String number, @Nullable String name, long seconds, long whenMs) { this(number, name, seconds, whenMs, 0); }
+        public Call(String number, @Nullable String name, long seconds, long whenMs, int type) { this.number = number; this.name = name; this.seconds = seconds; this.whenMs = whenMs; this.type = type; }
     }
 
     static final int TOP_PEOPLE = 10;
@@ -151,7 +154,87 @@ public final class CallReport {
 
     private static String normNumber(String s) { return s.replaceAll("[^0-9+]", ""); }
 
+    // ------------------------------------------------------------ "who likes me the most?"
+
+    /** Words that show warmth, matched in transcripts (Korean spoken forms + English). */
+    private static final Pattern WARM = Pattern.compile(
+            // Personal warmth only: not "여보세요" (phone hello), not the polite "감사합니다" of every business call.
+            // Whole words only (no Hangul right before): "여쭤보고 싶은" (I'd like to ask) and ASR noise like
+            // "되고마워" are not warmth; "보고 싶" must end as a feeling ("보고 싶어/싶다/싶었어").
+            "(?<![가-힣])(사랑해|사랑한다|보고\\s?싶(어|다|었어|네)|좋아해|고마워|고맙다|최고야|멋있어|멋지다|자기야|여보(?!세요)|귀여워|예뻐|이뻐|잘\\s?자(요)?[.!?~]|조심히\\s?(가|와|들어가)|힘내|응원해|축하해)|"
+            + "\\b(love you|miss you|proud of you|you're the best|good night)\\b",
+            Pattern.CASE_INSENSITIVE);
+
+    static Pattern warmPattern() { return WARM; }
+
+    static final class Affinity {
+        String name; int incoming, outgoing, missedByThem; long seconds; final List<String> warm = new ArrayList<>(); int warmCalls;
+        double score() { return incoming * 1.0 + missedByThem * 0.5 + seconds / 600.0 + warmCalls * 4.0; }
+    }
+
+    /**
+     * Who seems to like you most, with proof: they call you (incoming calls, and calls you
+     * missed), you talk long, and warm words come up when you do. Counts come from the call
+     * log (last 12 months); quotes from the transcribed recordings. It is a heuristic and the
+     * answer says so.
+     */
+    public JSONObject runLikes(SearchQuery q, long nowMs) throws Exception {
+        boolean ko = q.korean;
+        long since = nowMs - WINDOW_MS;
+        Map<String, Affinity> byName = new LinkedHashMap<>();
+        List<Call> calls = callLog == null ? null : callLog.calls();
+        if (calls != null) for (Call c : calls) {
+            if (c.whenMs < since || c.name == null || !isContact(normName(c.name))) continue;
+            Affinity a = byName.computeIfAbsent(normName(c.name), k -> { Affinity x = new Affinity(); x.name = k; return x; });
+            if (c.type == 1) a.incoming++; else if (c.type == 2) a.outgoing++; else if (c.type == 3) a.missedByThem++;
+            a.seconds += c.seconds;
+        }
+        // Warm words in what was said, per person (transcribed calls only).
+        FileIndex.Filter f = new FileIndex.Filter(); f.kind = FileIndex.AUDIO;
+        for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) {
+            String who = personOf(r.name);
+            if (who == null || !isContact(who) || r.transcript == null || when(r) < since) continue;
+            Affinity a = byName.computeIfAbsent(who, k -> { Affinity x = new Affinity(); x.name = k; return x; });
+            boolean hit = false;
+            for (String sentence : r.transcript.split("(?<=[.?!。])\\s+")) {
+                if (!WARM.matcher(sentence).find()) continue;
+                hit = true;
+                String quote = sentence.trim().length() > 90 ? sentence.trim().substring(0, 87) + "…" : sentence.trim();
+                if (a.warm.size() < 3 && !a.warm.contains(quote)) a.warm.add(quote);
+            }
+            if (hit) a.warmCalls++;
+        }
+        List<Affinity> ranked = new ArrayList<>(byName.values());
+        ranked.removeIf(a -> a.score() <= 0);
+        ranked.sort((x, y) -> Double.compare(y.score(), x.score()));
+        if (ranked.isEmpty()) {
+            return new JSONObject().put("answer", ko
+                    ? "판단할 근거가 없어요 — 통화 기록 접근을 허용하고 '통화 녹음' 폴더를 에이전트가 읽게 해 주세요."
+                    : "I have nothing to go on — allow call-log access and let the agent read your call recordings.")
+                    .put("sources", new JSONArray())
+                    .put("action", new JSONObject().put("type", "collect").put("skipped", true).put("reason", "nothing matched").put("needsCallLog", calls == null).put("report", "calls"));
+        }
+        StringBuilder a = new StringBuilder(ko ? "지난 12개월 통화로 보면, 당신을 가장 좋아하는 사람은:\n" : "Going by the last 12 months of calls, the people who seem to like you most:\n");
+        JSONArray sources = new JSONArray();
+        int n = 0;
+        for (Affinity x : ranked) {
+            if (++n > 5) break;
+            a.append(n).append(". ").append(x.name).append(" — ");
+            List<String> proof = new ArrayList<>();
+            if (x.incoming > 0) proof.add(ko ? "먼저 전화한 게 " + x.incoming + "번" + (x.outgoing > 0 ? " (당신은 " + x.outgoing + "번)" : "") : "called you " + x.incoming + " times" + (x.outgoing > 0 ? " (you called " + x.outgoing + ")" : ""));
+            if (x.missedByThem > 0) proof.add(ko ? "못 받은 전화 " + x.missedByThem + "통" : x.missedByThem + " calls you missed");
+            if (x.seconds >= 60) proof.add(ko ? "총 " + duration(x.seconds, true) + " 통화" : duration(x.seconds, false) + " on the phone");
+            if (x.warmCalls > 0) proof.add(ko ? "따뜻한 말이 나온 통화 " + x.warmCalls + "개" : "warm words in " + x.warmCalls + (x.warmCalls == 1 ? " call" : " calls"));
+            a.append(String.join(", ", proof)).append("\n");
+            for (String w : x.warm) a.append("   “").append(w).append("”\n");
+            if (n == 1) sources.put(new JSONObject().put("path", "").put("snippet", "").put("caller", x.name).put("summary", String.join(" · ", proof)));
+        }
+        a.append(ko ? "\n(통화 기록과 받아쓴 녹음에서 센 수치예요 — 마음을 읽는 건 아니에요.)" : "\n(Counted from your call log and transcribed recordings — a heuristic, not mind-reading.)");
+        return new JSONObject().put("answer", a.toString()).put("sources", new JSONArray());
+    }
+
     public JSONObject run(SearchQuery q, long nowMs) throws Exception {
+        if (q.likes) return runLikes(q, nowMs);
         boolean ko = q.korean;
         Map<String, Person> people = new LinkedHashMap<>();
         Map<String, Person> byNumber = new HashMap<>();

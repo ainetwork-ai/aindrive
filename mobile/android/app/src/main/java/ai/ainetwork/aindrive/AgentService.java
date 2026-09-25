@@ -94,6 +94,8 @@ public class AgentService extends Service {
     private final ExecutorService rpcPool = Executors.newFixedThreadPool(4);
     /** One indexing run at a time across all drives — it is I/O bound on the same storage anyway. */
     private final ExecutorService indexPool = Executors.newSingleThreadExecutor();
+    /** Call archives transcribe for hours: their own worker, so photo recognition elsewhere isn't stuck behind them. */
+    private final ExecutorService callPool = Executors.newSingleThreadExecutor();
     private volatile GeoLookup geo;
     /** driveId → live connection. Insertion order = the order the user started them. */
     private final Map<String, Conn> conns = new LinkedHashMap<>();
@@ -583,7 +585,7 @@ public class AgentService extends Service {
             for (Conn c : conns.values()) if ((driveId == null || driveId.equals(c.driveId)) && c.fs != null) targets.add(c);
         }
         for (Conn c : targets) {
-            indexPool.execute(() -> {
+            (isCallSource(c.driveId) ? callPool : indexPool).execute(() -> {
                 try { c.indexer().runOnce((done, total, phase) -> notifyStatus()); }
                 catch (RuntimeException e) { c.lastError = e.getMessage(); Log.w(TAG, "index failed", e); notifyStatus(); }
             });
@@ -634,10 +636,10 @@ public class AgentService extends Service {
     /** The phone's call log, newest first; null when READ_CALL_LOG was not granted. */
     @Nullable java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> callLog() {
         java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> out = new java.util.ArrayList<>();
-        String[] cols = {android.provider.CallLog.Calls.NUMBER, android.provider.CallLog.Calls.CACHED_NAME, android.provider.CallLog.Calls.DURATION, android.provider.CallLog.Calls.DATE};
+        String[] cols = {android.provider.CallLog.Calls.NUMBER, android.provider.CallLog.Calls.CACHED_NAME, android.provider.CallLog.Calls.DURATION, android.provider.CallLog.Calls.DATE, android.provider.CallLog.Calls.TYPE};
         try (android.database.Cursor c = getContentResolver().query(android.provider.CallLog.Calls.CONTENT_URI, cols, null, null, android.provider.CallLog.Calls.DATE + " DESC")) {
             if (c == null) return null;
-            while (c.moveToNext()) out.add(new ai.ainetwork.aindrive.agent.CallReport.Call(c.getString(0) == null ? "" : c.getString(0), c.getString(1), c.getLong(2), c.getLong(3)));
+            while (c.moveToNext()) out.add(new ai.ainetwork.aindrive.agent.CallReport.Call(c.getString(0) == null ? "" : c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4)));
         } catch (SecurityException e) {
             return null;
         }

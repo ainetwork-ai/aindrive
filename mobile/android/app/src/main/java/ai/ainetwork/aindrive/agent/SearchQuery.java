@@ -45,6 +45,8 @@ public final class SearchQuery {
     public boolean bySize;
     /** "통화내역 많이 통화한 순으로 / sort my calls by who I talk to most": the call-history report, not a file search. */
     public boolean calls;
+    /** "who likes me the most": rank contacts by signs of affection in calls, with proof. */
+    public boolean likes;
     /** Filters were inherited from the previous turn ("…and share them"). */
     public boolean followUp;
 

@@ -132,7 +132,15 @@ public final class QueryParser {
             "통화\\s*(내역|기록|녹음|목록|요약|많이)|통화한|통화했|(call|phone)\\s*(history|logs?|records?|recordings?)|\\bcalls\\b|who\\s+(do\\s+)?i\\s+(call|talk|phone)", Pattern.CASE_INSENSITIVE);
     private static final Pattern SHARE_ASK = Pattern.compile("공유|링크|\\bshare|\\blink", Pattern.CASE_INSENSITIVE);
 
-    public static boolean isCallsTask(String question) { return question != null && CALLS_TASK.matcher(question).find(); }
+    /** "who likes me the most?", "누가 나를 제일 좋아해?": an affection ranking over calls, not a file search. */
+    private static final Pattern LIKES_TASK = Pattern.compile(
+            "who\\s+(likes|loves|cares\\s+about|misses|adores)\\s+me|who('s| is)\\s+(closest|fond)|"
+            + "(나를|날|저를|절)\\s*(제일|가장|젤)?\\s*(좋아|사랑|아끼|챙기|그리워)|나\\s*(좋아하는|사랑하는)\\s*사람|누가\\s*(나|날)\\s*(제일|가장)?\\s*(좋아|사랑)",
+            Pattern.CASE_INSENSITIVE);
+
+    public static boolean isLikesTask(String question) { return question != null && LIKES_TASK.matcher(question).find(); }
+
+    public static boolean isCallsTask(String question) { return question != null && (CALLS_TASK.matcher(question).find() || isLikesTask(question)); }
 
     /**
      * Follow-up cues: the question refers to the previous turn's results
@@ -171,6 +179,7 @@ public final class QueryParser {
         q.korean = question.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
         if (isCallsTask(question)) {
             q.calls = true;
+            q.likes = isLikesTask(question);
             q.share = SHARE_ASK.matcher(question).find();
             return q;
         }
