@@ -112,6 +112,32 @@ let browse: {
 } | null = null;
 /** List/grid and sort, remembered like the web's (localStorage there, Preferences here). */
 let browseView: "list" | "grid" = "list";
+/** A view picked by hand for one folder ("key|path"); otherwise photo folders open as a grid. */
+let folderViews: Record<string, "list" | "grid"> = {};
+const FOLDER_VIEWS_KEY = "aindrive.mobile.folderViews";
+
+function isMedia(name: string): boolean { const m = guessMime(name); return m.startsWith("image/") || m.startsWith("video/"); }
+
+/** Grid when the folder is mostly photos/videos, unless this folder was switched by hand. */
+function viewOf(b: { key: string; path: string; entries?: { name: string; isDir: boolean }[] | null }): "list" | "grid" {
+  const picked = folderViews[`${b.key}|${b.path}`];
+  if (picked) return picked;
+  return mostlyMedia(b.entries) ? "grid" : browseView;
+}
+
+/** At least half the files are photos/videos: shown as a dense photo grid. */
+function mostlyMedia(entries?: { name: string; isDir: boolean }[] | null): boolean {
+  const files = (entries ?? []).filter((e) => !e.isDir);
+  return files.length > 0 && files.filter((e) => isMedia(e.name)).length * 2 >= files.length;
+}
+
+function pickView(v: "list" | "grid") {
+  if (!browse) return;
+  folderViews[`${browse.key}|${browse.path}`] = v;
+  void Preferences.set({ key: FOLDER_VIEWS_KEY, value: JSON.stringify(folderViews) });
+  render();
+  if (v === "grid") void loadThumbs();
+}
 let browseSort: { by: "name" | "modified" | "size"; dir: 1 | -1 } = { by: "name", dir: 1 };
 /** Thumbnails for the grid view, by folder-uri + path (data URLs, small). */
 const thumbs = new Map<string, string | null>();
@@ -1737,11 +1763,11 @@ function browseSheet(): string {
     const list = sortedEntries(b.entries ?? []);
     if (!list.length) body = b.query ? `<div class="empty"><div class="art">${I.search}</div><h3>No matches</h3><p>Nothing in this folder is called “${esc(b.query)}”.</p></div>`
       : `<div class="empty"><div class="art">${I.folder}</div><h3>This folder is empty</h3><p>Upload files or create a folder.</p></div>`;
-    else if (browseView === "grid") body = `<div class="tiles">${list.map((e) => {
+    else if (viewOf(b) === "grid") body = `<div class="tiles${mostlyMedia(b.entries) ? " media" : ""}">${list.map((e) => {
       const g = fileGlyph(e.name, e.isDir);
       const t = !e.isDir && !remote ? thumbs.get(thumbKey(e.path)) : undefined;
-      return `<div class="tile" data-entry="${esc(e.path)}">
-        <div class="thumb" data-op="open">${t ? `<img src="${t}" alt="" />` : `<span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="44" height="44"')}</span>`}</div>
+      return `<div class="tile${!e.isDir && isMedia(e.name) ? " pic" : ""}" data-entry="${esc(e.path)}">
+        <div class="thumb" data-op="open" data-thumb="${esc(e.path)}">${t ? `<img src="${t}" alt="" />` : `<span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="44" height="44"')}</span>`}</div>
         <div class="cap"><span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="16" height="16"')}</span><div class="name" data-op="open">${esc(e.name)}</div>
           <div class="menu-wrap"><button class="iconbtn ghost" data-op="menu" aria-label="More">${I.more}</button>${b.menu === e.path ? entryMenu(e, remote) : ""}</div></div>
       </div>`;
@@ -1769,7 +1795,7 @@ function browseSheet(): string {
         <button class="iconbtn" id="browse-chat" aria-label="Chat">${I.chat}</button>
       </div>
       <div class="toolbar">
-        <div class="seg"><button id="view-list" aria-pressed="${browseView === "list"}" aria-label="List">${icon("list", 18)}</button><button id="view-grid" aria-pressed="${browseView === "grid"}" aria-label="Grid">${icon("grid", 18)}</button></div>
+        <div class="seg"><button id="view-list" aria-pressed="${viewOf(b) === "list"}" aria-label="List">${icon("list", 18)}</button><button id="view-grid" aria-pressed="${viewOf(b) === "grid"}" aria-label="Grid">${icon("grid", 18)}</button></div>
         <div class="grow"></div>
         <button class="btn small secondary" id="browse-newfolder" ${isBusy ? "disabled" : ""}>${icon("folderPlus", 16)} New folder</button>
         ${remote ? "" : `<button class="btn small secondary" id="browse-upload" ${isBusy ? "disabled" : ""}>${isBusy ? `<span class="spinner"></span>` : icon("upload", 16)} Upload</button>`}
@@ -1790,16 +1816,26 @@ function thumbKey(path: string): string { return `${browse?.key ?? ""}|${path}`;
 /** Grid view: small JPEGs for photos, read on the phone and cached for the session. */
 async function loadThumbs() {
   const share = browseShare();
-  if (!browse || !share || browse.remote || browseView !== "grid" || !browse.entries) return;
-  const want = browse.entries.filter((e) => !e.isDir && guessMime(e.name).startsWith("image/") && !thumbs.has(thumbKey(e.path))).slice(0, 60);
-  for (const e of want) {
-    thumbs.set(thumbKey(e.path), null);
-    try {
-      const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path: e.path, maxPx: 320 });
-      thumbs.set(thumbKey(e.path), `data:${r.mime};base64,${r.base64}`);
-    } catch { /* leave the icon */ }
-  }
-  if (want.length && !typing()) render();
+  if (!browse || !share || browse.remote || viewOf(browse) !== "grid" || !browse.entries) return;
+  const want = browse.entries.filter((e) => !e.isDir && guessMime(e.name).startsWith("image/") && !thumbs.has(thumbKey(e.path))).slice(0, 120);
+  const key = browse.key;
+  // Three at a time, each patched into its tile as it lands — no full re-render per photo.
+  let next = 0;
+  const worker = async () => {
+    while (next < want.length) {
+      const e = want[next++];
+      thumbs.set(thumbKey(e.path), null);
+      try {
+        const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path: e.path, maxPx: 320 });
+        const url = `data:${r.mime};base64,${r.base64}`;
+        thumbs.set(`${key}|${e.path}`, url);
+        if (browse?.key !== key) continue;
+        const el = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].find((x) => x.dataset.thumb === e.path);
+        if (el) el.innerHTML = `<img src="${url}" alt="" />`;
+      } catch { /* leave the icon */ }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
 }
 
 function bindBrowse() {
@@ -1813,8 +1849,8 @@ function bindBrowse() {
   bind("browse-q-close", () => { b.searching = false; b.query = ""; render(); });
   const q = document.getElementById("browse-q") as HTMLInputElement | null;
   q?.addEventListener("input", () => { b.query = q.value; const pos = q.selectionStart; render(); const n = document.getElementById("browse-q") as HTMLInputElement | null; n?.focus(); n?.setSelectionRange(pos, pos); });
-  bind("view-list", () => { browseView = "list"; void Preferences.set({ key: "aindrive.mobile.view", value: "list" }); render(); });
-  bind("view-grid", () => { browseView = "grid"; void Preferences.set({ key: "aindrive.mobile.view", value: "grid" }); render(); void loadThumbs(); });
+  bind("view-list", () => pickView("list"));
+  bind("view-grid", () => pickView("grid"));
   document.querySelectorAll<HTMLElement>("[data-sort]").forEach((el) => el.addEventListener("click", () => {
     const by = el.dataset.sort as typeof browseSort.by;
     browseSort = browseSort.by === by ? { by, dir: browseSort.dir === 1 ? -1 : 1 } : { by, dir: by === "name" ? 1 : -1 };
@@ -1857,7 +1893,7 @@ function bindBrowse() {
     // Buying needs a wallet: the web's paywall (/s/:token) handles x402 payment.
     if (b.remote) void Browser.open({ url: `${state.server}/api/drives/${b.remote.id}/showcase/${el.dataset.buy}` });
   }));
-  if (browseView === "grid") void loadThumbs();
+  if (viewOf(b) === "grid") void loadThumbs();
 }
 
 /** Local: hand the file to the phone's apps (share/open with). Remote: a signed download link in the browser, like the web. */
@@ -2043,6 +2079,8 @@ async function boot() {
   try {
     const v = (await Preferences.get({ key: "aindrive.mobile.view" })).value;
     if (v === "grid" || v === "list") browseView = v;
+    const fv = (await Preferences.get({ key: FOLDER_VIEWS_KEY })).value;
+    if (fv) folderViews = JSON.parse(fv);
     const so = (await Preferences.get({ key: "aindrive.mobile.sort" })).value;
     if (so) browseSort = JSON.parse(so);
   } catch { /* defaults */ }

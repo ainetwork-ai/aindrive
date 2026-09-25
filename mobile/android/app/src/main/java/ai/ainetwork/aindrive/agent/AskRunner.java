@@ -3,6 +3,7 @@ package ai.ainetwork.aindrive.agent;
 import androidx.annotation.Nullable;
 
 import ai.ainetwork.aindrive.clip.ClipEmbedder;
+import ai.ainetwork.aindrive.clip.SceneLabels;
 import ai.ainetwork.aindrive.index.FileIndex;
 import ai.ainetwork.aindrive.index.GeoLookup;
 import ai.ainetwork.aindrive.speech.SpeechRecognizer;
@@ -36,7 +37,7 @@ import java.util.function.Supplier;
  */
 public final class AskRunner {
     public static final int LIMIT = 50;
-    // Photo-match thresholds live in the image model's manifest (ClipEmbedder.minScore / margin): they are per-model calibrations.
+    // Photo matching is zero-shot classification against everyday scenes (clip/SceneLabels), not a cosine cut-off.
 
     /** What the agent may DO to the folder, provided by the service (SAF on Android). */
     public interface FileOps {
@@ -127,11 +128,11 @@ public final class AskRunner {
                     : "Nothing here matches “" + w + "”. Try what a photo shows (\"dog photos\"), a place or date (\"photos from Paris\"), or a kind of file (\"last week's screenshots\").")
                     .put("sources", new JSONArray());
         }
-        if (hits.isEmpty() && !q.keywords.isEmpty()) { q.keywords.clear(); relaxed.add("keyword"); hits = search(q); }
-        // A place or a date the person named is never dropped: "photos taken in Paris" with no Paris
-        // photos must say so, not show photos from everywhere else. Only the kind is loosened
-        // ("Paris videos" → Paris photos), and only while the place/date still hold.
-        if (hits.isEmpty() && q.kind != null && (q.city != null || q.country != null || q.dateFrom != null)) {
+        // What the person asked about is never dropped either: "food photos this month" with no food
+        // must say so, not list every photo from this month. Likewise a place or a date: "photos taken
+        // in Paris" with no Paris photos says so. Only the kind is loosened ("Paris videos" → Paris
+        // photos), and only for a bare place/date question.
+        if (hits.isEmpty() && q.kind != null && q.keywords.isEmpty() && (q.city != null || q.country != null || q.dateFrom != null)) {
             String kind = q.kind; q.kind = null; relaxed.add("kind"); hits = search(q);
             if (hits.isEmpty()) { q.kind = kind; relaxed.remove("kind"); }
         }
@@ -303,20 +304,13 @@ public final class AskRunner {
             if (!photos.isEmpty()) {
                 StringBuilder en = new StringBuilder();
                 for (String k : content) en.append(en.length() > 0 ? " " : "").append(ContentWords.toEnglish(k));
-                float[] t = emb.embedText("a photo of " + en);
-                List<Object[]> scored = new ArrayList<>();
-                float best = 0;
-                for (FileIndex.Row r : photos) {
-                    float[] v = r.vector();
-                    if (v == null) continue;
-                    float s = ClipEmbedder.dot(v, t);
-                    best = Math.max(best, s);
-                    scored.add(new Object[]{r, s});
-                }
-                float cut = Math.max(emb.minScore, best - emb.margin);
-                for (Object[] o : scored) {
-                    FileIndex.Row r = (FileIndex.Row) o[0]; float s = (Float) o[1];
-                    if (s >= cut && !out.containsKey(r.docId)) out.put(r.docId, new Hit(r, 2, s, "photo", null));
+                float[] t = emb.embedText(SceneLabels.prompt(en.toString()));
+                List<float[]> vecs = new ArrayList<>(photos.size());
+                for (FileIndex.Row r : photos) vecs.add(r.vector());
+                float[] p = SceneLabels.match(t, emb.labelVectors(), vecs);
+                for (int i = 0; i < p.length; i++) {
+                    FileIndex.Row r = photos.get(i);
+                    if (p[i] >= 0 && !out.containsKey(r.docId)) out.put(r.docId, new Hit(r, 2, p[i], "photo", null));
                 }
             }
         }
@@ -355,12 +349,24 @@ public final class AskRunner {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
             String where = q.city != null ? (ko && geo.cityKo(q.city) != null ? geo.cityKo(q.city) : q.city) : q.country != null ? geo.countryName(q.country, ko) : null;
-            if (where != null || q.dateFrom != null) {
-                String what = kindNoun(q.kind, 2, ko);
+            String topic = String.join(" ", q.keywords);
+            if (where != null || q.dateFrom != null || !topic.isEmpty()) {
+                // "No receipts from August", not "No receipts files from August".
+                String what = topic.isEmpty() ? kindNoun(q.kind, 2, ko) : q.kind == null ? topic : topic + " " + kindNoun(q.kind, 2, ko);
                 String when = q.dateFrom != null ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(q.dateFrom) + (q.dateTo != null ? " ~ " + new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(q.dateTo - 1) : "") : null;
                 String none = ko
                         ? (where != null ? where + "에서 찍은 " : "") + (when != null ? when + " " : "") + what + "이 없어요."
                         : "No " + what + (where != null ? " taken in " + where : "") + (when != null ? " from " + when : "") + " here.";
+                if (!topic.isEmpty()) {
+                    // The place/date has files, just none showing the topic: say that, not "no photos from Tokyo".
+                    FileIndex.Filter f = new FileIndex.Filter();
+                    f.kind = q.kind == null ? FileIndex.PHOTO : q.kind; f.country = q.country; f.city = q.city; f.dateFrom = q.dateFrom; f.dateTo = q.dateTo;
+                    int there = index.query(f, 0).size();
+                    String scope = kindNoun(f.kind, there, ko) + (where != null ? (ko ? "" : " taken in " + where) : "") + (when != null ? (ko ? "" : " from " + when) : "");
+                    if (there > 0) return ko
+                            ? (where != null ? where + "에서 찍은 " : "") + (when != null ? when + " " : "") + kindNoun(f.kind, there, ko) + " " + there + "개 중에 “" + topic + "”에 해당하는 건 없어요."
+                            : "There are " + there + " " + scope + ", but none of them show “" + topic + "”.";
+                }
                 String places = where != null ? knownPlaces(q.kind, ko) : "";
                 return none + places;
             }

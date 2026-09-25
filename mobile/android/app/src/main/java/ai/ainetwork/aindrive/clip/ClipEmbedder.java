@@ -122,6 +122,22 @@ public final class ClipEmbedder implements AutoCloseable {
         }
     }
 
+    private volatile float[][] labelVecs;
+
+    /** Text vectors of {@link SceneLabels#VOCAB}; ~90 text passes the first time, so warm it off the ask path. */
+    public float[][] labelVectors() throws IOException {
+        float[][] l = labelVecs;
+        if (l != null) return l;
+        synchronized (this) {
+            if (labelVecs == null) {
+                float[][] v = new float[SceneLabels.VOCAB.length][];
+                for (int i = 0; i < v.length; i++) v[i] = embedText(SceneLabels.prompt(SceneLabels.VOCAB[i]));
+                labelVecs = v;
+            }
+            return labelVecs;
+        }
+    }
+
     public static float dot(float[] a, float[] b) {
         float s = 0;
         for (int i = 0; i < a.length; i++) s += a[i] * b[i];

@@ -301,6 +301,17 @@ input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; dis
 .tile .cap .name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile .cap .iconbtn { width: 30px; height: 30px; border: 0; }
 .tile .menu { top: auto; bottom: 36px; }
+/* Photo folders: a dense 3-up grid like a gallery; photos fill their square, name hidden, ⋮ floats on top. */
+.tiles.media { grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.tiles.media .tile { border-radius: 8px; box-shadow: none; border: 0; }
+.tiles.media .tile .thumb { aspect-ratio: 1 / 1; }
+.tiles.media .tile .cap { padding: 4px 2px 4px 6px; }
+.tiles.media .tile .cap .name { font-size: 11px; }
+.tiles.media .tile.pic .cap { position: absolute; top: 0; right: 0; padding: 2px; }
+.tiles.media .tile.pic .cap > :not(.menu-wrap) { display: none !important; }
+.tiles.media .tile:not(.pic) .cap { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.92); }
+.tiles.media .tile.pic .cap .iconbtn { background: rgba(0,0,0,.35); color: #fff; border-radius: 50%; width: 28px; height: 28px; }
+.tiles.media .tile.pic .menu { top: 32px; bottom: auto; right: 0; }
 .folder [data-act="browse"] { cursor: pointer; }
 
 /* ---------- in-app viewer ---------- */

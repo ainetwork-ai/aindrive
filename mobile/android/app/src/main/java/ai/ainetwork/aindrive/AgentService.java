@@ -487,7 +487,15 @@ public class AgentService extends Service {
         if (c != null) return c;
         synchronized (this) {
             if (clip == null) {
-                try { ModelStore s = clipStore(); if (s.ready()) clip = new ClipEmbedder(this, s); }
+                try {
+                    ModelStore s = clipStore();
+                    if (s.ready()) {
+                        ClipEmbedder made = new ClipEmbedder(this, s);
+                        clip = made;
+                        // The scene vocabulary costs ~90 text passes: pay it now, not on the first question.
+                        new Thread(() -> { try { made.labelVectors(); } catch (Exception e) { Log.w(TAG, "scene labels: " + e.getMessage()); } }, "clip-labels").start();
+                    }
+                }
                 catch (Exception e) { Log.w(TAG, "clip unavailable: " + e.getMessage()); }
             }
             return clip;
@@ -688,11 +696,22 @@ public class AgentService extends Service {
             results.put(c, r);
             if (r.getJSONArray("sources").length() > 0 && !r.optBoolean("relaxed")) anyExact = true;
         }
-        for (java.util.Map.Entry<Conn, JSONObject> e : results.entrySet()) {
+        // Originals first: a folder the agent collected ("food photos 2026-09") holds copies of
+        // camera-roll photos, and the same photo must not be listed once per folder.
+        java.util.List<java.util.Map.Entry<Conn, JSONObject>> ordered = new java.util.ArrayList<>(results.entrySet());
+        ordered.sort((x, y) -> Boolean.compare(!x.getKey().source, !y.getKey().source));
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (java.util.Map.Entry<Conn, JSONObject> e : ordered) {
             Conn c = e.getKey();
             JSONObject r = e.getValue();
             if (anyExact && r.optBoolean("relaxed")) continue;
-            JSONArray s = r.getJSONArray("sources");
+            JSONArray all = r.getJSONArray("sources"), s = new JSONArray();
+            for (int i = 0; i < all.length(); i++) {
+                JSONObject src = all.getJSONObject(i);
+                String p = src.optString("path");
+                if (seen.add(p.substring(p.lastIndexOf('/') + 1) + "|" + src.optString("snippet"))) s.put(src);
+            }
+            if (all.length() > 0 && s.length() == 0) continue;   // every hit was a copy already listed
             for (int i = 0; i < s.length(); i++) {
                 JSONObject src = s.getJSONObject(i);
                 // Keep `path` drive-relative (the web deep-link needs it); the
@@ -707,11 +726,16 @@ public class AgentService extends Service {
             }
         }
         if (answer.length() == 0) {
-            // Nobody matched: prefer a folder whose reply says where its photos ARE from over one with no locations.
+            // Nobody matched: prefer a reply that says where photos ARE from, and among those the
+            // biggest folder's (a small collected folder's "only Seoul" would mislead about the camera roll).
+            // "There are 69 photos taken in Tokyo, but none show food" beats a list of other places.
             String best = null;
-            for (JSONObject r : results.values()) {
-                String a = r.getString("answer");   // reuse: asking again could repeat a task
-                if (best == null || (a.contains(" are from ") || a.contains("이런 곳에서")) && !(best.contains(" are from ") || best.contains("이런 곳에서"))) best = a;
+            int bestSize = -1, bestRank = -1;
+            for (java.util.Map.Entry<Conn, JSONObject> e : results.entrySet()) {
+                String a = e.getValue().getString("answer");   // reuse: asking again could repeat a task
+                int rank = a.contains("but none of them show") || a.contains("해당하는 건 없어요") ? 2 : a.contains(" are from ") || a.contains("이런 곳에서") ? 1 : 0;
+                int size = e.getKey().index == null ? 0 : e.getKey().index.count();
+                if (rank > bestRank || rank == bestRank && size > bestSize) { best = a; bestSize = size; bestRank = rank; }
             }
             answer.append(best == null ? "" : best);
         }
