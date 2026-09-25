@@ -61,15 +61,23 @@ public final class CallReport {
         final List<FileIndex.Row> heard = new ArrayList<>();
         List<String> topics = new ArrayList<>();
         String gist = "";
+        /** LLM summary of the transcripts, when the summariser model is on the phone. */
+        @Nullable String summary;
     }
 
     private final FileIndex index;
     private final @Nullable CallLog callLog;
     private final Supplier<SpeechRecognizer> speech;
     private final @Nullable AskRunner.FileOps ops;
+    private final Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer;
 
     public CallReport(FileIndex index, @Nullable CallLog callLog, Supplier<SpeechRecognizer> speech, @Nullable AskRunner.FileOps ops) {
-        this.index = index; this.callLog = callLog; this.speech = speech; this.ops = ops;
+        this(index, callLog, speech, ops, () -> null);
+    }
+
+    public CallReport(FileIndex index, @Nullable CallLog callLog, Supplier<SpeechRecognizer> speech, @Nullable AskRunner.FileOps ops,
+                      Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer) {
+        this.index = index; this.callLog = callLog; this.speech = speech; this.ops = ops; this.summarizer = summarizer;
     }
 
     /** Recording file name → who it was with, or null when it is not a call recording. */
@@ -88,6 +96,7 @@ public final class CallReport {
     public JSONObject run(SearchQuery q, long nowMs) throws Exception {
         boolean ko = q.korean;
         Map<String, Person> people = new LinkedHashMap<>();
+        Map<String, Person> byNumber = new HashMap<>();
         List<Call> calls = callLog == null ? null : callLog.calls();
         boolean haveLog = calls != null;
         long logSince = Long.MAX_VALUE;
@@ -98,6 +107,8 @@ public final class CallReport {
                 if (key.isEmpty()) continue;
                 Person p = people.computeIfAbsent(key, k -> { Person x = new Person(); x.name = k; return x; });
                 p.calls++; p.seconds += c.seconds; p.lastMs = Math.max(p.lastMs, c.whenMs);
+                String num = normNumber(c.number);
+                if (num.length() >= 7) byNumber.putIfAbsent(num, p);
             }
         }
         // Recordings: by contact name; a name the call log does not know (or no log at all) still gets a row.
@@ -110,9 +121,9 @@ public final class CallReport {
             recordings++;
             Person p = people.get(who);
             if (p == null) {
-                // "010-1234-5678" recordings match a log entry with that number.
+                // "010-1234-5678" recordings belong to whoever the log knows under that number.
                 String num = normNumber(who);
-                if (num.length() >= 7) p = people.get(num);
+                if (num.length() >= 7) { p = byNumber.get(num); if (p == null) p = people.get(num); }
             }
             if (p == null) { p = new Person(); p.name = who; people.put(who, p); }
             p.recordings.add(r);
@@ -163,6 +174,7 @@ public final class CallReport {
             }
         }
         topics(top);
+        summarise(top, ko);
 
         // Answer + sources (one per person: the newest recording, snippet = topics).
         StringBuilder a = new StringBuilder();
@@ -172,7 +184,8 @@ public final class CallReport {
         for (Person p : top) {
             i++;
             a.append(i).append(". ").append(p.name).append(" — ").append(countText(p, ko));
-            if (!p.topics.isEmpty()) a.append(ko ? " · 주로 " : " · usually ").append(String.join(", ", p.topics));
+            if (p.summary != null) a.append("\n   ").append(p.summary.replace("\n", " "));
+            else if (!p.topics.isEmpty()) a.append(ko ? " · 주로 " : " · usually ").append(String.join(", ", p.topics));
             a.append("\n");
             if (!p.recordings.isEmpty()) {
                 FileIndex.Row r = p.recordings.get(0);
@@ -207,6 +220,36 @@ public final class CallReport {
     }
 
     private static long when(FileIndex.Row r) { return r.whenMs == null ? r.mtimeMs : r.whenMs; }
+
+    /** Real summaries when the on-device LLM is present; cached per person + transcript set so re-runs are quick. */
+    private void summarise(List<Person> people, boolean ko) {
+        ai.ainetwork.aindrive.llm.Summarizer llm = null;
+        Map<String, String> cache = loadSummaryCache();
+        boolean dirty = false;
+        for (Person p : people) {
+            if (p.transcripts.isEmpty()) continue;
+            String key = (ko ? "ko|" : "en|") + p.name + "|" + Integer.toHexString(String.join("\u0001", p.transcripts).hashCode());
+            String cached = cache.get(key);
+            if (cached != null) { p.summary = cached; continue; }
+            if (llm == null) { llm = summarizer.get(); if (llm == null) return; }
+            String s = llm.callsWith(p.name, p.transcripts, ko);
+            if (s != null) { p.summary = s; cache.put(key, s); dirty = true; }
+        }
+        if (dirty) saveSummaryCache(cache);
+    }
+
+    private Map<String, String> loadSummaryCache() {
+        Map<String, String> out = new HashMap<>();
+        try {
+            JSONObject o = new JSONObject(index.getMeta("call-summaries"));
+            for (java.util.Iterator<String> it = o.keys(); it.hasNext(); ) { String k = it.next(); out.put(k, o.getString(k)); }
+        } catch (Exception ignored) { }
+        return out;
+    }
+
+    private void saveSummaryCache(Map<String, String> cache) {
+        try { index.setMeta("call-summaries", new JSONObject(cache).toString()); } catch (Exception ignored) { }
+    }
 
     private static String countText(Person p, boolean ko) {
         String n = ko ? p.calls + "회" : p.calls + (p.calls == 1 ? " call" : " calls");
@@ -244,8 +287,9 @@ public final class CallReport {
         md.append(ko ? "- 통화 " : "- Calls: ").append(countText(p, ko)).append("\n");
         if (p.lastMs > 0) md.append(ko ? "- 마지막 통화: " : "- Last call: ").append(df.format(new Date(p.lastMs))).append("\n");
         if (!p.topics.isEmpty()) md.append(ko ? "- 자주 나온 말: " : "- Topics: ").append(String.join(", ", p.topics)).append("\n");
-        if (!p.gist.isEmpty()) md.append("\n> ").append(p.gist).append("\n");
-        if (p.topics.isEmpty()) md.append("\n").append(noTopics(p, ko, canHear)).append("\n");
+        if (p.summary != null) md.append(ko ? "\n## 요약\n\n" : "\n## Summary\n\n").append(p.summary).append("\n").append(ko ? "\n_폰에서 실행되는 소형 언어 모델이 아래 발췌를 읽고 쓴 요약이에요. 인식 오류가 요약에도 섞일 수 있어요._\n" : "\n_Written by a small language model on this phone from the excerpts below; recognition errors can leak into it._\n");
+        else if (!p.gist.isEmpty()) md.append("\n> ").append(p.gist).append("\n");
+        if (p.topics.isEmpty() && p.summary == null) md.append("\n").append(noTopics(p, ko, canHear)).append("\n");
         if (!p.heard.isEmpty()) {
             md.append(ko ? "\n## 들은 녹음\n\n" : "\n## Recordings heard\n\n");
             md.append(ko ? "각 녹음의 앞부분(최대 3분)을 폰에서 Whisper로 받아쓴 내용이에요. 인식 오류가 있을 수 있어요.\n\n"
@@ -265,13 +309,15 @@ public final class CallReport {
     }
 
     private static String markdown(List<Person> all, List<Person> top, boolean haveLog, int recordings, String day, boolean ko, boolean canHear, String logSinceText) {
+        boolean hasSummaries = false;
+        for (Person p : top) hasSummaries |= p.summary != null;
         StringBuilder md = new StringBuilder();
         md.append(ko ? "# 통화 요약 — " : "# Call summary — ").append(day).append("\n\n");
         md.append(ko
                 ? "이 폰의 통화 기록" + (haveLog ? "(" + logSinceText + " 이후)" : "(접근 불가)") + "과 통화 녹음 " + recordings + "개를 바탕으로, 많이 통화한 사람 순으로 정리했어요. 통화 기록보다 오래된 녹음은 통화 1회로 셌어요. "
-                  + "\"주로 나누는 이야기\"는 폰에서 Whisper로 받아쓴 녹음 내용 중 그 사람과의 대화에서 특히 자주 나온 말과 대표 문장이에요 — AI 요약이 아니라 통계입니다.\n\n"
+                  + (hasSummaries ? "요약은 폰에서 실행되는 소형 언어 모델이 받아쓴 녹음(Whisper)을 읽고 쓴 것이고, \"자주 나온 말\"은 그 사람과의 대화에서 특히 자주 나온 낱말이에요.\n\n" : "\"주로 나누는 이야기\"는 폰에서 Whisper로 받아쓴 녹음 내용 중 그 사람과의 대화에서 특히 자주 나온 말과 대표 문장이에요 — AI 요약이 아니라 통계입니다.\n\n")
                 : "From this phone's call log" + (haveLog ? " (since " + logSinceText + ")" : " (not accessible)") + " and " + recordings + " call recordings, ranked by how often you talk. Recordings older than the log count as one call each. "
-                  + "\"Usually about\" is the vocabulary that stands out in that person's recordings (transcribed on the phone with Whisper) plus one representative sentence — a statistic, not an AI summary.\n\n");
+                  + (hasSummaries ? "Summaries are written by a small language model on this phone from the recordings (transcribed with Whisper); \"usually about\" is the vocabulary that stands out in that person's calls.\n\n" : "\"Usually about\" is the vocabulary that stands out in that person's recordings (transcribed on the phone with Whisper) plus one representative sentence — a statistic, not an AI summary.\n\n"));
         md.append(ko ? "| # | 이름 | 통화 | 통화 시간 | 녹음 | 주로 나누는 이야기 |\n|---|---|---|---|---|---|\n"
                      : "| # | Person | Calls | Talk time | Recordings | Usually about |\n|---|---|---|---|---|---|\n");
         int i = 0;
@@ -279,7 +325,7 @@ public final class CallReport {
             i++;
             md.append("| ").append(i).append(" | ").append(p.name.replace("|", "\\|")).append(" | ").append(p.calls).append(" | ")
               .append(p.seconds > 0 ? duration(p.seconds, ko) : "–").append(" | ").append(p.recordings.size()).append(" | ")
-              .append(p.topics.isEmpty() ? "–" : String.join(", ", p.topics)).append(" |\n");
+              .append(p.summary != null ? p.summary.replace("|", "\\|").replace("\n", " ") : p.topics.isEmpty() ? "–" : String.join(", ", p.topics)).append(" |\n");
             if (i >= 50) break;
         }
         md.append("\n");
@@ -289,8 +335,9 @@ public final class CallReport {
             md.append(ko ? "- 통화 " : "- Calls: ").append(countText(p, ko)).append("\n");
             if (p.lastMs > 0) md.append(ko ? "- 마지막 통화: " : "- Last call: ").append(new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(p.lastMs))).append("\n");
             if (!p.topics.isEmpty()) md.append(ko ? "- 자주 나온 말: " : "- Topics: ").append(String.join(", ", p.topics)).append("\n");
-            if (!p.gist.isEmpty()) md.append("\n> ").append(p.gist).append("\n");
-            if (p.topics.isEmpty()) md.append("\n").append(noTopics(p, ko, canHear)).append("\n");
+            if (p.summary != null) md.append("\n").append(p.summary).append("\n");
+            else if (!p.gist.isEmpty()) md.append("\n> ").append(p.gist).append("\n");
+            if (p.topics.isEmpty() && p.summary == null) md.append("\n").append(noTopics(p, ko, canHear)).append("\n");
             md.append("\n");
         }
         return md.toString();

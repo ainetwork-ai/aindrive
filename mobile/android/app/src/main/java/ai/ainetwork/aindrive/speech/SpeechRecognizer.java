@@ -15,6 +15,7 @@ import com.k2fsa.sherpa.onnx.OfflineRecognizer;
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
 import com.k2fsa.sherpa.onnx.OfflineRecognizerResult;
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineQwen3AsrModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineStream;
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig;
@@ -41,8 +42,9 @@ public final class SpeechRecognizer implements AutoCloseable {
         JSONObject m = store.manifest;
         engine = m.optString("engine", "whisper");
         OfflineModelConfig model = new OfflineModelConfig();
-        model.setTokens(store.file("tokens").getAbsolutePath());
-        model.setNumThreads(Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1)));
+        if (store.has("tokens")) model.setTokens(store.file("tokens").getAbsolutePath());
+        // Big cores only matter here; leave two for the UI and the socket.
+        model.setNumThreads(Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors() - 2)));
         model.setDebug(false);
         model.setProvider("cpu");
         switch (engine) {
@@ -73,6 +75,19 @@ public final class SpeechRecognizer implements AutoCloseable {
                 s.setUseInverseTextNormalization(true);
                 model.setSenseVoice(s);
                 model.setModelType("sense_voice");
+                break;
+            }
+            case "qwen3-asr": {
+                // Qwen3-ASR: conv front-end + encoder + LLM decoder; the tokenizer is a directory next to them.
+                OfflineQwen3AsrModelConfig q = new OfflineQwen3AsrModelConfig();
+                q.setConvFrontend(store.file("frontend").getAbsolutePath());
+                q.setEncoder(store.file("encoder").getAbsolutePath());
+                q.setDecoder(store.file("decoder").getAbsolutePath());
+                q.setTokenizer(store.file("tokenizer").getParentFile().getAbsolutePath());
+                q.setMaxNewTokens(m.optInt("maxNewTokens", 512));
+                q.setTemperature(0f);
+                model.setQwen3Asr(q);
+                model.setModelType("qwen3_asr");
                 break;
             }
             default: throw new IOException("unknown speech engine " + engine);

@@ -64,13 +64,16 @@ public final class AskRunner {
     private final @Nullable FileOps ops;
     private final @Nullable CallReport.CallLog callLog;
     private final Supplier<SpeechRecognizer> speech;
+    private final Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer;
+    private final Runnable releaseSummarizer;
 
     public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops) {
-        this(index, geo, clip, ops, null, () -> null);
+        this(index, geo, clip, ops, null, () -> null, () -> null, () -> { });
     }
 
     public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops,
-                     @Nullable CallReport.CallLog callLog, Supplier<SpeechRecognizer> speech) {
+                     @Nullable CallReport.CallLog callLog, Supplier<SpeechRecognizer> speech,
+                     Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer, Runnable releaseSummarizer) {
         this.index = index;
         this.geo = geo;
         this.parser = new QueryParser(geo);
@@ -78,6 +81,8 @@ public final class AskRunner {
         this.ops = ops;
         this.callLog = callLog;
         this.speech = speech;
+        this.summarizer = summarizer;
+        this.releaseSummarizer = releaseSummarizer;
     }
 
     public JSONObject ask(String question) throws Exception { return ask(question, null); }
@@ -90,7 +95,10 @@ public final class AskRunner {
     public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
         SearchQuery q = parser.parse(question, System.currentTimeMillis(), SearchQuery.fromJson(context));
-        if (q.calls) return new CallReport(index, callLog, speech, ops).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context);
+        if (q.calls) {
+            try { return new CallReport(index, callLog, speech, ops, summarizer).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
+            finally { releaseSummarizer.run(); }
+        }
         int indexed = index.count();
         JSONObject out = new JSONObject().put("query", q.toString()).put("context", q.toJson()).put("followUp", q.followUp);
 

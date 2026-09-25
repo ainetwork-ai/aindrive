@@ -32,7 +32,8 @@ drive and a laptop drive are the same thing to the server.
 | `android/…/index/{PhotoIndex,Indexer,ExifMeta,GeoLookup}.java` | on-device photo index: app-private SQLite, EXIF date/GPS, offline GeoNames gazetteer (`assets/geo/cities.tsv.gz`, built by `scripts/build-gazetteer.py`) |
 | `android/…/agent/{QueryParser,AskRunner,SearchQuery,ContentWords}.java` | the on-device agent: question → kind/place/date/size filters + content words → name, transcript and photo matching → `{answer, sources}`; answers `agent-ask` and the in-app search |
 | `android/…/clip/{ClipEmbedder,ClipTokenizer,ModelStore}.java` | photo recognition: MobileCLIP-S0 on ONNX Runtime (image + text → 512-d), CLIP BPE tokenizer port, verified model downloads (`assets/clip/models.json`) |
-| `android/…/speech/{SpeechRecognizer,AudioDecoder}.java` | speech recognition: Whisper-base (int8) via sherpa-onnx; any container → 16 kHz PCM through MediaCodec (`assets/speech/models.json`) |
+| `android/…/speech/{SpeechRecognizer,AudioDecoder}.java` | speech recognition via sherpa-onnx: **Qwen3-ASR 0.6B int8** by default (`assets/speech/qwen3-asr.json`; best Korean of the exportable models — a 75 s call: Qwen3-ASR near-verbatim, SenseVoice usable, Whisper-base garbled; ~0.35× realtime on an S26), `sense-voice.json` / `whisper-base.json` kept for the `TRANSCRIBE` benchmark hook; any container → 16 kHz PCM through MediaCodec. Changing engine drops old transcripts (`FileIndex.adoptSpeechEngine`) |
+| `android/…/llm/Summarizer.java` | the only LLM on the phone: Qwen2.5-1.5B-Instruct (8-bit) on MediaPipe LLM Inference, used solely to summarise transcripts for the call report (`assets/llm/models.json`, ~1.6 GB, optional — without it the report shows topic words) |
 | `scripts/make-real-corpus.py`, `scripts/run-device-scenarios.py` | real-photo / real-speech corpus + the adb runner that asks every scenario on the phone |
 | `ios/App/App/AgentCore.swift` | same agent, one `DriveConn` (`URLSessionWebSocketTask`) per drive |
 | `ios/App/App/DriveFs.swift` | filesystem over a security-scoped folder bookmark |
@@ -126,7 +127,10 @@ drive and a laptop drive are the same thing to the server.
   cached in the index — a call source is never transcribed at index time) and
   writes `Call summary <date>/Call summary.md`. "Usually about" is TF-IDF
   vocabulary across people plus one representative sentence, and the markdown
-  says so; there is no LLM on the phone.
+  says so. When the optional summariser model is present (`llm/Summarizer`),
+  each person also gets a 2–3 sentence summary written on the phone from the
+  excerpts (cached in the index's `meta` table by transcript set); searches
+  never go through the LLM.
 - **Files open in the app.** Images (downscaled via `readFile`) and audio show
   in an in-app viewer; everything else goes to the OS chooser (`openFile`).
 - **`agent-ask` is answered on the phone, offline.** Same `{answer, sources:

@@ -88,6 +88,31 @@ public final class FileIndex extends SQLiteOpenHelper {
         onCreate(db);
     }
 
+    /** Small key/value side table (report caches); created on first use so the schema version stays. */
+    private void ensureMeta(SQLiteDatabase db) { db.execSQL("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)"); }
+
+    public @Nullable String getMeta(String key) {
+        SQLiteDatabase db = getWritableDatabase(); ensureMeta(db);
+        try (Cursor c = db.rawQuery("SELECT v FROM meta WHERE k = ?", new String[]{key})) { return c.moveToFirst() ? c.getString(0) : null; }
+    }
+
+    public void setMeta(String key, String value) {
+        SQLiteDatabase db = getWritableDatabase(); ensureMeta(db);
+        android.content.ContentValues v = new android.content.ContentValues(); v.put("k", key); v.put("v", value);
+        db.insertWithOnConflict("meta", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    /**
+     * Transcripts from a different speech engine are dropped so they get
+     * redone by the current one (a better engine must not leave old text behind).
+     */
+    public void adoptSpeechEngine(String engine) {
+        String prev = getMeta("speechEngine");
+        if (engine.equals(prev)) return;
+        if (prev != null) getWritableDatabase().execSQL("UPDATE files SET transcript = NULL WHERE transcript IS NOT NULL");
+        setMeta("speechEngine", engine);
+    }
+
     /** True when the file is unknown or changed since it was indexed. */
     public boolean needsIndex(String docId, long mtimeMs, long size) {
         try (Cursor c = getReadableDatabase().rawQuery(

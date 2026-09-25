@@ -1,0 +1,63 @@
+{
+ "model": "Qwen3-ASR 0.6B (int8) via sherpa-onnx \u2014 Korean/English, noise-robust",
+ "license": "Apache-2.0 (Qwen); ONNX export by k2-fsa/sherpa-onnx",
+ "engine": "qwen3-asr",
+ "language": "",
+ "maxNewTokens": 512,
+ "files": [
+  {
+   "id": "frontend",
+   "name": "qwen3-asr/conv_frontend.onnx",
+   "path": "conv_frontend.onnx",
+   "bytes": 44148281,
+   "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+   "archiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+   "archiveBytes": 878702423
+  },
+  {
+   "id": "encoder",
+   "name": "qwen3-asr/encoder.int8.onnx",
+   "path": "encoder.int8.onnx",
+   "bytes": 182491662,
+   "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+   "archiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+   "archiveBytes": 878702423
+  },
+  {
+   "id": "decoder",
+   "name": "qwen3-asr/decoder.int8.onnx",
+   "path": "decoder.int8.onnx",
+   "bytes": 755914231,
+   "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+   "archiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+   "archiveBytes": 878702423
+  },
+  {
+   "id": "tokenizer",
+   "name": "qwen3-asr/tokenizer/vocab.json",
+   "path": "tokenizer/vocab.json",
+   "bytes": 2776833,
+   "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+   "archiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+   "archiveBytes": 878702423
+  },
+  {
+   "id": "merges",
+   "name": "qwen3-asr/tokenizer/merges.txt",
+   "path": "tokenizer/merges.txt",
+   "bytes": 1671853,
+   "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+   "archiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+   "archiveBytes": 878702423
+  },
+  {
+   "id": "tokenizerConfig",
+   "name": "qwen3-asr/tokenizer/tokenizer_config.json",
+   "path": "tokenizer/tokenizer_config.json",
+   "bytes": 12487,
+   "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+   "archiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+   "archiveBytes": 878702423
+  }
+ ]
+}

@@ -1250,7 +1250,7 @@ function searchSheet(): string {
     : models.ready ? ""
     : `<div class="card" style="margin:0 0 12px;padding:12px 14px">
         <b style="font-size:14px">Recognise what's inside</b>
-        <p class="note" style="margin:4px 0 10px">Find photos by what they show and recordings by what was said — on this phone, offline. One-time download of about ${Math.round(models.total / 1e6)} MB.</p>
+        <p class="note" style="margin:4px 0 10px">Find photos by what they show, recordings by what was said, and get real summaries in the call report — all on this phone, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (photo + speech models, and a small language model for summaries).</p>
         ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
         <button class="btn small" id="ensure-models">Download models</button>
       </div>`;

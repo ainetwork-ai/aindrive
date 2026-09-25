@@ -65,6 +65,10 @@ dependencies {
     implementation "androidx.exifinterface:exifinterface:1.3.7"
     // On-device recognition: MobileCLIP (photos) runs on ONNX Runtime.
     implementation "com.microsoft.onnxruntime:onnxruntime-android:1.30.0"
+    // On-device summaries (call report): a small instruct LLM on MediaPipe's LLM Inference. Optional model, ~1.6 GB.
+    implementation "com.google.mediapipe:tasks-genai:0.10.35"
+    // Speech models ship as tar.bz2 bundles on sherpa-onnx's GitHub releases; unpack them on the phone.
+    implementation "org.apache.commons:commons-compress:1.27.1"
     // On-device speech recognition (see sherpa-onnx.gradle for how the AAR gets here).
     implementation fileTree(include: ['sherpa-onnx-*.aar'], dir: 'libs')
     testImplementation "junit:junit:$junitVersion"

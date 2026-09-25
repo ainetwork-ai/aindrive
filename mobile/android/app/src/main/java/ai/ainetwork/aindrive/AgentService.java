@@ -73,6 +73,8 @@ public class AgentService extends Service {
     public static final String ACTION_REINDEX = "ai.ainetwork.aindrive.REINDEX";
     /** Download the recognition models (photos + speech), then re-run recognition on every drive. */
     public static final String ACTION_ENSURE_MODELS = "ai.ainetwork.aindrive.ENSURE_MODELS";
+    /** Debug: transcribe one file with a given speech manifest and log it — for comparing engines on the same recording. */
+    public static final String ACTION_TRANSCRIBE = "ai.ainetwork.aindrive.TRANSCRIBE";
     public static final String EXTRA_DRIVE_ID = "driveId";
 
     /** Backoff schedule copied from cli/src/agent.js so reconnects feel the same. */
@@ -124,6 +126,23 @@ public class AgentService extends Service {
             ensureModels();
             return START_STICKY;
         }
+        if (ACTION_TRANSCRIBE.equals(intent.getAction())) {
+            String manifest = intent.getStringExtra("manifest"), file = intent.getStringExtra("file");
+            int secs = intent.getIntExtra("seconds", 180);
+            rpcPool.execute(() -> {
+                long t0 = System.currentTimeMillis();
+                try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+                    ModelStore s = new ModelStore(this, manifest);
+                    if (!s.ready()) { Log.w(TAG, "transcribe: models for " + manifest + " not downloaded"); return; }
+                    try (SpeechRecognizer r = new SpeechRecognizer(this, s)) {
+                        long t1 = System.currentTimeMillis();
+                        SpeechRecognizer.Transcript t = r.transcribe(in.getFD(), secs);
+                        Log.i(TAG, "transcribe[" + manifest + "] load=" + (t1 - t0) + "ms run=" + (System.currentTimeMillis() - t1) + "ms audio=" + (t == null ? 0 : Math.round(t.durationSec)) + "s → " + (t == null ? "" : t.text));
+                    }
+                } catch (Exception e) { Log.w(TAG, "transcribe failed", e); }
+            });
+            return START_STICKY;
+        }
         if (ACTION_ASK.equals(intent.getAction())) {
             String q = intent.getStringExtra("query");
             String ctx = intent.getStringExtra("context");
@@ -156,6 +175,7 @@ public class AgentService extends Service {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
             conn.fs = new SafFs(this, tree, intent.getStringArrayListExtra("excludeUris"));
             conn.index = new FileIndex(this, driveId);
+            conn.index.adoptSpeechEngine(speechEngineName());
             conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
         } catch (Exception e) {
             conn.lastError = "Could not open folder: " + e.getMessage();
@@ -254,7 +274,8 @@ public class AgentService extends Service {
         }
 
         synchronized AskRunner askRunner() {
-            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull);
+            if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull,
+                    AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer);
             return ask;
         }
 
@@ -385,7 +406,10 @@ public class AgentService extends Service {
 
     // ------------------------------------------------------------ recognition models
 
-    private volatile ModelStore clipStore, speechStore;
+    /** Which speech model the indexer and the call report use; the others stay selectable for the TRANSCRIBE benchmark hook. */
+    static final String SPEECH_MANIFEST = "speech/qwen3-asr.json";
+    private volatile ModelStore clipStore, speechStore, llmStore;
+    private volatile ai.ainetwork.aindrive.llm.Summarizer summarizer;
     private volatile ClipEmbedder clip;
     private volatile SpeechRecognizer speech;
     private volatile boolean modelsDownloading;
@@ -397,8 +421,33 @@ public class AgentService extends Service {
         return clipStore;
     }
 
+    /** The speech engine's name from its manifest — transcripts are only comparable within one engine. */
+    private String speechEngineName() {
+        try { return speechStore().manifest.optString("engine", "whisper") + "/" + speechStore().manifest.optString("model", ""); }
+        catch (Exception e) { return "unknown"; }
+    }
+
+    private ModelStore llmStore() throws java.io.IOException {
+        if (llmStore == null) llmStore = new ModelStore(this, "llm/models.json");
+        return llmStore;
+    }
+
+    /** The summariser, loaded on first use when its model is present; null otherwise (reports fall back to topic words). */
+    synchronized @Nullable ai.ainetwork.aindrive.llm.Summarizer summarizerOrNull() {
+        if (summarizer == null) {
+            try { ModelStore s = llmStore(); if (s.ready()) summarizer = new ai.ainetwork.aindrive.llm.Summarizer(this, s); }
+            catch (Exception e) { Log.w(TAG, "summariser unavailable: " + e.getMessage()); }
+        }
+        return summarizer;
+    }
+
+    /** Free the ~1.6 GB model after a report. */
+    synchronized void releaseSummarizer() {
+        if (summarizer != null) { try { summarizer.close(); } catch (Exception ignored) { } summarizer = null; }
+    }
+
     private ModelStore speechStore() throws java.io.IOException {
-        if (speechStore == null) speechStore = new ModelStore(this, "speech/models.json");
+        if (speechStore == null) speechStore = new ModelStore(this, SPEECH_MANIFEST);
         return speechStore;
     }
 
@@ -446,8 +495,8 @@ public class AgentService extends Service {
         modelsDownloading = true; modelsError = null; modelsDone = 0;
         indexPool.execute(() -> {
             try {
-                ModelStore[] stores = {clipStore(), speechStore()};
-                modelsTotal = stores[0].totalBytes() + stores[1].totalBytes();
+                ModelStore[] stores = {clipStore(), speechStore(), llmStore()};
+                modelsTotal = stores[0].totalBytes() + stores[1].totalBytes() + stores[2].totalBytes();
                 final long[] base = {0};
                 for (ModelStore s : stores) {
                     final long[] fileDone = {0};
