@@ -36,10 +36,7 @@ import java.util.function.Supplier;
  */
 public final class AskRunner {
     public static final int LIMIT = 50;
-    /** CLIP cosine at/above which a photo "is" the query (calibrated on real photos: matches ≈ .19–.31, others ≈ .10–.15). */
-    public static final float CLIP_MIN = 0.18f;
-    /** Also drop anything more than this below the best photo — the tail of near-misses. */
-    public static final float CLIP_MARGIN = 0.06f;
+    // Photo-match thresholds live in the image model's manifest (ClipEmbedder.minScore / margin): they are per-model calibrations.
 
     /** What the agent may DO to the folder, provided by the service (SAF on Android). */
     public interface FileOps {
@@ -259,7 +256,7 @@ public final class AskRunner {
                     best = Math.max(best, s);
                     scored.add(new Object[]{r, s});
                 }
-                float cut = Math.max(CLIP_MIN, best - CLIP_MARGIN);
+                float cut = Math.max(emb.minScore, best - emb.margin);
                 for (Object[] o : scored) {
                     FileIndex.Row r = (FileIndex.Row) o[0]; float s = (Float) o[1];
                     if (s >= cut && !out.containsKey(r.docId)) out.put(r.docId, new Hit(r, 2, s, "photo", null));

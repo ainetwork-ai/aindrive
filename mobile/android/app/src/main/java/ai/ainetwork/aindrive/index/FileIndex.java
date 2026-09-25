@@ -113,6 +113,14 @@ public final class FileIndex extends SQLiteOpenHelper {
         setMeta("speechEngine", engine);
     }
 
+    /** Photo vectors from a different image model are meaningless to the new one: drop them so they get recomputed. */
+    public void adoptImageModel(String model) {
+        String prev = getMeta("imageModel");
+        if (model.equals(prev)) return;
+        if (prev != null) getWritableDatabase().execSQL("UPDATE files SET vec = NULL WHERE vec IS NOT NULL");
+        setMeta("imageModel", model);
+    }
+
     /** True when the file is unknown or changed since it was indexed. */
     public boolean needsIndex(String docId, long mtimeMs, long size) {
         try (Cursor c = getReadableDatabase().rawQuery(

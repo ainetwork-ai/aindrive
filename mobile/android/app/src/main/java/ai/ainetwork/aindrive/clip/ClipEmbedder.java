@@ -21,8 +21,11 @@ import ai.onnxruntime.OrtException;
 import ai.onnxruntime.OrtSession;
 
 /**
- * MobileCLIP-S0 on ONNX Runtime: an image and a sentence become 512-d unit
- * vectors in the same space, so "a photo of a dog" is close to photos of dogs.
+ * MobileCLIP2-S2 (or any MobileCLIP-family export) on ONNX Runtime: an image
+ * and a sentence become 512-d unit vectors in the same space, so "a photo of
+ * a dog" is close to photos of dogs. On the real test corpus MobileCLIP2-S2
+ * ranks best of everything measured (P@4 0.93 vs S0 0.88 vs SigLIP2-B 0.85);
+ * the weights sit in `.onnx.data` files next to the graphs (ORT loads them).
  *
  * Preprocessing mirrors the model's preprocessor_config.json exactly: shortest
  * edge → 256, center crop 256×256, RGB in [0, 1], NO mean/std normalisation
@@ -36,6 +39,9 @@ import ai.onnxruntime.OrtSession;
  */
 public final class ClipEmbedder implements AutoCloseable {
     public static final int DIM = 512, SIZE = 256;
+    /** Cosine at/above which a photo "is" the query, and how far below the best hit still counts — calibrated per model (manifest). */
+    public final float minScore, margin;
+    public final String name;
 
     private final OrtEnvironment env = OrtEnvironment.getEnvironment();
     private final OrtSession vision, text;
@@ -46,6 +52,9 @@ public final class ClipEmbedder implements AutoCloseable {
         try (InputStream v = ctx.getAssets().open("clip/vocab.txt"); InputStream m = ctx.getAssets().open("clip/merges.txt")) {
             tokenizer = new ClipTokenizer(v, m);
         }
+        minScore = (float) store.manifest.optDouble("minScore", 0.18);
+        margin = (float) store.manifest.optDouble("margin", 0.06);
+        name = store.manifest.optString("model", "CLIP");
         try {
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
             opts.setIntraOpNumThreads(Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() - 1)));

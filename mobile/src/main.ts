@@ -737,14 +737,17 @@ function sourceCard(src: AgentSource): string {
     </div>`;
 }
 
-/** Which models see the user's data — all on this phone, none in the cloud. */
+/** Which models see the user's data — all on this phone, none in the cloud. A small link in the agent sheet; opens on tap. */
+let modelInfoOpen = false;
 function modelsSection(): string {
   const m = status.models;
   if (!m?.list?.length) return "";
   const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes the summaries in reports" };
+  const toggle = `<button class="link small" id="model-info-toggle">${modelInfoOpen ? "Hide model info" : "Model info"}</button>`;
+  if (!modelInfoOpen) return `<div class="modelinfo-bar">${toggle}</div>`;
   return `
-    <div class="section"><h2>Models on this phone</h2>${m.ready && m.llm ? "" : `<button class="link" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download all"}</button>`}</div>
-    <div class="card" style="padding:6px 16px">
+    <div class="modelinfo-bar">${toggle}${m.ready && m.llm ? "" : `<button class="link small" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download all"}</button>`}</div>
+    <div class="card" style="padding:6px 16px;margin-bottom:12px">
       ${m.list.map((x) => `
         <div class="row model"><span class="k">${esc(x.role)}</span>
           <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0">
@@ -1088,7 +1091,6 @@ function homeScreen(): string {
       : empty}
 
     ${anyPaired ? sourcesSection() : ""}
-    ${modelsSection()}
 
     ${remotes.length ? `
       <div class="section"><h2>Other devices</h2><button class="link" id="refresh-remotes">Refresh</button></div>
@@ -1168,7 +1170,6 @@ function bindHome() {
   bind("toggle-search", openSearch);
   bind("start-all", startAll);
   bind("add-source", () => void addSource());
-  bind("models-download", ensureModels);
   for (const el of document.querySelectorAll<HTMLElement>("[data-preset]")) {
     el.querySelector("[data-act=src-add]")?.addEventListener("click", () => void addSource(el.dataset.preset as PresetId));
   }
@@ -1331,6 +1332,7 @@ function searchSheet(): string {
       <div class="body">
         ${modelsLine}
         ${indexLine}
+        ${modelsSection()}
         ${body}
       </div>
     </div>`;
@@ -1338,6 +1340,8 @@ function searchSheet(): string {
 
 function bindSearch() {
   bind("close-search", () => { searchOpen = false; render(); });
+  bind("model-info-toggle", () => { modelInfoOpen = !modelInfoOpen; render(); });
+  bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });

@@ -196,6 +196,7 @@ public class AgentService extends Service {
             conn.fs = new SafFs(this, tree, intent.getStringArrayListExtra("excludeUris"));
             conn.index = new FileIndex(this, driveId);
             conn.index.adoptSpeechEngine(speechEngineName());
+            try { conn.index.adoptImageModel(clipStore().manifest.optString("model", "")); } catch (Exception ignored) { }
             conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
         } catch (Exception e) {
             conn.lastError = "Could not open folder: " + e.getMessage();
@@ -431,7 +432,7 @@ public class AgentService extends Service {
     static final String SPEECH_MANIFEST = "speech/qwen3-asr.json";
     /** The summariser's model; other manifests under assets/llm stay selectable for the SUMMARIZE benchmark hook. */
     static final String LLM_MANIFEST = "llm/gemma-4-e2b.json";
-    static final String CLIP_MANIFEST = "clip/models.json";
+    static final String CLIP_MANIFEST = "clip/mobileclip2-s2.json";
     private volatile ModelStore clipStore, speechStore, llmStore;
     private volatile ai.ainetwork.aindrive.llm.Summarizer summarizer;
     private volatile ClipEmbedder clip;
