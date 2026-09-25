@@ -21,6 +21,7 @@ import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, c
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
+import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent } from "./a2a";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
 import { ManageSheet } from "./manage-sheet";
@@ -85,7 +86,54 @@ let busy: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
 /** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
-interface Turn { q: string; r?: AskResult; error?: string; at: number }
+interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
+/** A2A agents added to this chat, next to the on-device agent (which is always here). */
+let a2aAgents: A2aAgent[] = [];
+/** Each agent's A2A conversation id for this thread, so it keeps context. */
+let a2aContexts = new Map<string, string>();
+let modelOpen = false;
+let a2aAdd: { busy: boolean; error?: string } = { busy: false };
+/** What's typed in the add-agent fields, so a redraw doesn't wipe it. */
+const a2aDraft = { url: "", token: "" };
+/**
+ * The signed-in aindrive server's own A2A agent is always in the chat (drives, files, search across
+ * devices) — added on sign-in from its card, marked built-in so it can't be removed.
+ */
+async function ensureDefaultAgent() {
+  if (!state.server || !state.sessionCookie) return;
+  const origin = new URL(state.server).origin;
+  const have = a2aAgents.find((a) => new URL(a.url).origin === origin);
+  if (have?.builtin) return;
+  if (have) { have.builtin = true; await saveAgents(a2aAgents, "local"); render(); return; }
+  try {
+    const agent = { ...(await discover(state.server)), builtin: true };
+    a2aAgents = [agent, ...a2aAgents];
+    await saveAgents(a2aAgents, "local");
+    render();
+  } catch { /* offline: try again next launch */ }
+}
+
+/** "@Weather what's up tomorrow" → that agent and the rest of the message. */
+function mentioned(q: string): { agent: A2aAgent; text: string } | null {
+  const m = /^@(\S+)\s*(.*)$/s.exec(q.trim());
+  if (!m) return null;
+  const key = m[1].toLowerCase();
+  const agent = a2aAgents.find((a) => a.name.replace(/\s+/g, "").toLowerCase() === key) ?? a2aAgents.find((a) => a.name.replace(/\s+/g, "").toLowerCase().startsWith(key));
+  return agent ? { agent, text: m[2] || m[0] } : null;
+}
+
+/** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
+async function askA2a(agents: A2aAgent[], text: string): Promise<{ answer: string; errors: string[] }> {
+  const parts = await Promise.all(agents.map(async (agent) => {
+    try {
+      const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own);
+      if (r.contextId) a2aContexts.set(agent.id, r.contextId);
+      return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
+    } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
+  }));
+  return { answer: parts.filter((p) => p.ok).map((p) => p.line).join("\n\n"), errors: parts.filter((p) => !p.ok).map((p) => p.line) };
+}
 let thread: Turn[] = [];
 /** The last turn's effective filters (AskResult.context): what "them" / "those" mean next time. */
 let askContext: Record<string, unknown> | null = null;
@@ -199,7 +247,7 @@ async function openPastChat(i: number) {
   const c = pastChats[i]; if (!c) return;
   if (thread.length) pastChats.unshift({ at: Date.now(), title: thread[0].q, thread });
   pastChats = pastChats.filter((x) => x !== c);
-  thread = c.thread; askResult = thread[thread.length - 1]?.r ?? null; askContext = null; historyOpen = false;
+  thread = c.thread; askResult = thread[thread.length - 1]?.r ?? null; askContext = null; historyOpen = false; a2aContexts = new Map();
   expandedPhotos.clear(); expandedFiles.clear();
   await Promise.all([saveThread(), saveHistory()]);
   render();
@@ -208,7 +256,7 @@ async function openPastChat(i: number) {
 async function newChat() {
   if (thread.length) { pastChats.unshift({ at: Date.now(), title: thread[0].q, thread }); await saveHistory(); }
   expandedPhotos.clear(); expandedFiles.clear();
-  thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null;
+  thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null; a2aContexts = new Map();
   await saveThread();
   render();
 }
@@ -784,6 +832,7 @@ async function login() {
     state.email = approved.email;
     await save();
     log(`Logged in${approved.email ? ` (${approved.email})` : ""}`);
+    void ensureDefaultAgent();
   } catch (e) {
     fail(e);
   } finally {
@@ -918,29 +967,6 @@ function sourceCard(src: AgentSource): string {
         </div>
         <button class="btn secondary small" data-act="src-remove">Revoke</button>
       </div>
-    </div>`;
-}
-
-/** Which models see the user's data — all on this phone, none in the cloud. A small link in the agent sheet; opens on tap. */
-let modelInfoOpen = false;
-function modelsSection(): string {
-  const m = status.models;
-  if (!m?.list?.length) return "";
-  const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes the summaries in reports" };
-  const toggle = `<button class="link small" id="model-info-toggle">${modelInfoOpen ? "Hide model info" : "Model info"}</button>`;
-  if (!modelInfoOpen) return `<div class="modelinfo-bar">${toggle}</div>`;
-  return `
-    <div class="modelinfo-bar">${toggle}${m.ready && m.llm ? "" : `<button class="link small" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download all"}</button>`}</div>
-    <div class="card" style="padding:6px 16px;margin-bottom:12px">
-      ${m.list.map((x) => `
-        <div class="row model"><span class="k">${esc(x.role)}</span>
-          <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0">
-            <b>${esc(x.name)}</b><br>
-            <span class="hint">${esc(what[x.id] ?? "")} · ${(x.bytes / 1e6) >= 1000 ? (x.bytes / 1e9).toFixed(1) + " GB" : Math.round(x.bytes / 1e6) + " MB"} · ${esc(x.license.replace(/\s*\(.*$/, ""))}</span>
-          </span>
-          <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? "On this phone" : "Not downloaded"}"></span>
-        </div>`).join("")}
-      <p class="hint" style="margin:6px 0 8px">Everything runs on this phone; nothing is sent to a cloud model. ${m.error ? `<span style="color:var(--err)">${esc(m.error)}</span>` : ""}</p>
     </div>`;
 }
 
@@ -1111,6 +1137,16 @@ async function ask(q = askQuery) {
   q = q.trim();
   if (!q) return;
   askQuery = q;
+  const direct = mentioned(q);
+  if (direct) {
+    askBusy = true; render();
+    try {
+      const r = await askA2a([direct.agent], direct.text);
+      askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
+      thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
+    } finally { askBusy = false; askQuery = ""; await saveThread(); render(); }
+    return;
+  }
   if (SHARE_AGAIN.test(q) && askResult?.action?.folder !== undefined && !askResult.action.skipped) {
     thread.push({ q, r: { answer: "Sharing the folder I just made.", sources: [], action: askResult.action }, at: Date.now() });
     askQuery = ""; await saveThread(); render();
@@ -1154,6 +1190,16 @@ async function ask(q = askQuery) {
     merged.answer = parts.join("\n");
     askResult = merged;
     if (local?.context && typeof local.context === "object") askContext = local.context as Record<string, unknown>;
+    // The on-device agent can't do it ("book a table…"): ask the A2A agents added to this chat.
+    if (merged.query === "out" && a2aAgents.length) {
+      const r = await askA2a(a2aAgents, q);
+      if (r.answer) {
+        askResult = { answer: r.answer, sources: [], query: "a2a" };
+        thread.push({ q, r: askResult, at: Date.now(), via: a2aAgents.map((x) => x.name).join(", ") });
+        askQuery = ""; await saveThread();
+        return;
+      }
+    }
     thread.push({ q, r: merged, at: Date.now() });
     askQuery = "";
     await saveThread();
@@ -1202,7 +1248,13 @@ function render() {
   // innerHTML replaces the focused input; put the caret (and the keyboard) back where it was.
   const focused = typing() ? document.activeElement as HTMLInputElement | HTMLTextAreaElement : null;
   const keep = focused ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
+  // Drawers keep their scroll position and typed values across redraws (status updates redraw often).
+  const scrolls = [...app.querySelectorAll<HTMLElement>(".drawer[id]")].map((d) => [d.id, d.scrollTop] as const);
+  // A drawer that was already on screen doesn't slide in again on every redraw.
+  const shown = new Set([...app.querySelectorAll<HTMLElement>(".drawer[id]")].map((d) => d.id));
   try { renderScreens(app); } finally {
+    for (const id of shown) document.getElementById(id)?.classList.add("still");
+    for (const [id, top] of scrolls) { const d = document.getElementById(id); if (d) d.scrollTop = top; }
     if (keep?.id) {
       const el = document.getElementById(keep.id) as HTMLInputElement | HTMLTextAreaElement | null;
       if (el) {
@@ -1470,7 +1522,7 @@ function bindHome() {
  * Nothing when nothing fits (small talk, a count, a folder already shared).
  */
 function followUps(r: AskResult | null, ctx: Record<string, unknown> | null): string[] {
-  if (!r || r.query === "chat" || r.query === "out") return [];
+  if (!r || r.query === "chat" || r.query === "out" || r.query === "a2a") return [];
   const a = r.action;
   if (a?.report === "calls" || (a?.folder !== undefined && !a.skipped)) return actionShare?.url ? [] : ["Share it"];
   if (a && ["count", "delete", "move"].includes(a.type)) return [];
@@ -1674,6 +1726,7 @@ function searchSheet(): string {
         <div class="bubble">${esc(t.q)}</div>
         ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
           ${last ? actionCard : collected(t.r) ? `<div class="card action compact"><div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(t.r.action!.label ?? t.r.action!.folder ?? "")}</b> <span class="hint">· ${t.r.action!.copied ?? 0} files</span></span></div>${folderStrip(t.r, i)}</div>` : ""}
+          ${t.via ? `<p class="hint via">${icon("globe", 12)} ${esc(t.via)}</p>` : ""}
           <p class="answer">${esc(t.r.answer)}</p>
           ${hitsList(t.r, i, last)}` : ""}
       </div>`;
@@ -1691,7 +1744,8 @@ function searchSheet(): string {
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : "offline"}</div></div>
+        <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
+        <button class="iconbtn" id="model-switch" aria-label="Model and agents" title="Model and agents">${icon("cpu", 20)}${a2aAgents.length ? `<span class="count-badge">${a2aAgents.length}</span>` : ""}</button>
         <!-- Always shown (with a label) so past conversations are findable even before the first "New chat". -->
         <button class="iconbtn" id="chat-history" aria-label="Past chats" title="Past chats">${icon("history", 20)}</button>
         ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${icon("plus", 20)}</button>` : ""}
@@ -1699,7 +1753,6 @@ function searchSheet(): string {
       <div class="body" id="ask-body">
         ${modelsLine}
         ${indexLine}
-        ${modelsSection()}
         ${body}
       </div>
       <!-- Composer at the bottom, like a chat: the conversation stays in view above the keyboard. -->
@@ -1708,16 +1761,56 @@ function searchSheet(): string {
           ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
         <button class="iconbtn primary" id="ask-send" aria-label="Send" ${askBusy ? "disabled" : ""}>${icon("up", 20)}</button>
       </div>
-      ${historyOpen ? `<div class="scrim" id="history-scrim"><div class="drawer"><div class="grab"></div>
+      ${historyOpen ? `<div class="scrim" id="history-scrim"><div class="drawer" id="history-drawer"><div class="grab"></div>
         <div class="head"><h3>Past chats</h3><button class="iconbtn ghost" id="history-close" aria-label="Close">${I.close}</button></div>
         ${pastChats.length ? "" : `<p class="note" style="padding:12px 16px">No past chats yet. Tapping “New chat” saves the current conversation here.</p>`}
         <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ft-doc">${icon("chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s">${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
+      ${modelOpen ? modelDrawer() : ""}
     </div>`;
+}
+
+/** Top-bar model switch: what's answering now, the agents to switch to, and "paste an A2A URL" to add one. */
+function modelDrawer(): string {
+  const m = status.models;
+  const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes summaries and chats" };
+  const size = (b: number) => (b / 1e6) >= 1000 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
+  const local = `<div class="card" style="padding:6px 16px;margin-bottom:12px">
+        <div class="row model"><span class="k">${icon("cpu", 16)}</span><span class="v" style="text-align:left;flex:1;margin-left:12px"><b>aindrive on-device agent</b><br><span class="hint">Your files, on this phone — nothing is sent to a cloud model</span></span></div>
+        ${(m?.list ?? []).map((x) => `
+          <div class="row model"><span class="k">${esc(x.role)}</span>
+            <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0"><b>${esc(x.name)}</b><br>
+              <span class="hint">${esc(what[x.id] ?? "")} · ${size(x.bytes)} · ${esc((x.license ?? "").replace(/\s*\(.*$/, ""))}</span></span>
+            <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? "On this phone" : "Not downloaded"}"></span>
+          </div>`).join("")}
+        ${m && !(m.ready && m.llm) ? `<p style="margin:8px 0"><button class="btn small secondary" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download models"}</button></p>` : ""}
+      </div>`;
+  const agents = a2aAgents.map((a) => `
+    <div class="card" style="padding:12px 16px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="ft-doc" style="display:inline-flex">${icon("globe", 20)}</span>
+        <div style="flex:1;min-width:0"><div style="font-weight:600">${esc(a.name)}${a.version ? ` <span class="hint">v${esc(a.version)}</span>` : ""}</div>
+          <div class="hint mono" style="word-break:break-all">${esc(new URL(a.url).host)} · @${esc(a.name.replace(/\s+/g, ""))}</div></div>
+        ${a.builtin ? `<span class="badge">Default</span>` : `<button class="iconbtn ghost" data-agent-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}">${icon("trash", 16)}</button>`}
+      </div>
+      ${a.description ? `<p class="note" style="margin:6px 0 0">${esc(a.description.length > 180 ? a.description.slice(0, 177) + "…" : a.description)}</p>` : ""}
+      ${a.skills.length ? `<div class="chips" style="margin-top:8px">${a.skills.slice(0, 8).map((k) => `<span class="badge" title="${esc(k.description ?? "")}">${esc(k.name)}</span>`).join("")}</div>` : ""}
+    </div>`).join("");
+  return `<div class="scrim" id="model-scrim"><div class="drawer" id="model-drawer"><div class="grab"></div>
+    <div class="head"><h3>Model &amp; agents</h3><button class="iconbtn ghost" id="model-close" aria-label="Close">${I.close}</button></div>
+    ${local}
+    <p class="note group">A2A agents in this chat</p>
+    ${agents || `<p class="hint" style="margin:0 0 8px">None yet. Add agents to help with what this phone can't do.</p>`}
+    ${a2aAgents.length ? `<p class="hint" style="margin:0 0 10px">Your files stay with the on-device agent. Anything it can't do goes to these agents; start a message with @name to ask one directly.</p>` : ""}
+    <p class="note group" style="margin-top:14px">Add an A2A agent</p>
+    <div class="field" style="margin-bottom:8px">${icon("link", 18)}<input id="a2a-url" type="url" inputmode="url" placeholder="Paste an A2A agent URL" autocomplete="off" value="${esc(a2aDraft.url)}" /></div>
+    <div class="field" style="margin-bottom:8px">${icon("lock", 18)}<input id="a2a-token" type="password" placeholder="Access token (optional)" autocomplete="off" value="${esc(a2aDraft.token)}" /></div>
+    ${a2aAdd.error ? `<p class="hint" style="color:var(--err)">${esc(a2aAdd.error)}</p>` : ""}
+    <button class="btn" id="a2a-add" ${a2aAdd.busy ? "disabled" : ""}>${a2aAdd.busy ? `<span class="spinner"></span> Reading agent card…` : "Add agent"}</button>
+  </div></div>`;
 }
 
 function bindSearch() {
   bind("close-search", () => { searchOpen = false; render(); });
-  bind("model-info-toggle", () => { modelInfoOpen = !modelInfoOpen; render(); });
   bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
@@ -1729,6 +1822,33 @@ function bindSearch() {
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
   bind("chat-history", () => { historyOpen = true; render(); });
+  bind("model-switch", () => { modelOpen = true; a2aAdd = { busy: false }; render(); });
+  bind("model-close", () => { modelOpen = false; render(); });
+  document.getElementById("model-scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { modelOpen = false; render(); } });
+  document.querySelectorAll<HTMLElement>("[data-agent-remove]").forEach((el) => el.addEventListener("click", () => {
+    const id = el.dataset.agentRemove!;
+    a2aAgents = a2aAgents.filter((a) => a.id !== id || a.builtin);
+    a2aContexts.delete(id);
+    void saveAgents(a2aAgents, "local"); render();
+  }));
+  const urlEl = document.getElementById("a2a-url") as HTMLInputElement | null, tokEl = document.getElementById("a2a-token") as HTMLInputElement | null;
+  urlEl?.addEventListener("input", () => { a2aDraft.url = urlEl.value; });
+  tokEl?.addEventListener("input", () => { a2aDraft.token = tokEl.value; });
+  bind("a2a-add", async () => {
+    const url = urlEl?.value || a2aDraft.url;
+    const token = (tokEl?.value || a2aDraft.token).trim() || undefined;
+    a2aAdd = { busy: true }; render();
+    try {
+      const agent = await discover(url, token);
+      a2aAgents = [...a2aAgents.filter((a) => a.url !== agent.url), agent];
+      await saveAgents(a2aAgents, "local");
+      a2aAdd = { busy: false }; a2aDraft.url = ""; a2aDraft.token = "";
+      notify(`Added ${agent.name} — ask it with @${agent.name.replace(/\s+/g, "")}`);
+    } catch (e) {
+      a2aAdd = { busy: false, error: msgOf(e) };
+    }
+    render();
+  });
   bind("history-close", () => { historyOpen = false; render(); });
   document.getElementById("history-scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { historyOpen = false; render(); } });
   document.querySelectorAll<HTMLElement>("[data-past]").forEach((el) => el.addEventListener("click", () => void openPastChat(Number(el.dataset.past))));
@@ -2135,8 +2255,33 @@ function sleep(ms: number) {
 
 // ---------------------------------------------------------------- boot
 
+/**
+ * Status updates (indexing progress) redraw the screen — but a redraw between touch-down and
+ * touch-up replaces the button being tapped and the tap is lost. So hold them while a finger is
+ * down, flush on release, and coalesce to at most ~2 per second.
+ */
+let fingerDown = false, statusPending = false, statusTimer: ReturnType<typeof setTimeout> | null = null, lastStatusRender = 0;
+function statusRender() {
+  statusPending = true;
+  if (fingerDown || statusTimer) return;
+  const wait = Math.max(0, 500 - (Date.now() - lastStatusRender));
+  statusTimer = setTimeout(() => {
+    statusTimer = null;
+    if (!statusPending || fingerDown) return;
+    if (typing()) return;
+    statusPending = false; lastStatusRender = Date.now();
+    render();
+  }, wait);
+}
+document.addEventListener("pointerdown", () => { fingerDown = true; }, true);
+const release = () => { fingerDown = false; if (statusPending) setTimeout(statusRender, 350); };
+document.addEventListener("pointerup", release, true);
+document.addEventListener("pointercancel", release, true);
+
 async function boot() {
   await load();
+  ({ agents: a2aAgents } = await loadAgents());
+  void ensureDefaultAgent();
   try {
     const v = (await Preferences.get({ key: "aindrive.mobile.view" })).value;
     if (v === "grid" || v === "list") browseView = v;
@@ -2165,7 +2310,7 @@ async function boot() {
       if (d.lastError && d.lastError !== prev?.lastError) log(`${name}: ${d.lastError}`);
     }
     // Indexing progress ticks every few files; never redraw under someone's fingers.
-    if (!typing()) render();
+    statusRender();
   }).catch(() => {});
   App.addListener("resume", () => {
     void pruneMissing();
