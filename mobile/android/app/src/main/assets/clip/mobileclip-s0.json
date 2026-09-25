@@ -1,0 +1,25 @@
+{
+ "model": "MobileCLIP-S0 (Apple, ONNX export by Xenova)",
+ "license": "Apple ML Research license / apple-ascl (see https://huggingface.co/apple/mobileclip_s0_timm)",
+ "embedDim": 512,
+ "imageSize": 256,
+ "contextLength": 77,
+ "files": [
+  {
+   "id": "vision",
+   "name": "vision_model.onnx",
+   "url": "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/vision_model.onnx",
+   "sha256": "17d3c037b1d488c10c50e09f6009ea5a198caef4e0e8f4ea5617b7cb2d067ac0",
+   "bytes": 45543630
+  },
+  {
+   "id": "text",
+   "name": "text_model_quantized.onnx",
+   "url": "https://huggingface.co/Xenova/mobileclip_s0/resolve/main/onnx/text_model_quantized.onnx",
+   "sha256": "b8557b10e5c23a0126c6d2e6eba48d240484979007917d128953b31618a04211",
+   "bytes": 42799238
+  }
+ ],
+ "minScore": 0.18,
+ "margin": 0.06
+}

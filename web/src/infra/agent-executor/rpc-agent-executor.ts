@@ -22,6 +22,9 @@ export const rpcAgentExecutor: AgentExecutor = {
       // 25s for slow models.
       { timeoutMs: 60_000 },
     );
-    return { answer: r.answer, sources: r.sources };
+    // `action` is set when the agent did something (the phone agent copies
+    // matches into a folder on "…모아서 폴더로 만들어줘"); pass it through so
+    // the asking device can offer "open folder" / "share".
+    return { answer: r.answer, sources: r.sources, ...(r.action ? { action: r.action } : {}) };
   },
 };

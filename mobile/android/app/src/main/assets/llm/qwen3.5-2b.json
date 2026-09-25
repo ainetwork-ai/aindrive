@@ -1,0 +1,8 @@
+{
+ "model": "Qwen3.5-2B (Alibaba, 2026-03) int8 — LiteRT-LM bundle",
+ "license": "Apache-2.0",
+ "engine": "litert-lm",
+ "files": [
+  {"id": "model", "name": "Qwen3.5-2B_int8.litertlm", "url": "https://huggingface.co/litert-community/Qwen3.5-2B/resolve/main/Qwen3.5-2B_int8.litertlm", "sha256": "8ae5027136e0b89039ed76eedfb61f0cf4b7277024d99bf765359264295b86b1", "bytes": 2116592816}
+ ]
+}

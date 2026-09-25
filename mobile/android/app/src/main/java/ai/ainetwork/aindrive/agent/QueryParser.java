@@ -34,7 +34,7 @@ public final class QueryParser {
      * they are rare in search questions and 고양이/나비/거미 must stay whole.
      */
     private static final String[] KO_PARTICLES = {
-            "에서의", "에서는", "에서", "으로", "로", "까지", "부터", "에는", "에", "의", "은", "는", "을", "를", "과", "와", "도", "랑", "이랑", "하고",
+            "에서의", "에서는", "에서", "으로", "로", "까지", "부터", "에는", "에", "의", "은", "는", "을", "를", "과", "와", "도", "랑", "이랑", "하고", "들만", "만",
     };
     /**
      * For PLACE matching only the locative/possessive particles are stripped:
@@ -49,10 +49,14 @@ public final class QueryParser {
             "찍은", "찍었던", "찍힌", "촬영한", "갔던", "갔을때", "갔을", "여행", "여행갔던", "때", "받은", "만든", "저장한", "저장된", "다운받은", "다운로드한",
             "찾아줘", "찾아", "찾아봐", "찾기", "검색", "보여줘", "보여", "줘", "좀", "다", "모두", "전부", "있어", "있나", "있니", "뭐", "어디", "어떤",
             "내", "나의", "우리", "그", "저", "것", "거", "들", "중", "중에", "중에서", "관련", "관련된", "모든", "전체", "다른", "제일", "가장", "좋은", "이름",
+            // "X 얘기한 녹음" — the verbs around a topic word are not the topic
+            "얘기한", "얘기", "이야기", "이야기한", "언급된", "언급한", "언급", "나온", "나왔던", "말한", "말했던", "관한", "대한", "다룬", "논의한", "토론한", "설명한", "들어간", "들어있는", "포함된", "나오는",
+            "먹은", "먹었던", "마신", "본", "봤던", "샀던", "갔다온", "다녀온",
             // English
             "find", "show", "search", "get", "open", "list", "me", "the", "a", "an", "of", "from", "in", "at", "on", "my", "our", "all", "any", "some", "with", "for", "that", "which",
             "taken", "took", "trip", "travel", "travelled", "traveled", "vacation", "holiday", "please", "i", "we", "were", "was", "named", "called", "about", "best", "good",
-            "downloaded", "saved", "received", "sent", "shared"
+            "downloaded", "saved", "received", "sent", "shared", "as", "them", "these", "those",
+            "mentioned", "mentions", "mentioning", "talked", "talking", "talks", "discussed", "discussing", "discussion", "said", "says", "where", "when", "who", "someone", "they", "he", "she"
     ));
     /** Kind words, per category. "사진" alone means photos; "파일" means any kind. */
     private static final Map<String, String> KIND_WORDS = new HashMap<>();
@@ -80,6 +84,33 @@ public final class QueryParser {
     /** English city names that are also everyday words: only a capitalised token means the city. */
     private static final Set<String> NEEDS_CAPITAL = new HashSet<>(Arrays.asList(
             "nice", "spring", "reading", "bath", "orange", "mobile", "buffalo", "phoenix", "jordan", "victoria", "of", "most", "split", "bar", "male", "media"));
+    /**
+     * "meeting recording about X": words that describe a recording rather than
+     * what was said in it. They still match file NAMES (녹음_회의.m4a), but are
+     * left out of the transcript and photo matching.
+     */
+    public static final Set<String> RECORDING_WORDS = new HashSet<>(Arrays.asList(
+            "meeting", "meetings", "회의", "미팅", "interview", "인터뷰", "call", "통화", "conversation", "대화", "talk", "강의", "lecture", "voice", "memo", "메모"));
+
+    public static List<String> contentWords(List<String> keywords) {
+        List<String> out = new ArrayList<>();
+        for (String k : keywords) if (!RECORDING_WORDS.contains(k.toLowerCase(Locale.ROOT))) out.add(k);
+        return out;
+    }
+    /** Verbs that turn a question into a task. Matched as prefixes of a token ("모아서", "모아", "만들어줘"). */
+    private static final String[] COLLECT_WORDS = {"모아", "모아서", "모아줘", "모으", "묶어", "정리", "폴더", "앨범", "collect", "gather", "folder", "album", "organize", "organise", "copy", "복사"};
+    private static final String[] MOVE_WORDS = {"옮겨", "옮기", "이동", "move"};
+    private static final String[] SHARE_WORDS = {"공유", "링크", "share", "link"};
+    private static final String[] DELETE_WORDS = {"삭제", "지워", "지우", "없애", "delete", "remove", "trash", "rid"};
+    private static final String[] COUNT_WORDS = {"몇", "개수", "갯수", "count", "number", "how many"};
+    private static final String[] OLDEST_WORDS = {"오래된", "옛날", "가장오래된", "oldest", "earliest"};
+    private static final String[] TASK_FILLER = {"만들어", "만들고", "만들어서", "만들어줘", "만든", "새", "넣어", "넣고", "해줘", "해서", "하고", "줘", "그리고", "다음", "개야", "개나", "개", "있어", "있니", "있나", "있는지", "알려줘", "알려", "골라", "골라줘", "뽑아", "뽑아줘", "보여줘",
+            "then", "and", "make", "create", "put", "into", "new", "them", "it", "me", "there", "are", "is", "do", "i", "have", "tell", "pick", "top", "only", "did", "take", "took", "taken", "just", "to", "get", "of", "my", "ate", "eat", "eaten", "had"};
+    private static final Pattern KO_COUNT = Pattern.compile("^(\\d{1,3})(개|장|건|개만|장만|건만)$");
+    private static final Pattern EN_COUNT = Pattern.compile("^(\\d{1,3})$");
+    /** Bare counters left behind by "몇 장", "몇 개". */
+    private static final Set<String> COUNT_UNITS = new HashSet<>(Arrays.asList("장", "개", "건", "번", "곡", "편"));
+    private static final Set<String> RECENT_N_WORDS = new HashSet<>(Arrays.asList("가장", "제일", "최근", "최신", "가장최근", "latest", "most", "recent", "newest", "biggest", "largest"));
     private static final Set<String> SIZE_WORDS = new HashSet<>(Arrays.asList("큰", "대용량", "용량큰", "무거운", "large", "big", "huge", "biggest", "largest"));
     private static final Pattern YEAR = Pattern.compile("^(19|20)\\d{2}$");
     private static final Pattern YEAR_MONTH = Pattern.compile("^((?:19|20)\\d{2})[-./]?(0?[1-9]|1[0-2])$");
@@ -96,9 +127,53 @@ public final class QueryParser {
 
     public QueryParser(GeoLookup geo) { this.geo = geo; }
 
-    public SearchQuery parse(String question, long nowMs) {
+    /** "통화 내역 / call history / who I call most": a report over the call log, not a file search. */
+    private static final Pattern CALLS_TASK = Pattern.compile(
+            "통화\\s*(내역|기록|녹음|목록|요약|많이)|통화한|통화했|(call|phone)\\s*(history|logs?|records?|recordings?)|\\bcalls\\b|who\\s+(do\\s+)?i\\s+(call|talk|phone)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SHARE_ASK = Pattern.compile("공유|링크|\\bshare|\\blink", Pattern.CASE_INSENSITIVE);
+
+    public static boolean isCallsTask(String question) { return question != null && CALLS_TASK.matcher(question).find(); }
+
+    /**
+     * Follow-up cues: the question refers to the previous turn's results
+     * ("and share them", "only the ones from Paris", "그중 파리 사진만").
+     */
+    private static final Pattern FOLLOWUP = Pattern.compile(
+            "\\b(those|them|these|the ones|of those|of them|among them|the same|that one|this one|the rest|also|too)\\b|^(and|now|then|only|just|but)\\b"
+            + "|그중|그 중|그것|그거|그걸|이것들|그것들|얘네|걔네|나머지|거기서|거기에서|그리고|또|만$|중에서|중에", Pattern.CASE_INSENSITIVE);
+
+    public static boolean isFollowUp(String question) { return question != null && FOLLOWUP.matcher(question.trim()).find(); }
+
+    public SearchQuery parse(String question, long nowMs) { return parse(question, nowMs, null); }
+
+    /**
+     * `prev` is the previous turn's filters (SearchQuery.fromJson of the
+     * context the shell keeps). A question that only says what to DO — or that
+     * points back at "those" — is applied to them: missing filters are
+     * inherited, given ones override, keywords accumulate.
+     */
+    public SearchQuery parse(String question, long nowMs, @Nullable SearchQuery prev) {
+        SearchQuery q = parseOne(question, nowMs);
+        if (prev == null || q.calls) return q;
+        boolean refers = isFollowUp(question);
+        if (!q.isTaskOnly() && !refers) return q;
+        if (q.kind == null) q.kind = prev.kind;
+        if (q.city == null && q.country == null) { q.city = prev.city; q.country = prev.country; }
+        if (q.dateFrom == null && q.dateTo == null) { q.dateFrom = prev.dateFrom; q.dateTo = prev.dateTo; }
+        if (q.minSize == null) q.minSize = prev.minSize;
+        for (String k : prev.keywords) if (!q.keywords.contains(k)) q.keywords.add(0, k);
+        q.followUp = true;
+        return q;
+    }
+
+    private SearchQuery parseOne(String question, long nowMs) {
         SearchQuery q = new SearchQuery();
         q.korean = question.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
+        if (isCallsTask(question)) {
+            q.calls = true;
+            q.share = SHARE_ASK.matcher(question).find();
+            return q;
+        }
         List<String> tokens = tokenize(question);
         Calendar now = Calendar.getInstance(TimeZone.getDefault());
         now.setTimeInMillis(nowMs);
@@ -137,7 +212,18 @@ public final class QueryParser {
                 if (q.kind == null || "*".equals(q.kind)) q.kind = kind;
                 used[i] = true; continue;
             }
-            if (SIZE_WORDS.contains(lower)) { q.minSize = LARGE_BYTES; used[i] = true; continue; }
+            // "음식사진", "회의영상": a content word glued to a kind word.
+            for (String kw : new String[]{"사진", "영상", "동영상", "문서", "녹음", "스크린샷"}) {
+                if (lower.length() > kw.length() + 1 && lower.endsWith(kw)) {
+                    String k2 = KIND_WORDS.get(kw);
+                    if (q.kind == null || "*".equals(q.kind)) q.kind = k2;
+                    tokens.set(i, t.substring(0, t.length() - kw.length()));   // leave the content part for step 4
+                    kind = "";
+                    break;
+                }
+            }
+            if (kind != null) { t = tokens.get(i); lower = t.toLowerCase(Locale.ROOT); }
+            if (SIZE_WORDS.contains(lower)) { q.minSize = LARGE_BYTES; q.bySize = true; used[i] = true; continue; }
             Matcher mm;
             if ((mm = YEAR_MONTH.matcher(t)).matches()) { y = Integer.parseInt(mm.group(1)); m = Integer.parseInt(mm.group(2)); used[i] = true; }
             else if (YEAR.matcher(t).matches()) { y = Integer.parseInt(t); used[i] = true; }
@@ -180,7 +266,36 @@ public final class QueryParser {
             if (y != null) applyDate(q, y, m, season);
         }
 
-        // 3. Whatever is left is a keyword for the file name (and, later, CLIP).
+        // 3. Task words: "모아서 폴더로 만들어서 공유해줘" is an instruction, not content.
+        //    Counts ("3개", "5 largest") cap the list; "몇 개" asks for the number only.
+        // First pass: is this a task at all? (so fillers before the verb — "put … in a folder" — count too)
+        boolean task = false;
+        for (int i = 0; i < tokens.size(); i++) {
+            if (used[i]) continue;
+            String lower = stripParticles(tokens.get(i)).toLowerCase(Locale.ROOT), raw = tokens.get(i).toLowerCase(Locale.ROOT);
+            for (String[] set : new String[][]{MOVE_WORDS, DELETE_WORDS, COLLECT_WORDS, SHARE_WORDS, COUNT_WORDS})
+                if (startsWithAny(raw, set) || startsWithAny(lower, set)) task = true;
+            if (KO_COUNT.matcher(raw).matches() || EN_COUNT.matcher(raw).matches() || raw.equals("how") && next(tokens, i).equals("many")) task = true;
+        }
+        for (int i = 0; i < tokens.size(); i++) {
+            if (used[i]) continue;
+            String lower = stripParticles(tokens.get(i)).toLowerCase(Locale.ROOT);
+            String raw = tokens.get(i).toLowerCase(Locale.ROOT);
+            Matcher cm;
+            if (startsWithAny(raw, MOVE_WORDS) || startsWithAny(lower, MOVE_WORDS)) { q.move = true; used[i] = true; }
+            else if (startsWithAny(raw, DELETE_WORDS) || startsWithAny(lower, DELETE_WORDS)) { q.delete = true; used[i] = true; }
+            else if (startsWithAny(raw, COLLECT_WORDS) || startsWithAny(lower, COLLECT_WORDS)) { q.collect = true; used[i] = true; }
+            else if (startsWithAny(raw, SHARE_WORDS) || startsWithAny(lower, SHARE_WORDS)) { q.share = true; q.collect = true; used[i] = true; }
+            else if (startsWithAny(raw, COUNT_WORDS) || startsWithAny(lower, COUNT_WORDS) || raw.equals("how") && next(tokens, i).equals("many")) { q.count = true; used[i] = true; if (raw.equals("how")) used[i + 1] = true; }
+            else if (startsWithAny(raw, OLDEST_WORDS) || startsWithAny(lower, OLDEST_WORDS)) { q.oldestFirst = true; used[i] = true; }
+            else if ((cm = KO_COUNT.matcher(raw)).matches() || (cm = EN_COUNT.matcher(raw)).matches()) { q.limit = Integer.parseInt(cm.group(1)); used[i] = true; }
+            else if (RECENT_N_WORDS.contains(lower) || COUNT_UNITS.contains(raw)) { used[i] = true; }
+            else if (startsWithAny(raw, TASK_FILLER) || startsWithAny(lower, TASK_FILLER)) { if (task || i > 0) used[i] = true; }
+        }
+        if (q.move) q.collect = true;   // a move is a collect that also removes the originals
+        if (q.bySize && q.limit > 0) q.minSize = null;   // "biggest 5" is a ranking, not a floor
+
+        // 4. Whatever is left is a keyword for the file name (and, later, CLIP).
         for (int i = 0; i < tokens.size(); i++) {
             if (used[i]) continue;
             String t = stripParticles(tokens.get(i));
@@ -204,6 +319,19 @@ public final class QueryParser {
             if (tok.length() > p.length() + 1 && tok.endsWith(p)) return tok.substring(0, tok.length() - p.length());
         }
         return tok;
+    }
+
+    /**
+     * Korean verbs inflect at the END ("모아", "모아서", "모아줘"), so a prefix
+     * match is right; English words do not, and "dog" must not match "do".
+     */
+    private static boolean startsWithAny(String t, String[] prefixes) {
+        boolean hangul = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
+        for (String p : prefixes) {
+            boolean pk = p.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
+            if (hangul && pk ? t.startsWith(p) : t.equals(p)) return true;
+        }
+        return false;
     }
 
     static String stripParticles(String tok) {

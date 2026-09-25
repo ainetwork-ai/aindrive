@@ -1,5 +1,7 @@
 # Mobile on-device agent — design (2026-09-23)
 
+> **Status 2026-09-24:** P1 (index + rule parser) and photo/speech recognition are implemented and verified on device — see `mobile/README.md`. What shipped differs from the plan below in two ways: the vision model is MobileCLIP-**S0 fp32 on ONNX Runtime** (not TFLite), and speech recognition (Whisper-base via sherpa-onnx) was added. The LLM planner (P2) is still open.
+
 > **목표**: 폰 앱(`mobile/`)에 초경량 에이전트를 넣어 *"프랑스 여행 갔던 사진 찾아줘"* 같은
 > 자연어 요청으로 공유 폴더의 파일을 찾는다. 모델·인덱스·추론이 전부 폰 안에서 돌고,
 > 서버는 지금처럼 서명된 RPC만 중계한다. 2026-09 기준 공개 모델·런타임으로 설계.

@@ -1,0 +1,29 @@
+// On-device speech recognition uses sherpa-onnx, which ships its Android
+// AAR on GitHub releases rather than Maven Central. Fetch it into app/libs
+// at build time (checksum-pinned) instead of committing 40 MB of binaries.
+// The static-link variant is required: the plain AAR bundles its own
+// libonnxruntime.so, which collides with the ONNX Runtime the photo model uses.
+def sherpaVersion = "1.13.8"
+def sherpaSha256 = "b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471"
+def sherpaAar = file("libs/sherpa-onnx-static-link-onnxruntime-${sherpaVersion}.aar")
+
+tasks.register("downloadSherpaOnnx") {
+    outputs.file(sherpaAar)
+    doLast {
+        if (sherpaAar.exists() && sherpaAar.length() > 0) return
+        sherpaAar.parentFile.mkdirs()
+        def url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaVersion}/sherpa-onnx-static-link-onnxruntime-${sherpaVersion}.aar"
+        println "Downloading ${url}"
+        def tmp = new File(sherpaAar.absolutePath + ".part")
+        new URL(url).openConnection().with { conn ->
+            conn.instanceFollowRedirects = true
+            tmp.withOutputStream { out -> conn.inputStream.withStream { it.transferTo(out) } }
+        }
+        def digest = java.security.MessageDigest.getInstance("SHA-256")
+        tmp.eachByte(1 << 16) { buf, n -> digest.update(buf, 0, n) }
+        def hex = digest.digest().collect { String.format("%02x", it) }.join()
+        if (hex != sherpaSha256) { tmp.delete(); throw new GradleException("sherpa-onnx AAR checksum mismatch: ${hex}") }
+        tmp.renameTo(sherpaAar)
+    }
+}
+preBuild.dependsOn("downloadSherpaOnnx")

@@ -139,6 +139,8 @@ export type Source = {
 };
 
 export type AskResult = {
+  /** Set when the agent DID something (phone agent: copied matches into a folder). Opaque to the web; shown by the asking client. */
+  action?: Record<string, unknown>;
   answer: string;
   sources: Source[];
 };

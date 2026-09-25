@@ -33,7 +33,8 @@ import org.json.JSONObject;
         name = "AindriveAgent",
         permissions = {
                 @Permission(alias = "notifications", strings = {"android.permission.POST_NOTIFICATIONS"}),
-                @Permission(alias = "mediaLocation", strings = {"android.permission.ACCESS_MEDIA_LOCATION"})
+                @Permission(alias = "mediaLocation", strings = {"android.permission.ACCESS_MEDIA_LOCATION"}),
+                @Permission(alias = "callLog", strings = {"android.permission.READ_CALL_LOG"})
         })
 public class AindriveAgentPlugin extends Plugin {
 
@@ -50,6 +51,12 @@ public class AindriveAgentPlugin extends Plugin {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        // "initial": open the picker AT a folder ("Call", "DCIM") so the user only has to confirm.
+        String initial = call.getString("initial");
+        if (initial != null && Build.VERSION.SDK_INT >= 26) {
+            Uri at = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + initial);
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, at);
+        }
         startActivityForResult(call, intent, "folderPicked");
     }
 
@@ -129,6 +136,63 @@ public class AindriveAgentPlugin extends Plugin {
         } catch (Exception e) {
             call.reject("Could not read folder: " + e.getMessage());
         }
+    }
+
+    /**
+     * File bytes for the in-app viewer: images come back downscaled (longest
+     * edge ≤ maxPx, JPEG) so a 12 MP photo is a few hundred KB on the bridge;
+     * anything else is raw, capped at 25 MB.
+     */
+    @PluginMethod
+    public void readFile(PluginCall call) {
+        String folderUri = call.getString("folderUri");
+        String path = call.getString("path");
+        int maxPx = call.getInt("maxPx", 1600);
+        if (folderUri == null || path == null) { call.reject("missing folderUri/path"); return; }
+        new Thread(() -> {
+            try {
+                SafFs fs = new SafFs(getContext(), Uri.parse(folderUri));
+                SafFs.Entry e = fs.stat(path);
+                if (e == null || e.isDir) throw new java.io.FileNotFoundException("no such file");
+                byte[] bytes; String mime = e.mime == null ? "application/octet-stream" : e.mime;
+                if (mime.startsWith("image/")) {
+                    byte[] raw = fs.read(path, 64 * 1024 * 1024);
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length, o);
+                    int sample = 1;
+                    while (Math.max(o.outWidth, o.outHeight) / (sample * 2) >= maxPx) sample *= 2;
+                    android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+                    o2.inSampleSize = sample;
+                    android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length, o2);
+                    if (bmp == null) throw new java.io.IOException("not an image");
+                    // Honour EXIF orientation so portrait phone shots don't show sideways.
+                    try {
+                        androidx.exifinterface.media.ExifInterface ex = new androidx.exifinterface.media.ExifInterface(new java.io.ByteArrayInputStream(raw));
+                        int rot = ex.getRotationDegrees();
+                        if (rot != 0) {
+                            android.graphics.Matrix m = new android.graphics.Matrix(); m.postRotate(rot);
+                            android.graphics.Bitmap r = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
+                            if (r != bmp) { bmp.recycle(); bmp = r; }
+                        }
+                    } catch (Exception ignored) { }
+                    java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, bos);
+                    bmp.recycle();
+                    bytes = bos.toByteArray(); mime = "image/jpeg";
+                } else {
+                    if (e.size > 25L * 1024 * 1024) throw new java.io.IOException("file too large to view in the app");
+                    bytes = fs.read(path, (int) Math.min(e.size, 25L * 1024 * 1024));
+                }
+                JSObject ret = new JSObject();
+                ret.put("mime", mime);
+                ret.put("name", e.name);
+                ret.put("base64", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP));
+                call.resolve(ret);
+            } catch (Exception ex) {
+                call.reject("Could not read file: " + ex.getMessage());
+            }
+        }, "aindrive-read").start();
     }
 
     /** Hand a file to whatever app handles its type (the phone's "open"). */
@@ -259,9 +323,22 @@ public class AindriveAgentPlugin extends Plugin {
 
     // ------------------------------------------------------------ agent
 
+    /** READ_CALL_LOG for the call-history report; resolves {granted}. */
+    @PluginMethod
+    public void requestCallLog(PluginCall call) {
+        if (getPermissionState("callLog") == com.getcapacitor.PermissionState.GRANTED) { call.resolve(new JSObject().put("granted", true)); return; }
+        requestPermissionForAlias("callLog", call, "afterCallLogPermission");
+    }
+
+    @com.getcapacitor.annotation.PermissionCallback
+    private void afterCallLogPermission(PluginCall call) {
+        call.resolve(new JSObject().put("granted", getPermissionState("callLog") == com.getcapacitor.PermissionState.GRANTED));
+    }
+
     @PluginMethod
     public void start(PluginCall call) {
-        String[] required = {"serverUrl", "driveId", "agentToken", "driveSecret", "folderUri"};
+        boolean source = Boolean.TRUE.equals(call.getBoolean("source", false));
+        String[] required = source ? new String[]{"driveId", "folderUri"} : new String[]{"serverUrl", "driveId", "agentToken", "driveSecret", "folderUri"};
         for (String k : required) {
             if (call.getString(k) == null) {
                 call.reject("missing " + k);
@@ -293,7 +370,12 @@ public class AindriveAgentPlugin extends Plugin {
                 .putExtra("driveSecret", call.getString("driveSecret"))
                 .putExtra("folderUri", call.getString("folderUri"))
                 .putExtra("folderLabel", call.getString("folderLabel", ""))
-                .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)));
+                .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)))
+                .putExtra("source", Boolean.TRUE.equals(call.getBoolean("source", false)));
+        java.util.ArrayList<String> exclude = new java.util.ArrayList<>();
+        com.getcapacitor.JSArray ex = call.getArray("excludeUris");
+        if (ex != null) for (int i = 0; i < ex.length(); i++) { try { exclude.add(ex.getString(i)); } catch (Exception ignored) { } }
+        svc.putStringArrayListExtra("excludeUris", exclude);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) getContext().startForegroundService(svc);
         else getContext().startService(svc);
         call.resolve(currentStatus());
@@ -363,15 +445,25 @@ public class AindriveAgentPlugin extends Plugin {
         call.resolve(currentStatus());
     }
 
+    /** Download the recognition models (photos + speech, ≈230 MB, verified) and recognise what is indexed. Progress via statusChanged. */
+    @PluginMethod
+    public void ensureModels(PluginCall call) {
+        Intent svc = new Intent(getContext(), AgentService.class).setAction(AgentService.ACTION_ENSURE_MODELS);
+        if (AgentService.get() == null) { call.reject("Turn a folder on first"); return; }
+        getContext().startService(svc);
+        call.resolve(currentStatus());
+    }
+
     /** Ask the on-device agent. Fully offline: gazetteer + local index only. */
     @PluginMethod
     public void ask(PluginCall call) {
         String query = call.getString("query", "");
+        org.json.JSONObject context = call.getObject("context");
         AgentService svc = AgentService.get();
         if (svc == null) { call.reject("Turn a drive on first"); return; }
         // SQLite + parse: fast, but keep it off the WebView thread regardless.
         new Thread(() -> {
-            try { call.resolve(toJs(svc.ask(query))); }
+            try { call.resolve(toJs(svc.ask(query, context))); }
             catch (Exception e) { call.reject(e.getMessage() == null ? "ask failed" : e.getMessage()); }
         }, "aindrive-ask").start();
     }

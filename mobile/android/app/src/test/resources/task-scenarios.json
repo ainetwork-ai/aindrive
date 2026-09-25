@@ -1,0 +1,1687 @@
+{
+ "generatedAt": "2026-09-25T07:20:30.782559",
+ "scenarios": [
+  {
+   "id": "T001",
+   "q": "collect the photos I took in Paris into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "Paris photos",
+    "share": false
+   },
+   "folderFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T002",
+   "q": "organize my Nice photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "Nice photos",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg"
+   ]
+  },
+  {
+   "id": "T003",
+   "q": "gather my Tokyo photos",
+   "action": {
+    "type": "collect",
+    "folder": "Tokyo photos",
+    "share": false
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T004",
+   "q": "make an album of the Osaka photos",
+   "action": {
+    "type": "collect",
+    "folder": "Osaka photos",
+    "share": false
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg"
+   ]
+  },
+  {
+   "id": "T005",
+   "q": "collect Seoul photos and make a folder",
+   "action": {
+    "type": "collect",
+    "folder": "Seoul photos",
+    "share": false
+   },
+   "folderFiles": [
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T006",
+   "q": "put the Busan photos in a folder",
+   "action": {
+    "type": "collect",
+    "folder": "Busan photos",
+    "share": false
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg"
+   ]
+  },
+  {
+   "id": "T007",
+   "q": "collect my Jeju photos",
+   "action": {
+    "type": "collect",
+    "folder": "Jeju City photos",
+    "share": false
+   },
+   "folderFiles": [
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg"
+   ]
+  },
+  {
+   "id": "T008",
+   "q": "New York photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "New York City photos",
+    "share": false
+   },
+   "folderFiles": [
+    "newyork_1.jpg",
+    "newyork_2.jpg",
+    "newyork_3.jpg",
+    "newyork_4.jpg"
+   ]
+  },
+  {
+   "id": "T009",
+   "q": "gather the London photos",
+   "action": {
+    "type": "collect",
+    "folder": "London photos",
+    "share": false
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T010",
+   "q": "make a Bangkok photo album",
+   "action": {
+    "type": "collect",
+    "folder": "Bangkok photos",
+    "share": false
+   },
+   "folderFiles": [
+    "bangkok_1.jpg",
+    "bangkok_2.jpg",
+    "bangkok_3.jpg",
+    "bangkok_4.jpg"
+   ]
+  },
+  {
+   "id": "T011",
+   "q": "collect all the France photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "France photos",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg",
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T012",
+   "q": "collect my Japan photos",
+   "action": {
+    "type": "collect",
+    "folder": "Japan photos",
+    "share": false
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg",
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T013",
+   "q": "organize the Korea photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "South Korea photos",
+    "share": false
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg",
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg",
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T014",
+   "q": "collect my Paris photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "Paris photos",
+    "share": false
+   },
+   "folderFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T015",
+   "q": "gather the photos from Tokyo into an album",
+   "action": {
+    "type": "collect",
+    "folder": "Tokyo photos",
+    "share": false
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T016",
+   "q": "put all the Korea photos in a folder",
+   "action": {
+    "type": "collect",
+    "folder": "South Korea photos",
+    "share": false
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg",
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg",
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T017",
+   "q": "collect the recordings and make a folder",
+   "action": {
+    "type": "collect",
+    "folder": "recordings",
+    "share": false
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T018",
+   "q": "recordings into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "recordings",
+    "share": false
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T019",
+   "q": "collect this month's France photos",
+   "action": {
+    "type": "collect",
+    "folder": "France photos 2026-09",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg",
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T020",
+   "q": "London photos taken this month into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "London photos 2026-09",
+    "share": false
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T021",
+   "q": "collect the puppy photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "puppy photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T022",
+   "q": "gather my cat photos",
+   "action": {
+    "type": "collect",
+    "folder": "cat photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "cat_1.jpg",
+    "cat_2.jpg",
+    "cat_3.jpg",
+    "cat_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T023",
+   "q": "organize the pizza photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "pizza photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T024",
+   "q": "make an album of the ramen photos",
+   "action": {
+    "type": "collect",
+    "folder": "ramen photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "ramen_1.jpg",
+    "ramen_2.jpg",
+    "ramen_3.jpg",
+    "ramen_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T025",
+   "q": "collect the beach photos",
+   "action": {
+    "type": "collect",
+    "folder": "beach photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T026",
+   "q": "make a folder of sunset photos",
+   "action": {
+    "type": "collect",
+    "folder": "sunset photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "sunset_1.jpg",
+    "sunset_2.jpg",
+    "sunset_3.jpg",
+    "sunset_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T027",
+   "q": "cherry blossom photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "cherry blossom photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "flowers_1.jpg",
+    "flowers_2.jpg",
+    "flowers_3.jpg",
+    "flowers_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T028",
+   "q": "collect my receipt photos",
+   "action": {
+    "type": "collect",
+    "folder": "receipt photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "sunset_1.jpg",
+    "sunset_2.jpg",
+    "sunset_3.jpg",
+    "sunset_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T029",
+   "q": "collect the sports car photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "sports car photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T030",
+   "q": "organize the cake photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "cake photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "cake_1.jpg",
+    "cake_2.jpg",
+    "cake_3.jpg",
+    "cake_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T031",
+   "q": "gather the coffee photos",
+   "action": {
+    "type": "collect",
+    "folder": "coffee photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "coffee_1.jpg",
+    "coffee_2.jpg",
+    "coffee_3.jpg",
+    "coffee_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T032",
+   "q": "make a wedding photo album",
+   "action": {
+    "type": "collect",
+    "folder": "wedding photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "wedding_1.jpg",
+    "wedding_2.jpg",
+    "wedding_3.jpg",
+    "wedding_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T033",
+   "q": "baby photos into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "baby photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "baby_1.jpg",
+    "baby_2.jpg",
+    "baby_3.jpg",
+    "baby_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T034",
+   "q": "collect the concert photos",
+   "action": {
+    "type": "collect",
+    "folder": "concert photos",
+    "share": false
+   },
+   "folderMustInclude": [
+    "concert_1.jpg",
+    "concert_2.jpg",
+    "concert_3.jpg",
+    "concert_4.jpg"
+   ],
+   "folderMustExclude": [
+    "cat_1.jpg",
+    "cat_2.jpg",
+    "cat_3.jpg",
+    "cat_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T035",
+   "q": "put all the dog pictures in one folder",
+   "action": {
+    "type": "collect",
+    "folder": "dog pictures",
+    "share": false
+   },
+   "folderMustInclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T036",
+   "q": "collect only the food photos from this month into a folder",
+   "action": {
+    "type": "collect",
+    "folder": "food photos 2026-09",
+    "share": false
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "ramen_1.jpg",
+    "ramen_2.jpg",
+    "ramen_3.jpg",
+    "ramen_4.jpg"
+   ],
+   "folderMustExclude": [
+    "beach_1.jpg",
+    "beach_2.jpg",
+    "beach_3.jpg",
+    "beach_4.jpg",
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T037",
+   "q": "collect the Paris photos into a folder and share it",
+   "action": {
+    "type": "collect",
+    "folder": "Paris photos",
+    "share": true
+   },
+   "folderFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T038",
+   "q": "gather the Tokyo photos and make a share link",
+   "action": {
+    "type": "collect",
+    "folder": "Tokyo photos",
+    "share": true
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T039",
+   "q": "make a folder of the Japan photos and share it",
+   "action": {
+    "type": "collect",
+    "folder": "Japan photos",
+    "share": true
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg",
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T040",
+   "q": "collect the recordings and share them",
+   "action": {
+    "type": "collect",
+    "folder": "recordings",
+    "share": true
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T041",
+   "q": "share my London photos as a folder",
+   "action": {
+    "type": "collect",
+    "folder": "London photos",
+    "share": true
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T042",
+   "q": "collect Korea photos into a folder and share it",
+   "action": {
+    "type": "collect",
+    "folder": "South Korea photos",
+    "share": true
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg",
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg",
+    "seoul_1.jpg",
+    "seoul_2.jpg",
+    "seoul_3.jpg",
+    "seoul_4.jpg"
+   ]
+  },
+  {
+   "id": "T043",
+   "q": "collect the puppy photos and share them",
+   "action": {
+    "type": "collect",
+    "folder": "puppy photos",
+    "share": true
+   },
+   "folderMustInclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T044",
+   "q": "make a pizza photo folder and share it",
+   "action": {
+    "type": "collect",
+    "folder": "pizza photos",
+    "share": true
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T045",
+   "q": "collect only the food photos I ate this month into a folder and share it",
+   "action": {
+    "type": "collect",
+    "folder": "food photos 2026-09",
+    "share": true
+   },
+   "folderMustInclude": [
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg",
+    "ramen_1.jpg",
+    "ramen_2.jpg",
+    "ramen_3.jpg",
+    "ramen_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "receipt_1.jpg",
+    "receipt_2.jpg",
+    "receipt_3.jpg",
+    "receipt_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T046",
+   "q": "collect the cherry blossom photos and share them as a link",
+   "action": {
+    "type": "collect",
+    "folder": "cherry blossom photos",
+    "share": true
+   },
+   "folderMustInclude": [
+    "flowers_1.jpg",
+    "flowers_2.jpg",
+    "flowers_3.jpg",
+    "flowers_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T047",
+   "q": "collect the Busan photos and share them",
+   "action": {
+    "type": "collect",
+    "folder": "Busan photos",
+    "share": true
+   },
+   "folderFiles": [
+    "busan_1.jpg",
+    "busan_2.jpg",
+    "busan_3.jpg",
+    "busan_4.jpg"
+   ]
+  },
+  {
+   "id": "T048",
+   "q": "collect this month's Tokyo photos",
+   "action": {
+    "type": "collect",
+    "folder": "Tokyo photos 2026-09",
+    "share": false
+   },
+   "folderFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T049",
+   "q": "make a coffee photo folder and share",
+   "action": {
+    "type": "collect",
+    "folder": "coffee photos",
+    "share": true
+   },
+   "folderMustInclude": [
+    "coffee_1.jpg",
+    "coffee_2.jpg",
+    "coffee_3.jpg",
+    "coffee_4.jpg"
+   ],
+   "folderMustExclude": [
+    "car_1.jpg",
+    "car_2.jpg",
+    "car_3.jpg",
+    "car_4.jpg",
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T050",
+   "q": "collect the sunset photos and share them",
+   "action": {
+    "type": "collect",
+    "folder": "sunset photos",
+    "share": true
+   },
+   "folderMustInclude": [
+    "sunset_1.jpg",
+    "sunset_2.jpg",
+    "sunset_3.jpg",
+    "sunset_4.jpg"
+   ],
+   "folderMustExclude": [
+    "dog_1.jpg",
+    "dog_2.jpg",
+    "dog_3.jpg",
+    "dog_4.jpg",
+    "pizza_1.jpg",
+    "pizza_2.jpg",
+    "pizza_3.jpg",
+    "pizza_4.jpg"
+   ],
+   "minRecall": 0.5
+  },
+  {
+   "id": "T051",
+   "q": "how many Paris photos are there?",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T052",
+   "q": "how many Tokyo photos",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T053",
+   "q": "tell me the number of France photos",
+   "action": {
+    "type": "count",
+    "count": 16
+   }
+  },
+  {
+   "id": "T054",
+   "q": "how many photos from Japan",
+   "action": {
+    "type": "count",
+    "count": 8
+   }
+  },
+  {
+   "id": "T055",
+   "q": "how many photos did I take in Korea",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T056",
+   "q": "how many recording files are there",
+   "action": {
+    "type": "count",
+    "count": 7
+   }
+  },
+  {
+   "id": "T057",
+   "q": "how many videos are there?",
+   "action": {
+    "type": "count",
+    "count": 1
+   }
+  },
+  {
+   "id": "T058",
+   "q": "how many photos do I have",
+   "action": {
+    "type": "count"
+   },
+   "countAtLeast": 128
+  },
+  {
+   "id": "T059",
+   "q": "how many photos from Paris",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T060",
+   "q": "how many recordings do I have",
+   "action": {
+    "type": "count",
+    "count": 7
+   }
+  },
+  {
+   "id": "T061",
+   "q": "how many photos from Korea",
+   "action": {
+    "type": "count",
+    "count": 12
+   }
+  },
+  {
+   "id": "T062",
+   "q": "how many videos",
+   "action": {
+    "type": "count",
+    "count": 1
+   }
+  },
+  {
+   "id": "T063",
+   "q": "count the Nice photos",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T064",
+   "q": "how many Bangkok photos are there",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T065",
+   "q": "number of London photos",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T066",
+   "q": "how many Osaka photos",
+   "action": {
+    "type": "count",
+    "count": 4
+   }
+  },
+  {
+   "id": "T067",
+   "q": "how many photos from France",
+   "action": {
+    "type": "count",
+    "count": 16
+   }
+  },
+  {
+   "id": "T068",
+   "q": "show me just the 3 most recent photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "newest"
+  },
+  {
+   "id": "T069",
+   "q": "recent 5 photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 5,
+   "order": "newest"
+  },
+  {
+   "id": "T070",
+   "q": "the 5 biggest files",
+   "action": {
+    "type": null
+   },
+   "listLength": 5,
+   "order": "size"
+  },
+  {
+   "id": "T071",
+   "q": "largest 3 photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "size"
+  },
+  {
+   "id": "T072",
+   "q": "the 2 oldest photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 2,
+   "order": "oldest"
+  },
+  {
+   "id": "T073",
+   "q": "just 2 recordings",
+   "action": {
+    "type": null
+   },
+   "listLength": 2,
+   "order": "newest"
+  },
+  {
+   "id": "T074",
+   "q": "latest 4 photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 4,
+   "order": "newest"
+  },
+  {
+   "id": "T075",
+   "q": "5 largest files",
+   "action": {
+    "type": null
+   },
+   "listLength": 5,
+   "order": "size"
+  },
+  {
+   "id": "T076",
+   "q": "3 biggest photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "size"
+  },
+  {
+   "id": "T077",
+   "q": "oldest 3 photos",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "oldest"
+  },
+  {
+   "id": "T078",
+   "q": "recent 3 recordings",
+   "action": {
+    "type": null
+   },
+   "listLength": 3,
+   "order": "newest"
+  },
+  {
+   "id": "T079",
+   "q": "earliest 2 recordings",
+   "action": {
+    "type": null
+   },
+   "listLength": 2,
+   "order": "oldest"
+  },
+  {
+   "id": "T080",
+   "q": "delete my Paris photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "paris_1.jpg",
+    "paris_2.jpg",
+    "paris_3.jpg",
+    "paris_4.jpg",
+    "paris_louvre_1.jpg",
+    "paris_louvre_2.jpg",
+    "paris_louvre_3.jpg",
+    "paris_louvre_4.jpg",
+    "paris_seine_1.jpg",
+    "paris_seine_2.jpg",
+    "paris_seine_3.jpg",
+    "paris_seine_4.jpg"
+   ]
+  },
+  {
+   "id": "T081",
+   "q": "remove the Nice photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg"
+   ]
+  },
+  {
+   "id": "T082",
+   "q": "delete all the recording files",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T083",
+   "q": "trash the videos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "회의_영상_2026-09-15.mp4"
+   ]
+  },
+  {
+   "id": "T084",
+   "q": "delete the Tokyo photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "tokyo_1.jpg",
+    "tokyo_2.jpg",
+    "tokyo_3.jpg",
+    "tokyo_4.jpg"
+   ]
+  },
+  {
+   "id": "T085",
+   "q": "remove my London photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T086",
+   "q": "get rid of the Bangkok photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "bangkok_1.jpg",
+    "bangkok_2.jpg",
+    "bangkok_3.jpg",
+    "bangkok_4.jpg"
+   ]
+  },
+  {
+   "id": "T087",
+   "q": "delete Osaka photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg"
+   ]
+  },
+  {
+   "id": "T088",
+   "q": "delete recordings",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  },
+  {
+   "id": "T089",
+   "q": "remove my Jeju photos",
+   "action": {
+    "type": "delete",
+    "pending": true
+   },
+   "pendingFiles": [
+    "jeju_1.jpg",
+    "jeju_2.jpg",
+    "jeju_3.jpg",
+    "jeju_4.jpg"
+   ]
+  },
+  {
+   "id": "T090",
+   "q": "collect the Moscow photos into a folder",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T091",
+   "q": "collect the photos from 2019",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T092",
+   "q": "delete the Berlin photos",
+   "action": {
+    "type": "delete",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T093",
+   "q": "collect my Madrid photos into a folder",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T094",
+   "q": "screenshots into a folder",
+   "action": {
+    "type": "collect",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T095",
+   "q": "delete the recordings from 2020",
+   "action": {
+    "type": "delete",
+    "skipped": true
+   }
+  },
+  {
+   "id": "T096",
+   "q": "move the Nice photos into a folder",
+   "action": {
+    "type": "move",
+    "folder": "Nice photos",
+    "share": false
+   },
+   "folderFiles": [
+    "nice_1.jpg",
+    "nice_2.jpg",
+    "nice_3.jpg",
+    "nice_4.jpg"
+   ]
+  },
+  {
+   "id": "T097",
+   "q": "move the Osaka photos and make a folder",
+   "action": {
+    "type": "move",
+    "folder": "Osaka photos",
+    "share": false
+   },
+   "folderFiles": [
+    "osaka_1.jpg",
+    "osaka_2.jpg",
+    "osaka_3.jpg",
+    "osaka_4.jpg"
+   ]
+  },
+  {
+   "id": "T098",
+   "q": "move Bangkok photos to a folder",
+   "action": {
+    "type": "move",
+    "folder": "Bangkok photos",
+    "share": false
+   },
+   "folderFiles": [
+    "bangkok_1.jpg",
+    "bangkok_2.jpg",
+    "bangkok_3.jpg",
+    "bangkok_4.jpg"
+   ]
+  },
+  {
+   "id": "T099",
+   "q": "move the London photos into a folder",
+   "action": {
+    "type": "move",
+    "folder": "London photos",
+    "share": false
+   },
+   "folderFiles": [
+    "london_1.jpg",
+    "london_2.jpg",
+    "london_3.jpg",
+    "london_4.jpg"
+   ]
+  },
+  {
+   "id": "T100",
+   "q": "move the recordings into a folder",
+   "action": {
+    "type": "move",
+    "folder": "recordings",
+    "share": false
+   },
+   "folderFiles": [
+    "interview_ambaiowei.mp3",
+    "meeting_lightning_talks_2017.m4a",
+    "녹음_한국어_0.m4a",
+    "녹음_한국어_1.m4a",
+    "녹음_한국어_2.m4a",
+    "녹음_한국어_3.m4a",
+    "회의_녹음_CEE_Spring_2017.m4a"
+   ]
+  }
+ ]
+}

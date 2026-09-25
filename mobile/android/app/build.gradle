@@ -10,6 +10,8 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Phones only: the recognition runtimes add ~40 MB of native code per ABI.
+        ndk { abiFilters "arm64-v8a" }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -27,6 +29,14 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+    packagingOptions {
+        // sherpa-onnx's x86 slice still carries a libonnxruntime.so that
+        // collides with onnxruntime-android; phones are arm64, keep one copy.
+        jniLibs.pickFirsts += ["lib/x86/libonnxruntime.so", "lib/x86_64/libonnxruntime.so"]
+        // Store .so files uncompressed at 16 KB-aligned offsets (Android 15+
+        // 16 KB page-size devices refuse to load them otherwise).
+        jniLibs.useLegacyPackaging = false
     }
     buildTypes {
         release {
@@ -53,6 +63,14 @@ dependencies {
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
     // Photo index: EXIF date/GPS from the header only, no bitmap decode.
     implementation "androidx.exifinterface:exifinterface:1.3.7"
+    // On-device recognition: MobileCLIP (photos) runs on ONNX Runtime.
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.30.0"
+    // On-device summaries (call report): Gemma 4 E2B on LiteRT-LM (.litertlm bundles). Optional model, ~2.6 GB. Needs JDK 21 to compile against.
+    implementation "com.google.ai.edge.litertlm:litertlm-android:0.17.1"
+    // Speech models ship as tar.bz2 bundles on sherpa-onnx's GitHub releases; unpack them on the phone.
+    implementation "org.apache.commons:commons-compress:1.27.1"
+    // On-device speech recognition (see sherpa-onnx.gradle for how the AAR gets here).
+    implementation fileTree(include: ['sherpa-onnx-*.aar'], dir: 'libs')
     testImplementation "junit:junit:$junitVersion"
     // Real org.json on the JVM: the stub in android.jar returns
     // defaults, which would make the signature test pass vacuously.
@@ -63,6 +81,7 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+apply from: 'sherpa-onnx.gradle'
 
 try {
     def servicesJSON = file('google-services.json')

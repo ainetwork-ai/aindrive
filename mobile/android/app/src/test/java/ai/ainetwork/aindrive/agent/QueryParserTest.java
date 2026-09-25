@@ -35,7 +35,8 @@ public class QueryParserTest {
                 + "Nice\tFR\t43.70313\t7.26608\t342669\t니스\n"
                 + "Paris\tUS\t33.66094\t-95.55551\t24782\t\n"
                 + "Boulogne-Billancourt\tFR\t48.83333\t2.25\t120071\t불로뉴비양쿠르\n"
-                + "Goyang-si\tKR\t37.65639\t126.835\t1073069\t고양시\n";
+                + "Goyang-si\tKR\t37.65639\t126.835\t1073069\t고양시\n"
+                + "London\tGB\t51.50853\t-0.12574\t8961989\t런던\n";
         geo = GeoLookup.load(new ByteArrayInputStream(tsv.getBytes(StandardCharsets.UTF_8)));
         parser = new QueryParser(geo);
     }
@@ -136,6 +137,56 @@ public class QueryParserTest {
         q = parser.parse("큰 영상 파일", NOW);
         assertEquals("video", q.kind);
         assertEquals(Long.valueOf(QueryParser.LARGE_BYTES), q.minSize);
+    }
+
+    @Test
+    public void taskWordsBecomeActions() {
+        SearchQuery q = parser.parse("이번달에 먹은 음식사진만 모아서 폴더로 만들어서 공유해줘", NOW);
+        assertEquals("photo", q.kind);
+        assertEquals("음식", q.textQuery());
+        assertEquals(Long.valueOf(at(2026, 9, 1)), q.dateFrom);
+        assertTrue(q.collect);
+        assertTrue(q.share);
+        q = parser.parse("collect my dog photos into a folder", NOW);
+        assertEquals("photo", q.kind);
+        assertEquals("dog", q.textQuery());
+        assertTrue(q.collect);
+        q = parser.parse("강아지 사진", NOW);
+        assertTrue(!q.collect && !q.share);
+    }
+
+    @Test
+    public void moreTaskGrammar() {
+        SearchQuery q = parser.parse("파리 사진 몇 장 있어?", NOW);
+        assertTrue(q.count); assertEquals("Paris", q.city); assertNull(q.textQuery());
+        q = parser.parse("how many screenshots do I have", NOW);
+        assertTrue(q.count); assertEquals("screenshot", q.kind); assertNull(q.textQuery());
+        q = parser.parse("가장 최근 사진 3장만 보여줘", NOW);
+        assertEquals(3, q.limit); assertEquals("photo", q.kind); assertNull(q.textQuery());
+        q = parser.parse("가장 큰 파일 5개", NOW);
+        assertEquals(5, q.limit); assertTrue(q.bySize); assertNull(q.minSize);
+        q = parser.parse("가장 오래된 사진 2장", NOW);
+        assertTrue(q.oldestFirst); assertEquals(2, q.limit);
+        q = parser.parse("강아지 사진 삭제해줘", NOW);
+        assertTrue(q.delete); assertEquals("강아지", q.textQuery()); assertTrue(!q.collect);
+        q = parser.parse("스크린샷 전부 폴더로 옮겨줘", NOW);
+        assertTrue(q.move && q.collect); assertEquals("screenshot", q.kind); assertNull(q.textQuery());
+        q = parser.parse("move the pizza photos into a folder", NOW);
+        assertTrue(q.move); assertEquals("pizza", q.textQuery());
+    }
+
+    @Test
+    public void bareFolderAndLeadingFillers() {
+        SearchQuery q = parser.parse("서울 사진 모아서 폴더 만들어", NOW);
+        assertTrue(q.collect); assertEquals("Seoul", q.city); assertNull(q.textQuery());
+        q = parser.parse("한국 사진 폴더로 정리", NOW);
+        assertTrue(q.collect); assertEquals("KR", q.country); assertNull(q.textQuery());
+        q = parser.parse("put all the Korea photos in a folder", NOW);
+        assertTrue(q.collect); assertEquals("KR", q.country); assertNull(q.textQuery());
+        q = parser.parse("share my London photos as a folder", NOW);
+        assertTrue(q.share && q.collect); assertEquals("London", q.city); assertNull(q.textQuery());
+        q = parser.parse("노을 사진 폴더 만들어", NOW);
+        assertTrue(q.collect); assertEquals("노을", q.textQuery());
     }
 
     @Test

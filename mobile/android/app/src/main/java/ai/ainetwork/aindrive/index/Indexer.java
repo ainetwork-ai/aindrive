@@ -3,6 +3,10 @@ package ai.ainetwork.aindrive.index;
 import android.util.Log;
 
 import ai.ainetwork.aindrive.SafFs;
+import ai.ainetwork.aindrive.clip.ClipEmbedder;
+import ai.ainetwork.aindrive.speech.SpeechRecognizer;
+
+import androidx.annotation.Nullable;
 
 import java.io.InputStream;
 import java.util.HashSet;
@@ -31,15 +35,31 @@ public final class Indexer {
     public volatile String phase = "idle";
     public volatile long lastRunMs;
 
+    /** Which recognisers are available for this run; null = that kind of recognition is skipped. */
+    public interface Recognisers {
+        @Nullable ClipEmbedder clip();
+        @Nullable SpeechRecognizer speech();
+        /** How much of each recording to hear; a call archive of thousands of hours needs a cap. */
+        default int speechSeconds() { return SpeechRecognizer.MAX_SECONDS; }
+        /** A call-recordings folder: hear it person by person rather than strictly by date. */
+        default boolean callArchive() { return false; }
+        /** Calls per contact in the last year (from the call log): who to hear first. Empty when unknown. */
+        default java.util.Map<String, Integer> callCounts() { return java.util.Collections.emptyMap(); }
+    }
+
+    public volatile int recognised, toRecognise;
+
     private final SafFs fs;
     private final FileIndex index;
     private final GeoLookup geo;
+    private final Recognisers recognisers;
     private final AtomicBoolean cancel = new AtomicBoolean();
 
-    public Indexer(SafFs fs, FileIndex index, GeoLookup geo) {
+    public Indexer(SafFs fs, FileIndex index, GeoLookup geo, Recognisers recognisers) {
         this.fs = fs;
         this.index = index;
         this.geo = geo;
+        this.recognisers = recognisers;
     }
 
     public void cancel() { cancel.set(true); }
@@ -67,9 +87,10 @@ public final class Indexer {
                 if (done % 50 == 0) progress.onProgress(done, total, phase);
             }
             int removed = index.deleteMissing(live);
+            Log.i(TAG, "indexed " + total + " files (" + failed + " failed, " + removed + " removed)");
+            recognise(files, progress);
             phase = "done";
             lastRunMs = System.currentTimeMillis();
-            Log.i(TAG, "indexed " + total + " files (" + failed + " failed, " + removed + " removed)");
             progress.onProgress(done, total, phase);
         } catch (Exception ex) {
             phase = "error: " + ex.getMessage();
@@ -78,6 +99,92 @@ public final class Indexer {
         } finally {
             running = false;
         }
+    }
+
+    /**
+     * Second pass: what is IN the file. Photos get a CLIP vector, audio and
+     * video a transcript. Runs after the metadata pass so a fast index is
+     * usable while the slow part (≈50 ms per photo, ≈1/13 of the audio's
+     * length per recording) catches up. Files already recognised are skipped,
+     * so a model that arrives later only costs what it adds.
+     */
+    private void recognise(List<SafFs.Entry> files, Progress progress) {
+        ClipEmbedder clip = recognisers.clip();
+        SpeechRecognizer speech = recognisers.speech();
+        if (clip == null && speech == null) return;
+        phase = "recognising";
+        recognised = 0; toRecognise = 0;
+        List<SafFs.Entry> todo = new java.util.ArrayList<>();
+        for (SafFs.Entry e : files) {
+            String kind = FileIndex.kindOf(e.mime, e.name);
+            boolean photo = clip != null && (FileIndex.PHOTO.equals(kind) || FileIndex.SCREENSHOT.equals(kind));
+            boolean av = speech != null && (FileIndex.AUDIO.equals(kind) || FileIndex.VIDEO.equals(kind));
+            if ((photo || av) && index.needsRecognition(e.docId, photo, av)) todo.add(e);
+        }
+        // Newest first: the calls people ask about are the recent ones, and a long archive is heard over days.
+        todo.sort((a, b) -> Long.compare(b.mtimeMs, a.mtimeMs));
+        if (recognisers.callArchive()) {
+            // Only the last year is ever reported on: don't spend hours hearing older calls.
+            long since = System.currentTimeMillis() - ai.ainetwork.aindrive.agent.CallReport.WINDOW_MS;
+            todo.removeIf(e -> { Long d = ai.ainetwork.aindrive.agent.CallReport.dateOf(e.name); return (d != null ? d : e.mtimeMs) < since; });
+            // Round-robin by person (each one's newest call, then each one's second…), contacts before bare
+            // numbers — so after an hour every contact has something heard, not just whoever called last week.
+            java.util.Map<String, Integer> seen = new java.util.HashMap<>();
+            java.util.Map<SafFs.Entry, Integer> round = new java.util.HashMap<>();
+            for (SafFs.Entry e : todo) {
+                String who = ai.ainetwork.aindrive.agent.CallReport.personOf(e.name);
+                String key = who == null ? "?" + e.name : who;
+                int n = seen.merge(key, 1, Integer::sum);
+                round.put(e, (n - 1) * 2 + (who != null && ai.ainetwork.aindrive.agent.CallReport.isContact(who) ? 0 : 1));
+            }
+            // Within a round, the people you call most go first: the top of the report is heard within minutes.
+            java.util.Map<String, Integer> calls = recognisers.callCounts();
+            java.util.Map<SafFs.Entry, Integer> weight = new java.util.HashMap<>();
+            for (SafFs.Entry e : todo) { String who = ai.ainetwork.aindrive.agent.CallReport.personOf(e.name); weight.put(e, who == null ? 0 : calls.getOrDefault(who, 0)); }
+            // The 20 most-called contacts get their 3 newest calls heard before anyone else's first.
+            java.util.List<Integer> counts = new java.util.ArrayList<>(calls.values());
+            counts.sort(java.util.Collections.reverseOrder());
+            int topCut = counts.size() >= 20 ? counts.get(19) : 1;
+            java.util.Map<SafFs.Entry, Integer> tier = new java.util.HashMap<>();
+            for (SafFs.Entry e : todo) tier.put(e, weight.get(e) >= Math.max(1, topCut) && round.get(e) < 6 ? 0 : 1);
+            todo.sort((a, b) -> {
+                int ta = tier.get(a), tb = tier.get(b);
+                if (ta != tb) return Integer.compare(ta, tb);
+                int ra = round.get(a), rb = round.get(b);
+                if (ra != rb) return Integer.compare(ra, rb);
+                int wa = weight.get(a), wb = weight.get(b);
+                if (wa != wb) return Integer.compare(wb, wa);
+                return Long.compare(b.mtimeMs, a.mtimeMs);
+            });
+        }
+        toRecognise = todo.size();
+        progress.onProgress(0, toRecognise, phase);
+        for (SafFs.Entry e : todo) {
+            if (cancel.get()) { phase = "cancelled"; return; }
+            String kind = FileIndex.kindOf(e.mime, e.name);
+            try {
+                if (FileIndex.PHOTO.equals(kind) || FileIndex.SCREENSHOT.equals(kind)) {
+                    try (InputStream in = fs.open(e.docId)) {
+                        float[] v = clip.embedImage(in);
+                        if (v != null) index.setRecognition(e.docId, FileIndex.encodeVec(v), null);
+                    }
+                } else {
+                    try (android.os.ParcelFileDescriptor pfd = fs.openFd(e.docId)) {
+                        SpeechRecognizer.Transcript t = speech.transcribe(pfd.getFileDescriptor(), recognisers.speechSeconds());
+                        // An empty transcript is still a result: the file was heard and had no speech.
+                        index.setRecognition(e.docId, null, t == null ? "" : t.text);
+                        Log.d(TAG, "transcribed " + e.name + " (" + (t == null ? 0 : Math.round(t.durationSec)) + "s): " + (t == null ? "" : t.text.substring(0, Math.min(120, t.text.length()))));
+                    }
+                }
+            } catch (Exception ex) {
+                failed++;
+                Log.w(TAG, "recognise " + e.name + ": " + ex.getMessage());
+            }
+            recognised++;
+            if (recognised % 10 == 0) progress.onProgress(recognised, toRecognise, phase);
+        }
+        Log.i(TAG, "recognised " + recognised + " files (" + failed + " failed)");
+        progress.onProgress(recognised, toRecognise, phase);
     }
 
     private void indexOne(SafFs.Entry e) throws Exception {

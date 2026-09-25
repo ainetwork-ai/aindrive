@@ -16,7 +16,7 @@ import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
-import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive } from "./api";
+import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
 
 const DEFAULT_SERVER = "https://aindrive.ainetwork.ai";
 const STORE_KEY = "aindrive.mobile.state.v2";
@@ -31,6 +31,10 @@ interface DriveCreds { driveId: string; agentToken: string; driveSecret: string;
 interface SharedFolder {
   folder: PickedFolder;
   drive?: DriveCreds;
+  /** Label of the folder this one lives in — agent-made folders are drives of their own but sit inside a picked folder. */
+  parent?: string;
+  /** The switch was on when the app last ran: turn it back on at launch (a reinstall or reboot must not silently take drives offline). */
+  on?: boolean;
 }
 
 interface SavedState {
@@ -39,7 +43,19 @@ interface SavedState {
   email?: string;
   /** Every folder the user has chosen to share, in the order they were added. */
   shares: SharedFolder[];
+  /** Agent sources: folders the agent may read for its tasks, never served. */
+  sources?: AgentSource[];
 }
+
+/** One folder the agent may read. `preset` marks the two suggested ones (call recordings, camera roll). */
+interface AgentSource { id: string; folder: PickedFolder; preset?: PresetId }
+type PresetId = "src-calls-new" | "src-calls" | "src-photos";
+/** Suggested first: Samsung's call recordings and the camera roll. Any other folder can be added too. */
+const PRESETS: { id: PresetId; label: string; hint: string; initial: string }[] = [
+  { id: "src-calls-new", label: "Call recordings", hint: "For \"who do I talk to most, and about what\" — Recordings/Call (Samsung, 2022 and later)", initial: "Recordings/Call" },
+  { id: "src-calls", label: "Older call recordings", hint: "The Call folder (Samsung, before 2022)", initial: "Call" },
+  { id: "src-photos", label: "Camera photos", hint: "For \"collect this month's food photos\" — DCIM", initial: "DCIM" },
+];
 
 interface LegacyState {
   server?: string;
@@ -59,12 +75,21 @@ const busyShares = new Set<string>();
 let busy: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
+/** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
+interface Turn { q: string; r?: AskResult; error?: string; at: number }
+let thread: Turn[] = [];
+/** The last turn's effective filters (AskResult.context): what "them" / "those" mean next time. */
+let askContext: Record<string, unknown> | null = null;
+const THREAD_KEY = "aindrive.mobile.thread.v1";
+const THREAD_MAX = 40;
 let askBusy = false;
 let searchOpen = false;
 let menuFor: string | null = null;
 /** In-app file browser: which share, where in it, what we saw there. */
 let browse: {
   key: string;
+  /** Set when browsing a drive on another device (through the server relay). */
+  remote?: RemoteDrive;
   path: string;
   entries: FileEntry[] | null;
   error: string | null;
@@ -73,6 +98,15 @@ let browse: {
   plusMenu: boolean;      // "+" menu (new folder / add files)
 } | null = null;
 let showAllActivity = false;
+/** In-app viewer: what is open (images and audio play here; everything else goes to the OS). */
+let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: string; mime: string; src?: string; text?: string; loading: boolean } | null = null;
+/** Drives this account has on OTHER devices (same login on another phone / laptop). */
+let remotes: RemoteDrive[] = [];
+let remotesAt = 0;
+/** agentId per remote drive, created on first ask (the record lives in that drive). */
+const remoteAgents = new Map<string, string>();
+/** Share link minted for the agent's last collected folder. */
+let actionShare: { folder: string; url?: string; busy: boolean; error?: string } | null = null;
 let toast: { msg: string; error?: boolean; timer?: number } | null = null;
 let confirmSheet: { title: string; body: string; ok: string; danger?: boolean; resolve: (v: boolean) => void } | null = null;
 
@@ -80,11 +114,39 @@ async function save() {
   await Preferences.set({ key: STORE_KEY, value: JSON.stringify(state) });
 }
 
+async function saveThread() {
+  thread = thread.slice(-THREAD_MAX);
+  try { await Preferences.set({ key: THREAD_KEY, value: JSON.stringify({ thread, context: askContext }) }); } catch { /* best effort */ }
+}
+
+async function loadThread() {
+  try {
+    const { value } = await Preferences.get({ key: THREAD_KEY });
+    if (!value) return;
+    const t = JSON.parse(value) as { thread?: Turn[]; context?: Record<string, unknown> | null };
+    thread = Array.isArray(t.thread) ? t.thread : [];
+    askContext = t.context ?? null;
+    askResult = thread.length ? thread[thread.length - 1].r ?? null : null;
+  } catch { thread = []; askContext = null; }
+}
+
+async function newChat() {
+  thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null;
+  await saveThread();
+  render();
+  (document.getElementById("ask-input") as HTMLInputElement | null)?.focus();
+}
+
 async function load() {
   const { value } = await Preferences.get({ key: STORE_KEY });
   if (value) {
     try { state = { ...state, ...JSON.parse(value) }; } catch { /* corrupt → defaults */ }
     if (!Array.isArray(state.shares)) state.shares = [];
+    if (state.sources && !Array.isArray(state.sources)) {
+      // first shape: { "src-calls": folder, "src-photos": folder }
+      const old = state.sources as unknown as Record<string, PickedFolder>;
+      state.sources = Object.entries(old).map(([id, folder]) => ({ id, folder, preset: id as PresetId }));
+    }
     return;
   }
   // First launch after the multi-folder update: lift the single folder/drive
@@ -161,6 +223,57 @@ function shareByDrive(driveId: string | undefined): SharedFolder | undefined {
   return running.length === 1 ? running[0] : undefined;
 }
 
+// ---------------------------------------------------------------- other devices
+
+function localDriveIds(): Set<string> {
+  return new Set(state.shares.map((s) => s.drive?.driveId).filter((x): x is string => !!x));
+}
+
+/** Drives owned by this account that this phone does not serve. Cached 30 s. */
+async function refreshRemotes(force = false) {
+  if (!state.sessionCookie) { remotes = []; return; }
+  if (!force && Date.now() - remotesAt < 30_000) return;
+  try {
+    const all = await listDrives(state.server, state.sessionCookie);
+    const mine = localDriveIds();
+    remotes = all.filter((d) => !mine.has(d.id));
+    remotesAt = Date.now();
+    render();
+  } catch (e) {
+    log(`Could not list other devices: ${msgOf(e)}`);
+  }
+}
+
+async function openRemoteBrowser(drive: RemoteDrive, path = "") {
+  menuFor = null;
+  browse = { key: "remote:" + drive.id, remote: drive, path, entries: null, error: null, loading: true, menu: null, plusMenu: false };
+  render();
+  await loadBrowse();
+}
+
+async function viewRemoteFile(drive: RemoteDrive, path: string, mime?: string) {
+  const name = path.split("/").pop() ?? path;
+  const m = mime || guessMime(name);
+  if (!(m.startsWith("image/") || m.startsWith("audio/") || isText(m, name))) {
+    // Anything else: the web has the right viewer/download for it.
+    await Browser.open({ url: `${state.server}/d/${drive.id}?path=${encodeURIComponent(path.split("/").slice(0, -1).join("/"))}` });
+    return;
+  }
+  viewer = { remote: drive, path, name, mime: m, loading: true };
+  render();
+  try {
+    const r = await remoteRead(state.server, state.sessionCookie!, drive.id, path);
+    if (viewer && viewer.path === path) {
+      if (isText(m, name)) viewer.text = decodeUtf8(r.base64); else viewer.src = `data:${r.mime || m};base64,${r.base64}`;
+      viewer.mime = r.mime || m; viewer.loading = false;
+    }
+  } catch (e) {
+    viewer = null;
+    notify(msgOf(e), true);
+  }
+  render();
+}
+
 // ---------------------------------------------------------------- actions
 
 async function addFolder() {
@@ -211,8 +324,13 @@ async function addFiles(share: SharedFolder, path = "") {
 // delete. Anything richer (sharing, selling, previews) is the web UI's job.
 
 function browseShare(): SharedFolder | undefined {
-  return browse ? findShare(browse.key) : undefined;
+  if (!browse) return undefined;
+  if (browse.remote) return REMOTE_SHARE;   // stand-in so the browser code paths stay shared
+  return findShare(browse.key);
 }
+
+/** A placeholder "share" for remote browsing; the folder handle is never used there. */
+const REMOTE_SHARE: SharedFolder = { folder: { uri: "remote", label: "" } };
 
 async function openBrowser(share: SharedFolder, path = "") {
   menuFor = null;
@@ -221,17 +339,30 @@ async function openBrowser(share: SharedFolder, path = "") {
   await loadBrowse();
 }
 
+/** SAF's ways of saying "that document is gone". */
+function isGone(msg: string): boolean {
+  return /FileNotFound|No such file|not found|Missing file|does not exist|ENOENT|is child of/i.test(msg);
+}
+
 async function loadBrowse() {
   const share = browseShare();
   if (!browse || !share) return;
+  if (browse.remote) share.folder.label = browse.remote.name;
   browse.loading = true; browse.error = null; browse.menu = null; browse.plusMenu = false;
   render();
   try {
-    const r = await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: browse.path });
-    if (!browse) return;
-    browse.entries = r.entries;
+    if (browse.remote) {
+      const entries = await remoteList(state.server, state.sessionCookie!, browse.remote.id, browse.path);
+      if (!browse) return;
+      browse.entries = entries.map((e) => ({ name: e.name, path: e.path, isDir: e.isDir, size: e.size, mtimeMs: e.mtimeMs, mime: e.mime ?? guessMime(e.name) }));
+    } else {
+      const r = await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: browse.path });
+      if (!browse) return;
+      browse.entries = r.entries;
+    }
   } catch (e) {
     if (browse) { browse.entries = []; browse.error = msgOf(e); }
+    if (browse && !browse.remote && !browse.path && isGone(msgOf(e))) { browse = null; await pruneMissing(); return; }
   } finally {
     if (browse) browse.loading = false;
     render();
@@ -251,8 +382,151 @@ async function browseOpen(entry: FileEntry) {
   const share = browseShare();
   if (!browse || !share) return;
   if (entry.isDir) { browse.path = entry.path; await loadBrowse(); return; }
-  try { await AindriveAgent.openFile({ folderUri: share.folder.uri, path: entry.path }); }
+  if (browse.remote) { await viewRemoteFile(browse.remote, entry.path, entry.mime); return; }
+  await viewFile(share, entry.path, entry.mime);
+}
+
+/**
+ * Open a file the way a person expects: images and audio right here in the
+ * app (no chooser, no web), everything else with the phone's own app.
+ */
+async function viewFile(share: SharedFolder, path: string, mime?: string) {
+  const name = path.split("/").pop() ?? path;
+  const m = mime || guessMime(name);
+  if (m.startsWith("image/") || m.startsWith("audio/") || isText(m, name)) {
+    viewer = { share, path, name, mime: m, loading: true };
+    render();
+    try {
+      const r = await AindriveAgent.readFile({ folderUri: share.folder.uri, path, maxPx: 1600 });
+      if (viewer && viewer.path === path) {
+        if (isText(m, name)) viewer.text = decodeUtf8(r.base64);
+        else viewer.src = `data:${r.mime};base64,${r.base64}`;
+        viewer.mime = r.mime; viewer.loading = false;
+      }
+    } catch (e) {
+      viewer = null;
+      notify(msgOf(e), true);
+    }
+    render();
+    return;
+  }
+  try { await AindriveAgent.openFile({ folderUri: share.folder.uri, path }); }
   catch (e) { notify(msgOf(e), true); }
+}
+
+/** Markdown and plain text render in the app: the agent's reports are .md files. */
+function isText(mime: string, name: string): boolean {
+  const e = (name.split(".").pop() ?? "").toLowerCase();
+  return mime.startsWith("text/") || ["md", "markdown", "txt", "log", "csv", "json"].includes(e);
+}
+
+function decodeUtf8(base64: string): string {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Just enough Markdown for the agent's own reports: headings, tables, lists,
+ * quotes, bold/italic/code, paragraphs. Everything is escaped first.
+ */
+function renderMarkdown(md: string): string {
+  const inline = (t: string) => esc(t)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*])\*([^*]+)\*/g, "$1<i>$2</i>")
+    .replace(/(https?:\/\/[^\s<]+)/g, `<a href="$1" target="_blank" rel="noopener">$1</a>`);
+  const lines = md.replace(/\r/g, "").split("\n");
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.trim()) { i++; continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\|/.test(l) && /^\|?\s*:?-{2,}/.test(lines[i + 1] ?? "")) {
+      const cells = (row: string) => row.replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, "|").trim());
+      const head = cells(l); i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\|/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<div class="tablewrap"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(l)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
+      out.push(`<ul>${items.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`); continue;
+    }
+    if (/^\s*\d+\.\s+/.test(l)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+\.\s+/, ""));
+      out.push(`<ol>${items.map((x) => `<li>${inline(x)}</li>`).join("")}</ol>`); continue;
+    }
+    if (/^>\s?/.test(l)) {
+      const q: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) q.push(lines[i++].replace(/^>\s?/, ""));
+      out.push(`<blockquote>${inline(q.join(" "))}</blockquote>`); continue;
+    }
+    const p: string[] = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\||\s*[-*]\s|\s*\d+\.\s|>)/.test(lines[i])) p.push(lines[i++]);
+    out.push(`<p>${inline(p.join(" "))}</p>`);
+  }
+  return out.join("");
+}
+
+function guessMime(name: string): string {
+  const e = (name.split(".").pop() ?? "").toLowerCase();
+  if (["jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp"].includes(e)) return "image/" + (e === "jpg" ? "jpeg" : e);
+  if (["mp3", "m4a", "aac", "wav", "ogg", "oga", "opus", "flac", "amr"].includes(e)) return "audio/" + e;
+  if (["mp4", "mov", "mkv", "webm", "3gp"].includes(e)) return "video/" + e;
+  if (["md", "markdown"].includes(e)) return "text/markdown";
+  if (["txt", "log", "csv"].includes(e)) return "text/plain";
+  return "application/octet-stream";
+}
+
+/**
+ * A folder the agent made on this phone becomes a drive of its own — its own
+ * row, switch and share link — rather than a sub-folder of the drive it was
+ * collected from. The parent is restarted so it stops showing that folder.
+ */
+async function promoteCollected(a: NonNullable<AskResult["action"]>) {
+  const label = a.folder!;
+  const parent = shareByDrive(a.driveId);
+  let share = findShare(a.folderUri!);
+  if (!share) {
+    share = { folder: { uri: a.folderUri!, label }, parent: parent?.folder.label };
+    state.shares.push(share);
+    await save();
+    log(`Folder "${label}" added as its own drive`);
+  }
+  await startShare(share);
+  if (parent && driveStatus(parent)?.running) await startShare(parent);
+  a.label = label;
+  a.folder = "";
+  a.driveId = share.drive?.driveId;
+}
+
+/** After "…and share it": mint a viewer link for the folder the agent just made. */
+async function shareCollected() {
+  const a = askResult?.action;
+  if (a?.folder === undefined || !state.sessionCookie) return;
+  const name = a.label ?? a.folder;
+  const share = shareByDrive(a.driveId);
+  const driveId = share?.drive?.driveId ?? (remotes.some((d) => d.id === a.driveId) ? a.driveId : undefined);
+  if (!driveId) { notify("Turn the folder on to share it.", true); return; }
+  actionShare = { folder: name, busy: true };
+  render();
+  try {
+    const r = await createShare(state.server, state.sessionCookie, driveId, a.folder);
+    actionShare = { folder: name, url: r.url, busy: false };
+    log(`Shared ${name}: ${r.url}`);
+    await navigator.clipboard?.writeText(r.url).then(() => notify("Link copied")).catch(() => {});
+  } catch (e) {
+    actionShare = { folder: name, busy: false, error: msgOf(e) };
+    log(`Error: ${msgOf(e)}`);
+  }
+  render();
 }
 
 function joinPath(dir: string, name: string): string {
@@ -376,8 +650,10 @@ async function startShare(share: SharedFolder) {
       folderUri: share.folder.uri,
       folderLabel: share.folder.label,
       indexOnStart: true,
+      excludeUris: state.shares.filter((s) => s !== share).map((s) => s.folder.uri),
     });
     log(`${share.folder.label} online`);
+    if (!share.on) { share.on = true; await save(); }
   } catch (e) {
     fail(e);
   } finally {
@@ -392,6 +668,132 @@ async function startAll() {
     if (driveStatus(share)?.running) continue;
     await startShare(share);
   }
+  await startSources();
+}
+
+// ---------------------------------------------------------------- agent sources
+
+function sourceStatus(id: string): DriveStatus | undefined {
+  return status.drives.find((d) => d.driveId === id);
+}
+
+/**
+ * Let the agent read a folder on this phone. Not shared: it never gets a drive
+ * on the server. A preset keeps its fixed id (the native side treats
+ * "src-calls" specially); any other folder gets a fresh one.
+ */
+async function addSource(preset?: PresetId) {
+  const def = PRESETS.find((s) => s.id === preset);
+  try {
+    const folder = await AindriveAgent.pickFolder(def ? { initial: def.initial } : {});
+    if (state.sources?.some((s) => s.folder.uri === folder.uri)) { notify(`The agent can already read "${folder.label}".`, true); return; }
+    const src: AgentSource = { id: def ? def.id : `src-${Date.now().toString(36)}`, folder, preset };
+    state.sources = [...(state.sources ?? []), src];
+    await save();
+    log(`Agent may read ${folder.label}${def ? ` (${def.label})` : ""}`);
+    await startSource(src);
+  } catch (e) {
+    if (!/cancel/i.test(msgOf(e))) fail(e);
+    render();
+  }
+}
+
+async function startSource(src: AgentSource) {
+  busyShares.add(src.id); render();
+  try {
+    status = await AindriveAgent.start({ serverUrl: state.server, driveId: src.id, agentToken: "", driveSecret: "", folderUri: src.folder.uri, folderLabel: src.folder.label, indexOnStart: true, source: true });
+  } catch (e) {
+    fail(e);
+  } finally {
+    busyShares.delete(src.id);
+    render();
+  }
+}
+
+async function startSources() {
+  for (const s of state.sources ?? []) if (!sourceStatus(s.id)?.running) await startSource(s);
+}
+
+async function removeSource(id: string) {
+  await AindriveAgent.stop({ driveId: id }).catch(() => {});
+  state.sources = (state.sources ?? []).filter((s) => s.id !== id);
+  await save();
+  try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
+  render();
+}
+
+function sourceCard(src: AgentSource): string {
+  const def = PRESETS.find((p) => p.id === src.preset);
+  const d = sourceStatus(src.id);
+  const ix = d?.index;
+  const st = busyShares.has(src.id) ? "Starting…" : d?.running
+    ? (ix?.running ? (ix.phase === "recognising" ? `${src.preset?.startsWith("src-calls") ? "Transcribing" : "Recognising"} ${ix.recognised.toLocaleString()}/${ix.toRecognise.toLocaleString()}` : `Indexing ${ix.done}/${ix.total}`)
+      : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed${ix.recognisedTotal ? ` · ${ix.recognisedTotal.toLocaleString()} ${src.preset?.startsWith("src-calls") ? "transcribed" : "recognised"}` : ""}` : "Ready")
+    : "Off";
+  return `
+    <div class="card" data-source="${esc(src.id)}">
+      <div class="folder">
+        <div class="glyph">${src.preset?.startsWith("src-calls") ? I.phone : I.folder}</div>
+        <div style="min-width:0;flex:1">
+          <div class="name">${esc(def ? def.label : src.folder.label)}${def ? ` <span class="hint">· ${esc(src.folder.label)}</span>` : ""}</div>
+          ${def ? `<div class="hint">${esc(def.hint)}</div>` : ""}
+          <div class="state"><span class="dot ${d?.running ? "on" : "off"}"></span>${esc(st)}</div>
+        </div>
+        <button class="btn secondary small" data-act="src-remove">Revoke</button>
+      </div>
+    </div>`;
+}
+
+/** Which models see the user's data — all on this phone, none in the cloud. A small link in the agent sheet; opens on tap. */
+let modelInfoOpen = false;
+function modelsSection(): string {
+  const m = status.models;
+  if (!m?.list?.length) return "";
+  const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes the summaries in reports" };
+  const toggle = `<button class="link small" id="model-info-toggle">${modelInfoOpen ? "Hide model info" : "Model info"}</button>`;
+  if (!modelInfoOpen) return `<div class="modelinfo-bar">${toggle}</div>`;
+  return `
+    <div class="modelinfo-bar">${toggle}${m.ready && m.llm ? "" : `<button class="link small" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download all"}</button>`}</div>
+    <div class="card" style="padding:6px 16px;margin-bottom:12px">
+      ${m.list.map((x) => `
+        <div class="row model"><span class="k">${esc(x.role)}</span>
+          <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0">
+            <b>${esc(x.name)}</b><br>
+            <span class="hint">${esc(what[x.id] ?? "")} · ${(x.bytes / 1e6) >= 1000 ? (x.bytes / 1e9).toFixed(1) + " GB" : Math.round(x.bytes / 1e6) + " MB"} · ${esc(x.license.replace(/\s*\(.*$/, ""))}</span>
+          </span>
+          <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? "On this phone" : "Not downloaded"}"></span>
+        </div>`).join("")}
+      <p class="hint" style="margin:6px 0 8px">Everything runs on this phone; nothing is sent to a cloud model. ${m.error ? `<span style="color:var(--err)">${esc(m.error)}</span>` : ""}</p>
+    </div>`;
+}
+
+function sourcesSection(): string {
+  const have = new Set((state.sources ?? []).map((s) => s.preset));
+  const suggested = PRESETS.filter((p) => !have.has(p.id)).map((p) => `
+    <div class="card" data-preset="${p.id}">
+      <div class="folder">
+        <div class="glyph">${p.id.startsWith("src-calls") ? I.phone : I.folder}</div>
+        <div style="min-width:0;flex:1">
+          <div class="name">${esc(p.label)}</div>
+          <div class="hint">${esc(p.hint)}</div>
+          <div class="state"><span class="dot off"></span>Not allowed</div>
+        </div>
+        <button class="btn small" data-act="src-add">Allow</button>
+      </div>
+    </div>`).join("");
+  return `
+    <div class="section"><h2>Agent can read</h2><button class="link" id="add-source">${I.plus} Add folder</button></div>
+    ${(state.sources ?? []).map(sourceCard).join("")}
+    ${suggested}
+    <p class="hint">Read only by the agent on this phone, for its tasks. Never shared. What it makes is saved into a shared folder.</p>`;
+}
+
+async function allowCallLog() {
+  try {
+    const r = await AindriveAgent.requestCallLog();
+    notify(r.granted ? "Call log access allowed — asking again." : "Call log access was refused.", !r.granted);
+    if (r.granted && askQuery) void ask(askQuery);
+  } catch (e) { fail(e); }
 }
 
 async function pollUntilApproved(server: string, linkId: string, deviceSecret: string) {
@@ -422,6 +824,7 @@ async function stopShare(share: SharedFolder) {
   busyShares.add(key); render();
   try {
     status = await AindriveAgent.stop({ driveId: share.drive.driveId });
+    share.on = false; await save();
     log(`${share.folder.label} offline`);
   } catch (e) { fail(e); }
   finally { busyShares.delete(key); render(); }
@@ -445,6 +848,34 @@ async function openDrive(share: SharedFolder, path?: string) {
  * (so the account gets its drive-limit slot back), and drops the credentials.
  * Files in the folder are untouched.
  */
+/**
+ * A folder deleted on the phone (in Files, or by the user) simply disappears
+ * from the list: its drive is taken offline and deleted on the server,
+ * quietly. Checked at launch, on resume and before the list is shown.
+ */
+async function pruneMissing() {
+  const gone: SharedFolder[] = [];
+  for (const share of state.shares) {
+    try { await AindriveAgent.listFolder({ folderUri: share.folder.uri, path: "" }); }
+    catch (e) { if (isGone(msgOf(e))) gone.push(share); }
+  }
+  if (!gone.length) return;
+  for (const share of gone) {
+    if (share.drive) {
+      await AindriveAgent.stop({ driveId: share.drive.driveId }).catch(() => {});
+      if (state.sessionCookie) await deleteDrive(state.server, state.sessionCookie, share.drive.driveId).catch(() => {});
+    }
+    log(`${share.folder.label} was deleted on the phone — removed from the list`);
+  }
+  state.shares = state.shares.filter((s) => !gone.includes(s));
+  await save();
+  // Parents hid the removed folders (excludeUris): restart them so a folder recreated inside shows up again.
+  for (const s of state.shares) if (driveStatus(s)?.running) await startShare(s);
+  try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
+  if (browse && gone.some((s) => browse && shareKey(s) === browse.key)) browse = null;
+  render();
+}
+
 async function removeShare(share: SharedFolder) {
   const ok = await confirmAsync(
     `Stop sharing "${share.folder.label}"?`,
@@ -476,6 +907,16 @@ async function removeShare(share: SharedFolder) {
   render();
 }
 
+async function ensureModels() {
+  try {
+    status = await AindriveAgent.ensureModels();
+    log("Downloading recognition models…");
+  } catch (e) {
+    fail(e);
+  }
+  render();
+}
+
 async function reindex() {
   try {
     status = await AindriveAgent.reindex();
@@ -486,17 +927,67 @@ async function reindex() {
   render();
 }
 
+/** "share it" / "공유해줘" right after a folder was made: no new search, just the link. */
+const SHARE_AGAIN = /^(share (it|that|this|them|the folder)|make a (share )?link|공유(해|해줘|해 줘|하자)?|링크 (만들어|만들어줘|줘))[.!]?$/i;
+
 async function ask(q = askQuery) {
   q = q.trim();
   if (!q) return;
   askQuery = q;
-  askBusy = true; render();
+  if (SHARE_AGAIN.test(q) && askResult?.action?.folder !== undefined && !askResult.action.skipped) {
+    thread.push({ q, r: { answer: "Sharing the folder I just made.", sources: [], action: askResult.action }, at: Date.now() });
+    askQuery = ""; await saveThread(); render();
+    await shareCollected();
+    return;
+  }
+  askBusy = true; actionShare = null; render();
   try {
-    askResult = await AindriveAgent.ask({ query: q });
-    log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}`);
+    const localRunning = status.drives.some((d) => d.running);
+    const targets = remotes.filter((d) => d.online);
+    const [local, ...remoteResults] = await Promise.all([
+      localRunning ? AindriveAgent.ask({ query: q, context: askContext ?? undefined }) : Promise.resolve<AskResult | null>(null),
+      ...targets.map(async (d) => {
+        try {
+          const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
+          remoteAgents.set(d.id, agentId);
+          const r = await askRemote(state.server, state.sessionCookie!, d.id, agentId, q);
+          return { drive: d, r, error: null as string | null, skipped: false };
+        } catch (e) {
+          // A drive shared TO this account (not owned) has no agent we may create: leave it out quietly.
+          if (/403|not_owner/.test(msgOf(e))) return { drive: d, r: null, error: null, skipped: true };
+          return { drive: d, r: null, error: msgOf(e) };
+        }
+      }),
+    ]);
+    // Merge: this phone first, then each other device, sources tagged with where they live.
+    const merged: AskResult = { answer: "", sources: [] };
+    const parts: string[] = [];
+    if (local) { parts.push(targets.length ? `This phone: ${local.answer}` : local.answer); merged.sources.push(...local.sources); merged.action = local.action; }
+    for (const rr of remoteResults) {
+      if ((rr as { skipped?: boolean }).skipped) continue;
+      if (rr.error) { parts.push(`${rr.drive.name}: couldn't ask (${rr.error})`); continue; }
+      const r = rr.r!;
+      parts.push(`${rr.drive.name}: ${r.answer}`);
+      merged.sources.push(...r.sources.map((s) => ({ ...s, driveId: rr.drive.id, remoteName: rr.drive.name, matchedBy: s.matchedBy as AskResult["sources"][number]["matchedBy"] })));
+      if (!merged.action && r.action && !r.action.skipped) merged.action = { ...(r.action as NonNullable<AskResult["action"]>), driveId: rr.drive.id };
+    }
+    if (!local && !targets.length) throw new Error("Turn a folder on, or have another device online, to ask.");
+    merged.answer = parts.join("\n");
+    askResult = merged;
+    if (local?.context && typeof local.context === "object") askContext = local.context as Record<string, unknown>;
+    thread.push({ q, r: merged, at: Date.now() });
+    askQuery = "";
+    await saveThread();
+    log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}${targets.length ? ` across ${1 + targets.length} devices` : ""}`);
+    const a = askResult.action;
+    if (a?.folder) log(`Agent made folder "${a.folder}" with ${a.copied} file${a.copied === 1 ? "" : "s"}`);
+    if (a?.folder && a.folderUri && shareByDrive(a.driveId)) await promoteCollected(a);
+    if (a && a.label !== undefined && a.share) void shareCollected();
   } catch (e) {
     fail(e);
     askResult = null;
+    thread.push({ q, error: msgOf(e), at: Date.now() });
+    await saveThread();
   } finally {
     askBusy = false;
     render();
@@ -504,10 +995,11 @@ async function ask(q = askQuery) {
 }
 
 function openSearch() {
-  if (!status.drives.some((d) => d.running)) {
-    notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — search looks through your shared folders.", true);
+  if (!status.drives.some((d) => d.running) && !remotes.some((d) => d.online)) {
+    notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — the agent works across your shared folders.", true);
     return;
   }
+  void refreshRemotes();
   searchOpen = true;
   menuFor = null;
   render();
@@ -529,13 +1021,37 @@ const I = {
   lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`,
   sparkle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>`,
   back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>`,
+  agent: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5v3"/><rect x="4" y="6" width="16" height="12" rx="4"/><circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none"/><path d="M9.5 15.5h5M2 11v3M22 11v3M8 18v2.5M16 18v2.5"/></svg>`,
+  link: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>`,
 };
 
 // ---------------------------------------------------------------- render
 
+/** True while the user is typing somewhere in the app — a full re-render would drop the keyboard. */
+function typing(): boolean {
+  const el = document.activeElement;
+  return el instanceof HTMLInputElement && (el.type === "text" || el.type === "search" || el.type === "email" || el.type === "password") || el instanceof HTMLTextAreaElement;
+}
+
 function render() {
   const app = document.getElementById("app");
   if (!app) return;
+  // innerHTML replaces the focused input; put the caret (and the keyboard) back where it was.
+  const focused = typing() ? document.activeElement as HTMLInputElement | HTMLTextAreaElement : null;
+  const keep = focused ? { id: focused.id, value: focused.value, start: focused.selectionStart, end: focused.selectionEnd } : null;
+  try { renderScreens(app); } finally {
+    if (keep?.id) {
+      const el = document.getElementById(keep.id) as HTMLInputElement | HTMLTextAreaElement | null;
+      if (el) {
+        if (el.value !== keep.value) el.value = keep.value;
+        el.focus({ preventScroll: true });
+        try { el.setSelectionRange(keep.start, keep.end); } catch { /* not a text field */ }
+      }
+    }
+  }
+}
+
+function renderScreens(app: HTMLElement) {
   if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); return; }
   if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); return; }
   if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); return; }
@@ -554,7 +1070,7 @@ function loginScreen(): string {
     <ul class="features">
       <li><span class="ic">${I.phone}</span><div><b>Files stay on your phone</b><span>Nothing is uploaded. The server only relays requests to this device.</span></div></li>
       <li><span class="ic">${I.lock}</span><div><b>Only the folders you pick</b><span>You choose each folder; the app can't see anything else.</span></div></li>
-      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"파리에서 찍은 사진", "last week's screenshots", "계약서 pdf" — answered on-device, offline.</span></div></li>
+      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"photos taken in Paris", "last week's screenshots", "the contract pdf" — answered on-device, offline.</span></div></li>
     </ul>
     <div class="card">
       <button class="btn" id="login" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : "Continue in browser"}</button>
@@ -578,7 +1094,7 @@ function bindLogin() {
 // ---- home
 
 function homeScreen(): string {
-  const running = status.drives.filter((d) => d.running).length;
+  const running = status.drives.filter((d) => d.running && !d.source).length;
   const anyPaired = state.shares.length > 0;
   const folders = state.shares.map(folderCard).join("");
   const empty = `
@@ -594,7 +1110,7 @@ function homeScreen(): string {
       <h1>aindrive</h1>
       <div class="actions">
         ${anyPaired ? `<button class="iconbtn" id="add" aria-label="Add folder" title="Add folder">${I.plus}</button>` : ""}
-        <button class="iconbtn primary" id="toggle-search" aria-label="Search" title="Search">${I.search}</button>
+        <button class="iconbtn primary" id="toggle-search" aria-label="Agent" title="Agent">${I.agent}</button>
       </div>
     </div>
 
@@ -608,6 +1124,23 @@ function homeScreen(): string {
       ${folders}
       <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; the notification is the off switch.</p>`
       : empty}
+
+    ${anyPaired ? sourcesSection() : ""}
+
+    ${remotes.length ? `
+      <div class="section"><h2>Other devices</h2><button class="link" id="refresh-remotes">Refresh</button></div>
+      ${remotes.map((d) => `
+        <div class="card remote" data-remote="${esc(d.id)}">
+          <div class="folder">
+            <div class="glyph">${I.phone}</div>
+            <div style="min-width:0">
+              <div class="name">${esc(d.name)}</div>
+              <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${d.online ? "Online" : "Offline"}${d.hostname ? ` · ${esc(d.hostname)}` : ""}</div>
+            </div>
+            <div class="controls"><button class="btn secondary small" data-act="browse" ${d.online ? "" : "disabled"}>Browse</button></div>
+          </div>
+        </div>`).join("")}
+      <p class="hint">Folders shared from other devices signed in as ${esc(state.email ?? "you")}. Browsing and asking go through the server; the files stay on that device.</p>` : ""}
 
     <div class="section"><h2>Recent activity</h2>${activity.length > 4 ? `<button class="link" id="more-activity">${showAllActivity ? "Show less" : "Show all"}</button>` : ""}</div>
     <div class="card">
@@ -650,6 +1183,7 @@ function folderCard(share: SharedFolder): string {
         <div class="glyph" data-act="browse">${I.folder}</div>
         <div style="min-width:0" data-act="browse" role="button" aria-label="Open ${esc(share.folder.label)}">
           <div class="name">${esc(share.folder.label)}</div>
+          ${share.parent ? `<div class="hint">in ${esc(share.parent)} · made by the agent</div>` : ""}
           <div class="state"><span class="dot ${dot}"></span>${esc(stateText)}${esc(indexText)}</div>
         </div>
         <div class="controls">
@@ -670,9 +1204,22 @@ function bindHome() {
   bind("add-first", addFolder);
   bind("toggle-search", openSearch);
   bind("start-all", startAll);
+  bind("add-source", () => void addSource());
+  for (const el of document.querySelectorAll<HTMLElement>("[data-preset]")) {
+    el.querySelector("[data-act=src-add]")?.addEventListener("click", () => void addSource(el.dataset.preset as PresetId));
+  }
+  for (const el of document.querySelectorAll<HTMLElement>("[data-source]")) {
+    el.querySelector("[data-act=src-remove]")?.addEventListener("click", () => void removeSource(el.dataset.source!));
+  }
   bind("stop-all", stopAll);
   bind("logout", logout);
   bind("more-activity", () => { showAllActivity = !showAllActivity; render(); });
+  bind("refresh-remotes", () => void refreshRemotes(true));
+  app.querySelectorAll<HTMLElement>("[data-remote]").forEach((card) => {
+    const d = remotes.find((r) => r.id === card.dataset.remote);
+    if (!d) return;
+    card.querySelector<HTMLButtonElement>("[data-act=browse]")?.addEventListener("click", () => void openRemoteBrowser(d));
+  });
   app.querySelectorAll<HTMLElement>("[data-share]").forEach((card) => {
     const share = findShare(card.dataset.share!);
     if (!share) return;
@@ -696,36 +1243,131 @@ function bindHome() {
 
 // ---- search
 
-const SUGGESTIONS = ["파리에서 찍은 사진", "지난주 스크린샷", "계약서 pdf", "작년 여름 사진", "큰 영상 파일", "최근 문서"];
+/** Follow-ups offered under the last answer, when they make sense for it. */
+const FOLLOWUPS: { q: string; when: (r: AskResult | null) => boolean }[] = [
+  { q: "Collect them into a folder", when: (r) => !!r && r.sources.length > 0 && r.action?.folder === undefined },
+  { q: "Share it", when: (r) => r?.action?.folder !== undefined && !r.action.skipped && !actionShare?.url },
+  { q: "How many are there?", when: (r) => !!r && r.sources.length > 0 && r.action?.type !== "count" },
+  { q: "Only the ones from this month", when: (r) => !!r && r.sources.length > 1 },
+  { q: "Show the oldest 3", when: (r) => !!r && r.sources.length > 3 },
+];
+/** Older turns show 3 hits; tapping "Show all" expands that turn. */
+const expandedTurns = new Set<number>();
+
+/** Tap-to-run examples, grouped by what the agent can do. Every one is a scenario the device tests cover. */
+const SUGGESTIONS: { title: string; items: string[] }[] = [
+  { title: "Reports", items: [
+    "Sort my call history by who I talk to most and summarize what we usually talk about, and share it",
+    "Who do I call the most?",
+  ] },
+  { title: "Collect into a folder & share", items: [
+    "Collect this month's food photos into a folder and share it",
+    "Collect the photos I took in Paris into a folder",
+    "Make a folder of sunset photos",
+    "Collect the recordings and share them",
+    "Put all the dog pictures in one folder",
+    "Collect the receipt photos",
+  ] },
+  { title: "Find by place & time", items: [
+    "Photos taken in Paris",
+    "Photos from Japan last year",
+    "Photos taken this month",
+    "Last week's screenshots",
+    "Videos from Seoul",
+  ] },
+  { title: "Find by what it shows or says", items: [
+    "Dog photos",
+    "Pizza photos",
+    "Photos of the beach",
+    "Meeting recordings where we talked about the budget",
+    "Recordings where someone mentions a contract",
+  ] },
+  { title: "Counts & rankings", items: [
+    "How many photos do I have",
+    "How many photos from Korea",
+    "The 5 biggest files",
+    "Show me just the 3 most recent photos",
+    "The 2 oldest photos",
+  ] },
+  { title: "Move & delete (asks first)", items: [
+    "Move the Nice photos into a folder",
+    "Delete the Tokyo photos",
+  ] },
+];
 
 function searchSheet(): string {
   const ix = status.drives.map((d) => d.index).filter((i): i is NonNullable<typeof i> => !!i);
   const indexed = ix.reduce((n, i) => n + i.indexed, 0);
   const active = ix.find((i) => i.running);
+  const recognised = ix.reduce((n, i) => n + (i.recognisedTotal ?? 0), 0);
+  const models = status.models;
   const indexLine = active
-    ? `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`
-    : `<div class="indexline"><span>${indexed ? `${indexed.toLocaleString()} files indexed` : "Not indexed yet"}</span><button class="btn secondary small" id="reindex">${indexed ? "Refresh" : "Index now"}</button></div>`;
-  const body = askBusy ? `<div class="searching"><span class="spinner"></span> Searching…</div>`
-    : askResult ? `
-      <p class="answer">${esc(askResult.answer)}</p>
-      ${askResult.sources.length ? `<ul class="hits">${askResult.sources.map((s, i) => {
-        const name = s.path.split("/").pop() ?? s.path;
-        const dir = s.path.split("/").slice(0, -1).join("/");
-        return `<li data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${esc(name)}</div><div class="meta">${esc([s.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
-      }).join("")}</ul>` : ""}`
-    : `
-      <p class="note" style="margin:0 0 8px">Try asking</p>
-      <div class="chips">${SUGGESTIONS.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>
-      <p class="hint">Understands file type, name, date and size for every file, plus where and when photos were taken. Runs on this phone — works offline.</p>`;
+    ? (active.phase === "recognising"
+      ? `<div class="indexline"><div style="flex:1">Recognising photos & recordings… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
+      : `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`)
+    : `<div class="indexline"><span>${indexed ? `${indexed.toLocaleString()} files indexed${recognised ? ` · ${recognised.toLocaleString()} recognised` : ""}` : "Not indexed yet"}</span><button class="btn secondary small" id="reindex">${indexed ? "Refresh" : "Index now"}</button></div>`;
+  const modelsLine = !models ? "" : models.downloading
+    ? `<div class="indexline"><div style="flex:1">Downloading recognition models… ${Math.round(models.done / 1e6)} / ${Math.round(models.total / 1e6)} MB<div class="progress"><i style="width:${models.total ? Math.round(100 * models.done / models.total) : 0}%"></i></div></div></div>`
+    : models.ready ? ""
+    : `<div class="card" style="margin:0 0 12px;padding:12px 14px">
+        <b style="font-size:14px">Recognise what's inside</b>
+        <p class="note" style="margin:4px 0 10px">Find photos by what they show, recordings by what was said, and get real summaries in the call report — all on this phone, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (photo + speech models, and a small language model for summaries).</p>
+        ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
+        <button class="btn small" id="ensure-models">Download models</button>
+      </div>`;
+  const a = askResult?.action;
+  const actionCard = !a ? "" : a.skipped
+    ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "Turn a shared folder on so I have somewhere to save the result.")}</p>${a.needsCallLog ? `<p class="hint" style="margin-top:8px"><button class="link" id="action-calllog">Allow call log</button></p>` : ""}</div>`
+    : `<div class="card action">
+        <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.label ?? a.folder ?? "")}</b><br><span class="hint">${a.label !== undefined ? "Its own drive · " : ""}${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
+        <div class="folder-foot">
+          <button class="btn secondary small" id="action-open">Open folder</button>
+          ${actionShare?.url ? `<button class="btn small" id="action-copy">${I.link} Copy link</button>` : `<button class="btn small" id="action-share" ${actionShare?.busy ? "disabled" : ""}>${actionShare?.busy ? "Sharing…" : `${I.link} Share link`}</button>`}
+        </div>
+        ${a.needsCallLog ? `<p class="hint" style="margin-top:8px">Without call-log access the ranking counts recordings only. <button class="link" id="action-calllog">Allow call log</button></p>` : ""}
+        ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
+        ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
+      </div>`;
+  const hitsList = (r: AskResult, turn: number, max: number) => !r.sources.length ? "" : `<ul class="hits">${r.sources.slice(0, max).map((src, i) => {
+    const name = src.path.split("/").pop() ?? src.path;
+    const dir = src.path.split("/").slice(0, -1).join("/");
+    const how = src.matchedBy === "photo" ? "👁" : src.matchedBy === "speech" ? "🎙" : "";
+    const where = (src as { remoteName?: string }).remoteName;
+    return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${src.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+  }).join("")}${r.sources.length > max ? `<li class="more" data-more="${turn}">Show all ${r.sources.length}</li>` : ""}</ul>`;
+  const turns = thread.map((t, i) => {
+    const last = i === thread.length - 1;
+    const open = last || expandedTurns.has(i);
+    return `
+      <div class="turn ${last ? "last" : ""}">
+        <div class="bubble">${esc(t.q)}</div>
+        ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
+          ${last ? actionCard : t.r.action?.folder ? `<p class="hint">${esc(t.r.action.label ?? t.r.action.folder)} · ${t.r.action.copied ?? 0} files</p>` : ""}
+          <p class="answer">${esc(t.r.answer)}</p>
+          ${hitsList(t.r, i, open ? 200 : 3)}` : ""}
+      </div>`;
+  }).join("");
+  const body = `
+    ${turns}
+    ${askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>` : ""}
+    ${!thread.length && !askBusy ? `
+      ${SUGGESTIONS.map((g) => `
+        <p class="note group">${esc(g.title)}</p>
+        <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
+      <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Follow-ups work: "…and share them", "only the ones from Paris". Runs on this phone; only sharing needs the server.</p>` : ""}
+    ${thread.length && !askBusy ? `<div class="chips followups">${FOLLOWUPS.filter((f) => askResult?.action?.report !== "calls" || f.q === "Share it").filter((f) => f.when(askResult)).map((f) => `<button class="chip" data-suggest="${esc(f.q)}">${esc(f.q)}</button>`).join("")}</div>` : ""}`;
   return `
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="field">${I.search}<input id="ask-input" type="text" enterkeyhint="search" placeholder="Ask across your folders" value="${esc(askQuery)}" autocomplete="off" />
+        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
           ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
+        ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${I.plus}</button>` : ""}
       </div>
       <div class="body">
+        ${modelsLine}
         ${indexLine}
+        ${modelsSection()}
         ${body}
       </div>
     </div>`;
@@ -733,18 +1375,37 @@ function searchSheet(): string {
 
 function bindSearch() {
   bind("close-search", () => { searchOpen = false; render(); });
+  bind("model-info-toggle", () => { modelInfoOpen = !modelInfoOpen; render(); });
+  bind("models-download", ensureModels);
   bind("reindex", reindex);
-  bind("clear-ask", () => { askQuery = ""; askResult = null; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
+  bind("ensure-models", ensureModels);
+  bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
+  bind("new-chat", () => void newChat());
+  document.querySelectorAll<HTMLElement>("[data-more]").forEach((li) => li.addEventListener("click", () => { expandedTurns.add(Number(li.dataset.more)); render(); }));
+  const bodyEl = document.querySelector<HTMLElement>(".sheet .body");
+  if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
   input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { input.blur(); void ask(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
-    const hit = askResult?.sources[Number(li.dataset.hit)];
+    const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];
     if (!hit) return;
+    const remote = remotes.find((d) => d.id === hit.driveId);
+    if (remote) { void viewRemoteFile(remote, hit.path); return; }
     const share = shareByDrive(hit.driveId);
-    if (share) void openDrive(share, hit.path); else notify("Turn the folder on to open it on the web.", true);
+    if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
+  bind("action-share", shareCollected);
+  bind("action-calllog", allowCallLog);
+  bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
+  bind("action-open", () => {
+    const a = askResult?.action; if (a?.folder === undefined) return;
+    const remote = remotes.find((d) => d.id === a.driveId);
+    if (remote) { searchOpen = false; void openRemoteBrowser(remote, a.folder); return; }
+    const share = shareByDrive(a.driveId);
+    if (share) { searchOpen = false; void openBrowser(share, a.folder); }
+  });
   bindOverlays();
 }
 
@@ -780,6 +1441,7 @@ function browseSheet(): string {
     </div>` : "";
   let body: string;
   if (browse.loading && !browse.entries) body = `<div class="searching"><span class="spinner"></span> Loading…</div>`;
+  else if (browse.error && isGone(browse.error) && !browse.path && !browse.remote) body = `<div class="empty"><h3>This folder no longer exists</h3><p>It was deleted or moved on the phone. Remove it from your shared folders, or ask the agent again to make a new one.</p><button class="btn secondary" id="browse-forget">Remove from list</button></div>`;
   else if (browse.error) body = `<div class="empty"><h3>Couldn’t read this folder</h3><p>${esc(browse.error)}</p><button class="btn secondary" id="browse-retry">Try again</button></div>`;
   else if (!browse.entries?.length) body = `<div class="empty"><div class="art">${I.folder}</div><h3>Empty folder</h3><p>Add files from this phone or create a folder with the + button.</p></div>`;
   else body = `<ul class="hits files">${browse.entries.map((e) => {
@@ -816,6 +1478,7 @@ function bindBrowse() {
   if (!browse || !share) return;
   bind("browse-back", browseBack);
   bind("browse-retry", () => void loadBrowse());
+  bind("browse-forget", () => { const sh = browseShare(); browse = null; render(); if (sh) void removeShare(sh); });
   bind("browse-plus", () => { if (browse) { browse.plusMenu = !browse.plusMenu; browse.menu = null; render(); } });
   document.querySelectorAll<HTMLElement>("#browse-plus ~ .menu [data-op]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -847,6 +1510,32 @@ function bindBrowse() {
 
 // ---- overlays
 
+function viewerSheet(): string {
+  if (!viewer) return "";
+  const media = viewer.loading ? `<div class="searching"><span class="spinner"></span> Loading…</div>`
+    : viewer.text !== undefined ? `<div class="doc">${/\.(md|markdown)$/i.test(viewer.name) ? renderMarkdown(viewer.text) : `<pre>${esc(viewer.text)}</pre>`}</div>`
+    : viewer.mime.startsWith("image/") ? `<img src="${viewer.src}" alt="${esc(viewer.name)}" />`
+    : `<audio controls autoplay src="${viewer.src}"></audio>`;
+  return `
+    <div class="viewer" id="viewer">
+      <div class="bar">
+        <button class="iconbtn" id="viewer-close" aria-label="Close">${I.back}</button>
+        <div class="title">${esc(viewer.name)}</div>
+        <button class="iconbtn" id="viewer-ext" aria-label="Open with another app" title="Open with another app">${I.more}</button>
+      </div>
+      <div class="stage">${media}</div>
+    </div>`;
+}
+
+function bindViewer() {
+  bind("viewer-close", () => { viewer = null; render(); });
+  bind("viewer-ext", () => {
+    const v = viewer; if (!v) return;
+    if (v.remote) { void Browser.open({ url: `${state.server}/d/${v.remote.id}?path=${encodeURIComponent(v.path.split("/").slice(0, -1).join("/"))}` }); return; }
+    if (v.share) void AindriveAgent.openFile({ folderUri: v.share.folder.uri, path: v.path }).catch((e) => notify(msgOf(e), true));
+  });
+}
+
 function overlays(): string {
   const t = toast ? `<div class="toast ${toast.error ? "error" : ""}" role="status">${esc(toast.msg)}${toast.error ? `<button id="toast-close">OK</button>` : ""}</div>` : "";
   const c = confirmSheet ? `
@@ -860,10 +1549,11 @@ function overlays(): string {
         </div>
       </div>
     </div>` : "";
-  return t + c;
+  return viewerSheet() + t + c;
 }
 
 function bindOverlays() {
+  bindViewer();
   bind("toast-close", () => { toast = null; render(); });
   bind("confirm-no", () => confirmSheet?.resolve(false));
   bind("confirm-yes", () => confirmSheet?.resolve(true));
@@ -911,6 +1601,13 @@ function sleep(ms: number) {
 async function boot() {
   await load();
   try { status = await AindriveAgent.status(); } catch { /* plugin absent in browser dev */ }
+  await loadThread();
+  await pruneMissing();
+  // Everything that was on comes back by itself: sources, and the shares whose switch was on.
+  void (async () => {
+    for (const share of state.shares) if (share.on && state.sessionCookie && !driveStatus(share)?.running) await startShare(share);
+    await startSources();
+  })();
   await AindriveAgent.addListener("statusChanged", (s) => {
     const before = new Map(status.drives.map((d) => [d.driveId, d]));
     status = s;
@@ -921,13 +1618,18 @@ async function boot() {
       if (!d.connected && prev?.connected) log(`${name}: disconnected — reconnecting`);
       if (d.lastError && d.lastError !== prev?.lastError) log(`${name}: ${d.lastError}`);
     }
-    render();
+    // Indexing progress ticks every few files; never redraw under someone's fingers.
+    if (!typing()) render();
   }).catch(() => {});
   App.addListener("resume", () => {
+    void pruneMissing();
     AindriveAgent.status().then((s) => { status = s; render(); }).catch(() => {});
+    void refreshRemotes();
   });
+  void refreshRemotes();
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
+    else if (viewer) { viewer = null; render(); }
     else if (searchOpen) { searchOpen = false; render(); }
     else if (browse) browseBack();
     else if (menuFor) { menuFor = null; render(); }

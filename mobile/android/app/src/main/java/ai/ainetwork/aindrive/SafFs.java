@@ -54,13 +54,36 @@ public final class SafFs {
     private final Uri treeUri;
     private final String rootDocId;
     private final ConcurrentHashMap<String, String> pathToDocId = new ConcurrentHashMap<>();
+    /** Document ids of sub-folders served as drives of their own: invisible here. */
+    private final Set<String> excluded = new HashSet<>();
 
-    SafFs(Context ctx, Uri treeUri) {
+    SafFs(Context ctx, Uri treeUri) { this(ctx, treeUri, null); }
+
+    /**
+     * `root` is the tree the user picked, or a document-in-tree URI of a folder
+     * inside such a tree (`buildDocumentUriUsingTree`): the persisted grant on
+     * the tree covers it, so an agent-made folder can be a drive by itself.
+     * `excludeUris` are the roots of other drives; those under this one are
+     * hidden so a file belongs to exactly one drive.
+     */
+    SafFs(Context ctx, Uri root, List<String> excludeUris) {
         this.cr = ctx.getContentResolver();
-        this.treeUri = treeUri;
-        this.rootDocId = DocumentsContract.getTreeDocumentId(treeUri);
+        this.treeUri = root;
+        this.rootDocId = DocumentsContract.isDocumentUri(ctx, root) ? DocumentsContract.getDocumentId(root) : DocumentsContract.getTreeDocumentId(root);
         pathToDocId.put("", rootDocId);
+        if (excludeUris != null) for (String u : excludeUris) {
+            try {
+                Uri x = Uri.parse(u);
+                if (!DocumentsContract.isDocumentUri(ctx, x)) continue;
+                if (!DocumentsContract.getTreeDocumentId(x).equals(DocumentsContract.getTreeDocumentId(root))) continue;
+                String id = DocumentsContract.getDocumentId(x);
+                if (!id.equals(rootDocId)) excluded.add(id);
+            } catch (Exception ignored) { }
+        }
     }
+
+    /** True for a folder that is served as its own drive (hidden from this one). */
+    public boolean isExcluded(String docId) { return excluded.contains(docId); }
 
     /** Content URI for an existing path — what an ACTION_VIEW intent needs. */
     Uri uriFor(String rel) throws IOException { return docUri(requireDoc(rel)); }
@@ -233,7 +256,7 @@ public final class SafFs {
             if (c == null) return out;
             while (c.moveToNext()) {
                 String name = c.getString(1);
-                if (name == null || HIDDEN.contains(name)) continue;
+                if (name == null || HIDDEN.contains(name) || excluded.contains(c.getString(0))) continue;
                 Entry e = new Entry();
                 e.docId = c.getString(0);
                 e.name = name;
@@ -333,6 +356,21 @@ public final class SafFs {
         }
         invalidate(rel);
         pathToDocId.put(String.join("/", splitPath(rel)), docId);
+    }
+
+    /** Copy one document (by id) to a new path inside the tree; existing target is replaced. */
+    public void copy(String srcDocId, String destRel) throws IOException {
+        String existing = resolve(destRel);
+        String destId = existing != null ? existing : createFile(destRel);
+        try (InputStream in = cr.openInputStream(docUri(srcDocId));
+             OutputStream out = cr.openOutputStream(docUri(destId), "wt")) {
+            if (in == null || out == null) throw new IOException("cannot open for copy");
+            byte[] buf = new byte[256 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+        }
+        invalidate(destRel);
     }
 
     /** Create the file (and any missing parent directories) and return its id. */

@@ -88,6 +88,7 @@ export async function POST(
       return NextResponse.json({
         answer: out.result.answer,
         sources: out.result.sources,
+        ...(out.result.action ? { action: out.result.action } : {}),
         policyName: out.policyName,
       });
     case "denied":
