@@ -97,6 +97,8 @@ public final class AskRunner {
      */
     public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
+        String chat = smallTalk(question);
+        if (chat != null) return new JSONObject().put("answer", chat).put("sources", new JSONArray()).put("query", "chat");
         SearchQuery q = parser.parse(question, System.currentTimeMillis(), SearchQuery.fromJson(context));
         if (q.calls) {
             try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
@@ -114,6 +116,17 @@ public final class AskRunner {
 
         List<String> relaxed = new ArrayList<>();
         Map<String, Hit> hits = search(q);
+        // A bare word that matches nothing ("hi", a typo) is not a request for every file:
+        // relax it only when something else (a kind, place, date, size, task) narrows the search.
+        boolean onlyWords = q.kind == null && q.country == null && q.city == null && q.dateFrom == null && q.dateTo == null
+                && q.minSize == null && !q.collect && !q.delete && !q.count && q.limit == 0 && !q.bySize && !q.oldestFirst;
+        if (hits.isEmpty() && !q.keywords.isEmpty() && onlyWords) {
+            String w = String.join(" ", q.keywords);
+            return out.put("answer", q.korean
+                    ? "“" + w + "”와 관련된 파일을 찾지 못했어요. 사진 속 내용(예: 강아지 사진), 장소·날짜(예: 파리에서 찍은 사진), 파일 종류(예: 지난주 스크린샷)로 물어보세요."
+                    : "Nothing here matches “" + w + "”. Try what a photo shows (\"dog photos\"), a place or date (\"photos from Paris\"), or a kind of file (\"last week's screenshots\").")
+                    .put("sources", new JSONArray());
+        }
         if (hits.isEmpty() && !q.keywords.isEmpty()) { q.keywords.clear(); relaxed.add("keyword"); hits = search(q); }
         if (hits.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed.add("date"); hits = search(q); }
         if (hits.isEmpty() && q.city != null) { q.city = null; relaxed.add("city"); hits = search(q); }
@@ -184,6 +197,23 @@ public final class AskRunner {
                 .put("share", q.share).put("files", files);
         if (copied > 0) { try { r.putOpt("folderUri", ops.uriOf(folder)); } catch (Exception ignored) { } }
         return r;
+    }
+
+    private static final java.util.regex.Pattern GREETING = java.util.regex.Pattern.compile(
+            "^(hi+|hello+|hey+|yo|hiya|good (morning|afternoon|evening)|thanks?( you)?|thank u|ty|ok(ay)?|cool|nice|great|help|what can you do\\??|who are you\\??|"
+            + "안녕(하세요)?|ㅎㅇ|하이|헬로|반가워(요)?|고마워(요)?|감사(합니다|해요)?|ㄱㅅ|좋아(요)?|오케이|ㅇㅋ|도움말|도와줘|뭐 할 수 있어\\??|뭘 할 수 있어\\??|넌 누구야\\??|누구세요\\??)[.!~ ]*$",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Greetings, thanks and "what can you do": a short reply, never a file search. Null when it is a real question. */
+    static @Nullable String smallTalk(String question) {
+        String t = question.trim();
+        if (!GREETING.matcher(t).matches()) return null;
+        boolean ko = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3 || cp >= 0x3131 && cp <= 0x318E);
+        boolean thanks = t.toLowerCase(Locale.ROOT).matches("^(thanks?|thank|ty|고마|감사|ㄱㅅ).*");
+        if (thanks) return ko ? "천만에요! 더 찾을 게 있으면 말씀하세요." : "You're welcome — ask me anything else about your files.";
+        return ko
+                ? "안녕하세요! 이 폰의 파일을 찾고 정리해 드려요. 예를 들면:\n· 파리에서 찍은 사진\n· 이번달 음식 사진을 폴더로 모아서 공유해줘\n· 예산 얘기한 회의 녹음\n· 많이 통화한 사람 순으로 정리하고 요약해줘"
+                : "Hi! I find and organise the files on this phone. Try:\n· photos taken in Paris\n· collect this month's food photos into a folder and share it\n· meeting recordings about the budget\n· sort my call history by who I talk to most and summarize it";
     }
 
     private String folderName(SearchQuery q) {
