@@ -7,40 +7,52 @@ import androidx.annotation.Nullable;
 
 import ai.ainetwork.aindrive.clip.ModelStore;
 
-import com.google.mediapipe.tasks.genai.llminference.LlmInference;
-import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession;
+import com.google.ai.edge.litertlm.Backend;
+import com.google.ai.edge.litertlm.Content;
+import com.google.ai.edge.litertlm.Contents;
+import com.google.ai.edge.litertlm.Conversation;
+import com.google.ai.edge.litertlm.ConversationConfig;
+import com.google.ai.edge.litertlm.Engine;
+import com.google.ai.edge.litertlm.EngineConfig;
+import com.google.ai.edge.litertlm.Message;
+import com.google.ai.edge.litertlm.SamplerConfig;
+import com.google.ai.edge.litertlm.ThinkingConfig;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 
 /**
- * The one place an LLM runs on the phone: a small instruct model (Qwen2.5
- * 1.5B, 8-bit) on MediaPipe's LLM Inference, used ONLY to turn text the
- * device already produced (call transcripts) into a few sentences. Search
- * never goes through it — the index answers searches — so it is optional:
- * without the model the call report falls back to topic words.
+ * The one place an LLM runs on the phone, used ONLY to turn text the device
+ * already produced (call transcripts) into a few sentences. Search never
+ * goes through it — the index answers searches — so it is optional: without
+ * the model the call report falls back to topic words.
  *
- * Memory: the model is ~1.6 GB mapped; loaded lazily, one instance, and
- * released after a report so the foreground service stays small.
+ * Runtime: Google's LiteRT-LM (`.litertlm` bundles — Gemma 4 E2B by default;
+ * Qwen3.5 works too). MediaPipe's older `.task` path was dropped: its
+ * byte-level decoding garbled Korean. Loaded lazily, one instance, released
+ * after a report so the service stays small.
  */
 public final class Summarizer implements AutoCloseable {
     private static final String TAG = "AindriveLlm";
-    /** Model context (prompt + answer). The bundle's KV cache is 4096. */
     private static final int MAX_TOKENS = 4096;
     /** Per-person budget for transcript text, in characters (Korean ≈ 1 token per 1.5 chars). */
     public static final int EXCERPT_CHARS = 3200;
 
-    private final LlmInference llm;
+    public final String engine, name;
+    private @Nullable Engine litert;
 
     public Summarizer(Context ctx, ModelStore store) throws IOException {
+        engine = store.manifest.optString("engine", "litert-lm");
+        name = store.manifest.optString("model", engine);
+        String path = store.file("model").getAbsolutePath();
         try {
-            llm = LlmInference.createFromOptions(ctx, LlmInference.LlmInferenceOptions.builder()
-                    .setModelPath(store.file("model").getAbsolutePath())
-                    .setMaxTokens(MAX_TOKENS)
-                    .setMaxTopK(40)
-                    .build());
+            int threads = Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors() - 2));
+            EngineConfig cfg = new EngineConfig(path, new Backend.CPU(threads, null), null, null, MAX_TOKENS, null, ctx.getCacheDir().getAbsolutePath());
+            litert = new Engine(cfg);
+            litert.initialize();
         } catch (RuntimeException e) {
-            throw new IOException("could not load the summariser: " + e.getMessage(), e);
+            throw new IOException("could not load the summariser (" + name + "): " + e.getMessage(), e);
         }
     }
 
@@ -64,21 +76,36 @@ public final class Summarizer implements AutoCloseable {
                   + "이 사람과 주로 어떤 이야기를 나누는지 2~3문장으로 요약하세요. 구체적인 주제(예: 투자 조건, 일정, 제품)를 언급하고, 한국어로 답하세요. 서론 없이 요약만 쓰세요."
                 : "Below are excerpts of my recent calls with \"" + person + "\".\n\n" + text
                   + "In 2–3 sentences, summarise what we usually talk about. Name the concrete subjects (e.g. investment terms, schedules, a product). Answer in English, summary only, no preamble.";
-        String prompt = "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + user + "<|im_end|>\n<|im_start|>assistant\n";
-        try (LlmInferenceSession s = LlmInferenceSession.createFromOptions(llm, LlmInferenceSession.LlmInferenceSessionOptions.builder()
-                .setTemperature(0.2f).setTopK(20).setTopP(0.9f).setRandomSeed(7).build())) {
-            s.addQueryChunk(prompt);
-            String out = s.generateResponse();
+        return generate(system, user, person);
+    }
+
+    /** One prompt, one answer; null when nothing usable came back. */
+    public @Nullable String generate(String system, String user, String what) {
+        try {
+            String out;
+            {
+                ConversationConfig cc = new ConversationConfig(Contents.Companion.of(system), Collections.emptyList(), Collections.emptyList(),
+                        new SamplerConfig(20, 0.9, 0.2, 7), false, Collections.emptyList(), Collections.emptyMap(), null, false, 400,
+                        new ThinkingConfig(false), false);
+                try (Conversation c = litert.createConversation(cc)) {
+                    Message m = c.sendMessage(user);
+                    StringBuilder sb = new StringBuilder();
+                    for (Content part : m.getContents().getContents()) if (part instanceof Content.Text) sb.append(((Content.Text) part).getText());
+                    out = sb.toString();
+                }
+            }
             if (out == null) return null;
-            out = out.replace("<|im_end|>", "").trim();
+            out = out.replaceAll("(?s)<think>.*?</think>", "").trim();
             // A model that echoes the instruction or gives up is worse than the topic words.
             if (out.length() < 12 || out.startsWith("[") || out.contains("<|im_start|>")) return null;
             return out;
         } catch (RuntimeException e) {
-            Log.w(TAG, "summary failed for " + person + ": " + e.getMessage());
+            Log.w(TAG, "generation failed for " + what + ": " + e.getMessage());
             return null;
         }
     }
 
-    @Override public void close() { llm.close(); }
+    @Override public void close() {
+        if (litert != null) { try { litert.close(); } catch (Exception ignored) { } litert = null; }
+    }
 }

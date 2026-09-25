@@ -61,7 +61,12 @@ export interface IndexStatus {
 }
 
 /** On-device recognition models (photos + speech): present, or being fetched. */
+export interface ModelInfo { id: "image" | "speech" | "llm"; role: string; name: string; license: string; engine: string; bytes: number; ready: boolean }
+
 export interface ModelsStatus {
+  /** Every model the agent runs on this phone, with what it is for. */
+  list?: ModelInfo[];
+  llm?: boolean;
   photos: boolean;
   speech: boolean;
   ready: boolean;

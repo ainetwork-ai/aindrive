@@ -75,6 +75,8 @@ public class AgentService extends Service {
     public static final String ACTION_ENSURE_MODELS = "ai.ainetwork.aindrive.ENSURE_MODELS";
     /** Debug: transcribe one file with a given speech manifest and log it — for comparing engines on the same recording. */
     public static final String ACTION_TRANSCRIBE = "ai.ainetwork.aindrive.TRANSCRIBE";
+    /** Debug: summarise a text file with a given LLM manifest and log it — for comparing models on the same transcript. */
+    public static final String ACTION_SUMMARIZE = "ai.ainetwork.aindrive.SUMMARIZE";
     public static final String EXTRA_DRIVE_ID = "driveId";
 
     /** Backoff schedule copied from cli/src/agent.js so reconnects feel the same. */
@@ -124,6 +126,24 @@ public class AgentService extends Service {
         }
         if (ACTION_ENSURE_MODELS.equals(intent.getAction())) {
             ensureModels();
+            return START_STICKY;
+        }
+        if (ACTION_SUMMARIZE.equals(intent.getAction())) {
+            String manifest = intent.getStringExtra("manifest"), file = intent.getStringExtra("file"), person = intent.getStringExtra("person");
+            boolean ko = intent.getBooleanExtra("korean", true);
+            rpcPool.execute(() -> {
+                long t0 = System.currentTimeMillis();
+                try {
+                    String text = new String(java.nio.file.Files.readAllBytes(new java.io.File(file).toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                    ModelStore s = new ModelStore(this, manifest);
+                    if (!s.ready()) { Log.w(TAG, "summarize: models for " + manifest + " not downloaded"); return; }
+                    try (ai.ainetwork.aindrive.llm.Summarizer sum = new ai.ainetwork.aindrive.llm.Summarizer(this, s)) {
+                        long t1 = System.currentTimeMillis();
+                        String out = sum.callsWith(person == null ? "X" : person, java.util.Arrays.asList(text.split("\n===\n")), ko);
+                        Log.i(TAG, "summarize[" + manifest + "] load=" + (t1 - t0) + "ms run=" + (System.currentTimeMillis() - t1) + "ms → " + out);
+                    }
+                } catch (Exception e) { Log.w(TAG, "summarize failed", e); }
+            });
             return START_STICKY;
         }
         if (ACTION_TRANSCRIBE.equals(intent.getAction())) {
@@ -409,6 +429,9 @@ public class AgentService extends Service {
 
     /** Which speech model the indexer and the call report use; the others stay selectable for the TRANSCRIBE benchmark hook. */
     static final String SPEECH_MANIFEST = "speech/qwen3-asr.json";
+    /** The summariser's model; other manifests under assets/llm stay selectable for the SUMMARIZE benchmark hook. */
+    static final String LLM_MANIFEST = "llm/gemma-4-e2b.json";
+    static final String CLIP_MANIFEST = "clip/models.json";
     private volatile ModelStore clipStore, speechStore, llmStore;
     private volatile ai.ainetwork.aindrive.llm.Summarizer summarizer;
     private volatile ClipEmbedder clip;
@@ -418,7 +441,7 @@ public class AgentService extends Service {
     private volatile long modelsDone, modelsTotal;
 
     private ModelStore clipStore() throws java.io.IOException {
-        if (clipStore == null) clipStore = new ModelStore(this, "clip/models.json");
+        if (clipStore == null) clipStore = new ModelStore(this, CLIP_MANIFEST);
         return clipStore;
     }
 
@@ -429,7 +452,7 @@ public class AgentService extends Service {
     }
 
     private ModelStore llmStore() throws java.io.IOException {
-        if (llmStore == null) llmStore = new ModelStore(this, "llm/models.json");
+        if (llmStore == null) llmStore = new ModelStore(this, LLM_MANIFEST);
         return llmStore;
     }
 
@@ -477,12 +500,24 @@ public class AgentService extends Service {
         }
     }
 
+    private static JSONObject modelInfo(String id, String role, ModelStore s, boolean ready) throws Exception {
+        return new JSONObject().put("id", id).put("role", role).put("name", s.manifest.optString("model", "")).put("license", s.manifest.optString("license", ""))
+                .put("engine", s.manifest.optString("engine", "")).put("bytes", s.totalBytes()).put("ready", ready);
+    }
+
     JSONObject modelsJson() {
         JSONObject o = new JSONObject();
         try {
-            boolean clipReady = false, speechReady = false; long total = 0;
+            boolean clipReady = false, speechReady = false, llmReady = false; long total = 0;
             try { clipReady = clipStore().ready(); total += clipStore().totalBytes(); } catch (Exception ignored) { }
             try { speechReady = speechStore().ready(); total += speechStore().totalBytes(); } catch (Exception ignored) { }
+            try { llmReady = llmStore().ready(); total += llmStore().totalBytes(); } catch (Exception ignored) { }
+            // What runs where — shown in the app so the user knows exactly which models see their data.
+            JSONArray list = new JSONArray();
+            try { list.put(modelInfo("image", "Image", clipStore(), clipReady)); } catch (Exception ignored) { }
+            try { list.put(modelInfo("speech", "Speech", speechStore(), speechReady)); } catch (Exception ignored) { }
+            try { list.put(modelInfo("llm", "LLM", llmStore(), llmReady)); } catch (Exception ignored) { }
+            o.put("list", list).put("llm", llmReady);
             o.put("photos", clipReady).put("speech", speechReady).put("ready", clipReady && speechReady)
              .put("downloading", modelsDownloading).put("done", modelsDone).put("total", modelsDownloading ? modelsTotal : total)
              .put("error", modelsError == null ? JSONObject.NULL : modelsError);

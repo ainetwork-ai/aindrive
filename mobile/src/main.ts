@@ -737,6 +737,26 @@ function sourceCard(src: AgentSource): string {
     </div>`;
 }
 
+/** Which models see the user's data — all on this phone, none in the cloud. */
+function modelsSection(): string {
+  const m = status.models;
+  if (!m?.list?.length) return "";
+  const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes the summaries in reports" };
+  return `
+    <div class="section"><h2>Models on this phone</h2>${m.ready && m.llm ? "" : `<button class="link" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download all"}</button>`}</div>
+    <div class="card" style="padding:6px 16px">
+      ${m.list.map((x) => `
+        <div class="row model"><span class="k">${esc(x.role)}</span>
+          <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0">
+            <b>${esc(x.name)}</b><br>
+            <span class="hint">${esc(what[x.id] ?? "")} · ${(x.bytes / 1e6) >= 1000 ? (x.bytes / 1e9).toFixed(1) + " GB" : Math.round(x.bytes / 1e6) + " MB"} · ${esc(x.license.replace(/\s*\(.*$/, ""))}</span>
+          </span>
+          <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? "On this phone" : "Not downloaded"}"></span>
+        </div>`).join("")}
+      <p class="hint" style="margin:6px 0 8px">Everything runs on this phone; nothing is sent to a cloud model. ${m.error ? `<span style="color:var(--err)">${esc(m.error)}</span>` : ""}</p>
+    </div>`;
+}
+
 function sourcesSection(): string {
   const have = new Set((state.sources ?? []).map((s) => s.preset));
   const suggested = PRESETS.filter((p) => !have.has(p.id)).map((p) => `
@@ -1068,6 +1088,7 @@ function homeScreen(): string {
       : empty}
 
     ${anyPaired ? sourcesSection() : ""}
+    ${modelsSection()}
 
     ${remotes.length ? `
       <div class="section"><h2>Other devices</h2><button class="link" id="refresh-remotes">Refresh</button></div>
@@ -1147,6 +1168,7 @@ function bindHome() {
   bind("toggle-search", openSearch);
   bind("start-all", startAll);
   bind("add-source", () => void addSource());
+  bind("models-download", ensureModels);
   for (const el of document.querySelectorAll<HTMLElement>("[data-preset]")) {
     el.querySelector("[data-act=src-add]")?.addEventListener("click", () => void addSource(el.dataset.preset as PresetId));
   }
