@@ -868,6 +868,8 @@ async function pruneMissing() {
   }
   state.shares = state.shares.filter((s) => !gone.includes(s));
   await save();
+  // Parents hid the removed folders (excludeUris): restart them so a folder recreated inside shows up again.
+  for (const s of state.shares) if (driveStatus(s)?.running) await startShare(s);
   try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
   if (browse && gone.some((s) => browse && shareKey(s) === browse.key)) browse = null;
   render();
@@ -1242,7 +1244,7 @@ function bindHome() {
 
 /** Follow-ups offered under the last answer, when they make sense for it. */
 const FOLLOWUPS: { q: string; when: (r: AskResult | null) => boolean }[] = [
-  { q: "Collect them into a folder", when: (r) => !!r && r.sources.length > 0 && !r.action?.folder },
+  { q: "Collect them into a folder", when: (r) => !!r && r.sources.length > 0 && r.action?.folder === undefined },
   { q: "Share it", when: (r) => r?.action?.folder !== undefined && !r.action.skipped && !actionShare?.url },
   { q: "How many are there?", when: (r) => !!r && r.sources.length > 0 && r.action?.type !== "count" },
   { q: "Only the ones from this month", when: (r) => !!r && r.sources.length > 1 },
@@ -1352,7 +1354,7 @@ function searchSheet(): string {
         <p class="note group">${esc(g.title)}</p>
         <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
       <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Follow-ups work: "…and share them", "only the ones from Paris". Runs on this phone; only sharing needs the server.</p>` : ""}
-    ${thread.length && !askBusy ? `<div class="chips followups">${FOLLOWUPS.filter((f) => f.when(askResult)).map((f) => `<button class="chip" data-suggest="${esc(f.q)}">${esc(f.q)}</button>`).join("")}</div>` : ""}`;
+    ${thread.length && !askBusy ? `<div class="chips followups">${FOLLOWUPS.filter((f) => askResult?.action?.report !== "calls" || f.q === "Share it").filter((f) => f.when(askResult)).map((f) => `<button class="chip" data-suggest="${esc(f.q)}">${esc(f.q)}</button>`).join("")}</div>` : ""}`;
   return `
     <div class="sheet">
       <div class="bar">
