@@ -3,7 +3,7 @@
 // (create-agent-modal.tsx), and MCP access tokens (mcp-modal.tsx). These are
 // server-side agents with a cloud LLM — distinct from the phone's own offline
 // agent (the 🤖 sheet), which answers about files on this phone.
-import { I, icon } from "./icons";
+import { I, icon, fileGlyph } from "./icons";
 import { esc, msgOf, on, val, when, type Ctx, type Sheet } from "./kit";
 import type { Agent, McpToken } from "./web";
 
@@ -56,7 +56,7 @@ export class ChatSheet implements Sheet {
         ${thread.map((m) => m.who === "me"
           ? `<div class="turn"><div class="bubble">${esc(m.text)}</div></div>`
           : `<div class="turn"><p class="answer" ${m.error ? `style="color:var(--err)"` : ""}>${esc(m.text)}</p>
-              ${m.sources?.length ? `<ul class="hits">${m.sources.map((s) => `<li data-open="${esc(s.path)}"><span class="kind ft-doc">${icon("file", 22)}</span><div style="min-width:0"><div class="name">${esc(s.path.split("/").pop())}</div><div class="meta">${esc(s.path)}</div></div></li>`).join("")}</ul>` : ""}</div>`).join("")}
+              ${m.sources?.length ? `<ul class="hits">${m.sources.map((s) => `<li data-open="${esc(s.path)}"><span class="kind ${fileGlyph(s.path, false).cls}">${fileGlyph(s.path, false).svg}</span><div style="min-width:0"><div class="name">${esc(s.path.split("/").pop())}</div><div class="meta">${esc(s.path)}</div></div></li>`).join("")}</ul>` : ""}</div>`).join("")}
         ${this.asking ? `<div class="searching"><span class="spinner"></span> Thinking…</div>` : ""}
         ${!thread.length && !this.asking ? `<p class="hint">Ask ${esc(a?.name ?? "the agent")} about the files in ${esc(a?.folder ? "/" + a.folder : this.driveName)}.</p>` : ""}`;
     return `
@@ -112,21 +112,25 @@ export class ChatSheet implements Sheet {
     })());
     const input = root.querySelector("#ch-input") as HTMLInputElement | null;
     input?.addEventListener("input", () => { this.draft = input.value; });
-    input?.addEventListener("keydown", (e) => { if (e.key === "Enter") void this.send(); });
-    on(root, "#ch-send", "click", () => void this.send());
+    // Android keyboards report Enter as key "Enter" or only keyCode 13 (the IME's send action).
+    input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); void this.send(root); } });
+    on(root, "#ch-send", "click", () => void this.send(root));
     on(root, "[data-open]", "click", (el) => this.onOpenPath(el.dataset.open!));
     const body = root.querySelector("#ch-body") as HTMLElement | null;
     if (body) body.scrollTop = body.scrollHeight;
   }
 
-  private async send() {
-    const q = this.draft.trim();
+  private async send(root?: HTMLElement) {
+    // The field is the truth: re-renders can leave this.draft behind what is on screen.
+    const q = ((root?.querySelector("#ch-input") as HTMLInputElement | null)?.value ?? this.draft).trim();
     if (!q || !this.current || this.asking) return;
     const id = this.current;
     const thread = this.msgs.get(id) ?? [];
     thread.push({ who: "me", text: q });
     this.msgs.set(id, thread);
-    this.draft = ""; this.asking = true; this.ctx.rerender();
+    const field = root?.querySelector("#ch-input") as HTMLInputElement | null;
+    if (field) field.value = "";   // render() keeps a focused field's value; clear it first
+    this.draft = ""; this.ctx.forget("ch-input"); this.asking = true; this.ctx.rerender();
     try {
       const r = await this.ctx.web.askAgent(this.driveId, id, q);
       thread.push({ who: "agent", text: r.answer, sources: r.sources });

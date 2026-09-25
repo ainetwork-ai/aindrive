@@ -228,7 +228,9 @@ function sheetCtx(): Ctx {
     web: web(),
     server: state.server,
     notify,
-    rerender: () => { if (!typing()) render(); },
+    // Sheets redraw even while a field has focus (render() puts focus and caret back);
+    // only background status ticks hold off while someone types.
+    rerender: () => render(),
     confirm: confirmAsync,
     close: closeSheet,
     copy: async (text, what = "Copied") => {
@@ -552,6 +554,7 @@ function renderMarkdown(md: string): string {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
     .replace(/(^|[^*])\*([^*]+)\*/g, "$1<i>$2</i>")
+    .replace(/(^|[\s(])_([^_]+)_(?=$|[\s).,!?])/g, "$1<i>$2</i>")
     .replace(/(https?:\/\/[^\s<]+)/g, `<a href="$1" target="_blank" rel="noopener">$1</a>`);
   const lines = md.replace(/\r/g, "").split("\n");
   const out: string[] = [];
@@ -1157,10 +1160,12 @@ function render() {
 }
 
 function renderScreens(app: HTMLElement) {
-  if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); return; }
+  if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); bindOverlays(); return; }
   if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); }
   else if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); }
   else { app.innerHTML = homeScreen() + overlays(); bindHome(); }
+  // Viewer, toast and confirm sit on every screen: bind them once, here.
+  bindOverlays();
   // Sheets render last so they sit on top; fields keep what was typed.
   if (sheet) {
     const host = document.createElement("div");
@@ -1208,7 +1213,6 @@ function bindLogin() {
   bind("login", login);
   const serverInput = document.getElementById("server") as HTMLInputElement | null;
   serverInput?.addEventListener("change", () => { state.server = serverInput.value; void save(); });
-  bindOverlays();
 }
 
 // ---- home
@@ -1401,7 +1405,6 @@ function bindHome() {
     });
   });
   if (menuFor) app.addEventListener("click", () => { menuFor = null; render(); }, { once: true });
-  bindOverlays();
 }
 
 // ---- search
@@ -1496,7 +1499,7 @@ function searchSheet(): string {
     const dir = src.path.split("/").slice(0, -1).join("/");
     const how = src.matchedBy === "photo" ? "👁" : src.matchedBy === "speech" ? "🎙" : "";
     const where = (src as { remoteName?: string }).remoteName;
-    return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${kindClass(name)}">${esc(ext(name))}</span><div style="min-width:0"><div class="name">${how ? `<span title="${src.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+    return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${fileGlyph(name, false).cls}">${fileGlyph(name, false).svg}</span><div style="min-width:0"><div class="name">${how ? `<span title="${src.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
   }).join("")}${r.sources.length > max ? `<li class="more" data-more="${turn}">Show all ${r.sources.length}</li>` : ""}</ul>`;
   const turns = thread.map((t, i) => {
     const last = i === thread.length - 1;
@@ -1549,7 +1552,7 @@ function bindSearch() {
   if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
-  input?.addEventListener("keydown", (e) => { if (e.key === "Enter") { input.blur(); void ask(); } });
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; input.blur(); void ask(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
     const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];
@@ -1569,17 +1572,8 @@ function bindSearch() {
     const share = shareByDrive(a.driveId);
     if (share) { searchOpen = false; void openBrowser(share, a.folder); }
   });
-  bindOverlays();
 }
 
-function kindClass(name: string): string {
-  const e = ext(name).toLowerCase();
-  if (["jpg", "jpeg", "png", "heic", "webp", "gif"].includes(e)) return "photo";
-  if (["mp4", "mov", "mkv", "webm"].includes(e)) return "video";
-  if (e === "pdf") return "pdf";
-  if (["doc", "docx", "txt", "md", "hwp", "xlsx", "xls", "csv", "ppt", "pptx"].includes(e)) return "doc";
-  return "";
-}
 
 function ext(name: string): string {
   const i = name.lastIndexOf(".");
@@ -1636,7 +1630,7 @@ function browseSheet(): string {
       const g = fileGlyph(e.name, e.isDir);
       const t = !e.isDir && !remote ? thumbs.get(thumbKey(e.path)) : undefined;
       return `<div class="tile" data-entry="${esc(e.path)}">
-        <div class="thumb" data-op="open">${t ? `<img src="${t}" alt="" />` : `<span class="${g.cls}">${icon(e.isDir ? "folder" : "file", 40).replace("<svg", `<svg class="${g.cls}"`)}</span>`}</div>
+        <div class="thumb" data-op="open">${t ? `<img src="${t}" alt="" />` : `<span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="44" height="44"')}</span>`}</div>
         <div class="cap"><span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="16" height="16"')}</span><div class="name" data-op="open">${esc(e.name)}</div>
           <div class="menu-wrap"><button class="iconbtn ghost" data-op="menu" aria-label="More">${I.more}</button>${b.menu === e.path ? entryMenu(e, remote) : ""}</div></div>
       </div>`;
