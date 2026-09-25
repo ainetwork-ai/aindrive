@@ -1415,8 +1415,45 @@ const FOLLOWUPS: { q: string; when: (r: AskResult | null) => boolean }[] = [
   { q: "Only the ones from this month", when: (r) => !!r && r.sources.length > 1 },
   { q: "Show the oldest 3", when: (r) => !!r && r.sources.length > 3 },
 ];
-/** Older turns show 3 hits; tapping "Show all" expands that turn. */
-const expandedTurns = new Set<number>();
+/** Turns whose photo grid / file list the user expanded ("+N", "Show all"). */
+const expandedPhotos = new Set<number>();
+const expandedFiles = new Set<number>();
+/** Agent-result thumbnails (small JPEGs read on the phone), by drive + path. */
+const askThumbs = new Map<string, string | null>();
+
+function thumbId(src: { driveId?: string; path: string }): string { return `${src.driveId ?? ""}|${src.path}`; }
+
+/** The folder a result lives in on this phone: a shared folder or an agent source (DCIM, Call…). */
+function localFolderFor(driveId?: string): SharedFolder | undefined {
+  const share = shareByDrive(driveId);
+  if (share) return share;
+  const src = state.sources?.find((x) => x.id === driveId);
+  return src ? { folder: src.folder } : undefined;
+}
+
+async function loadAskThumbs() {
+  const want = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].map((el) => el.dataset.thumb!).filter((k) => !askThumbs.has(k));
+  if (!want.length) return;
+  for (const k of want) askThumbs.set(k, null);
+  // Three at a time, each shown as soon as it's ready (a camera photo takes a few seconds to decode).
+  let redraw = 0;
+  const one = async (k: string) => {
+    const [driveId, ...rest] = k.split("|");
+    const folder = localFolderFor(driveId || undefined);
+    if (!folder) return;   // other devices: keep the icon (a full read per thumbnail is too heavy)
+    try {
+      const r = await AindriveAgent.readFile({ folderUri: folder.folder.uri, path: rest.join("|"), maxPx: 256 });
+      askThumbs.set(k, `data:${r.mime};base64,${r.base64}`);
+      // Patch the tile in place: no full re-render, so scrolling and typing are left alone.
+      const el = document.querySelector<HTMLElement>(`[data-thumb="${CSS.escape(k)}"]`);
+      const img = document.createElement("img"); img.src = askThumbs.get(k)!; img.alt = "";
+      if (el) { el.querySelector("span.ft-image")?.remove(); el.prepend(img); } else redraw++;
+    } catch { /* keep the icon */ }
+  };
+  const queue = [...want];
+  await Promise.all([0, 1, 2].map(async () => { while (queue.length) await one(queue.shift()!); }));
+  if (redraw && !typing()) render();
+}
 
 /** Tap-to-run examples, grouped by what the agent can do. Every one is a scenario the device tests cover. */
 const SUGGESTIONS: { title: string; items: string[] }[] = [
@@ -1492,23 +1529,45 @@ function searchSheet(): string {
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
         ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
       </div>`;
-  const hitsList = (r: AskResult, turn: number, max: number) => !r.sources.length ? "" : `<ul class="hits">${r.sources.slice(0, max).map((src, i) => {
-    const name = src.path.split("/").pop() ?? src.path;
-    const dir = src.path.split("/").slice(0, -1).join("/");
-    const how = src.matchedBy === "photo" ? "👁" : src.matchedBy === "speech" ? "🎙" : "";
-    const where = (src as { remoteName?: string }).remoteName;
-    return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${fileGlyph(name, false).cls}">${fileGlyph(name, false).svg}</span><div style="min-width:0"><div class="name">${how ? `<span title="${src.matchedBy === "photo" ? "matched by what the photo shows" : "matched by what was said"}">${how}</span> ` : ""}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
-  }).join("")}${r.sources.length > max ? `<li class="more" data-more="${turn}">Show all ${r.sources.length}</li>` : ""}</ul>`;
+  // Photos as a real thumbnail grid (a few, then "+N" expands); everything else a short list.
+  const hitsList = (r: AskResult, turn: number, last: boolean) => {
+    if (!r.sources.length) return "";
+    const idx = r.sources.map((src, i) => ({ src, i }));
+    const photos = idx.filter(({ src }) => guessMime(src.path).startsWith("image/"));
+    const files = idx.filter(({ src }) => !guessMime(src.path).startsWith("image/"));
+    const pMax = expandedPhotos.has(turn) ? photos.length : last ? 6 : 3;
+    const fMax = expandedFiles.has(turn) ? files.length : last ? 5 : 3;
+    const grid = photos.length ? `<div class="photo-grid">${photos.slice(0, pMax).map(({ src, i }) => {
+      const t = askThumbs.get(thumbId(src));
+      const how = src.matchedBy === "photo" ? `<span class="badge-how" title="matched by what the photo shows">${icon("sparkle", 12)}</span>` : "";
+      return `<button class="ph" data-turn="${turn}" data-hit="${i}" data-thumb="${esc(thumbId(src))}" aria-label="${esc(src.path.split("/").pop() ?? "")}">${t ? `<img src="${t}" alt="" />` : `<span class="ft-image">${icon("fileImage", 24)}</span>`}${how}</button>`;
+    }).join("")}${photos.length > pMax ? `<button class="ph more" data-more-photos="${turn}">+${photos.length - pMax}</button>` : ""}</div>` : "";
+    const list = files.length ? `<ul class="hits">${files.slice(0, fMax).map(({ src, i }) => {
+      if (src.caller) {
+        // A call recording reads as "who — what", not as its file name.
+        const at = src.callAt ? new Date(src.callAt) : null;
+        const whenTxt = at ? `${at.toLocaleDateString()} ${at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : "";
+        return `<li data-turn="${turn}" data-hit="${i}" class="call"><span class="kind ft-audio">${icon("call", 20)}</span><div style="min-width:0">
+          <div class="name">${esc(src.caller)} <span class="when">${esc(whenTxt)}</span></div>
+          <div class="summary">${esc(src.summary ?? src.snippet)}</div></div></li>`;
+      }
+      const name = src.path.split("/").pop() ?? src.path;
+      const dir = src.path.split("/").slice(0, -1).join("/");
+      const how = src.matchedBy === "speech" ? "🎙 " : "";
+      const where = (src as { remoteName?: string }).remoteName;
+      return `<li data-turn="${turn}" data-hit="${i}"><span class="kind ${fileGlyph(name, false).cls}">${fileGlyph(name, false).svg}</span><div style="min-width:0"><div class="name">${how}${esc(name)}</div><div class="meta">${esc([where ? `📱 ${where}` : "", src.snippet, dir].filter(Boolean).join(" · "))}</div></div></li>`;
+    }).join("")}${files.length > fMax ? `<li class="more" data-more-files="${turn}">Show all ${files.length}</li>` : ""}</ul>` : "";
+    return grid + list;
+  };
   const turns = thread.map((t, i) => {
     const last = i === thread.length - 1;
-    const open = last || expandedTurns.has(i);
     return `
       <div class="turn ${last ? "last" : ""}">
         <div class="bubble">${esc(t.q)}</div>
         ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
           ${last ? actionCard : t.r.action?.folder ? `<p class="hint">${esc(t.r.action.label ?? t.r.action.folder)} · ${t.r.action.copied ?? 0} files</p>` : ""}
           <p class="answer">${esc(t.r.answer)}</p>
-          ${hitsList(t.r, i, open ? 200 : 3)}` : ""}
+          ${hitsList(t.r, i, last)}` : ""}
       </div>`;
   }).join("");
   const body = `
@@ -1555,7 +1614,9 @@ function bindSearch() {
   });
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
-  document.querySelectorAll<HTMLElement>("[data-more]").forEach((li) => li.addEventListener("click", () => { expandedTurns.add(Number(li.dataset.more)); render(); }));
+  document.querySelectorAll<HTMLElement>("[data-more-photos]").forEach((el) => el.addEventListener("click", () => { expandedPhotos.add(Number(el.dataset.morePhotos)); render(); }));
+  document.querySelectorAll<HTMLElement>("[data-more-files]").forEach((el) => el.addEventListener("click", () => { expandedFiles.add(Number(el.dataset.moreFiles)); render(); }));
+  void loadAskThumbs();
   const bodyEl = document.getElementById("ask-body");
   if (bodyEl && thread.length) bodyEl.scrollTop = bodyEl.scrollHeight;
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
@@ -1567,7 +1628,7 @@ function bindSearch() {
     if (!hit) return;
     const remote = remotes.find((d) => d.id === hit.driveId);
     if (remote) { void viewRemoteFile(remote, hit.path); return; }
-    const share = shareByDrive(hit.driveId);
+    const share = localFolderFor(hit.driveId);
     if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
   bind("action-share", shareCollected);

@@ -113,6 +113,33 @@ public final class CallReport {
         } catch (Exception e) { return null; }
     }
 
+    /**
+     * A call recording shown as "who — what": adds `caller`, `callAt` and a one-line `summary`
+     * (the person's summary, else the matched part of the transcript, else its first sentence)
+     * so a result reads as a conversation, not a file name. Other files pass through untouched.
+     */
+    public static JSONObject describeCall(JSONObject src, FileIndex.Row r, @Nullable String excerpt, @Nullable String summary) {
+        String who = personOf(r.name);
+        if (who == null) return src;
+        try {
+            src.put("caller", who).put("callAt", when(r));
+            String line = summary != null ? summary : excerpt != null ? excerpt : firstSentence(r.transcript);
+            if (line != null && !line.isEmpty()) src.put("summary", line.length() > 160 ? line.substring(0, 157) + "…" : line);
+        } catch (Exception ignored) { }
+        return src;
+    }
+
+    private static @Nullable String firstSentence(@Nullable String t) {
+        if (t == null) return null;
+        // Skip "여보세요 / 네 / hello" openers: the first sentence with some substance.
+        for (String s : t.split("(?<=[.?!。])\\s+")) {
+            String x = s.trim();
+            if (x.length() >= 12) return x;
+        }
+        String x = t.trim();
+        return x.isEmpty() ? null : x;
+    }
+
     /** A saved contact has a name; an unsaved caller shows up as digits (with +, -, spaces). */
     public static boolean isContact(String name) {
         return name != null && !name.replaceAll("[\\s+\\-()#]", "").matches("\\d*");
@@ -229,8 +256,9 @@ public final class CallReport {
             a.append("\n");
             if (!p.recordings.isEmpty()) {
                 FileIndex.Row r = p.recordings.get(0);
-                sources.put(new JSONObject().put("path", r.path).put("matchedBy", "speech")
-                        .put("snippet", p.topics.isEmpty() ? (ko ? "녹음 " + p.recordings.size() + "개" : p.recordings.size() + " recordings") : String.join(" · ", p.topics)));
+                sources.put(describeCall(new JSONObject().put("path", r.path).put("matchedBy", "speech")
+                        .put("snippet", p.topics.isEmpty() ? (ko ? "녹음 " + p.recordings.size() + "개" : p.recordings.size() + " recordings") : String.join(" · ", p.topics)),
+                        r, null, p.summary != null ? p.summary : p.topics.isEmpty() ? null : String.join(" · ", p.topics)));
             }
         }
         int summarised = 0;

@@ -676,9 +676,20 @@ public class AgentService extends Service {
         JSONArray sources = new JSONArray();
         StringBuilder answer = new StringBuilder();
         JSONObject actionOut = new JSONObject();
+        // Ask every folder first: when any matched exactly, folders that only matched after
+        // loosening the question ("ignoring the content words") are left out of the answer.
+        java.util.Map<Conn, JSONObject> results = new java.util.LinkedHashMap<>();
+        boolean anyExact = false;
         for (Conn c : targets) {
             if (c.fs == null) continue;
             JSONObject r = c.askRunner().ask(query, context);
+            results.put(c, r);
+            if (r.getJSONArray("sources").length() > 0 && !r.optBoolean("relaxed")) anyExact = true;
+        }
+        for (java.util.Map.Entry<Conn, JSONObject> e : results.entrySet()) {
+            Conn c = e.getKey();
+            JSONObject r = e.getValue();
+            if (anyExact && r.optBoolean("relaxed")) continue;
             JSONArray s = r.getJSONArray("sources");
             for (int i = 0; i < s.length(); i++) {
                 JSONObject src = s.getJSONObject(i);
@@ -696,9 +707,8 @@ public class AgentService extends Service {
         if (answer.length() == 0) {
             // Nobody matched: prefer a folder whose reply says where its photos ARE from over one with no locations.
             String best = null;
-            for (Conn c : targets) {
-                if (c.fs == null) continue;
-                String a = c.askRunner().ask(query, context).getString("answer");
+            for (JSONObject r : results.values()) {
+                String a = r.getString("answer");   // reuse: asking again could repeat a task
                 if (best == null || (a.contains(" are from ") || a.contains("이런 곳에서")) && !(best.contains(" are from ") || best.contains("이런 곳에서"))) best = a;
             }
             answer.append(best == null ? "" : best);

@@ -93,7 +93,9 @@ export interface AskResult {
   context?: Record<string, unknown> | null;
   /** Filters were inherited from the previous turn. */
   followUp?: boolean;
-  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo"; remoteName?: string }[];
+  sources: { path: string; snippet: string; driveId?: string; matchedBy?: "filter" | "name" | "speech" | "photo"; remoteName?: string;
+    /** Call recordings: who it was with, when (ms), and a one-line summary of what was said. */
+    caller?: string; callAt?: number; summary?: string }[];
   /** Present when the question was a task ("…모아서 폴더로 만들어줘"). */
   action?: {
     type: "collect" | "move" | "count" | "delete";

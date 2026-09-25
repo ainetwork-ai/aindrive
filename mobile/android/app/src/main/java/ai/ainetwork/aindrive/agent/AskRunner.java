@@ -152,7 +152,7 @@ public final class AskRunner {
         JSONArray sources = new JSONArray();
         boolean anyContent = false, anySpeech = false;
         for (Hit h : ranked) {
-            sources.put(new JSONObject().put("path", h.row.path).put("snippet", snippet(h)).put("matchedBy", h.how));
+            sources.put(CallReport.describeCall(new JSONObject().put("path", h.row.path).put("snippet", snippet(h)).put("matchedBy", h.how), h.row, h.excerpt, null));
             anyContent |= h.tier == 2;
             anySpeech |= h.tier == 1;
         }
@@ -164,6 +164,8 @@ public final class AskRunner {
         out.put("answer", answer);
         out.put("sources", sources);
         boolean exact = !ranked.isEmpty() && relaxed.isEmpty();
+        // Lets the service drop this folder's loose matches when another folder matched exactly.
+        out.put("relaxed", !relaxed.isEmpty());
         if (q.delete) {
             // Never delete on the strength of a parse: list what would go and wait for a tap.
             JSONArray files = new JSONArray();
