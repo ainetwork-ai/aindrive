@@ -43,6 +43,8 @@ public final class Indexer {
         default int speechSeconds() { return SpeechRecognizer.MAX_SECONDS; }
         /** A call-recordings folder: hear it person by person rather than strictly by date. */
         default boolean callArchive() { return false; }
+        /** Calls per contact in the last year (from the call log): who to hear first. Empty when unknown. */
+        default java.util.Map<String, Integer> callCounts() { return java.util.Collections.emptyMap(); }
     }
 
     public volatile int recognised, toRecognise;
@@ -135,7 +137,25 @@ public final class Indexer {
                 int n = seen.merge(key, 1, Integer::sum);
                 round.put(e, (n - 1) * 2 + (who != null && ai.ainetwork.aindrive.agent.CallReport.isContact(who) ? 0 : 1));
             }
-            todo.sort((a, b) -> round.get(a) != round.get(b).intValue() ? Integer.compare(round.get(a), round.get(b)) : Long.compare(b.mtimeMs, a.mtimeMs));
+            // Within a round, the people you call most go first: the top of the report is heard within minutes.
+            java.util.Map<String, Integer> calls = recognisers.callCounts();
+            java.util.Map<SafFs.Entry, Integer> weight = new java.util.HashMap<>();
+            for (SafFs.Entry e : todo) { String who = ai.ainetwork.aindrive.agent.CallReport.personOf(e.name); weight.put(e, who == null ? 0 : calls.getOrDefault(who, 0)); }
+            // The 20 most-called contacts get their 3 newest calls heard before anyone else's first.
+            java.util.List<Integer> counts = new java.util.ArrayList<>(calls.values());
+            counts.sort(java.util.Collections.reverseOrder());
+            int topCut = counts.size() >= 20 ? counts.get(19) : 1;
+            java.util.Map<SafFs.Entry, Integer> tier = new java.util.HashMap<>();
+            for (SafFs.Entry e : todo) tier.put(e, weight.get(e) >= Math.max(1, topCut) && round.get(e) < 6 ? 0 : 1);
+            todo.sort((a, b) -> {
+                int ta = tier.get(a), tb = tier.get(b);
+                if (ta != tb) return Integer.compare(ta, tb);
+                int ra = round.get(a), rb = round.get(b);
+                if (ra != rb) return Integer.compare(ra, rb);
+                int wa = weight.get(a), wb = weight.get(b);
+                if (wa != wb) return Integer.compare(wb, wa);
+                return Long.compare(b.mtimeMs, a.mtimeMs);
+            });
         }
         toRecognise = todo.size();
         progress.onProgress(0, toRecognise, phase);

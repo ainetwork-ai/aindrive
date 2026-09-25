@@ -335,6 +335,7 @@ public class AgentService extends Service {
                 @Override public SpeechRecognizer speech() { return speechOrNull(); }
                 // A call archive is thousands of hours: hear the first minutes of each call, newest first, in the background.
                 @Override public boolean callArchive() { return isCallSource(driveId); }
+                @Override public java.util.Map<String, Integer> callCounts() { return recentCallCounts(); }
                 @Override public int speechSeconds() { return isCallSource(driveId) ? ai.ainetwork.aindrive.agent.CallReport.SECONDS_PER_RECORDING : SpeechRecognizer.MAX_SECONDS; }
             });
             return indexer;
@@ -598,6 +599,17 @@ public class AgentService extends Service {
     public static final String SOURCE_CALLS = "src-calls", SOURCE_PHOTOS = "src-photos";
     /** "src-calls" (Call/) and "src-calls-new" (Recordings/Call/): Samsung keeps call recordings in two places over the years. */
     static boolean isCallSource(String driveId) { return driveId != null && driveId.startsWith(SOURCE_CALLS); }
+
+    /** Calls per contact name in the last year, from the call log (empty without READ_CALL_LOG). */
+    java.util.Map<String, Integer> recentCallCounts() {
+        java.util.Map<String, Integer> out = new java.util.HashMap<>();
+        java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> log = callLog();
+        if (log == null) return out;
+        long since = System.currentTimeMillis() - ai.ainetwork.aindrive.agent.CallReport.WINDOW_MS;
+        for (ai.ainetwork.aindrive.agent.CallReport.Call c : log)
+            if (c.whenMs >= since && c.name != null && !c.name.trim().isEmpty()) out.merge(c.name.replaceFirst("^#", "").replaceAll("\\s+", " ").trim(), 1, Integer::sum);
+        return out;
+    }
 
     java.util.List<FileIndex> callIndexes() {
         java.util.List<FileIndex> out = new java.util.ArrayList<>();
