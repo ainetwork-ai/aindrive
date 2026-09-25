@@ -216,7 +216,9 @@ public final class CallReport {
             ops.write(file, markdown(ranked, top, haveLog, recordings, transcribed, busy, day, ko, canHear, logSince == Long.MAX_VALUE ? "" : new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(logSince))).getBytes(StandardCharsets.UTF_8));
             // One file per person: the same facts plus what was heard, recording by recording.
             for (Person p : top) {
-                String pf = folder + "/" + String.format(Locale.US, "%02d %s.md", ranked.indexOf(p) + 1, p.name.replaceAll("[\\/:*?\"<>|]", " ").trim());
+                // A file only for people there is something to say about (plus the most-called, so the ranking is complete).
+                if (p.summary == null && p.topics.isEmpty() && ranked.indexOf(p) >= TOP_PEOPLE) continue;
+                String pf = folder + "/" + String.format(Locale.US, "%03d %s.md", ranked.indexOf(p) + 1, p.name.replaceAll("[\\/:*?\"<>|]", " ").trim());
                 try { ops.write(pf, personMarkdown(p, ranked.indexOf(p) + 1, ko, canHear).getBytes(StandardCharsets.UTF_8)); files.put(pf); }
                 catch (Exception e) { failed++; }
             }
@@ -299,8 +301,8 @@ public final class CallReport {
         if (p.topics.isEmpty() && p.summary == null) md.append("\n").append(noTopics(p, ko, canHear)).append("\n");
         if (!p.heard.isEmpty()) {
             md.append(ko ? "\n## 들은 녹음\n\n" : "\n## Recordings heard\n\n");
-            md.append(ko ? "각 녹음의 앞부분(최대 3분)을 폰에서 Whisper로 받아쓴 내용이에요. 인식 오류가 있을 수 있어요.\n\n"
-                         : "The first minutes (up to 3) of each recording, transcribed on the phone with Whisper — expect recognition errors.\n\n");
+            md.append(ko ? "각 녹음의 앞부분(최대 3분)을 폰에서 받아쓴 내용이에요. 인식 오류가 있을 수 있어요.\n\n"
+                         : "The first minutes (up to 3) of each recording, transcribed on the phone — expect recognition errors.\n\n");
             for (int i = 0; i < p.heard.size(); i++) {
                 FileIndex.Row r = p.heard.get(i);
                 String t = p.transcripts.get(i).trim();
@@ -322,9 +324,9 @@ public final class CallReport {
         md.append(ko ? "# 통화 요약 — " : "# Call summary — ").append(day).append("\n\n");
         md.append(ko
                 ? "이 폰의 통화 기록" + (haveLog ? "(" + logSinceText + " 이후)" : "(접근 불가)") + "과 통화 녹음 " + recordings + "개를 바탕으로, 많이 통화한 사람 순으로 정리했어요. 통화 기록보다 오래된 녹음은 통화 1회로 셌어요. "
-                  + (hasSummaries ? "요약은 폰에서 실행되는 소형 언어 모델이 받아쓴 녹음(Whisper)을 읽고 쓴 것이고, \"자주 나온 말\"은 그 사람과의 대화에서 특히 자주 나온 낱말이에요.\n\n" : "\"주로 나누는 이야기\"는 폰에서 Whisper로 받아쓴 녹음 내용 중 그 사람과의 대화에서 특히 자주 나온 말과 대표 문장이에요 — AI 요약이 아니라 통계입니다.\n\n")
+                  + (hasSummaries ? "요약은 폰에서 실행되는 소형 언어 모델이 받아쓴 녹음을 읽고 쓴 것이고, \"자주 나온 말\"은 그 사람과의 대화에서 특히 자주 나온 낱말이에요.\n\n" : "\"주로 나누는 이야기\"는 폰에서 받아쓴 녹음 내용 중 그 사람과의 대화에서 특히 자주 나온 말과 대표 문장이에요 — AI 요약이 아니라 통계입니다.\n\n")
                 : "From this phone's call log" + (haveLog ? " (since " + logSinceText + ")" : " (not accessible)") + " and " + recordings + " call recordings, ranked by how often you talk. Recordings older than the log count as one call each. "
-                  + (hasSummaries ? "Summaries are written by a small language model on this phone from the recordings (transcribed with Whisper); \"usually about\" is the vocabulary that stands out in that person's calls.\n\n" : "\"Usually about\" is the vocabulary that stands out in that person's recordings (transcribed on the phone with Whisper) plus one representative sentence — a statistic, not an AI summary.\n\n"));
+                  + (hasSummaries ? "Summaries are written by a small language model on this phone from the recordings (transcribed on the phone); \"usually about\" is the vocabulary that stands out in that person's calls.\n\n" : "\"Usually about\" is the vocabulary that stands out in that person's recordings (transcribed on the phone) plus one representative sentence — a statistic, not an AI summary.\n\n"));
         if (transcribed < recordings) md.append(ko
                 ? "녹음 " + recordings + "개 중 " + transcribed + "개를 들었어요" + (busy ? " — 나머지는 지금 백그라운드에서 받아쓰는 중이에요. 나중에 다시 실행하면 더 많은 사람의 요약이 채워져요." : " — 나머지는 앱에서 '통화 녹음' 소스가 인덱싱될 때 받아쓰기됩니다.") + "\n\n"
                 : "Heard " + transcribed + " of " + recordings + " recordings" + (busy ? " — the rest are being transcribed in the background right now; run this again later for more people." : " — the rest are transcribed while the Call recordings source indexes.") + "\n\n");
@@ -339,8 +341,9 @@ public final class CallReport {
             if (i >= 50) break;
         }
         md.append("\n");
-        md.append(ko ? "사람별 파일이 이 폴더에 함께 있어요 (`01 이름.md`).\n\n" : "Each person below also has a file of their own in this folder (`01 name.md`).\n\n");
+        md.append(ko ? "사람별 파일이 이 폴더에 함께 있어요 (`001 이름.md`).\n\n" : "Each person below also has a file of their own in this folder (`001 name.md`).\n\n");
         for (Person p : top) {
+            if (p.summary == null && p.topics.isEmpty() && all.indexOf(p) >= TOP_PEOPLE) continue;
             md.append("## ").append(all.indexOf(p) + 1).append(". ").append(p.name).append("\n\n");
             md.append(ko ? "- 통화 " : "- Calls: ").append(countText(p, ko)).append("\n");
             if (p.lastMs > 0) md.append(ko ? "- 마지막 통화: " : "- Last call: ").append(new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(p.lastMs))).append("\n");
@@ -385,7 +388,7 @@ public final class CallReport {
             boolean hangul = t.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
             if (hangul) for (String s : KO_SUFFIXES) { if (t.length() > s.length() + 1 && t.endsWith(s)) { t = t.substring(0, t.length() - s.length()); break; } }
             if (t.length() < 2 || t.matches("\\d+") || STOP.contains(t)) continue;
-            // Whisper's Korean comes out as verb fragments ("있는데", "거야", "되게"): keep noun-like tokens only.
+            // Speech recognition's Korean comes out as verb fragments ("있는데", "거야", "되게"): keep noun-like tokens only.
             if (hangul && (KO_VERBISH.matcher(t).find() || KO_FRAGMENT.matcher(t).matches() || t.length() < 2)) continue;
             out.add(t);
         }
