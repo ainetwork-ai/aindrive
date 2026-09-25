@@ -128,10 +128,13 @@ public final class AskRunner {
                     .put("sources", new JSONArray());
         }
         if (hits.isEmpty() && !q.keywords.isEmpty()) { q.keywords.clear(); relaxed.add("keyword"); hits = search(q); }
-        if (hits.isEmpty() && q.dateFrom != null) { q.dateFrom = null; q.dateTo = null; relaxed.add("date"); hits = search(q); }
-        if (hits.isEmpty() && q.city != null) { q.city = null; relaxed.add("city"); hits = search(q); }
-        if (hits.isEmpty() && q.country != null) { q.country = null; relaxed.add("country"); hits = search(q); }
-        if (hits.isEmpty() && q.kind != null) { q.kind = null; relaxed.add("kind"); hits = search(q); }
+        // A place or a date the person named is never dropped: "photos taken in Paris" with no Paris
+        // photos must say so, not show photos from everywhere else. Only the kind is loosened
+        // ("Paris videos" → Paris photos), and only while the place/date still hold.
+        if (hits.isEmpty() && q.kind != null && (q.city != null || q.country != null || q.dateFrom != null)) {
+            String kind = q.kind; q.kind = null; relaxed.add("kind"); hits = search(q);
+            if (hits.isEmpty()) { q.kind = kind; relaxed.remove("kind"); }
+        }
 
         List<Hit> ranked = new ArrayList<>(hits.values());
         final boolean bySize = q.bySize, oldest = q.oldestFirst;
@@ -197,6 +200,24 @@ public final class AskRunner {
                 .put("share", q.share).put("files", files);
         if (copied > 0) { try { r.putOpt("folderUri", ops.uriOf(folder)); } catch (Exception ignored) { } }
         return r;
+    }
+
+    /** " Photos here are from Tokyo (120), Seoul (80), …" — so a miss says where to look instead. */
+    private String knownPlaces(@Nullable String kind, boolean ko) {
+        FileIndex.Filter f = new FileIndex.Filter();
+        f.kind = kind == null ? FileIndex.PHOTO : kind;
+        Map<String, Integer> byPlace = new LinkedHashMap<>();
+        for (FileIndex.Row r : index.query(f, 0)) {
+            if (r.city == null) continue;
+            String name = ko && geo.cityKo(r.city) != null ? geo.cityKo(r.city) : r.city;
+            byPlace.merge(name, 1, Integer::sum);
+        }
+        if (byPlace.isEmpty()) return ko ? " 이 폴더의 사진에는 위치 정보가 없어요." : " Photos in this folder have no location.";
+        List<Map.Entry<String, Integer>> top = new ArrayList<>(byPlace.entrySet());
+        top.sort((a, b) -> b.getValue() - a.getValue());
+        StringBuilder sb = new StringBuilder(ko ? " 여기 사진은 이런 곳에서 찍었어요: " : " Photos here are from ");
+        for (int i = 0; i < Math.min(5, top.size()); i++) sb.append(i > 0 ? ", " : "").append(top.get(i).getKey()).append(" (").append(top.get(i).getValue()).append(")");
+        return sb.append(".").toString();
     }
 
     private static final java.util.regex.Pattern GREETING = java.util.regex.Pattern.compile(
@@ -331,6 +352,16 @@ public final class AskRunner {
     private String answerFor(SearchQuery q, List<Hit> rows, int total, List<String> relaxed, boolean anyContent, boolean anySpeech) {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
+            String where = q.city != null ? (ko && geo.cityKo(q.city) != null ? geo.cityKo(q.city) : q.city) : q.country != null ? geo.countryName(q.country, ko) : null;
+            if (where != null || q.dateFrom != null) {
+                String what = kindNoun(q.kind, 2, ko);
+                String when = q.dateFrom != null ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(q.dateFrom) + (q.dateTo != null ? " ~ " + new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(q.dateTo - 1) : "") : null;
+                String none = ko
+                        ? (where != null ? where + "에서 찍은 " : "") + (when != null ? when + " " : "") + what + "이 없어요."
+                        : "No " + what + (where != null ? " taken in " + where : "") + (when != null ? " from " + when : "") + " here.";
+                String places = where != null ? knownPlaces(q.kind, ko) : "";
+                return none + places;
+            }
             return ko ? "조건에 맞는 파일을 찾지 못했어요." : "No files matched your question.";
         }
         Set<String> cities = new LinkedHashSet<>();

@@ -693,7 +693,16 @@ public class AgentService extends Service {
                 actionOut = r.getJSONObject("action").put("driveId", out == null ? c.driveId : out.driveId);
             }
         }
-        if (answer.length() == 0) answer.append(targets.get(0).askRunner().ask(query, context).getString("answer"));
+        if (answer.length() == 0) {
+            // Nobody matched: prefer a folder whose reply says where its photos ARE from over one with no locations.
+            String best = null;
+            for (Conn c : targets) {
+                if (c.fs == null) continue;
+                String a = c.askRunner().ask(query, context).getString("answer");
+                if (best == null || (a.contains(" are from ") || a.contains("이런 곳에서")) && !(best.contains(" are from ") || best.contains("이런 곳에서"))) best = a;
+            }
+            answer.append(best == null ? "" : best);
+        }
         JSONObject merged = new JSONObject().put("answer", answer.toString()).put("sources", sources);
         if (actionOut.has("folder")) merged.put("action", actionOut);
         return merged;
