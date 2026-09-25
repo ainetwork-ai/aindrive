@@ -39,6 +39,8 @@ public final class Indexer {
     public interface Recognisers {
         @Nullable ClipEmbedder clip();
         @Nullable SpeechRecognizer speech();
+        /** How much of each recording to hear; a call archive of thousands of hours needs a cap. */
+        default int speechSeconds() { return SpeechRecognizer.MAX_SECONDS; }
     }
 
     public volatile int recognised, toRecognise;
@@ -115,6 +117,8 @@ public final class Indexer {
             boolean av = speech != null && (FileIndex.AUDIO.equals(kind) || FileIndex.VIDEO.equals(kind));
             if ((photo || av) && index.needsRecognition(e.docId, photo, av)) todo.add(e);
         }
+        // Newest first: the calls people ask about are the recent ones, and a long archive is heard over days.
+        todo.sort((a, b) -> Long.compare(b.mtimeMs, a.mtimeMs));
         toRecognise = todo.size();
         progress.onProgress(0, toRecognise, phase);
         for (SafFs.Entry e : todo) {
@@ -128,7 +132,7 @@ public final class Indexer {
                     }
                 } else {
                     try (android.os.ParcelFileDescriptor pfd = fs.openFd(e.docId)) {
-                        SpeechRecognizer.Transcript t = speech.transcribe(pfd.getFileDescriptor());
+                        SpeechRecognizer.Transcript t = speech.transcribe(pfd.getFileDescriptor(), recognisers.speechSeconds());
                         // An empty transcript is still a result: the file was heard and had no speech.
                         index.setRecognition(e.docId, null, t == null ? "" : t.text);
                         Log.d(TAG, "transcribed " + e.name + " (" + (t == null ? 0 : Math.round(t.durationSec)) + "s): " + (t == null ? "" : t.text.substring(0, Math.min(120, t.text.length()))));

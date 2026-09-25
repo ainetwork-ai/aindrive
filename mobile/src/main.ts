@@ -719,7 +719,10 @@ function sourceCard(src: AgentSource): string {
   const def = PRESETS.find((p) => p.id === src.preset);
   const d = sourceStatus(src.id);
   const ix = d?.index;
-  const st = busyShares.has(src.id) ? "Starting…" : d?.running ? (ix?.running ? `Indexing ${ix.done}/${ix.total}` : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed` : "Ready") : "Off";
+  const st = busyShares.has(src.id) ? "Starting…" : d?.running
+    ? (ix?.running ? (ix.phase === "recognising" ? `${src.preset === "src-calls" ? "Transcribing" : "Recognising"} ${ix.recognised.toLocaleString()}/${ix.toRecognise.toLocaleString()}` : `Indexing ${ix.done}/${ix.total}`)
+      : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed${ix.recognisedTotal ? ` · ${ix.recognisedTotal.toLocaleString()} ${src.preset === "src-calls" ? "transcribed" : "recognised"}` : ""}` : "Ready")
+    : "Off";
   return `
     <div class="card" data-source="${esc(src.id)}">
       <div class="folder">

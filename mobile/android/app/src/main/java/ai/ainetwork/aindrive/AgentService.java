@@ -275,7 +275,7 @@ public class AgentService extends Service {
 
         synchronized AskRunner askRunner() {
             if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull,
-                    AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer);
+                    AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer, () -> indexer != null && indexer.running);
             return ask;
         }
 
@@ -310,8 +310,9 @@ public class AgentService extends Service {
         synchronized Indexer indexer() {
             if (indexer == null) indexer = new Indexer(fs, index, geo(), new Indexer.Recognisers() {
                 @Override public ClipEmbedder clip() { return clipOrNull(); }
-                // A call-recordings source is hours of audio: transcribe on demand (CallReport), not at index time.
-                @Override public SpeechRecognizer speech() { return source && SOURCE_CALLS.equals(driveId) ? null : speechOrNull(); }
+                @Override public SpeechRecognizer speech() { return speechOrNull(); }
+                // A call archive is thousands of hours: hear the first minutes of each call, newest first, in the background.
+                @Override public int speechSeconds() { return SOURCE_CALLS.equals(driveId) ? ai.ainetwork.aindrive.agent.CallReport.SECONDS_PER_RECORDING : SpeechRecognizer.MAX_SECONDS; }
             });
             return indexer;
         }

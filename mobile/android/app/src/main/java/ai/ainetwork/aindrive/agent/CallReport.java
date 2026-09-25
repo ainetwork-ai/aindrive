@@ -46,8 +46,11 @@ public final class CallReport {
     }
 
     static final int TOP_PEOPLE = 10;
+    /** Recordings heard on demand per person when the archive has not been transcribed yet (the indexer does the rest in the background). */
     static final int RECORDINGS_PER_PERSON = 3;
-    static final int SECONDS_PER_RECORDING = 3 * 60;
+    /** Transcripts per person the summary reads (newest first). */
+    static final int TRANSCRIPTS_PER_PERSON = 10;
+    public static final int SECONDS_PER_RECORDING = 3 * 60;
     static final int TOPICS = 5;
 
     private static final Pattern RECORDING = Pattern.compile(
@@ -70,14 +73,16 @@ public final class CallReport {
     private final Supplier<SpeechRecognizer> speech;
     private final @Nullable AskRunner.FileOps ops;
     private final Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer;
+    /** True while the indexer is transcribing the archive: don't run a second recogniser next to it. */
+    private final Supplier<Boolean> indexerBusy;
 
     public CallReport(FileIndex index, @Nullable CallLog callLog, Supplier<SpeechRecognizer> speech, @Nullable AskRunner.FileOps ops) {
-        this(index, callLog, speech, ops, () -> null);
+        this(index, callLog, speech, ops, () -> null, () -> false);
     }
 
     public CallReport(FileIndex index, @Nullable CallLog callLog, Supplier<SpeechRecognizer> speech, @Nullable AskRunner.FileOps ops,
-                      Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer) {
-        this.index = index; this.callLog = callLog; this.speech = speech; this.ops = ops; this.summarizer = summarizer;
+                      Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer, Supplier<Boolean> indexerBusy) {
+        this.index = index; this.callLog = callLog; this.speech = speech; this.ops = ops; this.summarizer = summarizer; this.indexerBusy = indexerBusy;
     }
 
     /** Recording file name → who it was with, or null when it is not a call recording. */
@@ -114,11 +119,12 @@ public final class CallReport {
         // Recordings: by contact name; a name the call log does not know (or no log at all) still gets a row.
         FileIndex.Filter f = new FileIndex.Filter();
         f.kind = FileIndex.AUDIO;
-        int recordings = 0;
+        int recordings = 0, transcribed = 0;
         for (FileIndex.Row r : index.query(f, 0)) {
             String who = personOf(r.name);
             if (who == null) continue;
             recordings++;
+            if (r.transcript != null) transcribed++;
             Person p = people.get(who);
             if (p == null) {
                 // "010-1234-5678" recordings belong to whoever the log knows under that number.
@@ -141,26 +147,22 @@ public final class CallReport {
                     .put("action", new JSONObject().put("type", "collect").put("skipped", true).put("reason", "nothing matched").put("needsCallLog", !haveLog).put("report", "calls"));
         }
 
-        // Words: transcripts already in the index, else transcribe the newest few now.
-        // Calls are recorded selectively, so the people you call most may have
-        // none: summarise the top of the ranking AND the most-recorded people.
+        // Everyone with a recording gets a summary (the archive is transcribed
+        // in the background, newest first), plus the top of the ranking even
+        // without recordings so the report is complete.
         List<Person> top = new ArrayList<>(ranked.subList(0, Math.min(TOP_PEOPLE, ranked.size())));
-        List<Person> byRecordings = new ArrayList<>(ranked);
-        byRecordings.sort((a, b) -> Integer.compare(b.recordings.size(), a.recordings.size()));
-        int added = 0;
-        for (Person p : byRecordings) {
-            if (added >= TOP_PEOPLE || p.recordings.isEmpty()) break;
-            if (!top.contains(p)) { top.add(p); added++; }
-        }
+        for (Person p : ranked) if (!p.recordings.isEmpty() && !top.contains(p)) top.add(p);
         top.sort((a, b) -> Integer.compare(ranked.indexOf(a), ranked.indexOf(b)));
         boolean canHear = speech.get() != null;
+        boolean busy = Boolean.TRUE.equals(indexerBusy.get());
         SpeechRecognizer asr = null;
         for (Person p : top) {
             int used = 0;
             for (FileIndex.Row r : p.recordings) {
-                if (used >= RECORDINGS_PER_PERSON) break;
+                if (used >= TRANSCRIPTS_PER_PERSON) break;
                 String t = r.transcript;
-                if (t == null && ops != null) {   // reading needs no output drive
+                // Not transcribed yet: hear a few now for the people who matter most, unless the indexer is already at it.
+                if (t == null && ops != null && !busy && used < RECORDINGS_PER_PERSON && ranked.indexOf(p) < 2 * TOP_PEOPLE) {
                     if (asr == null) asr = speech.get();
                     if (asr == null) break;
                     try (android.os.ParcelFileDescriptor pfd = ops.openFd(r.docId)) {
@@ -182,6 +184,7 @@ public final class CallReport {
         a.append(ko ? "많이 통화한 순서예요" : "Ranked by how often you talk").append(haveLog ? "" : (ko ? " (통화 기록 없이 녹음 파일 기준)" : " (from recordings only — call log not allowed)")).append(":\n");
         int i = 0;
         for (Person p : top) {
+            if (i >= 2 * TOP_PEOPLE) break;
             i++;
             a.append(i).append(". ").append(p.name).append(" — ").append(countText(p, ko));
             if (p.summary != null) a.append("\n   ").append(p.summary.replace("\n", " "));
@@ -193,6 +196,10 @@ public final class CallReport {
                         .put("snippet", p.topics.isEmpty() ? (ko ? "녹음 " + p.recordings.size() + "개" : p.recordings.size() + " recordings") : String.join(" · ", p.topics)));
             }
         }
+        int summarised = 0;
+        for (Person p : top) if (p.summary != null || !p.topics.isEmpty()) summarised++;
+        a.append(ko ? "\n총 " + ranked.size() + "명 중 " + summarised + "명의 통화 내용을 요약했고 (녹음 " + transcribed + "/" + recordings + "개 분석), 사람별 파일을 폴더에 넣었어요."
+                    : "\nSummarised calls with " + summarised + " of " + ranked.size() + " people (" + transcribed + "/" + recordings + " recordings analysed); one file per person is in the folder.");
         JSONObject out = new JSONObject().put("answer", a.toString().trim()).put("sources", sources);
 
         // The markdown report, in a folder the shell can turn into a shareable drive.
@@ -206,7 +213,7 @@ public final class CallReport {
             String file = folder + "/" + (ko ? "통화 요약.md" : "Call summary.md");
             JSONArray files = new JSONArray().put(file);
             int failed = 0;
-            ops.write(file, markdown(ranked, top, haveLog, recordings, day, ko, canHear, logSince == Long.MAX_VALUE ? "" : new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(logSince))).getBytes(StandardCharsets.UTF_8));
+            ops.write(file, markdown(ranked, top, haveLog, recordings, transcribed, busy, day, ko, canHear, logSince == Long.MAX_VALUE ? "" : new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(logSince))).getBytes(StandardCharsets.UTF_8));
             // One file per person: the same facts plus what was heard, recording by recording.
             for (Person p : top) {
                 String pf = folder + "/" + String.format(Locale.US, "%02d %s.md", ranked.indexOf(p) + 1, p.name.replaceAll("[\\/:*?\"<>|]", " ").trim());
@@ -298,7 +305,7 @@ public final class CallReport {
                 FileIndex.Row r = p.heard.get(i);
                 String t = p.transcripts.get(i).trim();
                 md.append("### ").append(df.format(new Date(when(r)))).append(" · ").append(r.name).append("\n\n");
-                md.append(t.length() > 1200 ? t.substring(0, 1200) + "…" : t).append("\n\n");
+                md.append(t.length() > 1500 ? t.substring(0, 1500) + "…" : t).append("\n\n");
             }
         }
         if (p.recordings.size() > p.heard.size()) {
@@ -308,7 +315,7 @@ public final class CallReport {
         return md.toString();
     }
 
-    private static String markdown(List<Person> all, List<Person> top, boolean haveLog, int recordings, String day, boolean ko, boolean canHear, String logSinceText) {
+    private static String markdown(List<Person> all, List<Person> top, boolean haveLog, int recordings, int transcribed, boolean busy, String day, boolean ko, boolean canHear, String logSinceText) {
         boolean hasSummaries = false;
         for (Person p : top) hasSummaries |= p.summary != null;
         StringBuilder md = new StringBuilder();
@@ -318,6 +325,9 @@ public final class CallReport {
                   + (hasSummaries ? "요약은 폰에서 실행되는 소형 언어 모델이 받아쓴 녹음(Whisper)을 읽고 쓴 것이고, \"자주 나온 말\"은 그 사람과의 대화에서 특히 자주 나온 낱말이에요.\n\n" : "\"주로 나누는 이야기\"는 폰에서 Whisper로 받아쓴 녹음 내용 중 그 사람과의 대화에서 특히 자주 나온 말과 대표 문장이에요 — AI 요약이 아니라 통계입니다.\n\n")
                 : "From this phone's call log" + (haveLog ? " (since " + logSinceText + ")" : " (not accessible)") + " and " + recordings + " call recordings, ranked by how often you talk. Recordings older than the log count as one call each. "
                   + (hasSummaries ? "Summaries are written by a small language model on this phone from the recordings (transcribed with Whisper); \"usually about\" is the vocabulary that stands out in that person's calls.\n\n" : "\"Usually about\" is the vocabulary that stands out in that person's recordings (transcribed on the phone with Whisper) plus one representative sentence — a statistic, not an AI summary.\n\n"));
+        if (transcribed < recordings) md.append(ko
+                ? "녹음 " + recordings + "개 중 " + transcribed + "개를 들었어요" + (busy ? " — 나머지는 지금 백그라운드에서 받아쓰는 중이에요. 나중에 다시 실행하면 더 많은 사람의 요약이 채워져요." : " — 나머지는 앱에서 '통화 녹음' 소스가 인덱싱될 때 받아쓰기됩니다.") + "\n\n"
+                : "Heard " + transcribed + " of " + recordings + " recordings" + (busy ? " — the rest are being transcribed in the background right now; run this again later for more people." : " — the rest are transcribed while the Call recordings source indexes.") + "\n\n");
         md.append(ko ? "| # | 이름 | 통화 | 통화 시간 | 녹음 | 주로 나누는 이야기 |\n|---|---|---|---|---|---|\n"
                      : "| # | Person | Calls | Talk time | Recordings | Usually about |\n|---|---|---|---|---|---|\n");
         int i = 0;
