@@ -357,3 +357,11 @@ input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; dis
 .count-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
 .hint.via { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; }
 .drawer.still { animation: none; }
+/* P2P on/off next to a folder: connected to aindrive or only on this phone. */
+.p2p { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 4px; }
+.folder-foot .p2p { margin-left: auto; font-size: 13px; }
+/* A folder chat says which folder it answers from. */
+.scope-chip { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin: 0 0 10px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); font-size: 13px; }
+.scope-chip span { flex: 1; min-width: 0; }
+/* The folder bar stays readable with the P2P switch in it. */
+.sheet > .bar .crumbs { min-width: 64px; }

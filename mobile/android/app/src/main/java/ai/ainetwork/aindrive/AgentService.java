@@ -193,6 +193,7 @@ public class AgentService extends Service {
                 intent.getStringExtra("driveSecret"),
                 intent.getStringExtra("folderLabel"));
         conn.source = intent.getBooleanExtra("source", false);
+        conn.localOnly = intent.getBooleanExtra("localOnly", false);
         try {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
             conn.fs = new SafFs(this, tree, intent.getStringArrayListExtra("excludeUris"));
@@ -210,7 +211,7 @@ public class AgentService extends Service {
         Conn previous;
         synchronized (conns) { previous = conns.put(driveId, conn); }
         if (previous != null) previous.close();
-        if (!conn.source) conn.connect();
+        if (!conn.source && !conn.localOnly) conn.connect();
         if (intent.getBooleanExtra("indexOnStart", false)) reindex(driveId);
         // START_STICKY: if Android reclaims us under memory pressure, come back
         // and reconnect rather than leaving the drive silently offline.
@@ -230,6 +231,11 @@ public class AgentService extends Service {
          * shared drive ({@link #outputConn()}).
          */
         boolean source;
+        /**
+         * A folder the on-device agent answers about while it is NOT connected to aindrive (P2P off):
+         * indexed and searchable here, no socket. Turning P2P on replaces it with a connected Conn.
+         */
+        boolean localOnly;
         SafFs fs;
         RpcHandler rpc;
         FileIndex index;
@@ -408,6 +414,7 @@ public class AgentService extends Service {
             try {
                 o.put("driveId", driveId);
                 o.put("source", source);
+                o.put("p2p", !source && !localOnly);
                 o.put("folderLabel", folderLabel == null ? JSONObject.NULL : folderLabel);
                 o.put("running", !closed && !stopping);
                 o.put("connected", connected);
@@ -636,6 +643,7 @@ public class AgentService extends Service {
     /** The shared drive that receives what the agent makes out of a source. */
     @Nullable Conn outputConn() {
         synchronized (conns) {
+            for (Conn c : conns.values()) if (!c.source && !c.localOnly && c.fs != null && !c.closed) return c;
             for (Conn c : conns.values()) if (!c.source && c.fs != null && !c.closed) return c;
         }
         return null;
@@ -656,9 +664,19 @@ public class AgentService extends Service {
 
     JSONObject ask(String query) throws Exception { return ask(query, null); }
 
-    JSONObject ask(String query, @Nullable JSONObject context) throws Exception {
+    JSONObject ask(String query, @Nullable JSONObject context) throws Exception { return ask(query, context, null); }
+
+    /** @param onlyDrive answer from this one folder (the folder chat); null = every folder on the phone. */
+    JSONObject ask(String query, @Nullable JSONObject context, @Nullable String onlyDrive) throws Exception {
         java.util.List<Conn> targets;
-        synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
+        synchronized (conns) {
+            targets = new java.util.ArrayList<>(conns.values());
+            if (onlyDrive != null) {
+                Conn c = conns.get(onlyDrive);
+                if (c == null || c.fs == null) throw new IllegalStateException("that folder isn't open on this phone");
+                targets = new java.util.ArrayList<>(java.util.Collections.singletonList(c));
+            }
+        }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
         // Small talk and out-of-scope turns are answered once, before any folder is searched.
         for (Conn t : targets) if (t.fs != null) { JSONObject r = t.askRunner().route(query, context); if (r != null) return r; break; }

@@ -430,7 +430,7 @@ public class AindriveAgentPlugin extends Plugin {
 
     @PluginMethod
     public void start(PluginCall call) {
-        boolean source = Boolean.TRUE.equals(call.getBoolean("source", false));
+        boolean source = Boolean.TRUE.equals(call.getBoolean("source", false)) || Boolean.TRUE.equals(call.getBoolean("localOnly", false));
         String[] required = source ? new String[]{"driveId", "folderUri"} : new String[]{"serverUrl", "driveId", "agentToken", "driveSecret", "folderUri"};
         for (String k : required) {
             if (call.getString(k) == null) {
@@ -464,7 +464,8 @@ public class AindriveAgentPlugin extends Plugin {
                 .putExtra("folderUri", call.getString("folderUri"))
                 .putExtra("folderLabel", call.getString("folderLabel", ""))
                 .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)))
-                .putExtra("source", Boolean.TRUE.equals(call.getBoolean("source", false)));
+                .putExtra("source", Boolean.TRUE.equals(call.getBoolean("source", false)))
+                .putExtra("localOnly", Boolean.TRUE.equals(call.getBoolean("localOnly", false)));
         java.util.ArrayList<String> exclude = new java.util.ArrayList<>();
         com.getcapacitor.JSArray ex = call.getArray("excludeUris");
         if (ex != null) for (int i = 0; i < ex.length(); i++) { try { exclude.add(ex.getString(i)); } catch (Exception ignored) { } }
@@ -556,7 +557,7 @@ public class AindriveAgentPlugin extends Plugin {
         if (svc == null) { call.reject("Turn a drive on first"); return; }
         // SQLite + parse: fast, but keep it off the WebView thread regardless.
         new Thread(() -> {
-            try { call.resolve(toJs(svc.ask(query, context))); }
+            try { call.resolve(toJs(svc.ask(query, context, call.getString("driveId")))); }
             catch (Exception e) { call.reject(e.getMessage() == null ? "ask failed" : e.getMessage()); }
         }, "aindrive-ask").start();
     }

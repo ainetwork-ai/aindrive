@@ -42,6 +42,8 @@ export interface AgentConfig {
    * driveId is "src-calls" or "src-photos"; no credentials needed.
    */
   source?: boolean;
+  /** Run the folder for the on-device agent only (indexed, searchable) without connecting it to aindrive. */
+  localOnly?: boolean;
 }
 
 /** Photo-index state for one drive; drives `Index photos` progress in the UI. */
@@ -128,6 +130,8 @@ export interface DriveStatus {
   source?: boolean;
   folderLabel: string | null;
   running: boolean;
+  /** False while the folder runs only for the on-device agent (P2P off: indexed here, not on aindrive). */
+  p2p?: boolean;
   connected: boolean;
   rpcCount: number;
   lastError: string | null;
@@ -183,7 +187,8 @@ export interface AindriveAgentPlugin {
   /** Download the recognition models (≈230 MB, checksum-verified) and recognise indexed files. Progress via statusChanged. */
   ensureModels(): Promise<AgentStatus>;
   /** Ask the on-device agent — fully offline (gazetteer + local index). `context` is the previous answer's `context` so follow-ups ("…and share them") apply to the same files. */
-  ask(opts: { query: string; context?: Record<string, unknown> }): Promise<AskResult>;
+  /** `driveId`: answer from that one folder only (the folder chat). */
+  ask(opts: { query: string; context?: Record<string, unknown>; driveId?: string }): Promise<AskResult>;
   addListener(
     event: "statusChanged",
     cb: (s: AgentStatus) => void,

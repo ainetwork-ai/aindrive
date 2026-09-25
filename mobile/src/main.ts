@@ -213,22 +213,26 @@ async function save() {
 
 async function saveThread() {
   thread = thread.slice(-THREAD_MAX);
-  try { await Preferences.set({ key: THREAD_KEY, value: JSON.stringify({ thread, context: askContext }) }); } catch { /* best effort */ }
+  try { await Preferences.set({ key: THREAD_KEY, value: JSON.stringify({ thread, context: askContext, scope: chatScope }) }); } catch { /* best effort */ }
 }
 
 async function loadThread() {
   try {
     const { value } = await Preferences.get({ key: THREAD_KEY });
     if (!value) return;
-    const t = JSON.parse(value) as { thread?: Turn[]; context?: Record<string, unknown> | null };
+    const t = JSON.parse(value) as { thread?: Turn[]; context?: Record<string, unknown> | null; scope?: ChatScope | null };
     thread = Array.isArray(t.thread) ? t.thread : [];
+    chatScope = t.scope ?? null;
     askContext = t.context ?? null;
     askResult = thread.length ? thread[thread.length - 1].r ?? null : null;
   } catch { thread = []; askContext = null; }
 }
 
 /** Past conversations (newest first): "New chat" files the current one here instead of throwing it away. */
-interface PastChat { at: number; title: string; thread: Turn[] }
+/** A folder chat: the on-device agent answers from this folder only. */
+interface ChatScope { driveId: string; label: string; uri: string }
+let chatScope: ChatScope | null = null;
+interface PastChat { at: number; title: string; thread: Turn[]; scope?: ChatScope | null }
 let pastChats: PastChat[] = [];
 let historyOpen = false;
 const HISTORY_KEY = "aindrive.mobile.history.v1";
@@ -245,17 +249,18 @@ async function saveHistory() {
 
 async function openPastChat(i: number) {
   const c = pastChats[i]; if (!c) return;
-  if (thread.length) pastChats.unshift({ at: Date.now(), title: thread[0].q, thread });
+  if (thread.length) pastChats.unshift({ at: Date.now(), title: thread[0].q, thread, scope: chatScope });
   pastChats = pastChats.filter((x) => x !== c);
-  thread = c.thread; askResult = thread[thread.length - 1]?.r ?? null; askContext = null; historyOpen = false; a2aContexts = new Map();
+  thread = c.thread; chatScope = c.scope ?? null; askResult = thread[thread.length - 1]?.r ?? null; askContext = null; historyOpen = false; a2aContexts = new Map();
   expandedPhotos.clear(); expandedFiles.clear();
   await Promise.all([saveThread(), saveHistory()]);
   render();
 }
 
 async function newChat() {
-  if (thread.length) { pastChats.unshift({ at: Date.now(), title: thread[0].q, thread }); await saveHistory(); }
+  if (thread.length) { pastChats.unshift({ at: Date.now(), title: thread[0].q, thread, scope: chatScope }); await saveHistory(); }
   expandedPhotos.clear(); expandedFiles.clear();
+  chatScope = null;
   thread = []; askContext = null; askResult = null; askQuery = ""; actionShare = null; a2aContexts = new Map();
   await saveThread();
   render();
@@ -383,6 +388,38 @@ function openManage(driveId: string | undefined, name: string) {
   }));
 }
 
+/** "P2P" on/off: whether the folder is connected to aindrive (others can reach it) or stays on this phone. */
+function p2pSwitch(share: SharedFolder | undefined, id: string): string {
+  if (!share) return "";
+  const on = p2pOn(share), busy = busyShares.has(shareKey(share));
+  return `<label class="p2p" title="${on ? "Connected to aindrive" : "Only on this phone"}"><span>P2P</span>
+    <button class="switch ${busy ? "busy" : ""}" role="switch" id="${id}" aria-checked="${on}" aria-label="Connect ${esc(share.folder.label)} to aindrive" ${busy ? "disabled" : ""}></button></label>`;
+}
+
+async function toggleP2p(share: SharedFolder | undefined) {
+  if (!share) return;
+  if (p2pOn(share)) {
+    await stopShare(share);
+    // Still answer about it here: back to local-only for the on-device agent.
+    try { await ensureLocal(share); } catch { /* the folder chat reopens it */ }
+  } else await startShare(share);
+  render();
+}
+
+/** The chat button in a folder on this phone: the on-device agent, answering from that folder; kept in Past chats. */
+async function openFolderChat(share: SharedFolder) {
+  try { await ensureLocal(share); } catch (e) { fail(e); return; }
+  const scope: ChatScope = { driveId: localIdOf(share), label: share.folder.label, uri: share.folder.uri };
+  if (chatScope?.uri !== scope.uri) {
+    const earlier = pastChats.findIndex((c) => c.scope?.uri === scope.uri);
+    if (earlier >= 0) await openPastChat(earlier);          // pick up this folder's last conversation
+    else { await newChat(); chatScope = scope; await saveThread(); }
+  }
+  chatScope = scope;
+  searchOpen = true;
+  render();
+}
+
 function openChat(driveId: string | undefined, name: string, folder: string, owned: boolean) {
   if (!driveId) { notify("Turn the folder on first.", true); return; }
   openSheet((ctx) => new ChatSheet(ctx, driveId, name, folder, owned, (path) => {
@@ -410,8 +447,32 @@ function driveUrl(share: SharedFolder): string | null {
 }
 
 function driveStatus(share: SharedFolder): DriveStatus | undefined {
-  const id = share.drive?.driveId;
-  return id ? status.drives.find((d) => d.driveId === id) : undefined;
+  const id = localIdOf(share);
+  return status.drives.find((d) => d.driveId === id);
+}
+
+/** The folder's id on the phone: its aindrive drive id once paired, else a stable local one. */
+function localIdOf(share: SharedFolder): string {
+  if (share.drive?.driveId) return share.drive.driveId;
+  let h = 0;
+  for (const c of share.folder.uri) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return `local-${(h >>> 0).toString(36)}`;
+}
+
+/** Connected to aindrive (P2P on) — not merely open for the on-device agent. */
+function p2pOn(share: SharedFolder | undefined): boolean {
+  const d = share ? driveStatus(share) : undefined;
+  return !!d?.running && d.p2p !== false;
+}
+
+/** Open the folder for the on-device agent without connecting it (P2P stays as it is). */
+async function ensureLocal(share: SharedFolder) {
+  if (driveStatus(share)?.running) return;
+  status = await AindriveAgent.start({
+    serverUrl: state.server, driveId: localIdOf(share), agentToken: "", driveSecret: "",
+    folderUri: share.folder.uri, folderLabel: share.folder.label, localOnly: true, indexOnStart: true,
+    excludeUris: state.shares.filter((s) => s !== share).map((s) => s.folder.uri),
+  });
 }
 
 /** Stable key for a share: the folder handle (unique per SAF grant / bookmark). */
@@ -424,7 +485,7 @@ function findShare(key: string): SharedFolder | undefined {
 }
 
 function shareByDrive(driveId: string | undefined): SharedFolder | undefined {
-  if (driveId) return state.shares.find((s) => s.drive?.driveId === driveId);
+  if (driveId) return state.shares.find((s) => localIdOf(s) === driveId);
   const running = state.shares.filter((s) => driveStatus(s)?.running);
   return running.length === 1 ? running[0] : undefined;
 }
@@ -721,11 +782,12 @@ async function promoteCollected(a: NonNullable<AskResult["action"]>) {
     await save();
     log(`Folder "${label}" added as its own drive`);
   }
-  await startShare(share);
-  if (parent && driveStatus(parent)?.running) await startShare(parent);
+  // P2P is the user's call (the switch on the folder card) — unless they asked to share it.
+  if (a.share) await startShare(share); else await ensureLocal(share);
+  if (parent && p2pOn(parent)) await startShare(parent);
   a.label = label;
   a.folder = "";
-  a.driveId = share.drive?.driveId;
+  a.driveId = localIdOf(share);
 }
 
 /** After "…and share it": mint a viewer link for the folder the agent just made. */
@@ -733,7 +795,8 @@ async function shareCollected() {
   const a = askResult?.action;
   if (a?.folder === undefined || !state.sessionCookie) return;
   const name = a.label ?? a.folder;
-  const share = shareByDrive(a.driveId);
+  const share = (a.folderUri ? findShare(a.folderUri) : undefined) ?? shareByDrive(a.driveId);
+  if (share && !p2pOn(share)) await startShare(share);
   const driveId = share?.drive?.driveId ?? (remotes.some((d) => d.id === a.driveId) ? a.driveId : undefined);
   if (!driveId) { notify("Turn the folder on to share it.", true); return; }
   actionShare = { folder: name, busy: true };
@@ -891,7 +954,7 @@ async function startShare(share: SharedFolder) {
 /** Turn on every paired-or-not folder that is not already being served. */
 async function startAll() {
   for (const share of state.shares) {
-    if (driveStatus(share)?.running) continue;
+    if (p2pOn(share)) continue;
     await startShare(share);
   }
   await startSources();
@@ -1022,11 +1085,10 @@ async function pollUntilApproved(server: string, linkId: string, deviceSecret: s
 }
 
 async function stopShare(share: SharedFolder) {
-  if (!share.drive) return;
   const key = shareKey(share);
   busyShares.add(key); render();
   try {
-    status = await AindriveAgent.stop({ driveId: share.drive.driveId });
+    status = await AindriveAgent.stop({ driveId: localIdOf(share) });
     share.on = false; await save();
     log(`${share.folder.label} offline`);
   } catch (e) { fail(e); }
@@ -1073,7 +1135,7 @@ async function pruneMissing() {
   state.shares = state.shares.filter((s) => !gone.includes(s));
   await save();
   // Parents hid the removed folders (excludeUris): restart them so a folder recreated inside shows up again.
-  for (const s of state.shares) if (driveStatus(s)?.running) await startShare(s);
+  for (const s of state.shares) if (p2pOn(s)) await startShare(s);
   try { status = await AindriveAgent.status(); } catch { /* browser dev */ }
   if (browse && gone.some((s) => browse && shareKey(s) === browse.key)) browse = null;
   render();
@@ -1155,11 +1217,14 @@ async function ask(q = askQuery) {
   }
   askBusy = true; actionShare = null; render();
   try {
+    // A folder chat asks that folder only (opened for the agent even with P2P off), never other devices.
+    const scope = chatScope;
+    if (scope) { const sh = findShare(scope.uri); if (sh) await ensureLocal(sh); }
     const localRunning = status.drives.some((d) => d.running);
-    const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined }) : null;
+    const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined, driveId: scope?.driveId }) : null;
     // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
     const offTopic = local?.query === "chat" || local?.query === "out";
-    const targets = offTopic ? [] : remotes.filter((d) => d.online);
+    const targets = offTopic || scope ? [] : remotes.filter((d) => d.online);
     const remoteResults = await Promise.all([
       ...targets.map(async (d) => {
         try {
@@ -1414,11 +1479,11 @@ function folderCard(share: SharedFolder): string {
   const key = shareKey(share);
   const d = driveStatus(share);
   const isBusy = busyShares.has(key);
-  const on = !!d?.running;
-  const dot = d?.connected ? "on" : d?.running ? "err" : "off";
+  const on = p2pOn(share);
+  const dot = d?.connected ? "on" : on ? "err" : "off";
   const stateText = isBusy ? (on ? "Turning off…" : share.drive ? "Connecting…" : "Setting up…")
     : d?.connected ? "Online"
-    : d?.running ? (d.lastError ? "Reconnecting…" : "Connecting…")
+    : on ? (d?.lastError ? "Reconnecting…" : "Connecting…")
     : "Not shared";
   const ix = d?.index;
   const indexText = on && ix ? (ix.running ? ` · indexing ${ix.done}/${ix.total}` : ix.indexed ? ` · ${ix.indexed.toLocaleString()} files` : "") : "";
@@ -1497,7 +1562,7 @@ function bindHome() {
       const act = btn.dataset.act;
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        if (act === "toggle") { void (driveStatus(share)?.running ? stopShare(share) : startShare(share)); }
+        if (act === "toggle") { void (p2pOn(share) ? stopShare(share) : startShare(share)); }
         else if (act === "browse") { void openBrowser(share); }
         else if (act === "menu") { menuFor = menuFor === shareKey(share) ? null : shareKey(share); render(); }
         else if (act === "open") { menuFor = null; void openDrive(share); }
@@ -1678,16 +1743,17 @@ function searchSheet(): string {
     const max = expandedPhotos.has(turn) ? photos.length : 7;
     return `<div class="mini-strip">${photos.slice(0, max).map(({ src, i }) => photoTile(src, i, turn, true)).join("")}${photos.length > max ? `<button class="ph mini more" data-more-photos="${turn}">+${photos.length - max}</button>` : ""}</div>`;
   };
+  const actionFolderShare = (x: NonNullable<AskResult["action"]>) => (x.folderUri ? findShare(x.folderUri) : undefined) ?? shareByDrive(x.driveId);
   const collected = (r?: AskResult) => !!r?.action && r.action.folder !== undefined && !r.action.skipped;
   const a = askResult?.action;
   const actionCard = !a ? "" : a.skipped
     ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "Turn a shared folder on so I have somewhere to save the result.")}</p>${a.needsCallLog ? `<p class="hint" style="margin-top:8px"><button class="link" id="action-calllog">Allow call log</button></p>` : ""}</div>`
     : `<div class="card action">
-        <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.label ?? a.folder ?? "")}</b><br><span class="hint">${a.label !== undefined ? "Its own drive · " : ""}${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
+        <div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(a.label ?? a.folder ?? "")}</b><br><span class="hint">${a.label !== undefined ? "Its own folder · " : ""}${a.copied} file${a.copied === 1 ? "" : "s"} copied${a.failed ? `, ${a.failed} failed` : ""}</span></span></div>
         ${askResult ? folderStrip(askResult, thread.length - 1) : ""}
         <div class="folder-foot">
           <button class="btn secondary small" id="action-open">Open folder</button>
-          ${actionShare?.url ? `<button class="btn small" id="action-copy">${I.link} Copy link</button>` : `<button class="btn small" id="action-share" ${actionShare?.busy ? "disabled" : ""}>${actionShare?.busy ? "Sharing…" : `${I.link} Share link`}</button>`}
+          ${p2pSwitch(actionFolderShare(a), "action-p2p")}
         </div>
         ${a.needsCallLog ? `<p class="hint" style="margin-top:8px">Without call-log access the ranking counts recordings only. <button class="link" id="action-calllog">Allow call log</button></p>` : ""}
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
@@ -1744,13 +1810,14 @@ function searchSheet(): string {
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="crumbs"><div class="title">Agent</div><div class="sub">Runs on this phone${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
+        <div class="crumbs"><div class="title">Agent</div><div class="sub">${chatScope ? `In ${esc(chatScope.label)} · ` : ""}Runs on this phone${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
         <button class="iconbtn" id="model-switch" aria-label="Model and agents" title="Model and agents">${icon("cpu", 20)}${a2aAgents.length ? `<span class="count-badge">${a2aAgents.length}</span>` : ""}</button>
         <!-- Always shown (with a label) so past conversations are findable even before the first "New chat". -->
         <button class="iconbtn" id="chat-history" aria-label="Past chats" title="Past chats">${icon("history", 20)}</button>
         ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${icon("plus", 20)}</button>` : ""}
       </div>
       <div class="body" id="ask-body">
+        ${chatScope ? `<div class="scope-chip">${icon("folder", 16)}<span>Answers from <b>${esc(chatScope.label)}</b> only</span><button class="link small" id="scope-clear">All files</button></div>` : ""}
         ${modelsLine}
         ${indexLine}
         ${body}
@@ -1764,7 +1831,7 @@ function searchSheet(): string {
       ${historyOpen ? `<div class="scrim" id="history-scrim"><div class="drawer" id="history-drawer"><div class="grab"></div>
         <div class="head"><h3>Past chats</h3><button class="iconbtn ghost" id="history-close" aria-label="Close">${I.close}</button></div>
         ${pastChats.length ? "" : `<p class="note" style="padding:12px 16px">No past chats yet. Tapping “New chat” saves the current conversation here.</p>`}
-        <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ft-doc">${icon("chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s">${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
+        <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ${c.scope ? "ft-folder" : "ft-doc"}">${icon(c.scope ? "folder" : "chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s">${c.scope ? `${esc(c.scope.label)} · ` : ""}${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
       ${modelOpen ? modelDrawer() : ""}
     </div>`;
 }
@@ -1822,6 +1889,7 @@ function bindSearch() {
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
   bind("chat-history", () => { historyOpen = true; render(); });
+  bind("scope-clear", () => void newChat());
   bind("model-switch", () => { modelOpen = true; a2aAdd = { busy: false }; render(); });
   bind("model-close", () => { modelOpen = false; render(); });
   document.getElementById("model-scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { modelOpen = false; render(); } });
@@ -1881,6 +1949,7 @@ function bindSearch() {
     if (share) void viewFile(share, hit.path); else notify("Turn the folder on to open it.", true);
   }));
   bind("action-share", shareCollected);
+  bind("action-p2p", () => { const x = askResult?.action; if (x) void toggleP2p((x.folderUri ? findShare(x.folderUri) : undefined) ?? shareByDrive(x.driveId)); });
   bind("action-calllog", allowCallLog);
   bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
   bind("action-open", () => {
@@ -1972,6 +2041,7 @@ function browseSheet(): string {
         ${b.searching ? `<div class="field">${I.search}<input id="browse-q" type="search" placeholder="Search in this folder" value="${esc(b.query ?? "")}" autocomplete="off" /><button id="browse-q-close" aria-label="Close search">${I.close}</button></div>`
           : `<div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${crumbs.length ? trail.map((t, i) => `<button data-crumb="${i}">${esc(t)}</button>`).join(" / ") : (remote ? esc(b.remote!.hostname ?? (b.remote!.online ? "Online" : "Offline")) : (driveStatus(share)?.connected ? "Online" : "On this phone"))}</div></div>
         <button class="iconbtn ghost" id="browse-search" aria-label="Search in this folder">${I.search}</button>`}
+        ${remote ? "" : p2pSwitch(share, "browse-p2p")}
         <button class="iconbtn primary" id="browse-share" aria-label="Share">${I.share}</button>
         <button class="iconbtn" id="browse-chat" aria-label="Chat">${I.chat}</button>
       </div>
@@ -2046,7 +2116,10 @@ function bindBrowse() {
   bind("browse-newfolder", () => void browseNewFolder());
   bind("browse-upload", () => void addFiles(share, b.path));
   bind("browse-share", () => openShareFor(driveIdOf(share, b.remote), b.path, b.path ? b.path.split("/").pop()! : (b.remote?.name ?? share.folder.label)));
-  bind("browse-chat", () => openChat(driveIdOf(share, b.remote), b.remote?.name ?? share.folder.label, b.path, b.remote ? b.remote.owned !== false : true));
+  bind("browse-p2p", () => void toggleP2p(share));
+  bind("browse-chat", () => b.remote
+    ? openChat(driveIdOf(share, b.remote), b.remote.name, b.path, b.remote.owned !== false)
+    : void openFolderChat(share));
   document.querySelectorAll<HTMLElement>("[data-entry]").forEach((li) => {
     const entry = b.entries?.find((e) => e.path === li.dataset.entry);
     if (!entry) return;
@@ -2296,7 +2369,7 @@ async function boot() {
   await pruneMissing();
   // Everything that was on comes back by itself: sources, and the shares whose switch was on.
   void (async () => {
-    for (const share of state.shares) if (share.on && state.sessionCookie && !driveStatus(share)?.running) await startShare(share);
+    for (const share of state.shares) if (share.on && state.sessionCookie && !p2pOn(share)) await startShare(share);
     await startSources();
   })();
   await AindriveAgent.addListener("statusChanged", (s) => {

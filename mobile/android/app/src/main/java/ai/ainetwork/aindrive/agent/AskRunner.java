@@ -13,6 +13,7 @@ import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -205,6 +206,8 @@ public final class AskRunner {
             anySpeech |= h.tier == 1;
         }
         String answer = answerFor(q, ranked, total, relaxed, anyContent, anySpeech);
+        // "Photos from 2026" → 1: say where the rest are, so a small number doesn't look like a miss.
+        if (q.dateFrom != null && total > 0 && total <= 3 && relaxed.isEmpty()) answer += otherYears(q);
         if (q.count) {
             answer = (q.korean ? "모두 " + total + "개예요. " : "There are " + total + ". ") + answer;
             out.put("action", new JSONObject().put("type", "count").put("count", total));
@@ -253,6 +256,25 @@ public final class AskRunner {
     }
 
     /** " Photos here are from Tokyo (120), Seoul (80), …" — so a miss says where to look instead. */
+    /** " Others here: 2024 (10), 2023 (1)." — the same search without its date, by year, outside the asked range. */
+    private String otherYears(SearchQuery q) {
+        FileIndex.Filter f = new FileIndex.Filter();
+        f.kind = q.kind; f.country = q.country; f.city = q.city; f.minSize = q.minSize;
+        Map<Integer, Integer> byYear = new java.util.TreeMap<>(java.util.Collections.reverseOrder());
+        Calendar c = Calendar.getInstance();
+        for (FileIndex.Row r : index.query(f, 0)) {
+            if (r.whenMs == null || r.whenMs >= q.dateFrom && (q.dateTo == null || r.whenMs < q.dateTo)) continue;
+            c.setTimeInMillis(r.whenMs);
+            byYear.merge(c.get(Calendar.YEAR), 1, Integer::sum);
+        }
+        if (byYear.isEmpty() || !q.keywords.isEmpty()) return "";
+        List<Map.Entry<Integer, Integer>> top = new ArrayList<>(byYear.entrySet());
+        top.sort((x, y) -> y.getValue() - x.getValue());
+        StringBuilder sb = new StringBuilder(q.korean ? " 다른 해: " : " Others here: ");
+        for (int i = 0; i < Math.min(4, top.size()); i++) sb.append(i > 0 ? ", " : "").append(top.get(i).getKey()).append(" (").append(top.get(i).getValue()).append(")");
+        return sb.append(".").toString();
+    }
+
     private String knownPlaces(@Nullable String kind, boolean ko) {
         FileIndex.Filter f = new FileIndex.Filter();
         f.kind = kind == null ? FileIndex.PHOTO : kind;
