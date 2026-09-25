@@ -49,10 +49,11 @@ interface SavedState {
 
 /** One folder the agent may read. `preset` marks the two suggested ones (call recordings, camera roll). */
 interface AgentSource { id: string; folder: PickedFolder; preset?: PresetId }
-type PresetId = "src-calls" | "src-photos";
+type PresetId = "src-calls-new" | "src-calls" | "src-photos";
 /** Suggested first: Samsung's call recordings and the camera roll. Any other folder can be added too. */
 const PRESETS: { id: PresetId; label: string; hint: string; initial: string }[] = [
-  { id: "src-calls", label: "Call recordings", hint: "For \"who do I talk to most, and about what\" — the Call folder", initial: "Call" },
+  { id: "src-calls-new", label: "Call recordings", hint: "For \"who do I talk to most, and about what\" — Recordings/Call (Samsung, 2022 and later)", initial: "Recordings/Call" },
+  { id: "src-calls", label: "Older call recordings", hint: "The Call folder (Samsung, before 2022)", initial: "Call" },
   { id: "src-photos", label: "Camera photos", hint: "For \"collect this month's food photos\" — DCIM", initial: "DCIM" },
 ];
 
@@ -726,13 +727,13 @@ function sourceCard(src: AgentSource): string {
   const d = sourceStatus(src.id);
   const ix = d?.index;
   const st = busyShares.has(src.id) ? "Starting…" : d?.running
-    ? (ix?.running ? (ix.phase === "recognising" ? `${src.preset === "src-calls" ? "Transcribing" : "Recognising"} ${ix.recognised.toLocaleString()}/${ix.toRecognise.toLocaleString()}` : `Indexing ${ix.done}/${ix.total}`)
-      : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed${ix.recognisedTotal ? ` · ${ix.recognisedTotal.toLocaleString()} ${src.preset === "src-calls" ? "transcribed" : "recognised"}` : ""}` : "Ready")
+    ? (ix?.running ? (ix.phase === "recognising" ? `${src.preset?.startsWith("src-calls") ? "Transcribing" : "Recognising"} ${ix.recognised.toLocaleString()}/${ix.toRecognise.toLocaleString()}` : `Indexing ${ix.done}/${ix.total}`)
+      : ix?.indexed ? `${ix.indexed.toLocaleString()} files indexed${ix.recognisedTotal ? ` · ${ix.recognisedTotal.toLocaleString()} ${src.preset?.startsWith("src-calls") ? "transcribed" : "recognised"}` : ""}` : "Ready")
     : "Off";
   return `
     <div class="card" data-source="${esc(src.id)}">
       <div class="folder">
-        <div class="glyph">${src.preset === "src-calls" ? I.phone : I.folder}</div>
+        <div class="glyph">${src.preset?.startsWith("src-calls") ? I.phone : I.folder}</div>
         <div style="min-width:0;flex:1">
           <div class="name">${esc(def ? def.label : src.folder.label)}${def ? ` <span class="hint">· ${esc(src.folder.label)}</span>` : ""}</div>
           ${def ? `<div class="hint">${esc(def.hint)}</div>` : ""}
@@ -771,7 +772,7 @@ function sourcesSection(): string {
   const suggested = PRESETS.filter((p) => !have.has(p.id)).map((p) => `
     <div class="card" data-preset="${p.id}">
       <div class="folder">
-        <div class="glyph">${p.id === "src-calls" ? I.phone : I.folder}</div>
+        <div class="glyph">${p.id.startsWith("src-calls") ? I.phone : I.folder}</div>
         <div style="min-width:0;flex:1">
           <div class="name">${esc(p.label)}</div>
           <div class="hint">${esc(p.hint)}</div>

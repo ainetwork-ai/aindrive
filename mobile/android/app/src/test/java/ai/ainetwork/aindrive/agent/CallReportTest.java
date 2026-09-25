@@ -17,7 +17,12 @@ public class CallReportTest {
         assertEquals("Amy Jang", CallReport.personOf("Call recording Amy Jang_210421_181302.m4a"));
         assertEquals("010-4135-4162", CallReport.personOf("Call recording 010-4135-4162_210423_140509.m4a"));
         assertEquals("이정인 책임연구원님 LG사이언스파크", CallReport.personOf("통화 녹음 이정인 책임연구원님 LG사이언스파크_230101_120000.m4a"));
+        assertEquals("엄유준", CallReport.personOf("통화 #엄유준_260805_085943.m4a"));
+        assertEquals("양성욱", CallReport.personOf("통화 양성욱_260925_081724.m4a"));
+        assertEquals("+16502071596", CallReport.personOf("통화 녹음 +16502071596_220228_140036.m4a"));
         assertNull(CallReport.personOf("meeting-2026-09-01.m4a"));
+        assertTrue(CallReport.isContact("엄유준")); assertTrue(CallReport.isContact("Amy Jang")); assertTrue(CallReport.isContact("KT 클라우드 마케팅 조현수님"));
+        assertFalse(CallReport.isContact("01074441320")); assertFalse(CallReport.isContact("+16502071596")); assertFalse(CallReport.isContact("010-4135-4162"));
         assertNull(CallReport.personOf("IMG_1234.jpg"));
     }
 

@@ -54,7 +54,7 @@ public final class CallReport {
     static final int TOPICS = 5;
 
     private static final Pattern RECORDING = Pattern.compile(
-            "^(?:통화\\s*녹음|call\\s*recording)\\s*#?\\s*(.+?)_(\\d{6})_(\\d{6})\\.[A-Za-z0-9]+$", Pattern.CASE_INSENSITIVE);
+            "^(?:통화(?:\\s*녹음)?|call(?:\\s*recording)?)\\s+#?\\s*(.+?)_(\\d{6})_(\\d{6})\\.[A-Za-z0-9]+$", Pattern.CASE_INSENSITIVE);
 
     static final class Person {
         String name; int calls; long seconds; long lastMs;
@@ -69,6 +69,8 @@ public final class CallReport {
     }
 
     private final FileIndex index;
+    /** Every call-recordings folder the agent may read (Samsung moved them: Call/ → Recordings/Call/); `index` is one of them. */
+    private final List<FileIndex> indexes = new ArrayList<>();
     private final @Nullable CallLog callLog;
     private final Supplier<SpeechRecognizer> speech;
     private final @Nullable AskRunner.FileOps ops;
@@ -83,6 +85,13 @@ public final class CallReport {
     public CallReport(FileIndex index, @Nullable CallLog callLog, Supplier<SpeechRecognizer> speech, @Nullable AskRunner.FileOps ops,
                       Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer, Supplier<Boolean> indexerBusy) {
         this.index = index; this.callLog = callLog; this.speech = speech; this.ops = ops; this.summarizer = summarizer; this.indexerBusy = indexerBusy;
+        indexes.add(index);
+    }
+
+    /** Also read the recordings indexed in these (other call folders). */
+    public CallReport withIndexes(List<FileIndex> more) {
+        for (FileIndex i : more) if (!indexes.contains(i)) indexes.add(i);
+        return this;
     }
 
     /** Recording file name → who it was with, or null when it is not a call recording. */
@@ -90,6 +99,11 @@ public final class CallReport {
         Matcher m = RECORDING.matcher(fileName.trim());
         if (!m.matches()) return null;
         return normName(m.group(1));
+    }
+
+    /** A saved contact has a name; an unsaved caller shows up as digits (with +, -, spaces). */
+    public static boolean isContact(String name) {
+        return name != null && !name.replaceAll("[\\s+\\-()#]", "").matches("\\d*");
     }
 
     static String normName(String s) {
@@ -120,7 +134,10 @@ public final class CallReport {
         FileIndex.Filter f = new FileIndex.Filter();
         f.kind = FileIndex.AUDIO;
         int recordings = 0, transcribed = 0;
-        for (FileIndex.Row r : index.query(f, 0)) {
+        List<FileIndex.Row> all = new ArrayList<>();
+        java.util.Set<String> ownIds = new HashSet<>();
+        for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) { all.add(r); if (ix == index) ownIds.add(r.docId); }
+        for (FileIndex.Row r : all) {
             String who = personOf(r.name);
             if (who == null) continue;
             recordings++;
@@ -136,7 +153,9 @@ public final class CallReport {
             // No log, or a recording from before the log's window: the recording is the only evidence of the call.
             if (!haveLog || when(r) < logSince) { p.calls++; p.lastMs = Math.max(p.lastMs, when(r)); }
         }
-        List<Person> ranked = new ArrayList<>(people.values());
+        List<Person> ranked = new ArrayList<>();
+        // Only people in your contacts: a bare number ("01074441320", "+1650…") is a stranger, a shop or spam.
+        for (Person p : people.values()) if (isContact(p.name)) ranked.add(p);
         ranked.sort((a, b) -> a.calls != b.calls ? Integer.compare(b.calls, a.calls) : Long.compare(b.seconds, a.seconds));
         for (Person p : ranked) p.recordings.sort((a, b) -> Long.compare(when(b), when(a)));
 
@@ -162,7 +181,7 @@ public final class CallReport {
                 if (used >= TRANSCRIPTS_PER_PERSON) break;
                 String t = r.transcript;
                 // Not transcribed yet: hear a few now for the people who matter most, unless the indexer is already at it.
-                if (t == null && ops != null && !busy && used < RECORDINGS_PER_PERSON && ranked.indexOf(p) < 2 * TOP_PEOPLE) {
+                if (t == null && ops != null && !busy && ownIds.contains(r.docId) && used < RECORDINGS_PER_PERSON && ranked.indexOf(p) < 2 * TOP_PEOPLE) {
                     if (asr == null) asr = speech.get();
                     if (asr == null) break;
                     try (android.os.ParcelFileDescriptor pfd = ops.openFd(r.docId)) {

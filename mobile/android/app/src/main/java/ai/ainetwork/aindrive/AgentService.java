@@ -296,7 +296,8 @@ public class AgentService extends Service {
 
         synchronized AskRunner askRunner() {
             if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull,
-                    AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer, () -> indexer != null && indexer.running);
+                    AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer, () -> anyIndexerRunning())
+                    .withCallIndexes(AgentService.this::callIndexes);
             return ask;
         }
 
@@ -333,7 +334,8 @@ public class AgentService extends Service {
                 @Override public ClipEmbedder clip() { return clipOrNull(); }
                 @Override public SpeechRecognizer speech() { return speechOrNull(); }
                 // A call archive is thousands of hours: hear the first minutes of each call, newest first, in the background.
-                @Override public int speechSeconds() { return SOURCE_CALLS.equals(driveId) ? ai.ainetwork.aindrive.agent.CallReport.SECONDS_PER_RECORDING : SpeechRecognizer.MAX_SECONDS; }
+                @Override public boolean callArchive() { return isCallSource(driveId); }
+                @Override public int speechSeconds() { return isCallSource(driveId) ? ai.ainetwork.aindrive.agent.CallReport.SECONDS_PER_RECORDING : SpeechRecognizer.MAX_SECONDS; }
             });
             return indexer;
         }
@@ -594,6 +596,20 @@ public class AgentService extends Service {
      */
     /** Drive ids of the agent sources (fixed: one folder of each kind). */
     public static final String SOURCE_CALLS = "src-calls", SOURCE_PHOTOS = "src-photos";
+    /** "src-calls" (Call/) and "src-calls-new" (Recordings/Call/): Samsung keeps call recordings in two places over the years. */
+    static boolean isCallSource(String driveId) { return driveId != null && driveId.startsWith(SOURCE_CALLS); }
+
+    java.util.List<FileIndex> callIndexes() {
+        java.util.List<FileIndex> out = new java.util.ArrayList<>();
+        synchronized (conns) { for (Conn c : conns.values()) if (isCallSource(c.driveId) && c.index != null) out.add(c.index); }
+        return out;
+    }
+
+    /** A call folder still transcribing: the report should not start a second recogniser next to it. */
+    boolean anyIndexerRunning() {
+        synchronized (conns) { for (Conn c : conns.values()) if (isCallSource(c.driveId) && c.indexer != null && c.indexer.running) return true; }
+        return false;
+    }
 
     /** The shared drive that receives what the agent makes out of a source. */
     @Nullable Conn outputConn() {
@@ -625,7 +641,8 @@ public class AgentService extends Service {
         if (ai.ainetwork.aindrive.agent.QueryParser.isCallsTask(query)) {
             // One report, over the call-recordings source when there is one (else the first drive: it may hold recordings).
             Conn c = null;
-            for (Conn t : targets) if (SOURCE_CALLS.equals(t.driveId) && t.fs != null) c = t;
+            java.util.List<FileIndex> callIndexes = new java.util.ArrayList<>();
+            for (Conn t : targets) if (isCallSource(t.driveId) && t.fs != null) { if (c == null) c = t; callIndexes.add(t.index); }
             if (c == null) for (Conn t : targets) if (t.fs != null) { c = t; break; }
             if (c == null) throw new IllegalStateException("no drive is running");
             JSONObject r = c.askRunner().ask(query, context);

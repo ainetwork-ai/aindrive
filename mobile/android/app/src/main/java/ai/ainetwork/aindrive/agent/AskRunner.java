@@ -64,6 +64,10 @@ public final class AskRunner {
     private final Supplier<ai.ainetwork.aindrive.llm.Summarizer> summarizer;
     private final Runnable releaseSummarizer;
     private final Supplier<Boolean> indexerBusy;
+    /** Indexes of every call-recordings folder, so one report covers them all. */
+    private Supplier<List<FileIndex>> callIndexes = java.util.Collections::emptyList;
+
+    public AskRunner withCallIndexes(Supplier<List<FileIndex>> s) { callIndexes = s; return this; }
 
     public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops) {
         this(index, geo, clip, ops, null, () -> null, () -> null, () -> { }, () -> false);
@@ -95,7 +99,7 @@ public final class AskRunner {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
         SearchQuery q = parser.parse(question, System.currentTimeMillis(), SearchQuery.fromJson(context));
         if (q.calls) {
-            try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
+            try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
         }
         int indexed = index.count();

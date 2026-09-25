@@ -41,6 +41,8 @@ public final class Indexer {
         @Nullable SpeechRecognizer speech();
         /** How much of each recording to hear; a call archive of thousands of hours needs a cap. */
         default int speechSeconds() { return SpeechRecognizer.MAX_SECONDS; }
+        /** A call-recordings folder: hear it person by person rather than strictly by date. */
+        default boolean callArchive() { return false; }
     }
 
     public volatile int recognised, toRecognise;
@@ -119,6 +121,19 @@ public final class Indexer {
         }
         // Newest first: the calls people ask about are the recent ones, and a long archive is heard over days.
         todo.sort((a, b) -> Long.compare(b.mtimeMs, a.mtimeMs));
+        if (recognisers.callArchive()) {
+            // Round-robin by person (each one's newest call, then each one's second…), contacts before bare
+            // numbers — so after an hour every contact has something heard, not just whoever called last week.
+            java.util.Map<String, Integer> seen = new java.util.HashMap<>();
+            java.util.Map<SafFs.Entry, Integer> round = new java.util.HashMap<>();
+            for (SafFs.Entry e : todo) {
+                String who = ai.ainetwork.aindrive.agent.CallReport.personOf(e.name);
+                String key = who == null ? "?" + e.name : who;
+                int n = seen.merge(key, 1, Integer::sum);
+                round.put(e, (n - 1) * 2 + (who != null && ai.ainetwork.aindrive.agent.CallReport.isContact(who) ? 0 : 1));
+            }
+            todo.sort((a, b) -> round.get(a) != round.get(b).intValue() ? Integer.compare(round.get(a), round.get(b)) : Long.compare(b.mtimeMs, a.mtimeMs));
+        }
         toRecognise = todo.size();
         progress.onProgress(0, toRecognise, phase);
         for (SafFs.Entry e : todo) {
