@@ -66,8 +66,12 @@ public class AindriveAgentPlugin extends Plugin {
         SafFs fs = svc == null ? null : svc.fsOf(call.getString("driveId", ""));
         if (fs == null) { call.reject("drive not running"); return; }
         try {
-            long offset = call.getLong("offset", 0L);
-            int length = Math.min(call.getInt("length", 0), 1 << 20);
+            // JS numbers arrive as Integer or Double, and getLong() returns its default for those.
+            Object ov = call.getData().opt("offset"), lv = call.getData().opt("length");
+            long offset = ov instanceof Number ? ((Number) ov).longValue() : -1L;
+            long len = lv instanceof Number ? ((Number) lv).longValue() : -1L;
+            if (offset < 0 || len < 1) { call.reject("bad offset or length"); return; }
+            int length = (int) Math.min(len, 1 << 20);
             byte[] data = fs.readChunk(call.getString("path", ""), offset, length);
             JSObject o = new JSObject();
             o.put("data", android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP));
@@ -366,7 +370,10 @@ public class AindriveAgentPlugin extends Plugin {
     @PluginMethod
     public void registerHandoffs(PluginCall call) {
         com.getcapacitor.JSArray files = call.getArray("files");
-        long ttlMs = call.getLong("ttlSeconds", 900L) * 1000L;
+        Object tv = call.getData().opt("ttlSeconds"); // Integer from JS; getLong() would ignore it
+        long ttlSeconds = tv == null ? 900L : tv instanceof Number ? ((Number) tv).longValue() : -1L;
+        if (ttlSeconds < 1) { call.reject("bad ttlSeconds"); return; }
+        long ttlMs = ttlSeconds * 1000L;
         if (files == null) { call.reject("missing files"); return; }
         new Thread(() -> {
             try {

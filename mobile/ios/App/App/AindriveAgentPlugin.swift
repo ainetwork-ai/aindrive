@@ -62,8 +62,11 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func readChunk(_ call: CAPPluginCall) {
         guard let fs = AgentCore.shared.fsOf(driveId: call.getString("driveId") ?? "") else { call.reject("drive not running"); return }
         do {
-            let offset = UInt64(call.getDouble("offset") ?? 0)
-            let length = min(call.getInt("length") ?? 0, 1 << 20)
+            // UInt64(Double) traps on negative, NaN or infinite values: reject those first.
+            let off = call.getDouble("offset") ?? -1, len = call.getDouble("length") ?? -1
+            guard off.isFinite, off >= 0, off < 9e15, len.isFinite, len >= 1 else { call.reject("bad offset or length"); return }
+            let offset = UInt64(off)
+            let length = Int(min(len, Double(1 << 20)))
             let data = try fs.readChunk(call.getString("path") ?? "", offset: offset, length: length)
             call.resolve(["data": data.base64EncodedString()])
         } catch { call.reject(error.localizedDescription) }

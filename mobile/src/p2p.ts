@@ -100,8 +100,14 @@ export function createPhoneRtc(deps: PhoneRtcDeps) {
           session.queue = session.queue.then(() => serve(want as number)).catch((e) => deps.log?.(`p2p: chunk not served: ${(e as Error).message}`));
         };
       };
-      await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
-      await pc.setLocalDescription(await pc.createAnswer());
+      try {
+        await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+        await pc.setLocalDescription(await pc.createAnswer());
+      } catch (e) {
+        close(sid); // a failed setup must not hold one of the drive's session slots
+        deps.log?.(`p2p: offer not answered: ${(e as Error).message}`);
+        return;
+      }
       deps.send(driveId, { type: "rtc", sid, data: { type: "answer", sdp: pc.localDescription!.sdp } });
       return;
     }

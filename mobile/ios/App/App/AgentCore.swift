@@ -205,10 +205,15 @@ private final class DriveConn {
     }
 
     /// Sends a text frame on this drive's socket (P2P signalling); false when not connected.
+    /// `task` and `closed` change on the main thread (connect() runs there via the reconnect timer),
+    /// so read them there too; plugin calls arrive on Capacitor's own queue, never main-blocking.
     func sendText(_ text: String) -> Bool {
-        guard !closed, let task else { return false }
-        task.send(.string(text)) { _ in }
-        return true
+        let send = { () -> Bool in
+            guard !self.closed, let task = self.task else { return false }
+            task.send(.string(text)) { _ in }
+            return true
+        }
+        return Thread.isMainThread ? send() : DispatchQueue.main.sync(execute: send)
     }
 
     func close() {
