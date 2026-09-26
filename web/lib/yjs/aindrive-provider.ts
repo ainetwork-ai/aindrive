@@ -45,11 +45,11 @@ export class AindriveProvider {
       const j = await fetch(`/api/willow/agent?drive=${encodeURIComponent(this.driveIdForAgent)}`).then((r) => r.json());
       this.agentMaterializes = !!j.materializes;
       try { localStorage.setItem(memo, this.agentMaterializes ? "1" : "0"); } catch {}
-    } catch {
-      // offline: a file write cannot succeed now, and the edit is safe in the Willow
-      // store; skip saving (the next save after reconnecting writes it, or the agent does)
+    } catch (e) {
       try { this.agentMaterializes = localStorage.getItem(memo) === "1"; } catch {}
-      return true;
+      // really offline (a network error): a file write cannot succeed now and the edit is
+      // safe in the Willow store, so skip; a server hiccup falls back to the last answer (review M7)
+      if ((typeof navigator !== "undefined" && navigator.onLine === false) || e instanceof TypeError) return true;
     }
     return this.agentMaterializes;
   }

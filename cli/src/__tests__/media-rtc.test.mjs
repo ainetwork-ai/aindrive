@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, writeFileSync, utimesSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -10,6 +10,7 @@ import { mediaIndex } from "../media-index.js";
 
 const C = 1048576;
 const pattern = (n, salt = 0) => Buffer.from(Uint8Array.from({ length: n }, (_, i) => (i * 13 + 5 + salt) & 255));
+const st = (f) => { const x = statSync(f); return { size: x.size, mtimeMs: x.mtimeMs }; };
 const rootHex = (leaves) => createHash("sha256").update(Buffer.concat(leaves.map((h) => Buffer.from(h, "hex")))).digest("hex");
 afterEach(() => closeAllRtc());
 
@@ -46,7 +47,7 @@ describe("agent answers P2P and serves chunks", () => {
     const file = pattern(3 * C + C / 2);
     writeFileSync(join(root, "v.mp4"), file);
     const idx = await mediaIndex(join(root, "v.mp4"));
-    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: rootHex(idx.leaves), exp: Date.now() + 60_000 });
+    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: rootHex(idx.leaves), exp: Date.now() + 60_000, ...st(join(root, "v.mp4")) });
     const { ch, opened } = await connect({ root, secret: "sec", token, path: "v.mp4" });
     expect(opened).toBe(true);
     for (const i of [0, 3]) {
@@ -61,7 +62,7 @@ describe("agent answers P2P and serves chunks", () => {
     const root = mkdtempSync(join(tmpdir(), "rtc-"));
     writeFileSync(join(root, "v.mp4"), pattern(10));
     writeFileSync(join(root, "secret.mp4"), pattern(10, 1));
-    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: "00".repeat(32), exp: Date.now() + 60_000 });
+    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: "00".repeat(32), exp: Date.now() + 60_000, size: 10, mtimeMs: 1 });
     const { opened } = await connect({ root, secret: "sec", token, path: "secret.mp4" });
     expect(opened).toBe(false);
   }, 20000);
@@ -70,11 +71,35 @@ describe("agent answers P2P and serves chunks", () => {
     const root = mkdtempSync(join(tmpdir(), "rtc-"));
     writeFileSync(join(root, "v.mp4"), pattern(2 * C));
     const idx = await mediaIndex(join(root, "v.mp4"));
-    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: rootHex(idx.leaves), exp: Date.now() + 60_000 });
+    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: rootHex(idx.leaves), exp: Date.now() + 60_000, ...st(join(root, "v.mp4")) });
     const { ch, opened } = await connect({ root, secret: "sec", token, path: "v.mp4" });
     expect(opened).toBe(true);
     writeFileSync(join(root, "v.mp4"), pattern(2 * C, 3));
     utimesSync(join(root, "v.mp4"), new Date(), new Date(Date.now() + 10_000));
     await expect(want(ch, 0)).rejects.toThrow();
+  }, 30000);
+
+  it("review I4: at most 8 sessions per drive", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rtc-"));
+    writeFileSync(join(root, "v.mp4"), pattern(10));
+    const idx = await mediaIndex(join(root, "v.mp4"));
+    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: rootHex(idx.leaves), exp: Date.now() + 60_000, ...st(join(root, "v.mp4")) });
+    let answers = 0;
+    for (let i = 0; i < 9; i++) {
+      await handleRtc({ type: "rtc", sid: `s${i}`, token, path: "v.mp4", data: { type: "offer", sdp: (await (async () => { const pc = new RTCPeerConnection({ iceServers: [] }); pc.createDataChannel("x"); const o = await pc.createOffer(); await pc.setLocalDescription(o); const sdp = pc.localDescription.sdp; pc.close(); return sdp; })()) } }, { root, driveSecret: "sec", send: (f) => { if (f.data?.type === "answer") answers++; } });
+    }
+    expect(answers).toBe(8);
+  }, 60000);
+
+  it("review M1: chunks stop when the token expires, even on an open channel", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rtc-"));
+    writeFileSync(join(root, "v.mp4"), pattern(C + 10));
+    const idx = await mediaIndex(join(root, "v.mp4"));
+    const token = mintToken("sec", { drive: "d", path: "v.mp4", root: rootHex(idx.leaves), exp: Date.now() + 3000, ...st(join(root, "v.mp4")) });
+    const { ch, opened } = await connect({ root, secret: "sec", token, path: "v.mp4" });
+    expect(opened).toBe(true);
+    await want(ch, 0);
+    await new Promise((r) => setTimeout(r, 3200));
+    await expect(want(ch, 1)).rejects.toThrow();
   }, 30000);
 });

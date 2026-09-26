@@ -3,23 +3,24 @@
 // root, expiry) with this drive's secret. The agent answers only a valid token whose
 // path matches, and on the data channel serves chunks of that one file, only while
 // the file still has the content the token names.
-import { createHash } from "node:crypto";
-import { openSync, readSync, closeSync } from "node:fs";
+import { statSync } from "node:fs";
+import { open as openFile } from "node:fs/promises";
 import { RTCPeerConnection, RTCIceCandidate } from "werift";
 import { safeResolve } from "./rpc.js";
-import { mediaIndex, CHUNK } from "./media-index.js";
+import { CHUNK } from "./media-index.js";
 import { verifyToken, encodePieces } from "./willow-shared/p2p.js";
 
 const IDLE_MS = 10 * 60_000;
-const sessions = new Map(); // sid → { pc, claim, timer }
+const MAX_SESSIONS = 8; // per drive (review I4)
+const SEND_HIGH = 1 << 20; // wait while more than 1 MiB is queued on the channel
+const sessions = new Map(); // sid → { pc, claim, timer, queue }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const rootOf = (leaves) => createHash("sha256").update(Buffer.concat(leaves.map((h) => Buffer.from(h, "hex")))).digest("hex");
-
-function readChunk(abs, index, size) {
-  const length = Math.min(CHUNK, size - index * CHUNK);
-  const buf = Buffer.alloc(Math.max(0, length));
-  const fd = openSync(abs, "r");
-  try { readSync(fd, buf, 0, buf.length, index * CHUNK); } finally { closeSync(fd); }
+async function readChunk(abs, index, size) {
+  const length = Math.max(0, Math.min(CHUNK, size - index * CHUNK));
+  const buf = Buffer.alloc(length);
+  const fh = await openFile(abs, "r"); // async: a 1 MiB read never blocks the agent
+  try { await fh.read(buf, 0, length, index * CHUNK); } finally { await fh.close(); }
   return buf;
 }
 
@@ -48,25 +49,33 @@ export async function handleRtc(frame, { root, driveSecret, send, iceServers = [
   const touch = () => { if (!s) return; clearTimeout(s.timer); s.timer = setTimeout(() => close(sid), IDLE_MS); };
 
   if (data.sdp && data.type === "offer" && !s) {
+    if (sessions.size >= MAX_SESSIONS) { log.warn({}, "p2p: too many sessions, not answering"); return; }
     const pc = new RTCPeerConnection({ iceServers });
-    s = { pc, claim, timer: null };
+    s = { pc, claim, timer: null, queue: Promise.resolve() };
     sessions.set(sid, s);
     touch();
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: "rtc", sid, data: { candidate: e.candidate.toJSON() } }); };
     pc.ondatachannel = (ev) => {
       const ch = ev.channel;
-      ch.onmessage = async (m) => {
+      const serve = async (want) => {
+        if (Date.now() > claim.exp) { close(sid); return; } // the token ran out (review M1)
+        const abs = safeResolve(root, claim.path);
+        const st = statSync(abs);
+        if (st.size !== claim.size || st.mtimeMs !== claim.mtimeMs) { close(sid); return; } // the file changed: no re-hash (review I4)
+        if (want * CHUNK >= claim.size) return;
+        for (const piece of encodePieces(want, await readChunk(abs, want, claim.size))) {
+          while (ch.bufferedAmount > SEND_HIGH && ch.readyState === "open") await sleep(10); // backpressure
+          if (ch.readyState !== "open") return;
+          ch.send(Buffer.from(piece));
+        }
+      };
+      ch.onmessage = (m) => {
         touch();
         let want;
         try { want = JSON.parse(String(m.data)).want; } catch { return; }
         if (!Number.isInteger(want) || want < 0) return;
-        try {
-          const abs = safeResolve(root, claim.path);
-          const idx = await mediaIndex(abs);
-          if (rootOf(idx.leaves) !== claim.root) { close(sid); return; } // the file changed: the token no longer describes it
-          if (want >= idx.leaves.length) return;
-          for (const piece of encodePieces(want, readChunk(abs, want, idx.size))) ch.send(Buffer.from(piece));
-        } catch (e) { log.warn({ err: e.message }, "p2p: chunk not served"); }
+        // one chunk at a time per session: a viewer cannot flood the uplink (review I4)
+        s.queue = s.queue.then(() => serve(want)).catch((e) => log.warn({ err: e.message }, "p2p: chunk not served"));
       };
     };
     await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });

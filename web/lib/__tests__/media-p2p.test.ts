@@ -34,7 +34,7 @@ describe("P2P chunk wire", () => {
 });
 
 describe("P2P token", () => {
-  const claim = { drive: "d1", path: "v.mp4", root: "ab".repeat(32), exp: 2000 };
+  const claim = { drive: "d1", path: "v.mp4", root: "ab".repeat(32), exp: 2000, size: 10, mtimeMs: 1 };
   it("verifies exactly the claim it was minted for, until it expires", () => {
     const t = mintToken("secret", claim);
     expect(verifyToken("secret", t, 1000)).toEqual(claim);
@@ -44,5 +44,23 @@ describe("P2P token", () => {
     const forged = Buffer.from(JSON.stringify({ ...claim, path: "secret.mp4" })).toString("base64url");
     expect(verifyToken("secret", `${forged}.${sig}`, 1000)).toBeNull();
     expect(verifyToken("secret", `${body}.`, 1000)).toBeNull();
+  });
+});
+
+describe("P2P review fixes", () => {
+  it("M4: pieces for a chunk nobody asked for are dropped, and at most 4 chunks assemble at once", () => {
+    const wanted = new Set([1]);
+    const r = new Reassembler({ accept: (i) => wanted.has(i), maxOpen: 4 });
+    const [p] = encodePieces(7, chunkOf(100000));
+    expect(r.push(p)).toBeNull();
+    expect(r.openCount).toBe(0);
+    const r2 = new Reassembler({ maxOpen: 4 });
+    for (const i of [1, 2, 3, 4]) r2.push(encodePieces(i, chunkOf(100000))[0]);
+    expect(() => r2.push(encodePieces(5, chunkOf(100000))[0])).toThrow();
+  });
+
+  it("the token claim carries size and mtime", () => {
+    const c = { drive: "d", path: "p", root: "ab".repeat(32), exp: 5, size: 10, mtimeMs: 3 };
+    expect(verifyToken("s", mintToken("s", c), 1)).toEqual(c);
   });
 });

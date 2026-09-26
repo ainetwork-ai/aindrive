@@ -1,59 +1,142 @@
 // The direct device → browser path, page side (P2P media spec M5). The server
 // introduces this tab to the drive's agent (/api/media/rtc) and hands over the
 // file's chunk hash list; chunks then come straight from the device over a WebRTC
-// data channel, each verified before use. Any chunk that does not arrive in time,
-// or fails verification, comes from the server instead: playback never depends on
-// the direct path.
-"use client";
+// data channel. Every chunk, from the device or from the server, is verified whole
+// against that list before a byte of it is used: a file that changed underneath
+// ends the stream with an error rather than stitching two versions together.
+// Playback never depends on the direct path: a chunk the device does not bring in
+// time comes from the server, and a drive whose direct path failed is not retried
+// for a while (no repeated waits).
 import { encodeWant, Reassembler } from "@/shared/media/p2p";
 
 const C = 1048576;
 const OPEN_MS = 4000;
 const CHUNK_MS = 4000;
+const FAILED_RETRY_MS = 5 * 60_000;
 
-type Manifest = { size: number; root: string; leaves: string[] };
-/** `disabled`: skip the direct path (a kill switch; also how tests exercise the fallback). */
-type Stats = { p2pBytes: number; serverBytes: number; sessions: number; disabled: boolean; closeAll(): void };
-
-const stats: Stats = { p2pBytes: 0, serverBytes: 0, sessions: 0, disabled: false, closeAll: () => { for (const s of open.values()) void s.then((x) => x?.close()); open.clear(); } };
-if (typeof window !== "undefined") (window as unknown as { __aindriveP2P: Stats }).__aindriveP2P = stats;
+export type Manifest = { size: number; root: string; leaves: string[] };
+type Chan = { readyState: string; binaryType: string; send(m: string): void; close(): void; onmessage: ((m: { data: unknown }) => void) | null; onclose: (() => void) | null };
 
 const hex = (b: ArrayBuffer) => Array.from(new Uint8Array(b), (x) => x.toString(16).padStart(2, "0")).join("");
-const stun = () => process.env.NEXT_PUBLIC_AINDRIVE_STUN ?? "stun:stun.l.google.com:19302";
+const sha256hex = async (b: Uint8Array) => hex(await crypto.subtle.digest("SHA-256", b as unknown as ArrayBuffer));
 
-class P2PSession {
-  private waiting = new Map<number, (c: Uint8Array | null) => void>();
-  private reasm = new Reassembler();
-  constructor(readonly manifest: Manifest, private readonly pc: RTCPeerConnection, private readonly ch: RTCDataChannel, private readonly ws: WebSocket) {
+export class P2PSession {
+  // one pending request per chunk, shared by every reader of it (review I3)
+  private readonly pending = new Map<number, Promise<Uint8Array | null>>();
+  private readonly resolvers = new Map<number, (c: Uint8Array | null) => void>();
+  // pieces are accepted only for chunks asked for, and a few at a time (review M4)
+  private readonly reasm = new Reassembler({ accept: (i) => this.resolvers.has(i), maxOpen: 4 });
+
+  constructor(readonly manifest: Manifest, private readonly pc: { close(): void }, private readonly ch: Chan, private readonly ws: { close(): void }) {
     ch.binaryType = "arraybuffer";
     ch.onmessage = (m) => {
       if (typeof m.data === "string") return;
       let got: { index: number; chunk: Uint8Array } | null = null;
       try { got = this.reasm.push(new Uint8Array(m.data as ArrayBuffer)); } catch { return; }
-      if (got) this.waiting.get(got.index)?.(got.chunk);
+      if (got) this.resolvers.get(got.index)?.(got.chunk);
     };
-    ch.onclose = () => { for (const r of this.waiting.values()) r(null); this.waiting.clear(); };
+    ch.onclose = () => { for (const r of this.resolvers.values()) r(null); };
   }
 
   get alive() { return this.ch.readyState === "open"; }
 
   /** Chunk `i` from the device, verified; null when it did not come in time or did not verify. */
-  async chunk(i: number): Promise<Uint8Array | null> {
-    if (!this.alive) return null;
-    const got = await new Promise<Uint8Array | null>((resolve) => {
-      const t = setTimeout(() => { this.waiting.delete(i); this.reasm.drop(i); resolve(null); }, CHUNK_MS);
-      this.waiting.set(i, (c) => { clearTimeout(t); this.waiting.delete(i); resolve(c); });
-      try { this.ch.send(encodeWant(i)); } catch { resolve(null); }
-    });
-    if (!got) return null;
-    const digest = hex(await crypto.subtle.digest("SHA-256", got as unknown as ArrayBuffer));
-    return digest === this.manifest.leaves[i] ? got : null;
+  chunk(i: number): Promise<Uint8Array | null> {
+    const hit = this.pending.get(i);
+    if (hit) return hit;
+    if (!this.alive) return Promise.resolve(null);
+    const p = new Promise<Uint8Array | null>((resolve) => {
+      const done = (c: Uint8Array | null) => { clearTimeout(t); if (this.resolvers.get(i) === done) this.resolvers.delete(i); this.reasm.drop(i); resolve(c); };
+      const t = setTimeout(() => done(null), CHUNK_MS);
+      this.resolvers.set(i, done);
+      try { this.ch.send(encodeWant(i)); } catch { done(null); }
+    }).then(async (c) => (c && (await sha256hex(c)) === this.manifest.leaves[i] ? c : null))
+      .finally(() => { if (this.pending.get(i) === p) this.pending.delete(i); });
+    this.pending.set(i, p);
+    return p;
   }
 
   close() { try { this.ch.close(); } catch {} try { this.pc.close(); } catch {} try { this.ws.close(); } catch {} }
 }
 
-async function openSession(driveId: string, path: string): Promise<P2PSession | null> {
+type Deps = {
+  openSession: (driveId: string, path: string) => Promise<P2PSession | null>;
+  fetch: typeof fetch;
+  now: () => number;
+};
+
+/** The direct path with its dependencies injected (tests); `p2p` below is the browser's. */
+export function createP2P(deps: Deps) {
+  const open = new Map<string, Promise<P2PSession | null>>();
+  const failedUntil = new Map<string, number>(); // per drive (review I1)
+  const stats = { p2pBytes: 0, serverBytes: 0, sessions: 0, disabled: false, closeAll: () => { for (const s of open.values()) void s.then((x) => x?.close()); open.clear(); } };
+
+  async function session(driveId: string, path: string): Promise<P2PSession | null> {
+    if (stats.disabled || (failedUntil.get(driveId) ?? 0) > deps.now()) return null;
+    const k = `${driveId}\0${path}`;
+    const cur = open.get(k);
+    if (cur) {
+      const s = await cur;
+      if (s?.alive) return s;
+      open.delete(k); // the channel went away: try the direct path again
+    }
+    const p = deps.openSession(driveId, path);
+    open.set(k, p);
+    const s = await p;
+    if (!s) { open.delete(k); failedUntil.set(driveId, deps.now() + FAILED_RETRY_MS); }
+    else stats.sessions++;
+    return s;
+  }
+
+  /** Bytes [start, end] (inclusive, like a Range): device first, server for anything it does not bring; every chunk verified. */
+  async function range(driveId: string, path: string, start: number, endInclusive: number | null): Promise<{ size: number; stream: ReadableStream<Uint8Array> } | null> {
+    const s = await session(driveId, path);
+    if (!s) return null;
+    const { size, leaves } = s.manifest;
+    const end = Math.min(endInclusive ?? size - 1, size - 1);
+    if (start > end) return null;
+    let i = Math.floor(start / C);
+    const last = Math.floor(end / C);
+    const serverUrl = `/api/drives/${encodeURIComponent(driveId)}/fs/stream?path=${encodeURIComponent(path)}&via=server`;
+
+    // the whole chunk from the server, verified like a device chunk (review I2)
+    const fromServer = async (idx: number): Promise<Uint8Array> => {
+      const want = Math.min(C, size - idx * C);
+      const r = await deps.fetch(serverUrl, { headers: { range: `bytes=${idx * C}-${idx * C + want - 1}` } } as RequestInit);
+      if (r.status !== 206) throw new Error(`server answered ${r.status}`);
+      const b = new Uint8Array(await r.arrayBuffer());
+      if (b.length !== want || (await sha256hex(b)) !== leaves[idx]) throw new Error("the file changed while playing");
+      stats.serverBytes += b.length;
+      return b;
+    };
+
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (i > last) { controller.close(); return; }
+        try {
+          const from = Math.max(start - i * C, 0);
+          const to = Math.min(end - i * C, C - 1);
+          const device = s.alive ? await s.chunk(i) : null;
+          const whole = device ?? (await fromServer(i));
+          if (device) stats.p2pBytes += to - from + 1;
+          controller.enqueue(whole.subarray(from, to + 1));
+          i++;
+        } catch (e) {
+          controller.error(e);
+        }
+      },
+    });
+    return { size, stream };
+  }
+
+  return { range, stats };
+}
+
+// ── the browser's instance ───────────────────────────────────────────────────
+
+const stun = () => process.env.NEXT_PUBLIC_AINDRIVE_STUN ?? "stun:stun.l.google.com:19302";
+
+async function openBrowserSession(driveId: string, path: string): Promise<P2PSession | null> {
   const ws = new WebSocket(`${location.origin.replace(/^http/, "ws")}/api/media/rtc?drive=${encodeURIComponent(driveId)}&path=${encodeURIComponent(path)}`);
   const pc = new RTCPeerConnection({ iceServers: stun() ? [{ urls: stun() }] : [] });
   const fail = () => { try { pc.close(); } catch {} try { ws.close(); } catch {} return null; };
@@ -78,63 +161,30 @@ async function openSession(driveId: string, path: string): Promise<P2PSession | 
     ch.onopen = () => { clearTimeout(t); resolve(true); };
   });
   if (!opened) return fail();
-  stats.sessions++;
-  return new P2PSession(ready, pc, ch, ws);
+  return new P2PSession(ready, pc, ch as unknown as Chan, ws);
 }
 
-const open = new Map<string, Promise<P2PSession | null>>();
-async function session(driveId: string, path: string): Promise<P2PSession | null> {
-  if (stats.disabled) return null;
-  const k = `${driveId}\0${path}`;
-  const cur = open.get(k);
-  if (cur) {
-    const s = await cur;
-    if (s?.alive) return s;
-    open.delete(k); // the channel went away: try the direct path again
+let browserP2P: ReturnType<typeof createP2P> | null = null;
+function p2p() {
+  if (!browserP2P) {
+    browserP2P = createP2P({ openSession: openBrowserSession, fetch: (...a) => fetch(...a), now: () => Date.now() });
+    (window as unknown as { __aindriveP2P: unknown }).__aindriveP2P = browserP2P.stats;
   }
-  const p = openSession(driveId, path);
-  open.set(k, p);
-  void p.then((x) => { if (!x) open.delete(k); });
-  return p;
+  return browserP2P;
 }
 
-/** Bytes [start, end] (inclusive, like a Range) of the file: device first, server for anything it does not bring. */
-export async function p2pRange(driveId: string, path: string, start: number, endInclusive: number | null): Promise<{ size: number; stream: ReadableStream<Uint8Array> } | null> {
-  const s = await session(driveId, path);
-  if (!s) return null;
-  const size = s.manifest.size;
-  const end = Math.min(endInclusive ?? size - 1, size - 1);
-  if (start > end) return null;
-  let i = Math.floor(start / C);
-  const last = Math.floor(end / C);
-  const serverUrl = `/api/drives/${encodeURIComponent(driveId)}/fs/stream?path=${encodeURIComponent(path)}&via=server`;
-  const stream = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (i > last) { controller.close(); return; }
-      const from = Math.max(start - i * C, 0);
-      const to = Math.min(end - i * C, C - 1);
-      let bytes: Uint8Array | null = s.alive ? await s.chunk(i) : null;
-      if (bytes) { stats.p2pBytes += to - from + 1; bytes = bytes.subarray(from, to + 1); }
-      else {
-        const r = await fetch(serverUrl, { headers: { range: `bytes=${i * C + from}-${i * C + to}` } });
-        if (!r.ok) { controller.error(new Error(`server ${r.status}`)); return; }
-        bytes = new Uint8Array(await r.arrayBuffer());
-        stats.serverBytes += bytes.length;
-      }
-      controller.enqueue(bytes);
-      i++;
-    },
-  });
-  return { size, stream };
-}
+export const p2pRange = (driveId: string, path: string, start: number, end: number | null) => p2p().range(driveId, path, start, end);
 
-/** The page's side of the service worker bridge: answer "p2p-range" requests. */
+/** The page's side of the service worker bridge: answer "p2p-range", and say yes to "p2p-ping" (a restarted worker asks). */
 export function serveP2PForServiceWorker() {
   if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
+  p2p();
   navigator.serviceWorker.addEventListener("message", async (ev) => {
     const m = ev.data as { type?: string; driveId?: string; path?: string; start?: number; end?: number | null };
     const port = ev.ports[0];
-    if (m?.type !== "p2p-range" || !port || !m.driveId || !m.path) return;
+    if (!port) return;
+    if (m?.type === "p2p-ping") { port.postMessage({ ok: true }); return; }
+    if (m?.type !== "p2p-range" || !m.driveId || !m.path) return;
     try {
       const r = await p2pRange(m.driveId, m.path, m.start ?? 0, m.end ?? null);
       if (!r) { port.postMessage({ ok: false }); return; }

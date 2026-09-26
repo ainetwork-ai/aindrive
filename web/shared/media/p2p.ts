@@ -33,6 +33,10 @@ export function encodePieces(index: number, chunk: Uint8Array): Uint8Array[] {
 /** Collects pieces into whole chunks; throws on a piece that cannot belong to one. */
 export class Reassembler {
   private readonly parts = new Map<number, { total: number; buf: Uint8Array; got: number; seen: Set<number> }>();
+  /** `accept(index)`: only chunks this side asked for (others are dropped, never buffered);
+   *  `maxOpen`: chunks assembling at once (review M4: a device cannot grow tab memory). */
+  constructor(private readonly opts: { accept?: (index: number) => boolean; maxOpen?: number } = {}) {}
+  get openCount() { return this.parts.size; }
 
   push(frame: Uint8Array): { index: number; chunk: Uint8Array } | null {
     if (frame.length < HEADER) throw new Error("short piece");
@@ -41,8 +45,13 @@ export class Reassembler {
     const body = frame.subarray(HEADER);
     if (total > CHUNK_MAX) throw new Error("chunk too large");
     if (offset % PIECE !== 0 || body.length > PIECE || offset + body.length > total) throw new Error("piece outside its chunk");
+    if (this.opts.accept && !this.opts.accept(index)) return null;
     let p = this.parts.get(index);
-    if (!p) { p = { total, buf: new Uint8Array(total), got: 0, seen: new Set() }; this.parts.set(index, p); }
+    if (!p) {
+      if (this.parts.size >= (this.opts.maxOpen ?? 8)) throw new Error("too many chunks at once");
+      p = { total, buf: new Uint8Array(total), got: 0, seen: new Set() };
+      this.parts.set(index, p);
+    }
     if (p.total !== total) throw new Error("piece from a different chunk");
     if (!p.seen.has(offset)) { p.seen.add(offset); p.buf.set(body, offset); p.got += body.length; }
     if (p.got < p.total) return null;
@@ -56,7 +65,8 @@ export class Reassembler {
 
 // ── signalling token: the server vouches that this browser may read this content ──
 
-export type P2PClaim = { drive: string; path: string; root: string; exp: number };
+/** size + mtimeMs let the agent notice a changed file with a stat instead of re-hashing it (review I4). */
+export type P2PClaim = { drive: string; path: string; root: string; exp: number; size: number; mtimeMs: number };
 
 // base64url without Buffer: this module also runs in the browser
 const b64u = (b: Uint8Array) => { let s = ""; for (const x of b) s += String.fromCharCode(x); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
@@ -75,7 +85,7 @@ export function verifyToken(secret: string, token: string, now: number): P2PClai
     const body = unb64u(a);
     if (!equalBytes(sign(secret, body), unb64u(b))) return null;
     const c = JSON.parse(new TextDecoder().decode(body)) as P2PClaim;
-    if (typeof c.drive !== "string" || typeof c.path !== "string" || typeof c.root !== "string" || typeof c.exp !== "number") return null;
+    if (typeof c.drive !== "string" || typeof c.path !== "string" || typeof c.root !== "string" || typeof c.exp !== "number" || typeof c.size !== "number" || typeof c.mtimeMs !== "number") return null;
     return now <= c.exp ? c : null;
   } catch { return null; }
 }

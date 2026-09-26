@@ -29,17 +29,35 @@ const TYPES = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
-  if (req.method !== "GET" || !p2pClients.has(e.clientId)) return;
+  if (req.method !== "GET" || !e.clientId) return;
   const url = new URL(req.url);
+  if (url.origin !== location.origin) return; // review M5
   const m = /^\/api\/drives\/([^/]+)\/fs\/stream$/.exec(url.pathname);
-  if (!m || url.searchParams.has("via") || !url.searchParams.get("path")) return;
-  e.respondWith(p2pOrNetwork(e, decodeURIComponent(m[1]), url.searchParams.get("path")));
+  const path = url.searchParams.get("path");
+  if (!m || url.searchParams.has("via") || !path) return;
+  if (!TYPES[(path.split(".").pop() || "").toLowerCase()]) return; // media only: previews of images etc. never wait on P2P (review I1)
+  e.respondWith(p2pOrNetwork(e, decodeURIComponent(m[1]), path));
 });
+
+// A worker restarted after being idle forgets which pages enabled P2P: ask the page (review I5).
+async function pageDoesP2P(client) {
+  if (p2pClients.has(client.id)) return true;
+  const ch = new MessageChannel();
+  const yes = await new Promise((resolve) => {
+    const t = setTimeout(() => resolve(false), 200);
+    ch.port1.onmessage = (ev) => { clearTimeout(t); resolve(!!ev.data?.ok); };
+    client.postMessage({ type: "p2p-ping" }, [ch.port2]);
+  });
+  if (yes) p2pClients.add(client.id);
+  return yes;
+}
 
 async function p2pOrNetwork(e, driveId, path) {
   const client = await self.clients.get(e.clientId);
-  if (!client) return fetch(e.request);
-  const r = /bytes=(\d+)-(\d*)/.exec(e.request.headers.get("range") || "");
+  if (!client || !(await pageDoesP2P(client))) return fetch(e.request);
+  const range = e.request.headers.get("range") || "";
+  if (range && !/^bytes=\d+-\d*$/.test(range.trim())) return fetch(e.request); // suffix and other forms: the server's grammar (review M5)
+  const r = /bytes=(\d+)-(\d*)/.exec(range);
   const start = r ? Number(r[1]) : 0;
   const end = r && r[2] ? Number(r[2]) : null;
   const ch = new MessageChannel();

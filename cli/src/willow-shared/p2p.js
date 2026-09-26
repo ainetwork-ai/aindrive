@@ -22,7 +22,16 @@ function encodePieces(index, chunk) {
   return out;
 }
 class Reassembler {
+  /** `accept(index)`: only chunks this side asked for (others are dropped, never buffered);
+   *  `maxOpen`: chunks assembling at once (review M4: a device cannot grow tab memory). */
+  constructor(opts = {}) {
+    this.opts = opts;
+  }
+  opts;
   parts = /* @__PURE__ */ new Map();
+  get openCount() {
+    return this.parts.size;
+  }
   push(frame) {
     if (frame.length < HEADER) throw new Error("short piece");
     const v = new DataView(frame.buffer, frame.byteOffset, frame.byteLength);
@@ -30,8 +39,10 @@ class Reassembler {
     const body = frame.subarray(HEADER);
     if (total > CHUNK_MAX) throw new Error("chunk too large");
     if (offset % PIECE !== 0 || body.length > PIECE || offset + body.length > total) throw new Error("piece outside its chunk");
+    if (this.opts.accept && !this.opts.accept(index)) return null;
     let p = this.parts.get(index);
     if (!p) {
+      if (this.parts.size >= (this.opts.maxOpen ?? 8)) throw new Error("too many chunks at once");
       p = { total, buf: new Uint8Array(total), got: 0, seen: /* @__PURE__ */ new Set() };
       this.parts.set(index, p);
     }
@@ -68,7 +79,7 @@ function verifyToken(secret, token, now) {
     const body = unb64u(a);
     if (!equalBytes(sign(secret, body), unb64u(b))) return null;
     const c = JSON.parse(new TextDecoder().decode(body));
-    if (typeof c.drive !== "string" || typeof c.path !== "string" || typeof c.root !== "string" || typeof c.exp !== "number") return null;
+    if (typeof c.drive !== "string" || typeof c.path !== "string" || typeof c.root !== "string" || typeof c.exp !== "number" || typeof c.size !== "number" || typeof c.mtimeMs !== "number") return null;
     return now <= c.exp ? c : null;
   } catch {
     return null;

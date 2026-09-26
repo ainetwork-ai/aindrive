@@ -3,7 +3,7 @@
 // browser receives the text through the server peer. Self-contained: boots its own
 // server, owner, drive and CLI agent, like scenarios/global-setup.mjs.
 import { test, expect, type Browser } from "@playwright/test";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, copyFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -28,6 +28,7 @@ async function until(ok: () => Promise<boolean>, ms: number, what: string) {
 
 test.beforeAll(async () => {
   test.setTimeout(180_000);
+  execFileSync("node", ["scripts/build-willow-peer.mjs"], { cwd: WEB, stdio: "ignore" }); // server.js imports the bundle
   const data = mkdtempSync(join(tmpdir(), "willow-e2e-data-"));
   server = spawn("node", ["server.js"], {
     cwd: WEB,

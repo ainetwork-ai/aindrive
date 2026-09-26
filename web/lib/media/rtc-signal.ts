@@ -39,16 +39,27 @@ export async function onRtcSignal(ws: WebSocket, _req: IncomingMessage, query: R
   const row = db.prepare("SELECT drive_secret FROM drives WHERE id = ?").get(driveId) as { drive_secret: string } | undefined;
   if (!row) { ws.close(4404, "no such drive"); return; }
 
-  let manifest;
+  // registered before any await: a browser that leaves early leaves nothing behind (review M2)
+  let sid: string | null = null, token = "";
+  let closed = false;
+  ws.on("close", () => {
+    closed = true;
+    if (!sid) return;
+    sessions.delete(sid);
+    sendToAgent(driveId, { type: "rtc", sid, token, path, data: { bye: true } });
+  });
+
+  let manifest, stat;
   try {
-    const stat = (await callAgent(driveId, row.drive_secret, { method: "stat", path })) as unknown as { entry: { size: number; mtimeMs: number; isDir: boolean } | null };
-    if (!stat.entry || stat.entry.isDir) { ws.close(4404, "not found"); return; }
-    manifest = await mediaManifest(driveId, row.drive_secret, path, stat.entry);
+    stat = ((await callAgent(driveId, row.drive_secret, { method: "stat", path })) as unknown as { entry: { size: number; mtimeMs: number; isDir: boolean } | null }).entry;
+    if (!stat || stat.isDir) { ws.close(4404, "not found"); return; }
+    manifest = await mediaManifest(driveId, row.drive_secret, path, stat);
   } catch { ws.close(4503, "device unreachable"); return; }
   if (!manifest) { ws.close(4501, "device cannot serve chunks directly"); return; }
+  if (closed) return;
 
-  const sid = randomBytes(12).toString("base64url");
-  const token = mintToken(row.drive_secret, { drive: driveId, path, root: manifest.rootHex, exp: Date.now() + TOKEN_MS });
+  sid = randomBytes(12).toString("base64url");
+  token = mintToken(row.drive_secret, { drive: driveId, path, root: manifest.rootHex, exp: Date.now() + TOKEN_MS, size: stat.size, mtimeMs: stat.mtimeMs });
   sessions.set(sid, { ws, driveId });
   const leaves = Array.from({ length: manifest.outboard.length / 32 }, (_, i) => toHex(manifest.outboard.subarray(i * 32, i * 32 + 32)));
   ws.send(JSON.stringify({ t: "ready", sid, manifest: { size: manifest.size, root: manifest.rootHex, leaves } }));
@@ -56,11 +67,7 @@ export async function onRtcSignal(ws: WebSocket, _req: IncomingMessage, query: R
   ws.on("message", (raw) => {
     let f: { t?: string; data?: unknown };
     try { f = JSON.parse(String(raw)); } catch { return; }
-    if (f.t === "signal") sendToAgent(driveId, { type: "rtc", sid, token, path, data: f.data });
-  });
-  ws.on("close", () => {
-    sessions.delete(sid);
-    sendToAgent(driveId, { type: "rtc", sid, token, path, data: { bye: true } });
+    if (f.t === "signal" && sid) sendToAgent(driveId, { type: "rtc", sid, token, path, data: f.data });
   });
 }
 

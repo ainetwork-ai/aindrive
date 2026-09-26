@@ -1,6 +1,6 @@
 // A self-contained aindrive for E2E: its own server, owner, drive and CLI agent
 // serving a temp folder (the same steps as scenarios/global-setup.mjs).
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -19,6 +19,8 @@ async function until(ok: () => Promise<boolean>, ms: number, what: string) {
 
 export async function startHarness(port: number, files: Record<string, string | Buffer>): Promise<Harness> {
   const base = `http://localhost:${port}`;
+  // server.js imports the bundled Willow/P2P server code: build it from the current sources
+  execFileSync("node", ["scripts/build-willow-peer.mjs"], { cwd: WEB, stdio: "ignore" });
   const data = mkdtempSync(join(tmpdir(), "willow-e2e-data-"));
   const server = spawn("node", ["server.js"], {
     cwd: WEB,
