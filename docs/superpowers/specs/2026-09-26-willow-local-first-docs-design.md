@@ -83,9 +83,12 @@ paths:
   ["_id", "cert"]                      device certificate(s)
   ["_id", "revoke", <deviceKey>]       revocations of this person's other devices
   ["_acl", <grantee userId>]           owner-signed membership grants (role, path prefix, expiry)
-  ["doc", <docPath...>, <seq>]         one Yjs update; payload = the update bytes
-  ["doc", <docPath...>]                this device's compacted snapshot (prunes its own <seq> entries)
+  ["doc", <docPath...>, "~u", <seq>]  one Yjs update; payload = the update bytes
+  ["doc", <docPath...>, "~u"]         this device's compacted snapshot (prunes its own <seq> entries)
 ```
+
+The `"~u"` segment keeps a snapshot from pruning another document whose path starts
+the same (a snapshot of `a` must not remove `a/b`'s updates).
 
 `docPath` is the canonical `normalizePath` result, split into components. Timestamps
 are microseconds (Willow data model), from the device clock, clamped to be
