@@ -919,6 +919,9 @@ async function startShare(share: SharedFolder) {
   const key = shareKey(share);
   busyShares.add(key); render();
   try {
+    // Open for the agent only so far (id "local-…")? Pairing gives it a real drive id: close the local one.
+    const localId = share.drive ? null : localIdOf(share);
+    if (localId && status.drives.some((d) => d.driveId === localId)) { try { status = await AindriveAgent.stop({ driveId: localId }); } catch { /* already gone */ } }
     if (!share.drive) {
       const paired = await pairDrive(state.server, state.sessionCookie, share.folder.label);
       share.drive = {
@@ -1219,7 +1222,7 @@ async function ask(q = askQuery) {
   try {
     // A folder chat asks that folder only (opened for the agent even with P2P off), never other devices.
     const scope = chatScope;
-    if (scope) { const sh = findShare(scope.uri); if (sh) await ensureLocal(sh); }
+    if (scope) { const sh = findShare(scope.uri); if (sh) { await ensureLocal(sh); scope.driveId = localIdOf(sh); } }
     const localRunning = status.drives.some((d) => d.running);
     const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined, driveId: scope?.driveId }) : null;
     // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
@@ -1968,10 +1971,12 @@ function bindSearch() {
   bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
   bind("action-open", () => {
     const a = askResult?.action; if (a?.folder === undefined) return;
+    // By where the folder is on the phone: its id changes when P2P pairs it.
+    const share = (a.folderUri ? findShare(a.folderUri) : undefined) ?? shareByDrive(a.driveId);
+    if (share) { searchOpen = false; void openBrowser(share, a.folder); return; }
     const remote = remotes.find((d) => d.id === a.driveId);
     if (remote) { searchOpen = false; void openRemoteBrowser(remote, a.folder); return; }
-    const share = shareByDrive(a.driveId);
-    if (share) { searchOpen = false; void openBrowser(share, a.folder); }
+    notify("That folder isn't on this phone any more.", true);
   });
 }
 
