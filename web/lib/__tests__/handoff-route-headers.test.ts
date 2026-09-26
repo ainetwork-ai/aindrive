@@ -5,14 +5,20 @@ import { join } from "node:path";
 
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-handoff-route-"));
 
-// Fake device: every handoff-read returns the whole file at once.
+const device = vi.hoisted(() => ({ bytes: Buffer.from("<script>alert(document.cookie)</script>"), offsets: [] as number[] }));
+// Small chunks exercise the actual binary streaming path across RPC boundaries.
+vi.mock("@/lib/agent-stream", () => ({ DOWNLOAD_CHUNK_BYTES: 7 }));
 vi.mock("@/lib/rpc", () => {
   class AgentError extends Error {
     status: number;
     constructor(msg: string, status = 502) { super(msg); this.status = status; }
   }
-  const bytes = Buffer.from("<script>alert(document.cookie)</script>");
-  return { AgentError, callAgent: async () => ({ data: bytes.toString("base64"), eof: true, size: bytes.length }) };
+  return { AgentError, callAgent: async (_drive: string, _secret: string, params: { method: string; offset: number; length: number }) => {
+    expect(params.method).toBe("handoff-read");
+    device.offsets.push(params.offset);
+    const chunk = device.bytes.subarray(params.offset, params.offset + params.length);
+    return { data: chunk.toString("base64"), eof: params.offset + chunk.length >= device.bytes.length, size: device.bytes.length };
+  } };
 });
 
 const { db } = await import("../db.js");
@@ -27,7 +33,7 @@ db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)"
 db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run("d-h", "u-h", "Phone", "h", "s");
 
 async function fetchAs(mime: string, name: string) {
-  const [l] = createHandoffs("u-h", "d-h", [{ deviceKey: name.padEnd(20, "x"), name, mime, size: 38 }], "Agent", 600);
+  const [l] = createHandoffs("u-h", "d-h", [{ deviceKey: name.padEnd(20, "x"), name, mime, size: device.bytes.length }], "Agent", 600);
   return GET(new Request(`http://x/api/h/${l.id}?k=${l.secret}`), { params: Promise.resolve({ id: l.id }) });
 }
 
@@ -58,6 +64,25 @@ describe("GET /api/h/:id — the creator's mime never runs on our origin", () =>
     const res = await fetchAs("image/svg+xml", "logo.svg");
     expect(res.headers.get("content-type")).toBe("image/svg+xml");
     expect(res.headers.get("content-security-policy")).toBe("sandbox");
+  });
+});
+
+describe("binary handoff downloads", () => {
+  it.each([
+    ["image/jpeg", "photo.jpg", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 0x80, 0xfe, 0xff, 0xd9])],
+    ["application/pdf", "notes.pdf", Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.from([0, 0xff, 0x80, 0xfe]), Buffer.from("\n%%EOF")])],
+  ])("returns %s bytes intact over multiple chunks without a session", async (mime, name, bytes) => {
+    const original = device.bytes;
+    device.bytes = bytes;
+    device.offsets = [];
+    try {
+      const response = await fetchAs(mime, name);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe(mime);
+      expect(response.headers.get("content-length")).toBe(String(bytes.length));
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+      expect(device.offsets).toEqual(Array.from({ length: Math.ceil(bytes.length / 7) }, (_, i) => i * 7));
+    } finally { device.bytes = original; }
   });
 });
 

@@ -18,6 +18,14 @@ Read **all** `message.parts`, not just the first text part:
   Entries contain `name`, `path`, `isDir`, `size`, `mime`. This is a snapshot of
   direct children (up to 200), not a recursive filesystem or a read grant.
 - `kind: "file"`: `file.uri`, `file.name`, `file.mimeType` for each granted file.
+  Photos and PDFs are included too, alongside the MCP data part. For example:
+  `{ "kind": "file", "file": { "uri": "https://<drive-host>/api/h/<id>?k=<secret>",
+  "name": "photo.jpg", "mimeType": "image/jpeg" } }`.
+  GET the full URI, preserving `?k=...`; no account session or MCP bearer is
+  needed for this link. The response is binary (`image/jpeg`, `application/pdf`,
+  etc.), not JSON or base64 text. The server decodes the native RPC's base64
+  chunks before streaming the original bytes. Use the file URI for PDFs/images;
+  MCP `read_file` remains text-only. Treat the link as a secret and do not log it.
 - `kind: "data"`, `metadata.type: "ai.aindrive/handoff-mcp"`:
   `data.mcpServers[]` contains `url`, `transport: "streamable-http"`,
   `headers.Authorization`, `expiresAt`, and the tool names. Register this server
@@ -52,3 +60,10 @@ question, empty/directories-only folders, bounded listings, failures and the
 unchanged search-result wire contract. Actual cloud responses require the
 receiver to consume the contract above; local payload tests do not prove that
 its production deployment does so.
+
+Binary regression coverage: the SDK transport test includes JPEG and PDF
+FileParts together with MCP. `web/lib/__tests__/handoff-route-headers.test.ts`
+checks exact binary bytes and MIME types across multiple simulated device RPC
+chunks. Run it with `npx vitest run lib/__tests__/handoff-route-headers.test.ts`
+in `web/`. These are local tests, not confirmation of an installed app or the
+production cloud consumer.

@@ -101,12 +101,20 @@ test('official A2A SDK sends all parts and keeps MCP credentials out of the agen
   };
   try {
     const card = { name: 'Mock cloud', description: 'Test', url: 'https://cloud.test/a2a', version: '1', protocolVersion: '0.3.0', capabilities: {}, defaultInputModes: ['text/plain'], defaultOutputModes: ['text/plain'], skills: [] };
-    const handed = await prepareFolderHandoff({ uri: 'local-folder', label: 'Folder' }, async () => ({ entries: [entry('a.txt')] }), async () => ({ files: [], mcp }));
+    const binaryFiles = [
+      { uri: 'https://drive.test/api/h/photo?k=photo-key', name: 'photo.jpg', mimeType: 'image/jpeg' },
+      { uri: 'https://drive.test/api/h/pdf?k=pdf-key', name: 'notes.pdf', mimeType: 'application/pdf' },
+    ];
+    const handed = await prepareFolderHandoff({ uri: 'local-folder', label: 'Folder' }, async () => ({ entries: binaryFiles.map(f => ({ ...entry(f.name), mime: f.mimeType })) }), async picked => {
+      assert.deepEqual(picked.map(f => f.path), ['photo.jpg', 'notes.pdf']);
+      return { files: binaryFiles, mcp };
+    });
     const reply = await send({ id: 'test', source: card.url, url: card.url, name: card.name, skills: [], card, enabled: true, addedAt: 1 }, "what's in this folder?", 'conversation', undefined, handed);
     assert.equal(outgoing.method, 'message/send');
     assert.equal(outgoing.params.message.contextId, 'conversation');
     assert.ok(outgoing.params.message.parts.some(p => p.metadata?.type === HANDOFF_MCP_PART));
     assert.ok(outgoing.params.message.parts.some(p => p.metadata?.type === 'ai.aindrive/folder-context'));
+    assert.deepEqual(outgoing.params.message.parts.filter(p => p.kind === 'file').map(p => p.file), binaryFiles);
     assert.equal(reply.text, 'Listed the folder');
   } finally { globalThis.fetch = original; }
 });
