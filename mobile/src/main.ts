@@ -89,7 +89,7 @@ let askQuery = "";
 let askResult: AskResult | null = null;
 /** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
 interface HandoffLink { id: string; name: string; expiresAt: string; revoked?: boolean }
-interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Files handed to the A2A agent as links (revocable). */ handoffs?: HandoffLink[]; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
+interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Being written by an A2A agent right now (streamed). */ streaming?: boolean; /** Files handed to the A2A agent as links (revocable). */ handoffs?: HandoffLink[]; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
 /** A2A agents added to this chat, next to the on-device agent (which is always here). */
 let a2aAgents: A2aAgent[] = [];
 /** Each agent's A2A conversation id for this thread, so it keeps context. */
@@ -308,11 +308,44 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
 }
 
 /** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
-async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }): Promise<{ answer: string; errors: string[] }> {
+/**
+ * A turn that shows up on the first streamed chunk and grows in place: the text is patched in the DOM
+ * (no re-render per chunk) and kept on the Turn, so a re-render mid-stream shows the same text.
+ */
+function liveTurn(q: string, via: string, handoffs?: HandoffLink[]) {
+  let turn: Turn | null = null;
+  const ensure = () => {
+    if (turn) return turn;
+    turn = { q, r: { answer: "", sources: [], query: "a2a" }, at: Date.now(), via, streaming: true, ...(handoffs?.length ? { handoffs } : {}) };
+    thread.push(turn); render();
+    return turn;
+  };
+  return {
+    update(text: string) {
+      const t = ensure();
+      t.r!.answer = text;
+      const el = document.querySelector<HTMLElement>(".turn.last .answer");
+      if (el) { el.textContent = text; el.scrollIntoView?.({ block: "end" }); }
+    },
+    finish(r: { answer: string; errors: string[] }) {
+      const t = ensure();
+      t.streaming = false;
+      t.r = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
+      if (!r.answer) t.error = r.errors.join("\n");
+      askResult = t.r;
+      return t;
+    },
+  };
+}
+
+async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }, onDelta?: (answer: string) => void): Promise<{ answer: string; errors: string[] }> {
+  // Partial replies per agent, composed like the final answer, so the live turn reads like the finished one.
+  const partial = new Map<string, string>();
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
-      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed);
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed,
+        onDelta && ((t) => { partial.set(agent.id, agents.length > 1 ? `${agent.name}: ${t}` : t); onDelta(agents.map((a) => partial.get(a.id)).filter(Boolean).join("\n\n")); }));
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
@@ -1447,9 +1480,10 @@ async function ask(q = askQuery) {
     if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
     try {
-      const r = await askA2a([direct.agent], direct.text, handed);
-      askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
-      thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(handed.links.length ? { handoffs: handed.links } : {}), ...(r.answer ? {} : { error: r.errors.join("\n") }) });
+      const live = liveTurn(q, direct.agent.name, handed.links);
+      live.update(`Calling @${handleOf(direct.agent)}…`);   // shown at once; replaced by the first streamed chunk, or the whole reply
+      const r = await askA2a([direct.agent], direct.text, handed, (t) => live.update(t));
+      live.finish(r);
     } finally { askBusy = false; askQuery = ""; await saveThread(); render(); }
     return;
   }
@@ -1511,13 +1545,37 @@ async function ask(q = askQuery) {
         catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
         if (!handed) return;
       }
-      const r = await askA2a(to, q, handed);
+      const live = liveTurn(q, to.map((x) => x.name).join(", "), handed?.links);
+      const r = await askA2a(to, q, handed, (t) => live.update(t));
       if (r.answer) {
-        askResult = { answer: r.answer, sources: [], query: "a2a" };
-        thread.push({ q, r: askResult, at: Date.now(), via: to.map((x) => x.name).join(", "), ...(handed?.links.length ? { handoffs: handed.links } : {}) });
+        live.finish(r);
         askQuery = ""; await saveThread();
         return;
       }
+    }
+    // The on-device agent could not answer — nothing to show and nothing done (an empty index, no
+    // match, a folder it can't read): the owner asked that every such turn go to aindrive-cloud, with
+    // this device's answer as context and, in a folder chat, that folder's files as handoff links.
+    const cloud = fallbackAgents();
+    if (cloud.length && local && !merged.sources.length && !merged.action && merged.query !== "chat" && merged.query !== "out") {
+      thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
+      let handed: Awaited<ReturnType<typeof handoffPicked>> = null;
+      if (scope && cloud.length === 1) {
+        const sh = findShare(scope.uri);
+        if (sh) {
+          try {
+            const listed = await AindriveAgent.listFolder({ folderUri: sh.folder.uri, path: "" });
+            const picked = (listed.entries ?? []).filter((e) => !e.isDir).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, HANDOFF_MAX).map((e) => ({ folderUri: sh.folder.uri, path: e.path }));
+            if (picked.length) handed = await handoffPicked(cloud[0], picked);
+          } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
+        }
+      }
+      const live = liveTurn(q, cloud.map((x) => x.name).join(", "), handed?.links);
+      live.update(`Calling @${handleOf(cloud[0])}…`);
+      const r = await askA2a(cloud, `${q}\n\n(The on-device agent could not answer; it said: ${merged.answer})`, handed ?? { files: [] }, (t) => live.update(t));
+      live.finish(r);
+      askQuery = ""; await saveThread();
+      return;
     }
     thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
     askQuery = "";
