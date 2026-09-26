@@ -1,0 +1,1477 @@
+{
+ "today": "2026-09-27",
+ "dialogues": [
+  {
+   "dialogue_id": "llm_holdout_00000",
+   "turns": [
+    {
+     "utterance": "what's in this folder?",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "and how many of those are videos",
+     "route": "files",
+     "intent": "CountFiles",
+     "state": {
+      "kind": "video",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00001",
+   "turns": [
+    {
+     "utterance": "can you show me what this folder has",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "just the PDFs please",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "pdf",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00002",
+   "turns": [
+    {
+     "utterance": "is there anything in here from Tokyo?",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": "Tokyo",
+      "country": "JP",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00003",
+   "turns": [
+    {
+     "utterance": "give me a rundown of this folder",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "thanks, that's all",
+     "route": "chat",
+     "intent": "Chat",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00004",
+   "turns": [
+    {
+     "utterance": "anything from Sam's wedding?",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "wedding"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00005",
+   "turns": [
+    {
+     "utterance": "got any pictures of the beach",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "beach"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "the ones from last summer",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2025-06-01",
+      "date_to": "2025-09-01",
+      "content": [
+       "beach"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00006",
+   "turns": [
+    {
+     "utterance": "I'm looking for that contract we signed in March",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "document",
+      "city": null,
+      "country": null,
+      "date_from": "2026-03-01",
+      "date_to": "2026-04-01",
+      "content": [
+       "contract"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00007",
+   "turns": [
+    {
+     "utterance": "where did the receipts from the Lisbon trip end up",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": "Lisbon",
+      "country": "PT",
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "receipt"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00008",
+   "turns": [
+    {
+     "utterance": "I know there's a sunset shot from Bali somewhere",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": "ID",
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "sunset"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00009",
+   "turns": [
+    {
+     "utterance": "did I ever save the invoice from the plumber",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "invoice"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00010",
+   "turns": [
+    {
+     "utterance": "remind me what videos I took in Kyoto",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": "Kyoto",
+      "country": "JP",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00011",
+   "turns": [
+    {
+     "utterance": "there should be a recording of the budget call",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "audio",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "budget"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00012",
+   "turns": [
+    {
+     "utterance": "pull up whatever I have from Barcelona",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": "Barcelona",
+      "country": "ES",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "only the videos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": "Barcelona",
+      "country": "ES",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00013",
+   "turns": [
+    {
+     "utterance": "any chance you have the passport scan",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "passport"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00014",
+   "turns": [
+    {
+     "utterance": "pics from the week before this one",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-14",
+      "date_to": "2026-09-21",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00015",
+   "turns": [
+    {
+     "utterance": "everything I shot this past summer",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": "2026-06-01",
+      "date_to": "2026-09-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00016",
+   "turns": [
+    {
+     "utterance": "screenshots from earlier this week",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "screenshot",
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-21",
+      "date_to": "2026-09-28",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00017",
+   "turns": [
+    {
+     "utterance": "what did I photograph over the weekend",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-19",
+      "date_to": "2026-09-21",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00018",
+   "turns": [
+    {
+     "utterance": "photos from the winter before this one",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2025-12-01",
+      "date_to": "2026-03-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00019",
+   "turns": [
+    {
+     "utterance": "the December photos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2025-12-01",
+      "date_to": "2026-01-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00020",
+   "turns": [
+    {
+     "utterance": "videos from back in 2023",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": null,
+      "country": null,
+      "date_from": "2023-01-01",
+      "date_to": "2024-01-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00021",
+   "turns": [
+    {
+     "utterance": "anything from yesterday evening",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-26",
+      "date_to": "2026-09-27",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00022",
+   "turns": [
+    {
+     "utterance": "all the spreadsheets I made this year",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "spreadsheet",
+      "city": null,
+      "country": null,
+      "date_from": "2026-01-01",
+      "date_to": "2027-01-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00023",
+   "turns": [
+    {
+     "utterance": "stuff from three days ago",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-24",
+      "date_to": "2026-09-25",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00024",
+   "turns": [
+    {
+     "utterance": "photos from the spring of 2025",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2025-03-01",
+      "date_to": "2025-06-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00025",
+   "turns": [
+    {
+     "utterance": "show me the pictures from when we were in Prague",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Prague",
+      "country": "CZ",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00026",
+   "turns": [
+    {
+     "utterance": "what did I film on the Hanoi trip",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": "Hanoi",
+      "country": "VN",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00027",
+   "turns": [
+    {
+     "utterance": "the Vancouver stuff from last year",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": "Vancouver",
+      "country": "CA",
+      "date_from": "2025-01-01",
+      "date_to": "2026-01-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00028",
+   "turns": [
+    {
+     "utterance": "I want to see my Japan photos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": "JP",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "the Osaka ones only",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Osaka",
+      "country": "JP",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00029",
+   "turns": [
+    {
+     "utterance": "temple pictures from Taipei",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Taipei",
+      "country": "TW",
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "temple"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00030",
+   "turns": [
+    {
+     "utterance": "snow photos from Zürich this winter",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Zürich",
+      "country": "CH",
+      "date_from": "2025-12-01",
+      "date_to": "2026-03-01",
+      "content": [
+       "snow"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00031",
+   "turns": [
+    {
+     "utterance": "recordings from the Berlin meetings",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "audio",
+      "city": "Berlin",
+      "country": "DE",
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "meeting"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00032",
+   "turns": [
+    {
+     "utterance": "how much stuff do I have from Bangkok",
+     "route": "files",
+     "intent": "CountFiles",
+     "state": {
+      "kind": null,
+      "city": "Bangkok",
+      "country": "TH",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00033",
+   "turns": [
+    {
+     "utterance": "do I have more than ten videos from Osaka?",
+     "route": "files",
+     "intent": "CountFiles",
+     "state": {
+      "kind": "video",
+      "city": "Osaka",
+      "country": "JP",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00034",
+   "turns": [
+    {
+     "utterance": "count the screenshots from last month",
+     "route": "files",
+     "intent": "CountFiles",
+     "state": {
+      "kind": "screenshot",
+      "city": null,
+      "country": null,
+      "date_from": "2026-08-01",
+      "date_to": "2026-09-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00035",
+   "turns": [
+    {
+     "utterance": "what's the number of PDFs in here",
+     "route": "files",
+     "intent": "CountFiles",
+     "state": {
+      "kind": "pdf",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00036",
+   "turns": [
+    {
+     "utterance": "put the Sydney photos together somewhere",
+     "route": "files",
+     "intent": "CollectFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Sydney",
+      "country": "AU",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00037",
+   "turns": [
+    {
+     "utterance": "gather up all the dog pictures",
+     "route": "files",
+     "intent": "CollectFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "dog"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "and send me a link to it",
+     "route": "files",
+     "intent": "ShareFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "dog"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00038",
+   "turns": [
+    {
+     "utterance": "make me a set of the whiteboard photos from this week",
+     "route": "files",
+     "intent": "CollectFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-21",
+      "date_to": "2026-09-28",
+      "content": [
+       "whiteboard"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00039",
+   "turns": [
+    {
+     "utterance": "I want the Chicago videos in one place",
+     "route": "files",
+     "intent": "CollectFiles",
+     "state": {
+      "kind": "video",
+      "city": "Chicago",
+      "country": "US",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00040",
+   "turns": [
+    {
+     "utterance": "get the recipes together so I can pass them on",
+     "route": "files",
+     "intent": "ShareFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "recipe"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00041",
+   "turns": [
+    {
+     "utterance": "bundle the August receipts and give me a link",
+     "route": "files",
+     "intent": "ShareFiles",
+     "state": {
+      "kind": null,
+      "city": null,
+      "country": null,
+      "date_from": "2026-08-01",
+      "date_to": "2026-09-01",
+      "content": [
+       "receipt"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00042",
+   "turns": [
+    {
+     "utterance": "move the Singapore screenshots out into their own folder",
+     "route": "files",
+     "intent": "MoveFiles",
+     "state": {
+      "kind": "screenshot",
+      "city": "Singapore",
+      "country": "SG",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00043",
+   "turns": [
+    {
+     "utterance": "get rid of the screenshots from yesterday",
+     "route": "files",
+     "intent": "DeleteFiles",
+     "state": {
+      "kind": "screenshot",
+      "city": null,
+      "country": null,
+      "date_from": "2026-09-26",
+      "date_to": "2026-09-27",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00044",
+   "turns": [
+    {
+     "utterance": "the five biggest videos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 5,
+      "oldest": false,
+      "largest": true
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00045",
+   "turns": [
+    {
+     "utterance": "my oldest photos from London",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "London",
+      "country": "GB",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": true,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00046",
+   "turns": [
+    {
+     "utterance": "just the three most recent PDFs",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "pdf",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 3,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00047",
+   "turns": [
+    {
+     "utterance": "what's the earliest thing I have from Paris",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": null,
+      "city": "Paris",
+      "country": "FR",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": true,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00048",
+   "turns": [
+    {
+     "utterance": "fotos frm tokyo",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Tokyo",
+      "country": "JP",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00049",
+   "turns": [
+    {
+     "utterance": "vids amsterdam",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": "Amsterdam",
+      "country": "NL",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00050",
+   "turns": [
+    {
+     "utterance": "cat pics",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "cat"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00051",
+   "turns": [
+    {
+     "utterance": "resume pdf",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "pdf",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "resume"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00052",
+   "turns": [
+    {
+     "utterance": "my desk at work is such a mess, any tips?",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00053",
+   "turns": [
+    {
+     "utterance": "do you like photography?",
+     "route": "chat",
+     "intent": "Chat",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00054",
+   "turns": [
+    {
+     "utterance": "what camera should I buy for travel photos",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00055",
+   "turns": [
+    {
+     "utterance": "can you book a table for four tonight",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00056",
+   "turns": [
+    {
+     "utterance": "how do I share my screen in a video call",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00057",
+   "turns": [
+    {
+     "utterance": "write me a caption for my beach photo",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00058",
+   "turns": [
+    {
+     "utterance": "you're pretty good at this",
+     "route": "chat",
+     "intent": "Chat",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00059",
+   "turns": [
+    {
+     "utterance": "is it going to rain in Tokyo tomorrow",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00060",
+   "turns": [
+    {
+     "utterance": "hey",
+     "route": "chat",
+     "intent": "Chat",
+     "state": null
+    },
+    {
+     "utterance": "photos from Seoul in August",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "Seoul",
+      "country": "KR",
+      "date_from": "2026-08-01",
+      "date_to": "2026-09-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "what about videos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "video",
+      "city": "Seoul",
+      "country": "KR",
+      "date_from": "2026-08-01",
+      "date_to": "2026-09-01",
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "perfect, thank you",
+     "route": "chat",
+     "intent": "Chat",
+     "state": null
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00061",
+   "turns": [
+    {
+     "utterance": "what time is it in New York",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    },
+    {
+     "utterance": "actually, show me my New York photos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": "New York City",
+      "country": "US",
+      "date_from": null,
+      "date_to": null,
+      "content": [],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00062",
+   "turns": [
+    {
+     "utterance": "wedding photos",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "wedding"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    },
+    {
+     "utterance": "who should I invite to mine?",
+     "route": "out",
+     "intent": "OutOfScope",
+     "state": null
+    },
+    {
+     "utterance": "back to the photos — just the ones from Italy",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "photo",
+      "city": null,
+      "country": "IT",
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "wedding"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  },
+  {
+   "dialogue_id": "llm_holdout_00063",
+   "turns": [
+    {
+     "utterance": "who did I talk to the most this month",
+     "route": "calls",
+     "intent": "CallReport",
+     "state": null
+    },
+    {
+     "utterance": "and the recordings with the bank",
+     "route": "files",
+     "intent": "FindFiles",
+     "state": {
+      "kind": "audio",
+      "city": null,
+      "country": null,
+      "date_from": null,
+      "date_to": null,
+      "content": [
+       "bank"
+      ],
+      "limit": 0,
+      "oldest": false,
+      "largest": false
+     }
+    }
+   ]
+  }
+ ]
+}
