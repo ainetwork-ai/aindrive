@@ -138,7 +138,7 @@ describe("account scopes drives:write / drives:sell", () => {
     expect(pair.scope).toBe("profile drives:write drives:sell");
     expect(acct.verifyAccountToken(pair.access_token)?.scopes).toEqual(["profile", "drives:write", "drives:sell"]);
     const meta = await asMetaRoute.GET().json();
-    expect(meta.scopes_supported).toEqual(["drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell"]);
+    expect(meta.scopes_supported).toEqual(["drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell", "wallet:pay"]);
   });
 });
 

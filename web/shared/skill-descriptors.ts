@@ -16,6 +16,10 @@ export const SALE_SKILL_NAMES = [
   "list_receipts",
 ] as const;
 
+/** Pay tools: the account's agent wallet signs and the server's facilitator
+ *  settles x402 payments (lib/x402-pay-skills.ts). No drive involved. */
+export const PAY_SKILL_NAMES = ["x402_wallet", "x402_sign", "x402_settle"] as const;
+
 export const SKILL_NAMES = [
   "list_drives",
   "list_files",
@@ -25,6 +29,7 @@ export const SKILL_NAMES = [
   "stat",
   "search",
   ...SALE_SKILL_NAMES,
+  ...PAY_SKILL_NAMES,
 ] as const;
 
 /** Skills that change the drive: editor role, and never under a read scope. */
@@ -32,14 +37,20 @@ export const MUTATING: readonly string[] = ["write_file", "delete_path"];
 
 export type SkillName = (typeof SKILL_NAMES)[number];
 export type SaleSkillName = (typeof SALE_SKILL_NAMES)[number];
+export type PaySkillName = (typeof PAY_SKILL_NAMES)[number];
 
 export function isSaleSkill(name: string): name is SaleSkillName {
   return (SALE_SKILL_NAMES as readonly string[]).includes(name);
 }
 
-/** What a skill needs from a grant: read, write (mutating file ops) or sell. */
-export function skillGroup(name: SkillName): "read" | "write" | "sell" {
+export function isPaySkill(name: string): name is PaySkillName {
+  return (PAY_SKILL_NAMES as readonly string[]).includes(name);
+}
+
+/** What a skill needs from a grant: read, write (mutating file ops), sell or pay. */
+export function skillGroup(name: SkillName): "read" | "write" | "sell" | "pay" {
   if (isSaleSkill(name)) return "sell";
+  if (isPaySkill(name)) return "pay";
   return MUTATING.includes(name) ? "write" : "read";
 }
 
@@ -244,7 +255,52 @@ export const SALE_SKILL_DESCRIPTORS: SkillDescriptor[] = [
  * delete_path) under a read scope, and the sale tools only with `sell` —
  * clients should not be offered a tool that always fails.
  */
-export function driveScopedDescriptors(scope: "read" | "write", opts: { sell?: boolean } = {}): SkillDescriptor[] {
+/**
+ * Pay tools — no drive; offered to a session (legacy /mcp) or an account grant
+ * with `wallet:pay`, and only while the server has agent wallets on. Shapes
+ * are x402 v2's so a caller can use them in place of a facilitator.
+ */
+export const PAY_SKILL_DESCRIPTORS: SkillDescriptor[] = [
+  {
+    name: "x402_wallet",
+    description: "The account's agent wallet address — where x402 payments it makes come from, and where it can be paid.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "x402_sign",
+    description:
+      "Sign an x402 v2 'exact' payment (EIP-3009 transferWithAuthorization) for the given paymentRequirements with the account's agent wallet. " +
+      "Returns { paymentPayload } to send as the PAYMENT-SIGNATURE header (base64 JSON).",
+    inputSchema: {
+      type: "object",
+      required: ["paymentRequirements"],
+      properties: {
+        x402Version: { type: "integer", const: 2 },
+        paymentRequirements: {
+          type: "object",
+          description: "one entry of the 402's `accepts` (scheme exact, network eip155:<id>, asset, payTo, amount, extra.name/version)",
+        },
+        resource: { type: "object", description: "the 402's `resource` ({ url, … }), echoed into the payload" },
+      },
+    },
+  },
+  {
+    name: "x402_settle",
+    description:
+      "Verify and settle an x402 v2 payment through this server's facilitator. " +
+      "Returns the facilitator's settle reply: { success, transaction, network, payer } or { success: false, errorReason }.",
+    inputSchema: {
+      type: "object",
+      required: ["paymentPayload", "paymentRequirements"],
+      properties: {
+        paymentPayload: { type: "object", description: "the decoded PAYMENT-SIGNATURE payload" },
+        paymentRequirements: { type: "object", description: "the requirements it was signed for" },
+      },
+    },
+  },
+];
+
+export function driveScopedDescriptors(scope: "read" | "write", opts: { sell?: boolean; pay?: boolean } = {}): SkillDescriptor[] {
   const fileTools = SKILL_DESCRIPTORS
     .filter((d) => d.name !== "list_drives" && (scope === "write" || !MUTATING.includes(d.name)))
     .map((d) => {
@@ -259,7 +315,7 @@ export function driveScopedDescriptors(scope: "read" | "write", opts: { sell?: b
         },
       };
     });
-  return opts.sell ? [...fileTools, ...SALE_SKILL_DESCRIPTORS] : fileTools;
+  return [...fileTools, ...(opts.sell ? SALE_SKILL_DESCRIPTORS : []), ...(opts.pay ? PAY_SKILL_DESCRIPTORS : [])];
 }
 
 export function isSkillName(s: string): s is SkillName {

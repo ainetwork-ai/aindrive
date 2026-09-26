@@ -94,6 +94,7 @@ const ACCOUNT_SCOPE_LINES: Record<AccountScope, string[]> = {
   "drives:read": ["List your drives", "Read files in your drives (read-only)"],
   "drives:write": ["Upload and delete files in your drives"],
   "drives:sell": ["List files for sale, set prices and your payout wallet, and read your sales"],
+  "wallet:pay": ["Pay with your agent wallet (x402) — sign and settle payments as you"],
 };
 
 /** Consent for an account grant ("Sign in with aindrive"): no drive; lists every requested scope. */

@@ -95,6 +95,34 @@ For third-party web apps: one token pair for the user, not one drive.
 - Connected apps: `GET /api/oauth/account-tokens`, `DELETE /api/oauth/account-tokens/[id]`
   (session + same-origin). There is no UI for this yet.
 
+## Pay tools (x402) — `lib/x402-pay-skills.ts`, `lib/agent-wallets.ts`
+
+aindrive as an x402 **client and facilitator front** for an account, so an
+app acting as the account (ainmem's pocket-money gift, an agent buying a
+file) pays without holding a key:
+
+| Tool | In | Out |
+|------|----|-----|
+| `x402_wallet` | `{}` | `{ address, kind: "agent" }` |
+| `x402_sign` | `{ x402Version: 2, paymentRequirements, resource? }` | `{ paymentPayload }` (EIP-3009 `exact`, signed by the agent wallet) |
+| `x402_settle` | `{ paymentPayload, paymentRequirements }` | the facilitator's settle reply: `{ success, transaction, network, payer }` or `{ success: false, errorReason }` |
+
+Shapes are x402 v2's, so a caller drops them in where it would call a
+facilitator. Settlement uses the same facilitator resolution as paid shares
+(`lib/x402-facilitator.ts`: `AINDRIVE_X402_FACILITATOR` → CDP keys → x402.org
+on testnet; `AINDRIVE_DEV_BYPASS_X402=1` for demos).
+
+- **Agent wallet** = a custodial "pocket-money" key per account (table
+  `agent_wallets`, AES-GCM under the session secret), made on first use. It is
+  NOT the identity wallet (`account_wallets`, SIWE, self-custodial). Fund it
+  with what an agent may spend.
+- **Off by default.** `AINDRIVE_AGENT_WALLETS=1` turns it on; until then the
+  tools are not listed anywhere, so a client that looks for `x402_*` in
+  `tools/list` learns whether it can pay here.
+- **Who gets them**: a session on the legacy `/mcp` (the whole account), or an
+  account grant with the `wallet:pay` scope on `/mcp/d/[driveId]`. PATs and
+  drive-scoped OAuth never do.
+
 ## Guards in runSkill (every MCP call)
 
 - The path is canonicalized once (`normalizePath`); that same string feeds the access check, paywall and agent call.

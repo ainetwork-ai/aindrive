@@ -20,6 +20,7 @@ import { maxRoleInDrive, verifyMcpToken } from "@/lib/mcp-tokens";
 import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "@/lib/account-tokens";
 import { MCP_CORS, bearerFrom, serveMcp } from "@/lib/mcp-http";
 import { driveScopedDescriptors, skillGroup } from "@/shared/agent-skills";
+import { agentWalletsEnabled } from "@/lib/agent-wallets";
 
 type Ctx = { params: Promise<{ driveId: string }> };
 
@@ -48,7 +49,7 @@ function forbidden(description: string): Response {
   );
 }
 
-const GROUP_SCOPE = { read: "drives:read", write: "drives:write", sell: "drives:sell" } as const;
+const GROUP_SCOPE = { read: "drives:read", write: "drives:write", sell: "drives:sell", pay: "wallet:pay" } as const;
 
 /**
  * Account grant on any drive the user belongs to. Only the tools of the
@@ -58,13 +59,14 @@ function handleAccountToken(req: Request, driveId: string, bearer: string): Prom
   const token = verifyAccountToken(bearer);
   if (!token) return unauthorized(driveId, "invalid_token", "token is invalid, expired or revoked");
   const has = (g: keyof typeof GROUP_SCOPE) => token.scopes.includes(GROUP_SCOPE[g]);
-  if (!has("read") && !has("write") && !has("sell")) {
-    return forbidden("token lacks a drives:read, drives:write or drives:sell scope");
+  if (!has("read") && !has("write") && !has("sell") && !has("pay")) {
+    return forbidden("token lacks a drives:read, drives:write, drives:sell or wallet:pay scope");
   }
   if (maxRoleInDrive(driveId, token.userId) === "none") return forbidden("the account has no access to this drive");
   const scope = has("write") ? "write" : "read";
-  const tools = driveScopedDescriptors(scope, { sell: has("sell") }).filter((t) => has(skillGroup(t.name)));
-  return serveMcp(req, { userId: token.userId, driveId, scope, sell: has("sell") }, tools);
+  const pay = has("pay") && agentWalletsEnabled();
+  const tools = driveScopedDescriptors(scope, { sell: has("sell"), pay }).filter((t) => has(skillGroup(t.name)));
+  return serveMcp(req, { userId: token.userId, driveId, scope, sell: has("sell"), pay }, tools);
 }
 
 async function handle(req: Request, { params }: Ctx) {
