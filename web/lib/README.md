@@ -75,7 +75,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - Identity: `session.ts` (session JWT cookie).
 - Observability: `logger.js`, `trace.js` (stdout + ring buffer).
 - Guards/limits: `rate-limit.js`, `limits.ts` (drives-per-account cap, `AINDRIVE_UNLIMITED_OWNERS` storage-cap exemption).
-- Helpers: `path.js`, `mime.ts`, `zod-helpers.ts` (`zPath`), `sort-entries.ts`, `api-client.ts`, `wagmi-config.ts`, `eip6963-uuid-guard.ts` (stabilises misbehaving wallet-extension announces so the picker lists each wallet once).
+- Helpers: `path.js`, `mime.ts`, `served-bytes.ts` (the only way a route serves user-typed bytes inline — fs/stream, /api/h), `zod-helpers.ts` (`zPath`), `sort-entries.ts`, `api-client.ts`, `wagmi-config.ts`, `eip6963-uuid-guard.ts` (stabilises misbehaving wallet-extension announces so the picker lists each wallet once).
 
 ## Contracts & invariants
 

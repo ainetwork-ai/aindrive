@@ -4,6 +4,7 @@ import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind } from "@/lib/mime";
 import { agentByteStream } from "@/lib/agent-stream";
+import { servedBytesHeaders } from "@/lib/served-bytes";
 
 /**
  * GET /api/drives/:driveId/fs/stream?path=...
@@ -16,23 +17,10 @@ import { agentByteStream } from "@/lib/agent-stream";
  *
  * Same viewer+ gate as fs/read. The "save to disk" twin is fs/download.
  *
- * XSS containment: this URL renders INLINE on the app origin, and uploads
- * come from any editor — serving text/html (or script-bearing SVG) verbatim
- * would hand them same-origin script execution against viewers' sessions.
- * Only browser-passive media types stay inline; SVG keeps a CSP sandbox
- * (scripts dead if opened as a document; <img> never runs them anyway);
- * everything else is forced to download as application/octet-stream.
+ * XSS containment: this URL renders INLINE on the app origin and uploads come
+ * from any editor, so the type is served by lib/served-bytes.ts's policy.
  */
 
-// Mime families browsers render passively (no script execution context).
-function inlineSafe(mime: string): boolean {
-  return (
-    (mime.startsWith("image/") && mime !== "image/svg+xml") ||
-    mime.startsWith("video/") ||
-    mime.startsWith("audio/") ||
-    mime === "application/pdf"
-  );
-}
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const url = new URL(req.url);
@@ -89,15 +77,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff",
     };
-    if (inlineSafe(mime)) {
-      headers["Content-Type"] = mime;
-    } else if (mime === "image/svg+xml") {
-      headers["Content-Type"] = mime;
-      headers["Content-Security-Policy"] = "sandbox";
-    } else {
-      headers["Content-Type"] = "application/octet-stream";
-      headers["Content-Disposition"] = "attachment";
-    }
+    Object.assign(headers, servedBytesHeaders(mime));
     if (status === 206) headers["Content-Range"] = `bytes ${start}-${endExclusive - 1}/${size}`;
 
     // 0-byte file: nothing to pull — an empty body avoids a degenerate stream.
