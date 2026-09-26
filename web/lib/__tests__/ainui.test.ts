@@ -32,6 +32,7 @@ const isAction = (v: unknown) => !!v && typeof (v as any).event?.name === "strin
 const AINUI: Record<string, { req: Record<string, (v: unknown) => boolean>; opt: Record<string, (v: unknown) => boolean> }> = {
   FileUpload: { req: { label: isDyn, action: isAction }, opt: { maxBytes: (v) => typeof v === "number" && v > 0 } },
   X402Payment: { req: { amount: isDyn, currency: isDyn, network: isDyn, payTo: isDyn, action: isAction }, opt: {} },
+  Toolbar: { req: { children: isChildren }, opt: {} },
   Grid: { req: { children: isChildren }, opt: { minItemWidth: (v) => typeof v === "number", gap: (v) => typeof v === "number" } },
   Tile: { req: { kind: isDyn, label: isDyn }, opt: { media: isDyn, caption: isDyn, action: isAction } },
   FileView: { req: { src: isDyn, name: isDyn }, opt: { mime: isDyn, size: isDyn } },
@@ -157,7 +158,7 @@ describe("AINUI builders", () => {
     expect(byId(comps, "row_label")).toMatchObject({ text: { path: "label" } });
     const docs = ainuiForSkill("list_files", { path: "" }, ok({ entries: [PHOTOS[3]] }), "d1", SERVER_ENV);
     expect(data(docs).view).toBe("list");
-    expect(data(docs).inventory).toContain("this folder only");
+    expect(data(docs).inventory).toContain("This folder only");
     const empty = ainuiForSkill("list_files", { path: "" }, ok({ entries: [] }), "d1", SERVER_ENV);
     expect(byId(validate(empty), "root")!.children).toEqual(["crumbs", "toolbar", "inventory", "empty"]);
   });
