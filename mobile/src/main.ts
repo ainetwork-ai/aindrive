@@ -1284,12 +1284,18 @@ async function ask(q = askQuery) {
   }
 }
 
-function openSearch() {
+async function openSearch() {
   if (!status.drives.some((d) => d.running) && !remotes.some((d) => d.online)) {
     notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — the agent works across your shared folders.", true);
     return;
   }
   void refreshRemotes();
+  // From home the agent is about everything: leave a folder chat (it stays in Past chats) for the
+  // latest all-files conversation, or a fresh one.
+  if (chatScope) {
+    const general = pastChats.findIndex((c) => !c.scope);
+    if (general >= 0) await openPastChat(general); else await newChat();
+  }
   searchOpen = true;
   menuFor = null;
   render();   // no autofocus: the conversation and suggestions come first, the keyboard on tap
@@ -1525,7 +1531,7 @@ function bindHome() {
   const app = document.getElementById("app")!;
   bind("add", addFolder);
   bind("add-first", addFolder);
-  bind("toggle-search", openSearch);
+  bind("toggle-search", () => void openSearch());
   bind("start-all", startAll);
   bind("add-source", () => void addSource());
   for (const el of document.querySelectorAll<HTMLElement>("[data-preset]")) {
@@ -1838,7 +1844,7 @@ function searchSheet(): string {
       ${historyOpen ? `<div class="scrim" id="history-scrim"><div class="drawer" id="history-drawer"><div class="grab"></div>
         <div class="head"><h3>Past chats</h3><button class="iconbtn ghost" id="history-close" aria-label="Close">${I.close}</button></div>
         ${pastChats.length ? "" : `<p class="note" style="padding:12px 16px">No past chats yet. Tapping “New chat” saves the current conversation here.</p>`}
-        <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ${c.scope ? "ft-folder" : "ft-doc"}">${icon(c.scope ? "folder" : "chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s">${c.scope ? `${esc(c.scope.label)} · ` : ""}${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
+        <ul class="list">${pastChats.map((c, i) => `<li data-past="${i}"><span class="kind ${c.scope ? "ft-folder" : "ft-doc"}">${icon(c.scope ? "folder" : "chat", 20)}</span><div class="grow"><div class="t">${esc(c.title)}</div><div class="s"><span class="where ${c.scope ? "folder" : ""}">${icon(c.scope ? "folder" : "phone", 12)} ${c.scope ? esc(c.scope.label) : "All files"}</span> · ${esc(new Date(c.at).toLocaleString())} · ${c.thread.length} message${c.thread.length === 1 ? "" : "s"}</div></div>${icon("chevron", 18)}</li>`).join("")}</ul></div></div>` : ""}
       ${modelOpen ? modelDrawer() : ""}
     </div>`;
 }
