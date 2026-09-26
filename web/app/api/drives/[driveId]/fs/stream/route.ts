@@ -3,7 +3,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind } from "@/lib/mime";
-import { bytesFor, cachedOnly, cachedSize } from "@/lib/media/cache"; // verified chunk cache, or straight from the agent
+import { bytesFor, cachedOnly, cachedSize, noteStat } from "@/lib/media/cache"; // verified chunk cache, or straight from the agent
 import { servedBytesHeaders } from "@/lib/served-bytes";
 
 /**
@@ -46,6 +46,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
       offlineSize = (e as AgentError).status === 504 || (e as AgentError).status === 502 ? cachedSize(driveId, path) : null;
       if (offlineSize === null) throw e;
     }
+    if (stat) noteStat(driveId, path, stat.entry && !stat.entry.isDir ? stat.entry : null); // a changed or deleted file forgets its offline manifest
     if (stat && (!stat.entry || stat.entry.isDir)) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }

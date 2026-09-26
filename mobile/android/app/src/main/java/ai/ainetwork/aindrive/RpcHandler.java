@@ -41,6 +41,7 @@ import java.util.Set;
 final class RpcHandler {
     /** media-index results by "path|size|mtime": re-hashing a long video on every play would drain the battery. */
     private static final java.util.Map<String, java.util.List<String>> MEDIA_INDEX = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Set<String> MEDIA_INDEXING = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     private static final Set<String> METHODS = new HashSet<>(Arrays.asList(
             "list", "stat", "read", "write", "mkdir", "rename", "delete",
@@ -135,7 +136,24 @@ final class RpcHandler {
                 String memoKey = path + "|" + e.size + "|" + e.mtimeMs;
                 java.util.List<String> leaves = MEDIA_INDEX.get(memoKey);
                 if (leaves == null) {
-                    leaves = MediaIndex.leaves((off, len) -> fs.readChunk(path, off, len), e.size);
+                    MediaIndex.Reader reader = (off, len) -> fs.readChunk(path, off, len);
+                    if (e.size > 16L * MediaIndex.CHUNK) {
+                        // a long video: hash it off the RPC thread and answer "pending" now;
+                        // the server streams directly meanwhile and asks again later
+                        if (MEDIA_INDEXING.add(memoKey)) {
+                            final long size = e.size;
+                            Thread t = new Thread(() -> {
+                                try { java.util.List<String> l = MediaIndex.leaves(reader, size); if (MEDIA_INDEX.size() > 200) MEDIA_INDEX.clear(); MEDIA_INDEX.put(memoKey, l); }
+                                catch (IOException ignored) {}
+                                finally { MEDIA_INDEXING.remove(memoKey); }
+                            }, "aindrive-media-index");
+                            t.setDaemon(true);
+                            t.setPriority(Thread.MIN_PRIORITY);
+                            t.start();
+                        }
+                        return result(method).put("pending", true);
+                    }
+                    leaves = MediaIndex.leaves(reader, e.size);
                     if (MEDIA_INDEX.size() > 200) MEDIA_INDEX.clear();
                     MEDIA_INDEX.put(memoKey, leaves);
                 }

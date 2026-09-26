@@ -4,7 +4,7 @@ import { getDrive, type DriveRow } from "@/lib/drives";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind, basenameForDownload } from "@/lib/mime";
-import { bytesFor } from "@/lib/media/cache"; // verified chunk cache, or straight from the agent
+import { bytesFor, noteStat } from "@/lib/media/cache"; // verified chunk cache, or straight from the agent
 import { verifyDownloadToken } from "@/lib/download-token";
 
 /**
@@ -54,6 +54,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   try {
     const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as
       { entry: { size: number; mtimeMs: number; isDir: boolean } | null };
+    noteStat(driveId, path, stat.entry && !stat.entry.isDir ? stat.entry : null); // a changed or deleted file forgets its offline manifest
     if (!stat.entry || stat.entry.isDir) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }

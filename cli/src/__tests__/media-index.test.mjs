@@ -35,3 +35,24 @@ describe("media-index", () => {
     expect(b.leaves[0]).not.toBe(a.leaves[0]);
   });
 });
+
+describe("media-index in the background (review I2/I3)", () => {
+  it("a large file answers pending at once, then the index once hashed", async () => {
+    const { mediaIndexOrPending } = await import("../media-index.js");
+    const dir = mkdtempSync(join(tmpdir(), "media-index-"));
+    const f = join(dir, "big.bin");
+    writeFileSync(f, pattern(20 * 1048576));
+    const first = await mediaIndexOrPending(f);
+    expect(first).toEqual({ pending: true });
+    let r = first;
+    for (let i = 0; i < 100 && r.pending; i++) { await new Promise((res) => setTimeout(res, 50)); r = await mediaIndexOrPending(f); }
+    expect(r.leaves.length).toBe(20);
+  });
+  it("a small file is indexed inline", async () => {
+    const { mediaIndexOrPending } = await import("../media-index.js");
+    const dir = mkdtempSync(join(tmpdir(), "media-index-"));
+    const f = join(dir, "small.bin");
+    writeFileSync(f, pattern(3 * 1048576));
+    expect((await mediaIndexOrPending(f)).leaves.length).toBe(3);
+  });
+});

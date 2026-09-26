@@ -13,12 +13,14 @@ let file = pattern(3 * C + 500);
 let mtimeMs = 1000;
 let corrupt = -1;
 let noIndex = false;
+let pendingIndex = false;
 const calls = { index: 0, chunk: 0 };
 vi.mock("@/lib/rpc", () => ({
   callAgent: async (_d: string, _s: string, p: { method: string; offset?: number; length?: number }) => {
     if (p.method === "media-index") {
       calls.index++;
       if (noIndex) throw new Error("unknown method");
+      if (pendingIndex) return { method: "media-index", pending: true };
       const leaves: string[] = [];
       for (let i = 0; i < file.length; i += C) leaves.push(createHash("sha256").update(file.subarray(i, i + C)).digest("hex"));
       return { method: "media-index", size: file.length, mtimeMs, chunk: C, leaves };
@@ -30,7 +32,7 @@ vi.mock("@/lib/rpc", () => ({
     return { method: "download-chunk", data: b.toString("base64"), eof: p.offset! + b.length >= file.length };
   },
 }));
-const { mediaManifest, cachedByteStream, bytesFor, cachedOnly } = await import("../media/cache");
+const { mediaManifest, cachedByteStream, bytesFor, cachedOnly, noteStat } = await import("../media/cache");
 
 const read = async (drive: string, start: number, end: number) => {
   const m = (await mediaManifest(drive, "s", "v.mp4", { size: file.length, mtimeMs }))!;
@@ -88,6 +90,8 @@ describe("verifying media cache", () => {
     process.env.AINDRIVE_MEDIA_CACHE_MB = "2";
     await read("d7", 0, file.length);
     await new Promise((r) => setTimeout(r, 100));
+    const { evict } = await import("../media/cache");
+    evict("d7"); // eviction is throttled in the write path (every 64 MiB / 30 s); run it now
     const dir = join(process.env.AINDRIVE_DATA_DIR!, "media-cache", "d7");
     let total = 0;
     const walk = (d: string) => { for (const f of readdirSync(d)) { const p = join(d, f); const s = statSync(p); if (s.isDirectory()) walk(p); else total += s.size; } };
@@ -122,5 +126,45 @@ describe("verifying media cache", () => {
     expect(hit!.size).toBe(file.length);
     expect(cachedOnly("d10", "v.mp4", 0, file.length)).toBeNull(); // the last chunk was never fetched
     expect(cachedOnly("d10", "never-seen.mp4", 0, 10)).toBeNull();
+  });
+
+  it("review I1: concurrent first requests index the file once", async () => {
+    calls.index = 0;
+    await Promise.all([1, 2, 3].map(() => mediaManifest("d11", "s", "v.mp4", { size: file.length, mtimeMs: 42 })));
+    expect(calls.index).toBe(1);
+  });
+
+  it("review I2/I3: while the device is still hashing, bytes stream directly and the next request uses the index", async () => {
+    pendingIndex = true; calls.index = 0; calls.chunk = 0;
+    const got = Buffer.from(await new Response(await bytesFor("d12", "s", "v.mp4", { size: file.length, mtimeMs: 43 }, 0, 100)).arrayBuffer());
+    expect(got.equals(file.subarray(0, 100))).toBe(true);
+    pendingIndex = false;
+    expect(await mediaManifest("d12", "s", "v.mp4", { size: file.length, mtimeMs: 43 })).not.toBeNull(); // asked again, not memoised as null
+    expect(calls.index).toBe(2);
+  });
+
+  it("review I4: a stat that no longer matches forgets the offline manifest", async () => {
+    await read("d13", 0, 10);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(cachedOnly("d13", "v.mp4", 0, 10)).not.toBeNull();
+    noteStat("d13", "v.mp4", { size: file.length + 1, mtimeMs: 99 });
+    expect(cachedOnly("d13", "v.mp4", 0, 10)).toBeNull();
+    await read("d13", 0, 10);
+    noteStat("d13", "v.mp4", null); // deleted on the device
+    expect(cachedOnly("d13", "v.mp4", 0, 10)).toBeNull();
+  });
+
+  it("review I6: a total budget across drives", async () => {
+    process.env.AINDRIVE_MEDIA_CACHE_TOTAL_MB = "3";
+    const { evictAll } = await import("../media/cache");
+    await read("d14", 0, file.length);
+    await read("d15", 0, file.length);
+    await new Promise((r) => setTimeout(r, 100));
+    evictAll();
+    let total = 0;
+    const walk = (d: string) => { for (const f of readdirSync(d)) { const p = join(d, f); const st = statSync(p); if (st.isDirectory()) walk(p); else total += st.size; } };
+    walk(join(process.env.AINDRIVE_DATA_DIR!, "media-cache"));
+    expect(total).toBeLessThanOrEqual(3 * C);
+    delete process.env.AINDRIVE_MEDIA_CACHE_TOTAL_MB;
   });
 });

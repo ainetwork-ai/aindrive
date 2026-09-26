@@ -41,7 +41,17 @@ struct RpcHandler {
     let fs: DriveFs
     let yjsDir: URL
     /// media-index results by "path|size|mtime": re-hashing a long video on every play would drain the battery.
-    static var mediaIndexMemo: [String: [String]] = [:]
+    /// Guarded by a lock: background hashing finishes on another queue.
+    private static var mediaIndexMemo: [String: [String]] = [:]
+    private static var mediaIndexing = Set<String>()
+    private static let mediaLock = NSLock()
+    static func memoGet(_ k: String) -> [String]? { mediaLock.lock(); defer { mediaLock.unlock() }; return mediaIndexMemo[k] }
+    static func startIndexing(_ k: String) -> Bool { mediaLock.lock(); defer { mediaLock.unlock() }; return mediaIndexing.insert(k).inserted }
+    static func finishIndexing(_ k: String, _ leaves: [String]?) {
+        mediaLock.lock(); defer { mediaLock.unlock() }
+        mediaIndexing.remove(k)
+        if let l = leaves { if mediaIndexMemo.count > 200 { mediaIndexMemo.removeAll() }; mediaIndexMemo[k] = l }
+    }
 
     init(fs: DriveFs, driveId: String) {
         self.fs = fs
@@ -109,10 +119,21 @@ struct RpcHandler {
             guard let e = fs.stat(path), !e.isDir else { throw NSError(domain: "aindrive", code: 404, userInfo: [NSLocalizedDescriptionKey: "not a file"]) }
             let memoKey = "\(path)|\(e.size)|\(e.mtimeMs)"
             let leaves: [String]
-            if let hit = RpcHandler.mediaIndexMemo[memoKey] { leaves = hit } else {
+            if let hit = RpcHandler.memoGet(memoKey) { leaves = hit } else if e.size > 16 * MediaIndex.chunk {
+                // a long video: hash it off the RPC queue and answer "pending" now;
+                // the server streams directly meanwhile and asks again later
+                if RpcHandler.startIndexing(memoKey) {
+                    let fs = self.fs
+                    let size = UInt64(e.size)
+                    DispatchQueue.global(qos: .utility).async {
+                        let l = try? MediaIndex.leaves(size: size) { off, len in try fs.readChunk(path, offset: off, length: len) }
+                        RpcHandler.finishIndexing(memoKey, l)
+                    }
+                }
+                return ["method": method, "pending": true]
+            } else {
                 leaves = try MediaIndex.leaves(size: UInt64(e.size)) { off, len in try fs.readChunk(path, offset: off, length: len) }
-                if RpcHandler.mediaIndexMemo.count > 200 { RpcHandler.mediaIndexMemo.removeAll() }
-                RpcHandler.mediaIndexMemo[memoKey] = leaves
+                RpcHandler.finishIndexing(memoKey, leaves)
             }
             return ["method": method, "size": e.size, "mtimeMs": e.mtimeMs, "chunk": MediaIndex.chunk, "leaves": leaves]
         case "download-chunk":

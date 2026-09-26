@@ -1,6 +1,6 @@
 import { promises as fsp, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { mediaIndex } from "./media-index.js";
+import { mediaIndexOrPending } from "./media-index.js";
 import path from "node:path";
 import * as Y from "yjs";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
@@ -302,7 +302,7 @@ export async function handleRpc(params, root) {
     case "media-index": {
       // a file's chunk hash list, for the server's verifying cache (P2P media)
       const abs = safeResolve(root, params.path);
-      return { method: "media-index", ...(await mediaIndex(abs)) };
+      return { method: "media-index", ...(await mediaIndexOrPending(abs)) };
     }
     case "agent-ask": {
       // Web side has already verified caller identity + access policy.

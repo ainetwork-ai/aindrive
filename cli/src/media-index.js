@@ -29,3 +29,18 @@ export async function mediaIndex(abs) {
   if (memo.size > 500) memo.delete(memo.keys().next().value);
   return result;
 }
+
+// Hashing a long video takes a while (seconds here, much longer on a phone): the
+// first request must not wait for it (review I2/I3). Small files are indexed inline;
+// larger ones in the background, answering { pending: true } until done.
+const INLINE_MAX = 16 * CHUNK;
+const running = new Map(); // abs → Promise
+
+export async function mediaIndexOrPending(abs) {
+  const st = statSync(abs);
+  const hit = memo.get(abs);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.result;
+  if (st.size <= INLINE_MAX) return mediaIndex(abs);
+  if (!running.has(abs)) running.set(abs, mediaIndex(abs).catch(() => {}).finally(() => running.delete(abs)));
+  return { pending: true };
+}
