@@ -305,7 +305,14 @@ public class AgentService extends Service {
         synchronized AskRunner askRunner() {
             if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull,
                     AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer, () -> anyIndexerRunning())
-                    .withCallIndexes(AgentService.this::callIndexes);
+                    .withCallIndexes(AgentService.this::callIndexes)
+                    .withCallOpener(new ai.ainetwork.aindrive.agent.CallReport.Opener() {
+                        @Override public android.os.ParcelFileDescriptor open(FileIndex ix, String docId) throws Exception {
+                            Conn home = connOf(ix);
+                            return home == null || home.fs == null ? null : home.fs.openFd(docId);
+                        }
+                        @Override public String driveIdOf(FileIndex ix) { Conn home = connOf(ix); return home == null ? null : home.driveId; }
+                    });
             return ask;
         }
 
@@ -628,6 +635,11 @@ public class AgentService extends Service {
         return out;
     }
 
+    @Nullable Conn connOf(FileIndex ix) {
+        synchronized (conns) { for (Conn c : conns.values()) if (c.index == ix) return c; }
+        return null;
+    }
+
     java.util.List<FileIndex> callIndexes() {
         java.util.List<FileIndex> out = new java.util.ArrayList<>();
         synchronized (conns) { for (Conn c : conns.values()) if (isCallSource(c.driveId) && c.index != null) out.add(c.index); }
@@ -691,7 +703,14 @@ public class AgentService extends Service {
             Conn out = c.source ? outputConn() : c;
             String outId = out == null ? c.driveId : out.driveId;
             JSONArray s = r.getJSONArray("sources");
-            for (int i = 0; i < s.length(); i++) s.getJSONObject(i).put("driveId", c.driveId).put("drive", c.folderLabel == null ? c.driveId : c.folderLabel);
+            for (int i = 0; i < s.length(); i++) {
+                JSONObject src = s.getJSONObject(i);
+                // A source may name the call folder its file is really in (Call/ vs Recordings/Call/).
+                Conn home = null;
+                if (src.has("driveId")) synchronized (conns) { home = conns.get(src.getString("driveId")); }
+                if (home == null) home = c;
+                src.put("driveId", home.driveId).put("drive", home.folderLabel == null ? home.driveId : home.folderLabel);
+            }
             if (r.has("action")) r.getJSONObject("action").put("driveId", outId);
             return r;
         }

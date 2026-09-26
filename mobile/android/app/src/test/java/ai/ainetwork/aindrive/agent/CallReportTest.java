@@ -43,6 +43,17 @@ public class CallReportTest {
         assertFalse(QueryParser.isLikesTask("photos I like"));
     }
 
+    @Test public void transcribeOneCallIsACallsTask() {
+        for (String q : new String[]{"엄유준 최신 통화 stt 해줘", "transcribe my latest call with Amy Jang", "speech-to-text my last phone call",
+                "give me a transcript of the last call recording"}) {
+            assertTrue(q, QueryParser.isTranscribeTask(q));
+            assertTrue(q, QueryParser.isCallsTask(q));
+        }
+        // The ranking report and plain file searches stay what they were.
+        for (String q : new String[]{"transcribe who I call the most", "transcribe this meeting audio", "photos from Paris", "summarise my calls"})
+            assertFalse(q, QueryParser.isTranscribeTask(q));
+    }
+
     @Test public void callsTaskIsDetectedInBothLanguages() {
         for (String q : new String[]{
                 "내 통화내역을 많이 통화한 사람 순으로 정렬하고 보통 어떤 얘기를 나누는지 요약해줘",

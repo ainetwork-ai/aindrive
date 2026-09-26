@@ -245,7 +245,7 @@ public final class Router {
                 try { out.put("scope", "out"); } catch (org.json.JSONException ignored) { }
                 return new Turn(d.route, "OutOfScope", d.reply, null, out);
             }
-            case CALLS: return new Turn(d.route, d.query.likes ? "WhoLikesMe" : "CallReport", null, d.query, context);
+            case CALLS: return new Turn(d.route, d.query.likes ? "WhoLikesMe" : d.query.transcribe ? "TranscribeCall" : "CallReport", null, d.query, context);
             default: return new Turn(d.route, intentOf(d.query), null, d.query, d.query.toJson());
         }
     }

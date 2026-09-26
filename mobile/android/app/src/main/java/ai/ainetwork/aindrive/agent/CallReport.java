@@ -99,6 +99,102 @@ public final class CallReport {
         return this;
     }
 
+    /** Opens a document of one of `indexes` — the recording asked for may live in another call folder than `index`. */
+    public interface Opener {
+        @Nullable android.os.ParcelFileDescriptor open(FileIndex ix, String docId) throws Exception;
+        /** The drive `ix` indexes, so a source points at the folder its file is really in. */
+        default @Nullable String driveIdOf(FileIndex ix) { return null; }
+    }
+
+    private @Nullable Opener opener;
+
+    public CallReport withOpener(@Nullable Opener o) { opener = o; return this; }
+
+    private @Nullable android.os.ParcelFileDescriptor open(FileIndex ix, String docId) throws Exception {
+        if (opener != null) return opener.open(ix, docId);
+        return ix == index && ops != null ? ops.openFd(docId) : null;
+    }
+
+    /**
+     * "엄유준 최신 통화 stt 해줘": the newest recording with the person the question names (the
+     * longest recorded name it contains, so "김민" does not take "김민현"'s calls), or the newest
+     * call of all when it names no one, heard in full now — the archive indexer only hears the
+     * first minutes of each call.
+     */
+    public JSONObject runTranscribe(SearchQuery q) throws Exception {
+        boolean ko = q.korean;
+        String asked = squash(q.asked == null ? "" : q.asked);
+        FileIndex.Filter f = new FileIndex.Filter();
+        f.kind = FileIndex.AUDIO;
+        List<FileIndex.Row> rows = new ArrayList<>();
+        Map<FileIndex.Row, FileIndex> home = new HashMap<>();
+        String who = null;
+        for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) {
+            String p = personOf(r.name);
+            if (p == null) continue;
+            rows.add(r); home.put(r, ix);
+            String key = squash(p);
+            if (!key.isEmpty() && asked.contains(key) && (who == null || key.length() > squash(who).length())) who = p;
+        }
+        if (who == null && callLog != null) {
+            // Named, but never recorded: say so rather than transcribe someone else's call.
+            List<Call> log = callLog.calls();
+            if (log != null) for (Call c : log) {
+                if (c.name == null) continue;
+                String key = squash(normName(c.name));
+                if (key.length() >= 2 && asked.contains(key)) {
+                    return new JSONObject().put("answer", ko ? normName(c.name) + "님과의 통화 녹음이 없어요." : "There are no call recordings with " + normName(c.name) + ".")
+                            .put("sources", new JSONArray());
+                }
+            }
+        }
+        FileIndex.Row newest = null;
+        for (FileIndex.Row r : rows) {
+            if (who != null && !who.equals(personOf(r.name))) continue;
+            if (newest == null || when(r) > when(newest)) newest = r;
+        }
+        if (newest == null) {
+            String why = ko ? "통화 녹음 파일이 없어요. 앱에서 '통화 녹음' 폴더를 에이전트 소스로 추가해 주세요."
+                    : "There are no call recordings. Add the call-recordings folder as an agent source in the app.";
+            return new JSONObject().put("answer", why).put("sources", new JSONArray());
+        }
+        String person = personOf(newest.name);
+        String at = new SimpleDateFormat(ko ? "yyyy-MM-dd HH:mm" : "MMM d, yyyy HH:mm", ko ? Locale.KOREA : Locale.US).format(new Date(when(newest)));
+        String text = null;
+        boolean truncated = false;
+        SpeechRecognizer asr = speech.get();
+        if (asr != null) {
+            FileIndex ix = home.get(newest);
+            try (android.os.ParcelFileDescriptor pfd = open(ix, newest.docId)) {
+                if (pfd != null) {
+                    SpeechRecognizer.Transcript tr = asr.transcribe(pfd.getFileDescriptor(), SpeechRecognizer.MAX_SECONDS);
+                    if (tr != null) { text = tr.text; truncated = tr.truncated; ix.setRecognition(newest.docId, null, text); }
+                }
+            }
+        }
+        boolean partial = false;
+        if (text == null && newest.transcript != null) { text = newest.transcript; partial = true; }   // what the indexer heard: the first minutes
+        StringBuilder a = new StringBuilder();
+        a.append(ko ? person + "님과의 최근 통화 (" + at + ")" : "Your latest call with " + person + " (" + at + ")");
+        if (text == null) {
+            a.append(ko ? "\n음성 인식 모델이 아직 없어서 받아쓸 수 없어요. 앱에서 음성 모델을 내려받아 주세요."
+                        : "\nI can't transcribe it yet: the speech model isn't on the phone. Download it in the app.");
+        } else if (text.trim().isEmpty()) {
+            a.append(ko ? "\n들리는 말이 없었어요." : "\nNo speech was heard.");
+        } else {
+            a.append(":\n\n").append(text.trim());
+            if (truncated) a.append(ko ? "\n\n(앞 " + SpeechRecognizer.MAX_SECONDS / 60 + "분만 받아썼어요.)" : "\n\n(Only the first " + SpeechRecognizer.MAX_SECONDS / 60 + " minutes were transcribed.)");
+            else if (partial) a.append(ko ? "\n\n(앞부분만 받아쓴 기록이에요.)" : "\n\n(Only the beginning had been transcribed.)");
+            a.append(ko ? "\n\n폰에서 받아쓴 것이라 틀린 부분이 있을 수 있어요." : "\n\nTranscribed on the phone — expect recognition errors.");
+        }
+        JSONObject src = describeCall(new JSONObject().put("path", newest.path).put("matchedBy", "speech"), newest, null, null);
+        if (opener != null) src.putOpt("driveId", opener.driveIdOf(home.get(newest)));
+        return new JSONObject().put("answer", a.toString()).put("sources", new JSONArray().put(src))
+                .put("transcript", text == null ? JSONObject.NULL : text);
+    }
+
+    private static String squash(String s) { return normName(s).toLowerCase(Locale.ROOT).replaceAll("\\s+", ""); }
+
     /** Recording file name → who it was with, or null when it is not a call recording. */
     public static @Nullable String personOf(String fileName) {
         Matcher m = RECORDING.matcher(fileName.trim());
@@ -235,6 +331,7 @@ public final class CallReport {
 
     public JSONObject run(SearchQuery q, long nowMs) throws Exception {
         if (q.likes) return runLikes(q, nowMs);
+        if (q.transcribe) return runTranscribe(q);
         boolean ko = q.korean;
         Map<String, Person> people = new LinkedHashMap<>();
         Map<String, Person> byNumber = new HashMap<>();

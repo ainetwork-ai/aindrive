@@ -47,6 +47,10 @@ public final class SearchQuery {
     public boolean calls;
     /** "who likes me the most": rank contacts by signs of affection in calls, with proof. */
     public boolean likes;
+    /** "엄유준 최신 통화 stt 해줘": transcribe one recording (the newest, with whoever the question names). */
+    public boolean transcribe;
+    /** The question as asked, for a transcribe request: the person is found by matching recorded names against it. */
+    public @Nullable String asked;
     /** Filters were inherited from the previous turn ("…and share them"). */
     public boolean followUp;
     /** Words that were neither a filter nor content ("check", "weather"): a search box doesn't get those. */
