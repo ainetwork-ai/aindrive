@@ -1811,7 +1811,8 @@ function searchSheet(): string {
   const body = `
     ${turns}
     ${askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>` : ""}
-    ${!thread.length && !askBusy ? `
+    ${!thread.length && !askBusy && chatScope ? `<p class="hint" style="margin:8px 2px">Ask anything about the files in “${esc(chatScope.label)}”.</p>` : ""}
+    ${!thread.length && !askBusy && !chatScope ? `
       ${SUGGESTIONS.map((g) => `
         <p class="note group">${esc(g.title)}</p>
         <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
