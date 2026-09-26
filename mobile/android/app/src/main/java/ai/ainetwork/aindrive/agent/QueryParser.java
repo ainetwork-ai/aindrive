@@ -109,6 +109,11 @@ public final class QueryParser {
     /** Verbs that turn a question into a task. Matched as prefixes of a token ("모아서", "모아", "만들어줘"). */
     private static final String[] COLLECT_WORDS = {"모아", "모아서", "모아줘", "모으", "묶어", "정리", "폴더", "앨범", "collect", "gather", "folder", "album", "organize", "organise", "copy", "복사", "save", "group", "bundle", "throw"};
     private static final String[] MOVE_WORDS = {"옮겨", "옮기", "이동", "move"};
+    /** Collect words that are nouns: a destination ("into a folder") — or the folder being asked about ("what's in this folder"). */
+    private static final String[] PLACE_NOUNS = {"폴더", "앨범", "folder", "album"};
+    /** Right before a place noun, these point at the folder that is already there: "this folder", "이 폴더", "현재 폴더". */
+    private static final Set<String> POINTING = new HashSet<>(Arrays.asList(
+            "this", "that", "the", "my", "our", "current", "these", "those", "이", "그", "저", "현재", "지금", "여기", "이번"));
     private static final String[] SHARE_WORDS = {"공유", "링크", "share", "link"};
     private static final String[] DELETE_WORDS = {"삭제", "지워", "지우", "없애", "delete", "remove", "trash", "rid", "wipe", "erase"};
     private static final String[] COUNT_WORDS = {"몇", "개수", "갯수", "count", "number", "how many"};
@@ -408,6 +413,7 @@ public final class QueryParser {
         for (int i = 0; i < tokens.size(); i++) {
             if (used[i]) continue;
             String lower = stripParticles(tokens.get(i)).toLowerCase(Locale.ROOT), raw = tokens.get(i).toLowerCase(Locale.ROOT);
+            if (pointedAt(tokens, i)) continue;
             for (String[] set : new String[][]{MOVE_WORDS, DELETE_WORDS, COLLECT_WORDS, SHARE_WORDS, COUNT_WORDS})
                 if (startsWithAny(raw, set) || startsWithAny(lower, set)) task = true;
             if (KO_COUNT.matcher(raw).matches() || EN_COUNT.matcher(raw).matches() || raw.equals("how") && next(tokens, i).equals("many")) task = true;
@@ -417,6 +423,7 @@ public final class QueryParser {
             String lower = stripParticles(tokens.get(i)).toLowerCase(Locale.ROOT);
             String raw = tokens.get(i).toLowerCase(Locale.ROOT);
             Matcher cm;
+            if (pointedAt(tokens, i)) { used[i] = true; used[i - 1] = true; continue; }   // "this folder": where to look, not a task
             if (startsWithAny(raw, MOVE_WORDS) || startsWithAny(lower, MOVE_WORDS)) { q.move = true; used[i] = true; }
             else if (startsWithAny(raw, DELETE_WORDS) || startsWithAny(lower, DELETE_WORDS)) { q.delete = true; used[i] = true; }
             else if (startsWithAny(raw, COLLECT_WORDS) || startsWithAny(lower, COLLECT_WORDS)) { q.collect = true; used[i] = true; }
@@ -554,6 +561,15 @@ public final class QueryParser {
     private static boolean anyUsed(boolean[] used, int from, int n) {
         for (int i = from; i < from + n; i++) if (used[i]) return true;
         return false;
+    }
+
+    /** "this folder", "이 폴더에", "the album": the folder already there, which a question is about — not "make a folder". */
+    private static boolean pointedAt(List<String> tokens, int i) {
+        if (i == 0) return false;
+        String t = stripParticles(tokens.get(i)).toLowerCase(Locale.ROOT);
+        boolean noun = false;
+        for (String n : PLACE_NOUNS) if (t.equals(n) || t.equals(n + "s")) noun = true;
+        return noun && POINTING.contains(tokens.get(i - 1).toLowerCase(Locale.ROOT));
     }
 
     private static String next(List<String> tokens, int i) {

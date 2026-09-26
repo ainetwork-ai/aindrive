@@ -1,6 +1,7 @@
 package ai.ainetwork.aindrive.agent;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -210,6 +211,19 @@ public class QueryParserTest {
         GeoLookup.Place p = geo.byPlaceName("paris");
         assertNotNull(p);
         assertEquals("FR", p.country);
+    }
+
+    /** "What's in this folder?" asks about the folder there; only "into a folder" makes one. */
+    @Test
+    public void thisFolderIsWhereToLookNotATask() {
+        for (String q : new String[]{"what's in this folder?", "list this folder", "이 폴더에 뭐 있어?", "현재 폴더 보여줘"}) {
+            SearchQuery x = parser.parse(q, NOW);
+            assertFalse(q, x.collect);
+            assertTrue(q + " " + x.keywords, x.keywords.isEmpty());
+        }
+        assertEquals("photo", parser.parse("photos in this folder", NOW).kind);
+        for (String q : new String[]{"collect them into a folder", "put the Tokyo photos in a folder", "make an album of the Paris photos", "폴더로 모아줘"})
+            assertTrue(q, parser.parse(q, NOW).collect);
     }
 
     @Test
