@@ -271,6 +271,31 @@ public class SendGateTest {
     }
 
     @Test
+    public void aRateMeasuredLowDoesNotDropAReplyThatWouldMakeIt() throws Exception {
+        FakeClock clock = new FakeClock();
+        SendGate gate = new SendGate(25, clock);
+        // Time the link at 0.5 MB/s: a second 7 MB reply waits for the first to drain.
+        LinkSocket slow = new LinkSocket(clock, 500_000);
+        String seven = ascii(7_000_000);
+        assertEquals(SendGate.Result.SENT, gate.send(slow, seven, clock.in(60_000), () -> true));
+        assertEquals(SendGate.Result.SENT, gate.send(slow, seven, clock.in(60_000), () -> true));
+        assertEquals(500_000, gate.bytesPerSecond(), 5_000);
+
+        // The link is really 0.7 MB/s (the measurement came out ~30% low). An 11 MB reply due in
+        // 18 s would take 22 s at the measured rate, but leaves in under 16 s: it is sent, and
+        // it is out before its deadline.
+        LinkSocket fast = new LinkSocket(clock, 700_000);
+        long deadline = clock.in(18_000);
+        assertEquals(SendGate.Result.SENT, gate.send(fast, ascii(11_000_000), deadline, () -> true));
+        assertTrue(fast.doneAt(0) <= deadline);
+
+        // Past the slack it is still dropped: 11 MB due in 10 s needs 1.5 × the measured rate and more.
+        LinkSocket other = new LinkSocket(clock, 700_000);
+        assertEquals(SendGate.Result.LATE, gate.send(other, ascii(11_000_000), clock.in(10_000), () -> true));
+        assertTrue(other.messages.isEmpty());
+    }
+
+    @Test
     public void withoutAMeasuredRateOnlyTheDeadlineCounts() throws Exception {
         FakeClock clock = new FakeClock();
         LinkSocket link = new LinkSocket(clock, 500_000);

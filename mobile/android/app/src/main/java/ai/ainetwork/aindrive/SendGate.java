@@ -26,8 +26,10 @@ import java.util.function.BooleanSupplier;
  *    ARRIVED (see {@link RpcBudget}), so time spent queued for a worker and
  *    time spent waiting here both count;
  *  - once it has timed how fast this socket drains, also gives up early (LATE)
- *    on a message that would still be leaving the phone after the deadline —
- *    the uplink is better spent on replies the server still wants;
+ *    on a message that would still be leaving the phone after the deadline even
+ *    were the link {@link #LATE_RATE_SLACK}× faster than measured — the uplink
+ *    is better spent on replies the server still wants, but a measurement that
+ *    came out low must not cost a reply that would have made it;
  *  - reports send()'s own return value instead of ignoring it.
  *
  * The agent-hello is the one frame sent around the gate: it is the first frame
@@ -56,6 +58,15 @@ final class SendGate {
     static final long WATCH_GAP_NS = 200_000_000L;
     /** A drain rate older than this is not used: the phone may have changed networks. */
     static final long RATE_FRESH_NS = 60_000_000_000L;
+    /**
+     * A message is written off as LATE only if it would still be leaving after the deadline at
+     * this multiple of the measured rate. The measurement can come out low: a drain is noticed
+     * up to {@link #WATCH_GAP_NS} after it happened (up to ~30% slow on the shortest timed span),
+     * the kernel's send buffer hides where a message really is, and links vary. A wrong LATE
+     * drops a reply the server still wants; a wrong send only spends some uplink, and the
+     * deadline still bounds how long anything waits for room.
+     */
+    static final double LATE_RATE_SLACK = 1.5;
 
     interface Socket {
         /** Bytes queued but not yet written (OkHttp WebSocket.queueSize()). */
@@ -207,10 +218,13 @@ final class SendGate {
 
     private boolean fresh(long now) { return bytesPerNs > 0 && now - rateAtNs <= RATE_FRESH_NS; }
 
-    /** With a measured rate: would the queue ahead plus this message still be leaving at the deadline? */
+    /**
+     * With a measured rate: would the queue ahead plus this message still be leaving at the
+     * deadline, even at {@link #LATE_RATE_SLACK} times that rate?
+     */
     private boolean lateAt(long now, long queued, long bytes, long deadlineNanos) {
         if (!fresh(now)) return false;
-        double leaves = now + (Math.max(0, queued) + bytes) / bytesPerNs;
+        double leaves = now + (Math.max(0, queued) + bytes) / (bytesPerNs * LATE_RATE_SLACK);
         return leaves > deadlineNanos;
     }
 

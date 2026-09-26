@@ -98,6 +98,8 @@ public class AgentService extends Service {
     private final ExecutorService indexPool = Executors.newSingleThreadExecutor();
     /** Call archives transcribe for hours: their own worker, so photo recognition elsewhere isn't stuck behind them. */
     private final ExecutorService callPool = Executors.newSingleThreadExecutor();
+    /** Big replies (a whole file in base64) in memory at once, across every drive: {@link RpcBudget#MAX_BULK_IN_FLIGHT}. */
+    private final java.util.concurrent.Semaphore bulkSlots = RpcBudget.bulkSlots();
     private volatile GeoLookup geo;
     /** driveId → live connection. Insertion order = the order the user started them. */
     private final Map<String, Conn> conns = new LinkedHashMap<>();
@@ -213,6 +215,7 @@ public class AgentService extends Service {
         Conn previous;
         synchronized (conns) { previous = conns.put(driveId, conn); }
         if (previous != null) previous.close();
+        conn.prepareIndex();
         if (!conn.source && !conn.localOnly) conn.connect();
         if (intent.getBooleanExtra("indexOnStart", false)) reindex(driveId);
         // START_STICKY: if Android reclaims us under memory pressure, come back
@@ -375,6 +378,7 @@ public class AgentService extends Service {
         synchronized Indexer indexer() {
             if (indexer == null) indexer = new Indexer(fs, index, geo(), new Indexer.Recognisers() {
                 @Override public ClipEmbedder clip() { return clipOrNull(); }
+                @Override public ClipEmbedder loadedClip() { return AgentService.this.clip; }
                 @Override public SpeechRecognizer speech() { return speechOrNull(); }
                 // A call archive is thousands of hours: hear the first minutes of each call, newest first, in the background.
                 @Override public boolean callArchive() { return isCallSource(driveId); }
@@ -428,6 +432,23 @@ public class AgentService extends Service {
                 Log.w(TAG, "rpc " + method + " expired before it ran — skipped");
                 return;
             }
+            // A big reply holds tens of MB until it is sent: only so many at once on the whole phone.
+            boolean bulk = RpcBudget.bulk(method);
+            try {
+                if (bulk && !RpcBudget.takeSlot(bulkSlots, deadline)) {
+                    Log.w(TAG, "rpc " + method + " expired waiting for a bulk slot — skipped");
+                    return;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            try { answer(socket, frame, p0, reqId, method, deadline); }
+            finally { if (bulk) bulkSlots.release(); }
+        }
+
+        /** Run the verified request and send its signed response (or error) through the gate. */
+        private void answer(WebSocket socket, JSONObject frame, @Nullable JSONObject p0, String reqId, String method, long deadline) {
             JSONObject response = new JSONObject();
             try {
                 JSONObject params = frame.optJSONObject("params");
@@ -522,12 +543,29 @@ public class AgentService extends Service {
             indexLater(() -> index.removeUnder(ai.ainetwork.aindrive.agent.AskScope.spellings(normalized(path))));
         }
 
+        /**
+         * The index's one-time `path` index (FileIndex#ensurePathIndex), built on the index thread:
+         * on a big existing index it takes seconds, and the main thread (this START) must not wait
+         * for it. Only drives that are updated file by file need it; agent sources are not.
+         */
+        void prepareIndex() {
+            if (fs == null || index == null || source) return;
+            try {
+                indexPool.execute(() -> {
+                    if (closed) return;
+                    try { index.ensurePathIndex(); }
+                    catch (Exception e) { if (!closed) Log.w(TAG, "path index skipped: " + sanitize(e.getMessage())); }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException ignored) { /* service is stopping */ }
+        }
+
         private void indexLater(IndexTask task) {
             if (fs == null || index == null || source) return;
             try {
                 indexPool.execute(() -> {
                     if (closed) return;
                     try {
+                        index.ensurePathIndex();   // normally done at start already (prepareIndex)
                         if (index.count() == 0) return;
                         task.run();
                         notifyStatus();
@@ -551,7 +589,7 @@ public class AgentService extends Service {
                 o.put("lastError", lastError == null ? JSONObject.NULL : lastError);
                 JSONObject ix = new JSONObject();
                 Indexer in = indexer;
-                ix.put("indexed", index == null ? 0 : index.count());
+                ix.put("indexed", index == null ? 0 : index.countForStatus());
                 ix.put("running", in != null && in.running);
                 ix.put("done", in == null ? 0 : in.done);
                 ix.put("total", in == null ? 0 : in.total);
@@ -560,7 +598,7 @@ public class AgentService extends Service {
                 ix.put("lastRunMs", in == null ? 0 : in.lastRunMs);
                 ix.put("recognised", in == null ? 0 : in.recognised);
                 ix.put("toRecognise", in == null ? 0 : in.toRecognise);
-                ix.put("recognisedTotal", index == null ? 0 : index.countRecognised());
+                ix.put("recognisedTotal", index == null ? 0 : index.countRecognisedForStatus());
                 o.put("index", ix);
             } catch (Exception ignored) { }
             return o;

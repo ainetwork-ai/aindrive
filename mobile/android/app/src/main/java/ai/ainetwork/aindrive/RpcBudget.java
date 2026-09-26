@@ -2,6 +2,7 @@ package ai.ainetwork.aindrive;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,7 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Lanes: every drive has its own workers, so one drive's traffic never holds another's
  * requests; and within a drive, the methods whose reply can be megabytes (a whole file in
  * base64) have a lane of their own, so a thumbnail grid pulling whole photos can't take
- * the workers a list or stat needs.
+ * the workers a list or stat needs. Across drives, at most {@link #MAX_BULK_IN_FLIGHT} of
+ * those big replies are in memory at once ({@link #bulkSlots}).
  *
  * Pure (no Android types) so it is unit-tested on the JVM.
  */
@@ -42,6 +44,28 @@ final class RpcBudget {
 
     /** Workers per drive for bulk replies (read, download-chunk, …) and for everything else. */
     static final int BULK_WORKERS = 2, CONTROL_WORKERS = 4;
+
+    /**
+     * Bulk replies being built or waiting to be sent, on the whole phone: each holds an 8 MiB
+     * read, its ≈ 11 MB of base64 and the signed frame (tens of MB at peak) until the send gate
+     * lets it go, and the app has no large heap. 4 is the ceiling the one process-wide pool of
+     * 4 RPC workers gave before drives had lanes of their own; with one or two drives the lanes
+     * (2 bulk workers each) never reach it.
+     */
+    static final int MAX_BULK_IN_FLIGHT = 4;
+
+    /** The phone's bulk slots: one per bulk reply in flight, first come first served. */
+    static Semaphore bulkSlots() { return new Semaphore(MAX_BULK_IN_FLIGHT, true); }
+
+    /**
+     * Take a bulk slot, waiting until `deadlineNanos` at the latest. False when the deadline came
+     * first: the server has given up on the request, so it is skipped ({@link #bulk} methods are
+     * all {@link #readOnly}).
+     */
+    static boolean takeSlot(Semaphore slots, long deadlineNanos) throws InterruptedException {
+        long wait = deadlineNanos - System.nanoTime();
+        return wait > 0 && slots.tryAcquire(wait, TimeUnit.NANOSECONDS);
+    }
 
     /** The longest the server waits for `method`. */
     static long serverTimeoutMs(String method) {
@@ -74,7 +98,7 @@ final class RpcBudget {
     /** True when the request in `frame` runs in the bulk lane (see {@link #methodOf}). */
     static boolean bulkFrame(String frame) { return bulk(methodOf(frame)); }
 
-    /** Methods whose reply can be megabytes: they run in the drive's bulk lane. */
+    /** Methods whose reply can be megabytes: they run in the drive's bulk lane and take a bulk slot. */
     static boolean bulk(String method) {
         switch (method == null ? "" : method) {
             case "read":

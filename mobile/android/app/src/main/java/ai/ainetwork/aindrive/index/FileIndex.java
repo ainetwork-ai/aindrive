@@ -91,24 +91,55 @@ public class FileIndex extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX files_when ON files(when_ms)");
         db.execSQL("CREATE INDEX files_kind ON files(kind)");
         db.execSQL("CREATE INDEX files_country ON files(country)");
-        ensurePathIndex(db);
-    }
-
-    @Override
-    public void onOpen(SQLiteDatabase db) {
-        // Only a speed-up: a database that can't take it (full disk) still opens and answers.
-        if (!db.isReadOnly()) { try { ensurePathIndex(db); } catch (RuntimeException ignored) { } }
+        db.execSQL(PATH_INDEX);   // an empty table: instant
     }
 
     /**
      * An index on `path`: the incremental updates after an upload, a rename or a delete look rows
      * up by path (a folder rename re-keys every file in it), which is a full scan without one.
-     * Added with IF NOT EXISTS on open rather than by a schema bump, because onUpgrade rebuilds
-     * the table and would throw away hours of photo vectors and transcripts.
+     * Added with IF NOT EXISTS rather than by a schema bump, because onUpgrade rebuilds the table
+     * and would throw away hours of photo vectors and transcripts.
      */
-    private static void ensurePathIndex(SQLiteDatabase db) {
-        db.execSQL("CREATE INDEX IF NOT EXISTS files_path ON files(path)");
+    private static final String PATH_INDEX = "CREATE INDEX IF NOT EXISTS files_path ON files(path)";
+    private final Object pathIndexLock = new Object();
+    /** files_path exists (or could not be made this run: it is only a speed-up). */
+    private volatile boolean pathIndexReady;
+    /** True while {@link #ensurePathIndex} builds it: that holds the database until it is done. */
+    private volatile boolean buildingPathIndex;
+    /** The last counts read, shown while the database is held by that build. */
+    private volatile int lastCount, lastRecognised;
+
+    /**
+     * Build files_path on a database made before it existed. On a big index that is seconds of
+     * work on a phone, once, holding the database: call it on the index thread, never on the main
+     * thread. A no-op once done (and for a database made with it).
+     */
+    public void ensurePathIndex() {
+        if (pathIndexReady) return;
+        synchronized (pathIndexLock) {
+            if (pathIndexReady) return;
+            try {
+                countRecognised();                  // what the status shows meanwhile
+                count();
+                buildingPathIndex = true;
+                getWritableDatabase().execSQL(PATH_INDEX);
+            } catch (RuntimeException e) {
+                // Only a speed-up: a database that can't take it (full disk) still answers, by scans.
+            } finally {
+                buildingPathIndex = false;
+                pathIndexReady = true;
+            }
+        }
     }
+
+    /**
+     * The file count for the app's status, which is read on the main thread: while the path
+     * index is being built it is the last count read instead of a query that would wait for it.
+     */
+    public int countForStatus() { return buildingPathIndex ? lastCount : count(); }
+
+    /** {@link #countRecognised()} for the app's status, on the same terms as {@link #countForStatus()}. */
+    public int countRecognisedForStatus() { return buildingPathIndex ? lastRecognised : countRecognised(); }
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldV, int newV) {
@@ -180,7 +211,7 @@ public class FileIndex extends SQLiteOpenHelper {
 
     public int countRecognised() {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM files WHERE vec IS NOT NULL OR transcript IS NOT NULL", null)) {
-            return c.moveToFirst() ? c.getInt(0) : 0;
+            return lastRecognised = c.moveToFirst() ? c.getInt(0) : 0;
         }
     }
 
@@ -291,7 +322,7 @@ public class FileIndex extends SQLiteOpenHelper {
 
     public int count() {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM files", null)) {
-            return c.moveToFirst() ? c.getInt(0) : 0;
+            return lastCount = c.moveToFirst() ? c.getInt(0) : 0;
         }
     }
 

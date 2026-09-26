@@ -14,14 +14,21 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 /**
  * Per-request deadlines under the server's timeouts, and per-drive lanes: one drive answering
@@ -56,6 +63,8 @@ public class RpcBudgetTest {
         // Anything that may change the folder always runs, as before.
         for (String m : new String[]{"write", "upload-chunk", "rename", "delete", "mkdir", "yjs-write", "agent-ask", "", null})
             assertFalse(String.valueOf(m), RpcBudget.readOnly(m));
+        // A bulk request that can't get a slot by its deadline is skipped: only safe if it changes nothing.
+        for (String m : RpcHandler.methods()) if (RpcBudget.bulk(m)) assertTrue(m + " is bulk but not read-only", RpcBudget.readOnly(m));
     }
 
     private static String rep(char c, int n) {
@@ -109,30 +118,187 @@ public class RpcBudgetTest {
         assertEquals(RpcBudget.SERVER_DEFAULT_MS, constant(read("lib/agents.js"), "DEFAULT_TIMEOUT_MS"));
         assertEquals(RpcBudget.SERVER_TRANSFER_MS, constant(read("lib/agent-stream.ts"), "STREAM_CHUNK_TIMEOUT_MS"));
 
-        // No call site gives any RPC longer than the longest budget, and only the transfer
-        // methods and agent-ask get more than the default.
-        Pattern literal = Pattern.compile("timeoutMs:\\s*([0-9_]+)");
-        List<String> over = new ArrayList<>();
-        int[] scanned = {0};
-        Files.walkFileTree(WEB, new SimpleFileVisitor<Path>() {
-            @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                String n = dir.getFileName().toString();
-                return n.equals("node_modules") || n.startsWith(".next") || n.equals("__tests__") ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
-            }
-            @Override public FileVisitResult visitFile(Path f, BasicFileAttributes attrs) throws IOException {
-                String n = f.getFileName().toString();
-                if (!(n.endsWith(".ts") || n.endsWith(".tsx") || n.endsWith(".js")) || n.contains(".test.")) return FileVisitResult.CONTINUE;
-                scanned[0]++;
-                Matcher m = literal.matcher(new String(Files.readAllBytes(f), StandardCharsets.UTF_8));
-                while (m.find()) {
-                    long ms = Long.parseLong(m.group(1).replace("_", ""));
-                    if (ms > RpcBudget.SERVER_TRANSFER_MS) over.add(WEB.relativize(f) + ": " + ms);
+        // Every call site gives its method at most the phone's budget for that method.
+        List<String> checked = new ArrayList<>();
+        List<String> drift = TimeoutScan.drift(WEB, checked);
+        assertTrue("server timeouts the phone would not wait for: " + drift, drift.isEmpty());
+        assertTrue("the scan found the web's RPC timeouts: " + checked, checked.size() >= 3);
+    }
+
+    @Rule public TemporaryFolder tmp = new TemporaryFolder();
+
+    private void write(Path root, String rel, String src) throws IOException {
+        Path f = root.resolve(rel);
+        Files.createDirectories(f.getParent());
+        Files.write(f, src.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** The scan catches a timeout that drifts for ONE method, not only one past the longest budget. */
+    @Test
+    public void theTimeoutScanCatchesPerMethodDrift() throws Exception {
+        Path web = tmp.newFolder("web").toPath();
+        // Too long for its method (read: 25 s), though under the longest budget.
+        write(web, "lib/a.ts", "export async function a() {\n  await callAgent(d, s, { method: \"read\", path }, { timeoutMs: 60_000 });\n}\n");
+        // Fine: a constant from this file, a comment that names another method, a multi-line call.
+        write(web, "lib/b.ts", "const T = 120_000;\nawait callAgent(d, s, {\n  // method: \"read\" is not this call's method\n  method: \"upload-chunk\", path: \"a)b\",\n  data,\n}, { timeoutMs: T });\n");
+        // A constant from another file, too long for `write`.
+        write(web, "lib/c.ts", "export const LONG_MS = 60_000;\n");
+        write(web, "lib/d.ts", "import { LONG_MS } from \"./c\";\nsendRpc(id, { method: 'write', path }, { timeoutMs: LONG_MS });\n");
+        // No method literal: only the default (which every method's budget covers) is safe.
+        write(web, "lib/e.ts", "callAgent(d, s, params, { timeoutMs: 60_000 });\ncallAgent(d, s, params, { timeoutMs: 3000 });\n");
+        // Fine, and a value the scan can't read.
+        write(web, "lib/f.ts", "callAgent(d, s, { method: \"agent-ask\", query }, { timeoutMs: 90_000 });\ncallAgent(d, s, { method: \"stat\", path }, { timeoutMs: pick() });\n");
+        // A wrapper's own definition (a typed `timeoutMs?:`) is not a call with a timeout.
+        write(web, "lib/rpc.ts", "export async function callAgent<M extends P[\"method\"]>(id: string, params: Extract<P, { method: M }>, opts: { timeoutMs?: number } = {}) {\n  return sendRpc(id, params, opts);\n}\n");
+        // Not an RPC: only a value past the longest budget counts.
+        write(web, "lib/g.ts", "pollUntil(ok, { intervalMs: 500, timeoutMs: 60_000 });\nwait({ timeoutMs: 300_000 });\n");
+
+        List<String> checked = new ArrayList<>();
+        List<String> drift = TimeoutScan.drift(web, checked);
+        String all = String.join("\n", drift);
+        assertEquals(all, 5, drift.size());
+        assertTrue(all, all.contains("lib/a.ts: read gets 60000 ms"));
+        assertTrue(all, all.contains("lib/d.ts: write gets 60000 ms"));
+        assertTrue(all, all.contains("lib/e.ts: an RPC whose method is not a literal gets 60000 ms"));
+        assertTrue(all, all.contains("lib/f.ts: stat: can't read timeoutMs"));
+        assertTrue(all, all.contains("lib/g.ts: 300000 ms"));
+        assertTrue(checked.toString(), checked.contains("lib/b.ts: upload-chunk 120000"));
+        assertTrue(checked.toString(), checked.contains("lib/f.ts: agent-ask 90000"));
+    }
+
+    /**
+     * Reads the web's RPC call sites (`callAgent(` / `sendRpc(`) without a JS parser: each call's
+     * argument text (strings and comments skipped), its first `method: "…"` literal, and its
+     * `timeoutMs` — a number or a constant defined anywhere in web/. A call past its method's
+     * budget, a timeout it can't read, or a call with no method literal given more than the
+     * default is reported; so is a `timeoutMs:` outside such a call past the longest budget (a
+     * wrapper's caller). A timeout passed in a variable `opts` object is not seen.
+     */
+    static final class TimeoutScan {
+        private static final Pattern CALL = Pattern.compile("\\b(?:callAgent|sendRpc)\\s*(?:<[^()]*?>)?\\s*\\(");
+        private static final Pattern METHOD = Pattern.compile("[\"']?\\bmethod[\"']?\\s*:\\s*[\"']([^\"']+)[\"']");
+        /** `timeoutMs: <value>`, or a bare `timeoutMs` (shorthand: a variable) — not a type's `timeoutMs?:`. */
+        private static final Pattern TIMEOUT = Pattern.compile("\\btimeoutMs\\b(?!\\s*\\?)(\\s*:\\s*([^,}\\)]+))?");
+        private static final Pattern CONSTANT = Pattern.compile("\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::\\s*number\\s*)?=\\s*([0-9][0-9_]*)\\s*[;,\\n]");
+
+        static List<String> drift(Path web, List<String> checked) throws IOException {
+            Map<Path, String> code = new HashMap<>();
+            Files.walkFileTree(web, new SimpleFileVisitor<Path>() {
+                @Override public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    String n = dir.getFileName().toString();
+                    return n.equals("node_modules") || n.startsWith(".next") || n.equals("__tests__") ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
                 }
-                return FileVisitResult.CONTINUE;
+                @Override public FileVisitResult visitFile(Path f, BasicFileAttributes attrs) throws IOException {
+                    String n = f.getFileName().toString();
+                    if (n.contains(".test.") || n.endsWith(".d.ts")) return FileVisitResult.CONTINUE;
+                    if (n.endsWith(".ts") || n.endsWith(".tsx") || n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".cjs"))
+                        code.put(f, withoutComments(new String(Files.readAllBytes(f), StandardCharsets.UTF_8)));
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+            Map<String, TreeSet<Long>> global = new HashMap<>();
+            for (String src : code.values()) constants(src, global);
+
+            List<String> drift = new ArrayList<>();
+            for (Map.Entry<Path, String> e : code.entrySet()) {
+                String rel = web.relativize(e.getKey()).toString().replace('\\', '/'), src = e.getValue();
+                Map<String, TreeSet<Long>> local = new HashMap<>();
+                constants(src, local);
+                List<int[]> calls = new ArrayList<>();
+                Matcher c = CALL.matcher(src);
+                while (c.find()) {
+                    int close = closeParen(src, c.end() - 1);
+                    if (close < 0) continue;
+                    calls.add(new int[]{c.end(), close});
+                    String args = src.substring(c.end(), close);
+                    Matcher t = TIMEOUT.matcher(args);
+                    if (!t.find()) continue;                         // the default: within every budget
+                    Matcher m = METHOD.matcher(args);
+                    String method = m.find() ? m.group(1) : null;
+                    Long ms = t.group(2) == null ? null : value(t.group(2).trim(), local, global);
+                    if (ms == null) { drift.add(rel + ": " + (method == null ? "an RPC" : method) + ": can't read timeoutMs"); continue; }
+                    if (method == null) {
+                        if (ms > RpcBudget.SERVER_DEFAULT_MS) drift.add(rel + ": an RPC whose method is not a literal gets " + ms + " ms");
+                        continue;
+                    }
+                    checked.add(rel + ": " + method + " " + ms);
+                    if (ms > RpcBudget.serverTimeoutMs(method))
+                        drift.add(rel + ": " + method + " gets " + ms + " ms, the phone waits " + RpcBudget.serverTimeoutMs(method) + " ms");
+                }
+                // Outside those calls (a wrapper's caller): nothing past the longest budget.
+                Matcher t = TIMEOUT.matcher(src);
+                while (t.find()) {
+                    if (t.group(2) == null || inside(calls, t.start())) continue;
+                    Long ms = value(t.group(2).trim(), local, global);
+                    if (ms != null && ms > RpcBudget.SERVER_TRANSFER_MS) drift.add(rel + ": " + ms + " ms, past every budget");
+                }
             }
-        });
-        assertTrue(scanned[0] > 50);
-        assertTrue("server timeouts longer than the phone's budget: " + over, over.isEmpty());
+            java.util.Collections.sort(drift);
+            java.util.Collections.sort(checked);
+            return drift;
+        }
+
+        private static boolean inside(List<int[]> spans, int at) {
+            for (int[] s : spans) if (at >= s[0] && at < s[1]) return true;
+            return false;
+        }
+
+        private static void constants(String src, Map<String, TreeSet<Long>> into) {
+            Matcher m = CONSTANT.matcher(src);
+            while (m.find()) into.computeIfAbsent(m.group(1), k -> new TreeSet<>()).add(Long.parseLong(m.group(2).replace("_", "")));
+        }
+
+        /** A number, or a constant (this file's first, else any file's; the largest when defined twice). */
+        private static Long value(String v, Map<String, TreeSet<Long>> local, Map<String, TreeSet<Long>> global) {
+            if (v.matches("[0-9][0-9_]*")) return Long.parseLong(v.replace("_", ""));
+            if (!v.matches("[A-Za-z_$][\\w$]*")) return null;
+            TreeSet<Long> s = local.containsKey(v) ? local.get(v) : global.get(v);
+            return s == null ? null : s.last();
+        }
+
+        /** Index of the `)` closing the `(` at `open`, skipping strings; -1 when unbalanced. */
+        static int closeParen(String src, int open) {
+            int depth = 0;
+            for (int i = open; i < src.length(); i++) {
+                char ch = src.charAt(i);
+                if (ch == '"' || ch == '\'' || ch == '`') { i = endOfString(src, i); if (i < 0) return -1; continue; }
+                if (ch == '(' || ch == '[' || ch == '{') depth++;
+                else if (ch == ')' || ch == ']' || ch == '}') { if (--depth == 0) return ch == ')' ? i : -1; }
+            }
+            return -1;
+        }
+
+        private static int endOfString(String src, int start) {
+            char q = src.charAt(start);
+            for (int i = start + 1; i < src.length(); i++) {
+                char ch = src.charAt(i);
+                if (ch == '\\') { i++; continue; }
+                if (ch == q) return i;
+                if (ch == '\n' && q != '`') return i;              // an unterminated quote ends with its line
+            }
+            return -1;
+        }
+
+        /** The source with every comment blanked out (same length, newlines kept); strings untouched. */
+        static String withoutComments(String src) {
+            StringBuilder out = new StringBuilder(src);
+            for (int i = 0; i < src.length(); i++) {
+                char ch = src.charAt(i);
+                if (ch == '"' || ch == '\'' || ch == '`') { int end = endOfString(src, i); if (end < 0) break; i = end; continue; }
+                if (ch == '/' && i + 1 < src.length() && src.charAt(i + 1) == '/') {
+                    int end = src.indexOf('\n', i);
+                    if (end < 0) end = src.length();
+                    for (int k = i; k < end; k++) out.setCharAt(k, ' ');
+                    i = end;
+                } else if (ch == '/' && i + 1 < src.length() && src.charAt(i + 1) == '*') {
+                    int end = src.indexOf("*/", i + 2);
+                    end = end < 0 ? src.length() : end + 2;
+                    for (int k = i; k < end; k++) if (src.charAt(k) != '\n') out.setCharAt(k, ' ');
+                    i = end - 1;
+                }
+            }
+            return out.toString();
+        }
     }
 
     // ------------------------------------------------------------ lanes
@@ -174,15 +340,77 @@ public class RpcBudgetTest {
 
         /** What onMessage + onFrame do: pick the lane by method, then send the reply with the arrival deadline. */
         Future<Long> answer(String method, String reply, long deadlineMs) {
+            return answer(method, reply, deadlineMs, null, 0, null, null);
+        }
+
+        /**
+         * The same with the phone's bulk slots: a bulk request takes one before it reads (here:
+         * holds `readMs`, counted in `inFlight`/`peak`) and keeps it until its reply is sent.
+         * -1 when the reply was not sent, -2 when no slot came before the deadline.
+         */
+        Future<Long> answer(String method, String reply, long deadlineMs, Semaphore slots, long readMs, AtomicInteger inFlight, AtomicInteger peak) {
             long arrived = System.nanoTime();
             long deadline = arrived + deadlineMs * 1_000_000L;
             return (RpcBudget.bulk(method) ? bulk : control).submit(() -> {
-                SendGate.Result r = gate.send(link, reply, deadline, () -> true);
-                return r == SendGate.Result.SENT ? (System.nanoTime() - arrived) / 1_000_000L : -1L;
+                boolean slot = slots != null && RpcBudget.bulk(method);
+                if (slot && !RpcBudget.takeSlot(slots, deadline)) return -2L;
+                try {
+                    if (inFlight != null) { int n = inFlight.incrementAndGet(); peak.accumulateAndGet(n, Math::max); }
+                    try {
+                        if (readMs > 0) Thread.sleep(readMs);
+                        SendGate.Result r = gate.send(link, reply, deadline, () -> true);
+                        return r == SendGate.Result.SENT ? (System.nanoTime() - arrived) / 1_000_000L : -1L;
+                    } finally { if (inFlight != null) inFlight.decrementAndGet(); }
+                } finally { if (slot) slots.release(); }
             });
         }
 
         void stop() { bulk.shutdownNow(); control.shutdownNow(); }
+    }
+
+    /** How many bulk replies were in memory at once: three drives, each reading on both its bulk workers. */
+    private static int peakBulkInFlight(Semaphore slots) throws Exception {
+        List<Drive> drives = new ArrayList<>();
+        for (int i = 0; i < 3; i++) drives.add(new Drive("d" + i, 50_000_000));
+        AtomicInteger inFlight = new AtomicInteger(), peak = new AtomicInteger();
+        try {
+            List<Future<Long>> reads = new ArrayList<>();
+            for (Drive d : drives) for (int i = 0; i < 4; i++) reads.add(d.answer("read", rep('x', 100_000), 20_000, slots, 150, inFlight, peak));
+            for (Future<Long> f : reads) assertTrue(f.get(20, TimeUnit.SECONDS) >= 0);
+            return peak.get();
+        } finally {
+            for (Drive d : drives) d.stop();
+        }
+    }
+
+    @Test
+    public void bigRepliesInFlightAreCappedAcrossDrives() throws Exception {
+        // Without a shared cap the lanes alone let 3 drives × 2 bulk workers read at once…
+        assertEquals(3 * RpcBudget.BULK_WORKERS, peakBulkInFlight(new Semaphore(100)));
+        // …with the phone's bulk slots, never more than the old process-wide pool.
+        int peak = peakBulkInFlight(RpcBudget.bulkSlots());
+        assertTrue("peak " + peak, peak <= RpcBudget.MAX_BULK_IN_FLIGHT && peak >= 2);
+    }
+
+    @Test
+    public void aBulkRequestWithNoSlotByItsDeadlineIsSkipped() throws Exception {
+        Semaphore slots = RpcBudget.bulkSlots();
+        slots.acquire(RpcBudget.MAX_BULK_IN_FLIGHT);                 // four big replies elsewhere
+        Drive d = new Drive("d", 50_000_000);
+        try {
+            long t0 = System.nanoTime();
+            assertEquals(-2L, (long) d.answer("read", "{}", 200, slots, 0, null, null).get(5, TimeUnit.SECONDS));
+            long waited = (System.nanoTime() - t0) / 1_000_000L;
+            assertTrue("waited " + waited + " ms", waited >= 150 && waited < 2_000);
+            // A list is not bulk: it never waits for a slot.
+            assertTrue(d.answer("list", "{}", 200, slots, 0, null, null).get(5, TimeUnit.SECONDS) >= 0);
+            // One slot frees up: the next read gets it.
+            slots.release();
+            assertTrue(d.answer("read", "{}", 2_000, slots, 0, null, null).get(5, TimeUnit.SECONDS) >= 0);
+            assertFalse("a past deadline takes no slot", RpcBudget.takeSlot(slots, System.nanoTime() - 1));
+        } finally {
+            d.stop();
+        }
     }
 
     @Test
