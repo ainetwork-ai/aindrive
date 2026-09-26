@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { generateDeviceKey } from "@/shared/willow/keys";
 import { toHex } from "@/shared/willow/bytes";
 import {
-  issueAttestedCert, issueDeviceCert, issueWalletCert, walletCertMessageLine, signLink, revoke, resolvePerson, type Trust,
+  issueAttestedCert, issueDeviceCert, issueWalletCert, walletCertMessageLine, signLink, revoke, revokeAttested, resolvePerson, type Trust,
 } from "@/shared/willow/cert";
 
 const T0 = 1_000_000n;
@@ -66,7 +66,7 @@ describe("device certificates", () => {
     const phone = await generateDeviceKey();
     const c1 = await issueAttestedCert(aindrive, laptop.publicKey, "u-mom", "laptop", T0);
     const c2 = await issueAttestedCert(aindrive, phone.publicKey, "u-mom", "phone", T0);
-    const r = await revoke(laptop, phone.publicKey, "u-mom", T0 + 100n);
+    const r = await revokeAttested(aindrive, phone.publicKey, "u-mom", T0 + 100n); // only the device itself or aindrive may revoke (review C1)
     expect(await resolvePerson(toHex(phone.publicKey), [c1, c2], [r], trust, T0 + 50n)).not.toBeNull();
     expect(await resolvePerson(toHex(phone.publicKey), [c1, c2], [r], trust, T0 + 100n)).toBeNull();
   });

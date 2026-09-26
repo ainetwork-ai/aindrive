@@ -12,8 +12,11 @@ export type Grant = {
   v: 1; driveId: string; userId: string; role: Role; pathPrefix: string[]; expiresAt?: string; issuedAt: string;
   issuer: { type: "attestation" | "device"; key: string }; sig: string;
 };
-export type PolicyCtx = { driveId: string; ownerUserId: string; grants: Grant[]; certs: Cert[]; revocations: Revocation[]; trust: Trust };
-export type EntryMeta = { subspaceHex: string; path: string[]; timestamp: bigint };
+/** `now` is the receiving peer's clock (µs): revocation and expiry are judged at the
+ *  later of `now` and the entry's own timestamp, so a backdated entry gets nothing. */
+export type PolicyCtx = { driveId: string; ownerUserId: string; grants: Grant[]; certs: Cert[]; revocations: Revocation[]; trust: Trust; now?: bigint };
+/** `cert` is the parsed payload of an `_id/cert` entry; `payloadLength` caps `_id` entries. */
+export type EntryMeta = { subspaceHex: string; path: string[]; timestamp: bigint; payloadLength?: bigint; cert?: Cert };
 export type Verdict =
   | { ok: true; person: Person | null }
   | { ok: false; reason: "unknown-device" | "revoked" | "not-a-member" | "outside-grant" | "expired" | "bad-grant" };
@@ -28,20 +31,45 @@ export async function signGrant(signer: DeviceKeypair, issuerType: "attestation"
 
 const isPrefix = (prefix: string[], path: string[]) => prefix.length <= path.length && prefix.every((c, i) => path[i] === c);
 
+const ID_MAX = 4096n;
+const HEX64 = /^[0-9a-f]{64}$/;
+const later = (a: bigint, b?: bigint) => (b !== undefined && b > a ? b : a);
+
 async function grantValid(g: Grant, ctx: PolicyCtx): Promise<boolean> {
-  if (g.driveId !== ctx.driveId) return false;
-  const { sig, ...rest } = g;
-  if (!(await verify(fromHex(g.issuer.key), grantBody(rest), fromHex(sig)))) return false;
-  if (g.issuer.type === "attestation") return ctx.trust.attestationKeys.includes(g.issuer.key);
-  const issuer = await resolvePerson(g.issuer.key, ctx.certs, ctx.revocations, ctx.trust, BigInt(g.issuedAt));
-  return issuer?.userId === ctx.ownerUserId;
+  try {
+    if (g.driveId !== ctx.driveId) return false;
+    const { sig, ...rest } = g;
+    if (!(await verify(fromHex(g.issuer.key), grantBody(rest), fromHex(sig)))) return false;
+    if (g.issuer.type === "attestation") return ctx.trust.attestationKeys.includes(g.issuer.key);
+    // the owner's device must be valid now, not just when it claims to have signed
+    const issuer = await resolvePerson(g.issuer.key, ctx.certs, ctx.revocations, ctx.trust, later(BigInt(g.issuedAt), ctx.now));
+    return issuer?.userId === ctx.ownerUserId;
+  } catch {
+    return false;
+  }
 }
 
 export async function mayWrite(e: EntryMeta, ctx: PolicyCtx): Promise<Verdict> {
   const [head, ...rest] = e.path;
-  if (head === "_id") return { ok: true, person: null };
+  const t = later(e.timestamp, ctx.now);
 
-  const now = await resolvePerson(e.subspaceHex, ctx.certs, ctx.revocations, ctx.trust, e.timestamp);
+  if (head === "_id") {
+    const cert = rest.length === 1 && rest[0] === "cert";
+    const rev = rest.length === 2 && rest[0] === "revoke" && HEX64.test(rest[1]);
+    if (!cert && !rev) return { ok: false, reason: "outside-grant" };
+    if (e.payloadLength !== undefined && e.payloadLength > ID_MAX) return { ok: false, reason: "outside-grant" };
+    if (cert && e.cert) {
+      if (e.cert.deviceKey !== e.subspaceHex) return { ok: false, reason: "unknown-device" };
+      // a device-issued certificate needs an issuer that is valid now (no backdated minting by a revoked device)
+      if (e.cert.issuer?.type === "device" && !(await resolvePerson(e.cert.issuer.key, ctx.certs, ctx.revocations, ctx.trust, t)))
+        return { ok: false, reason: "revoked" };
+      const p = await resolvePerson(e.subspaceHex, [...ctx.certs, e.cert], ctx.revocations, ctx.trust, t);
+      if (!p) return { ok: false, reason: "unknown-device" };
+    }
+    return { ok: true, person: null };
+  }
+
+  const now = await resolvePerson(e.subspaceHex, ctx.certs, ctx.revocations, ctx.trust, t);
   if (!now) {
     const ever = await resolvePerson(e.subspaceHex, ctx.certs, [], ctx.trust);
     return { ok: false, reason: ever ? "revoked" : "unknown-device" };
@@ -50,13 +78,19 @@ export async function mayWrite(e: EntryMeta, ctx: PolicyCtx): Promise<Verdict> {
   if (head !== "doc") return { ok: false, reason: "outside-grant" };
   if (now.userId === ctx.ownerUserId) return { ok: true, person: now };
 
-  const docPath = rest.slice(0, rest.indexOf("~u") < 0 ? rest.length : rest.indexOf("~u"));
+  const u = rest.indexOf("~u");
+  const docPath = rest.slice(0, u < 0 ? rest.length : u);
   let member = false;
-  for (const g of ctx.grants.filter((g) => g.userId === now.userId && WRITE.includes(g.role))) {
-    if (g.expiresAt && e.timestamp >= BigInt(g.expiresAt)) continue;
-    if (!(await grantValid(g, ctx))) continue;
-    member = true;
-    if (isPrefix(g.pathPrefix, docPath)) return { ok: true, person: now };
+  for (const g of ctx.grants) {
+    try {
+      if (g.userId !== now.userId || !WRITE.includes(g.role)) continue;
+      if (g.expiresAt && t >= BigInt(g.expiresAt)) continue;
+      if (!(await grantValid(g, ctx))) continue;
+      member = true;
+      if (isPrefix(g.pathPrefix, docPath)) return { ok: true, person: now };
+    } catch {
+      continue;
+    }
   }
   return { ok: false, reason: member ? "outside-grant" : "not-a-member" };
 }

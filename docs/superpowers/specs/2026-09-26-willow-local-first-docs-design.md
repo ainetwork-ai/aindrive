@@ -70,9 +70,13 @@ An email account that later links a wallet gets self-sovereign certificates for 
 devices from then on. Certificates are Willow entries in the device's own subspace at
 `["_id", "cert"]`, so they sync with the data they explain.
 
-**Revocation.** "Remove this device" (account page) writes a revocation entry signed by
-another device of the same person. From its timestamp on, peers refuse that device's
-new entries. Edits made before it stay attributed.
+**Revocation.** "Remove this device" (account page, signed in) writes a revocation
+signed by aindrive's attestation key; a device may also retire itself. Another device
+cannot revoke a device, so a stolen device cannot lock its owner's others out. Peers
+judge revocation at the later of their own clock and the entry's timestamp, so a
+revoked device cannot backdate new entries; the cost is that offline edits it made
+before the revocation but syncs afterwards are refused. Edits already accepted stay
+attributed. A device paired by a device that is later retired stays valid.
 
 ## 5. Data layout in a drive's namespace
 

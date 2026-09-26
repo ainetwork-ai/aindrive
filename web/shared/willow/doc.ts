@@ -34,9 +34,16 @@ export async function readUpdates(store: AnyStore, docPath: string[]) {
 
 export async function loadDoc(store: AnyStore, docPath: string[]): Promise<Y.Doc> {
   const doc = new Y.Doc();
-  for (const u of await readUpdates(store, docPath)) Y.applyUpdate(doc, u.update);
+  for (const u of await readUpdates(store, docPath)) {
+    // one corrupt update must not make the document unloadable for everyone
+    try { Y.applyUpdate(doc, u.update); } catch {}
+  }
   return doc;
 }
+
+const clientsOf = (update: Uint8Array): number[] => {
+  try { return [...new Set(Y.decodeUpdate(update).structs.map((s) => s.id.client))]; } catch { return []; }
+};
 
 export async function compactOwn(store: AnyStore, kp: DeviceKeypair, docPath: string[]): Promise<void> {
   const me = toHex(kp.publicKey);
@@ -48,10 +55,18 @@ export async function compactOwn(store: AnyStore, kp: DeviceKeypair, docPath: st
   if (r.kind !== "success") throw new Error(`snapshot not stored: ${r.kind}`);
 }
 
+/** Yjs clientID → the device (subspace hex) that first used it, in timestamp order.
+ *  A later update from another device reusing that id does not take it over. */
 export async function authorsByClient(store: AnyStore, docPath: string[]): Promise<Map<number, string>> {
   const map = new Map<number, string>();
-  for (const u of await readUpdates(store, docPath)) {
-    for (const s of Y.decodeUpdate(u.update).structs) map.set(s.id.client, u.subspaceHex);
-  }
+  const ups = (await readUpdates(store, docPath)).sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  for (const u of ups) for (const c of clientsOf(u.update)) if (!map.has(c)) map.set(c, u.subspaceHex);
   return map;
+}
+
+/** True when `update` uses a Yjs clientID that another device already owns in this
+ *  document: peers refuse such an entry at ingest, so authorship cannot be forged. */
+export async function clientClaimConflict(store: AnyStore, docPath: string[], subspaceHex: string, update: Uint8Array): Promise<boolean> {
+  const owners = await authorsByClient(store, docPath);
+  return clientsOf(update).some((c) => owners.has(c) && owners.get(c) !== subspaceHex);
 }
