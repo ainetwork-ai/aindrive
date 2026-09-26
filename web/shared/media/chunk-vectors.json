@@ -1,0 +1,26 @@
+[
+  {
+    "size": 0,
+    "root": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "size": 1,
+    "root": "b6d58dfa6547c1eb7f0d4ffd3e3bd6452213210ea51baa70b97c31f011187215"
+  },
+  {
+    "size": 1048575,
+    "root": "e7a0e9d0d626fb286db6402746efa0b15a8d6754fa63b0dfdbe62702af527ffe"
+  },
+  {
+    "size": 1048576,
+    "root": "e6275c3ee9ba455f68a9da0124b847ee3384886cab6c9fad2145ac272664b107"
+  },
+  {
+    "size": 1048577,
+    "root": "ddf0da75d3892f17aecaaab45948e59343681d478713366e641e3c1d54b70f34"
+  },
+  {
+    "size": 3145728,
+    "root": "5c0661eacf2622341f5ca40ce05fe0f46c69623a379e1b13ed354490c0ecb8b8"
+  }
+]

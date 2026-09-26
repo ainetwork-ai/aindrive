@@ -51,6 +51,7 @@ Agent domain (pure, no I/O):
 Policy:
 - `domain/policy/path.ts` — `pathCovers(prefix, target)`, Willow path-prefix semantics.
 - `domain/policy/system-paths.ts` — `isSystemPath`; flags the reserved `.aindrive/` subtree.
+- `willow/` — Willow building blocks (keys, schemes, certificates, policy, documents); see `willow/README.md`. `media/chunks.ts` — the chunked media digest.
 
 Display (pure, no I/O):
 - `wallet-display.ts` — `isWalletOnlyEmail` / `walletDisplayLabel`; de-leaks the
