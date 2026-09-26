@@ -314,6 +314,37 @@ public class AindriveAgentPlugin extends Plugin {
                 });
     }
 
+    /**
+     * Register files for handoff links (web/lib/handoff.ts): each gets a random key the server links
+     * to; `handoff-read` serves only these. Returns [{key, name, mime, size}] for the server call.
+     */
+    @PluginMethod
+    public void registerHandoffs(PluginCall call) {
+        com.getcapacitor.JSArray files = call.getArray("files");
+        long ttlMs = call.getLong("ttlSeconds", 900L) * 1000L;
+        if (files == null) { call.reject("missing files"); return; }
+        new Thread(() -> {
+            try {
+                com.getcapacitor.JSArray out = new com.getcapacitor.JSArray();
+                java.security.SecureRandom rnd = new java.security.SecureRandom();
+                for (int i = 0; i < files.length(); i++) {
+                    org.json.JSONObject f = files.getJSONObject(i);
+                    String folderUri = f.getString("folderUri"), path = f.getString("path");
+                    SafFs.Entry st = new SafFs(getContext(), Uri.parse(folderUri)).stat(path);
+                    if (st == null || st.isDir) throw new java.io.FileNotFoundException(path);
+                    byte[] k = new byte[18]; rnd.nextBytes(k);
+                    String key = android.util.Base64.encodeToString(k, android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP | android.util.Base64.NO_PADDING);
+                    Handoffs.register(getContext(), key, folderUri, path, System.currentTimeMillis() + ttlMs + 60_000);
+                    JSObject o = new JSObject();
+                    o.put("key", key); o.put("path", path); o.put("name", st.name);
+                    o.put("mime", st.mime == null ? "application/octet-stream" : st.mime); o.put("size", st.size);
+                    out.put(o);
+                }
+                JSObject ret = new JSObject(); ret.put("files", out); call.resolve(ret);
+            } catch (Exception e) { call.reject("Could not prepare files: " + e.getMessage()); }
+        }, "aindrive-handoff").start();
+    }
+
     /** Hand a file to whatever app handles its type (the phone's "open"). */
     @PluginMethod
     public void openFile(PluginCall call) {

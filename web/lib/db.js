@@ -115,6 +115,33 @@ function open() {
       FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_account_google_account ON account_google(account_id);
+    -- File handoff links: one file, picked on the owner's device, readable by an outside agent
+    -- through a short-lived URL. Bytes come from the device (carrier drive's agent), never stored here.
+    CREATE TABLE IF NOT EXISTS file_handoffs (
+      id TEXT PRIMARY KEY,
+      secret_hash TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      drive_id TEXT NOT NULL,
+      device_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      audience TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_handoffs_owner ON file_handoffs(owner_id, created_at);
+    CREATE TABLE IF NOT EXISTS file_handoff_fetches (
+      handoff_id TEXT NOT NULL,
+      at TEXT NOT NULL DEFAULT (datetime('now')),
+      ip TEXT,
+      user_agent TEXT,
+      status INTEGER NOT NULL,
+      FOREIGN KEY(handoff_id) REFERENCES file_handoffs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_file_handoff_fetches ON file_handoff_fetches(handoff_id);
     -- Invites for emails that don't have an account yet. On signup these convert
     -- to drive_members (upgrade-only) and are deleted; a registered invitee is
     -- granted immediately and never lands here. UNIQUE keeps one pending grant

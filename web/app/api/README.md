@@ -13,6 +13,7 @@ Auth / identity:
 | Route | Role / gate |
 |-------|-------------|
 | `auth/login`, `auth/signup`, `auth/logout` | email+password session cookie; rate-limited. First-ever signup → `admin`. |
+| `handoffs` (POST/GET/DELETE `?audience`), `handoffs/[id]` (DELETE), `h/[id]` (GET, public) | file handoff links for A2A (`lib/handoff.ts`): the owner's device registers picked files, POST mints one short-lived link per file (`/api/h/<id>?k=<secret>`), a fetch is checked (secret/expiry/revocation), logged, and streamed from the device via the `handoff-read` RPC on a connected drive. Owners list (with fetch counts) and revoke. |
 | `auth/google` | GET → `{clientId}` (404 unless `AINDRIVE_GOOGLE_CLIENT_IDS`); POST `{idToken}` → verifies a Google ID token (`lib/google-auth.ts`: JWKS, issuer, our audience, verified email), links/creates the account, sets the cookie and returns `{token, user}` for native apps. |
 | `auth/cli/{start,approve,poll}` | device-link flow: CLI starts, browser (logged-in) approves a `linkId`, CLI polls with its device secret to get a session token. |
 | `auth/me`, `whoami` | current user (+ wallet, for whoami). |

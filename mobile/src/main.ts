@@ -21,7 +21,7 @@ import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, c
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
-import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent } from "./a2a";
+import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type LinkedFile } from "./a2a";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
 import { ManageSheet } from "./manage-sheet";
@@ -86,7 +86,8 @@ let busy: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
 /** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
-interface Turn { q: string; r?: AskResult; error?: string; at: number; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
+interface HandoffLink { id: string; name: string; expiresAt: string; revoked?: boolean }
+interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Files handed to the A2A agent as links (revocable). */ handoffs?: HandoffLink[]; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
 /** A2A agents added to this chat, next to the on-device agent (which is always here). */
 let a2aAgents: A2aAgent[] = [];
 /** Each agent's A2A conversation id for this thread, so it keeps context. */
@@ -113,6 +114,49 @@ async function ensureDefaultAgent() {
   } catch { /* offline: try again next launch */ }
 }
 
+/** "these / them / those photos / this file": the message is about the files in the last answer. */
+const REFERS_TO_FILES = /\b(these|those|them|this (photo|picture|file|recording|document)|the (photos?|pictures?|files?|recordings?|documents?|pdfs?|images?))\b|이것|이거|그것|그거|이 사진|그 사진|사진들|파일들/i;
+const HANDOFF_TTL_SECONDS = 15 * 60;
+const HANDOFF_MAX = 10;
+
+/**
+ * Files from the last answer to hand to an A2A agent, as short-lived links (web/lib/handoff.ts):
+ * asks first, registers exactly those files on the phone, mints one link per file, and returns them
+ * for the A2A message. Bytes go phone → server → agent only when the agent fetches the link.
+ */
+async function handoffFiles(agent: A2aAgent, text: string): Promise<{ files: LinkedFile[]; links: HandoffLink[] } | null> {
+  const src = askResult?.sources ?? [];
+  if (!src.length || !REFERS_TO_FILES.test(text)) return { files: [], links: [] };
+  const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ s, folder: localFolderFor(s.driveId) })).filter((x) => x.folder);
+  if (!picked.length) return { files: [], links: [] };
+  // The links travel through a drive connected to aindrive (P2P on): any of the owner's will do.
+  const carrier = state.shares.find((sh) => sh.drive && driveStatus(sh)?.connected);
+  if (!carrier?.drive) { notify("Turn P2P on for a folder first — the files go out through it.", true); return null; }
+  const names = picked.map((x) => x.s.path.split("/").pop()).join(", ");
+  const ok = await confirmAsync(`Send ${picked.length} file${picked.length === 1 ? "" : "s"} to ${agent.name}?`,
+    `${names}\n\n${agent.name} gets a link to each file that works for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this phone until it opens a link, and you can revoke them any time.`, "Send links");
+  if (!ok) return null;
+  const reg = await AindriveAgent.registerHandoffs({ files: picked.map((x) => ({ folderUri: x.folder!.folder.uri, path: x.s.path })), ttlSeconds: HANDOFF_TTL_SECONDS });
+  const r = await new Web(state.server, state.sessionCookie!).handoffs({
+    driveId: carrier.drive.driveId, audience: agent.name, ttlSeconds: HANDOFF_TTL_SECONDS,
+    files: reg.files.map((f) => ({ deviceKey: f.key, name: f.name, mime: f.mime, size: f.size })),
+  });
+  const mime = new Map(reg.files.map((f) => [f.key, f.mime]));
+  return {
+    files: r.links.map((l) => ({ uri: l.url, name: l.name, mimeType: mime.get(l.deviceKey) ?? "application/octet-stream" })),
+    links: r.links.map((l) => ({ id: l.id, name: l.name, expiresAt: l.expiresAt })),
+  };
+}
+
+async function revokeHandoff(turn: number, id?: string) {
+  const t = thread[turn]; if (!t?.handoffs) return;
+  const web = new Web(state.server, state.sessionCookie!);
+  for (const h of t.handoffs) if (!h.revoked && (!id || h.id === id)) {
+    try { await web.revokeHandoff(h.id); h.revoked = true; } catch (e) { notify(msgOf(e), true); }
+  }
+  await saveThread(); render();
+}
+
 /** "@Weather what's up tomorrow" → that agent and the rest of the message. */
 function mentioned(q: string): { agent: A2aAgent; text: string } | null {
   const m = /^@(\S+)\s*(.*)$/s.exec(q.trim());
@@ -123,11 +167,11 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
 }
 
 /** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
-async function askA2a(agents: A2aAgent[], text: string): Promise<{ answer: string; errors: string[] }> {
+async function askA2a(agents: A2aAgent[], text: string, files: LinkedFile[] = []): Promise<{ answer: string; errors: string[] }> {
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
-      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own);
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, files);
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
@@ -1204,11 +1248,15 @@ async function ask(q = askQuery) {
   askQuery = q;
   const direct = mentioned(q);
   if (direct) {
+    let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
+    try { handed = await handoffFiles(direct.agent, direct.text); }
+    catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
+    if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
     try {
-      const r = await askA2a([direct.agent], direct.text);
+      const r = await askA2a([direct.agent], direct.text, handed.files);
       askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
-      thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
+      thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(handed.links.length ? { handoffs: handed.links } : {}), ...(r.answer ? {} : { error: r.errors.join("\n") }) });
     } finally { askBusy = false; askQuery = ""; await saveThread(); render(); }
     return;
   }
@@ -1835,6 +1883,11 @@ function searchSheet(): string {
         <div class="bubble">${esc(t.q)}</div>
         ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
           ${last ? actionCard : collected(t.r) ? `<div class="card action compact"><div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(t.r.action!.label ?? t.r.action!.folder ?? "")}</b> <span class="hint">· ${t.r.action!.copied ?? 0} files</span></span></div>${folderStrip(t.r, i)}</div>` : ""}
+          ${t.handoffs?.length ? (() => {
+            const live = t.handoffs!.filter((h) => !h.revoked && Date.parse(h.expiresAt) > Date.now());
+            const until = new Date(Math.max(...t.handoffs!.map((h) => Date.parse(h.expiresAt)))).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+            return `<div class="card handoff">${icon("link", 16)}<span>${t.handoffs!.length} file${t.handoffs!.length === 1 ? "" : "s"} sent to <b>${esc(t.via ?? "")}</b> as links · ${live.length ? `open until ${esc(until)}` : "links closed"}</span>${live.length ? `<button class="btn small secondary" data-revoke-turn="${i}">Revoke</button>` : ""}</div>`;
+          })() : ""}
           ${t.via ? `<p class="hint via">${icon("globe", 12)} ${esc(t.via)}</p>` : t.in ? `<p class="hint via">${icon("folder", 12)} In ${esc(t.in)}</p>` : ""}
           <p class="answer">${esc(t.r.answer)}</p>
           ${hitsList(t.r, i, last)}` : ""}
@@ -1935,6 +1988,7 @@ function bindSearch() {
   bind("clear-ask", () => { askQuery = ""; render(); (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); });
   bind("new-chat", () => void newChat());
   bind("chat-history", () => { historyOpen = true; render(); });
+  document.querySelectorAll<HTMLElement>("[data-revoke-turn]").forEach((el) => el.addEventListener("click", () => void revokeHandoff(Number(el.dataset.revokeTurn))));
   bind("scope-clear", () => void newChat());
   bind("model-switch", () => { modelOpen = true; a2aAdd = { busy: false }; render(); });
   bind("model-close", () => { modelOpen = false; render(); });
