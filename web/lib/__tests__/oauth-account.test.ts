@@ -126,7 +126,7 @@ describe("(a) validateAuthorize: account vs drive grants", () => {
 
   it("advertises account scopes + userinfo in AS metadata, drive scopes only in PRM", async () => {
     const meta = await asMetaRoute.GET().json();
-    expect(meta.scopes_supported).toEqual(["drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell"]);
+    expect(meta.scopes_supported).toEqual(["drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell", "wallet:pay"]);
     expect(meta.userinfo_endpoint).toBe("http://drive.test/api/oauth/userinfo");
     expect(oauth.protectedResourceMetadata("d1", "D1").scopes_supported).toEqual(["drive:read", "drive:write"]);
   });

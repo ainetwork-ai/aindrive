@@ -10,7 +10,7 @@ downgrading them) takes effect immediately for every token they hold.
 |---|---|---|---|
 | Personal access token | `aind_pat_` | one drive, `read` or `write` | drive → sidebar **MCP** → *Generate* (shown once; 30d / 90d / never) |
 | OAuth drive token | `aind_oat_` (+ refresh `aind_ort_`) | one drive, `drive:read` / `drive:write` | OAuth 2.1 with `resource` = the drive's MCP URL |
-| OAuth account token | `aind_aat_` (+ refresh `aind_art_`) | every drive the user belongs to, per scope: `drives:read`, `drives:write`, `drives:sell`, and/or `profile` | OAuth 2.1 with **no** `resource` ("Sign in with aindrive") |
+| OAuth account token | `aind_aat_` (+ refresh `aind_art_`) | every drive the user belongs to, per scope: `drives:read`, `drives:write`, `drives:sell`, `wallet:pay`, and/or `profile` | OAuth 2.1 with **no** `resource` ("Sign in with aindrive") |
 
 Where each token works:
 
@@ -20,6 +20,7 @@ Where each token works:
 | `aind_aat_` + `drives:read` | read tools, any member drive | read skills | read skills | read skills | drives ✓ |
 | `aind_aat_` + `drives:write` | + `write_file`, `delete_path` | + write skills | + write skills | + write skills | — |
 | `aind_aat_` + `drives:sell` | + [sale tools](/docs/skills#sale-tools) (drive creator only) | — | — | — | — |
+| `aind_aat_` + `wallet:pay` | + the x402 pay tools (`x402_wallet` / `x402_sign` / `x402_settle`), when the server has agent wallets on | — | — | — | — |
 | `aind_aat_` + `profile` | — | — | — | — | userinfo ✓ |
 
 Each account scope adds exactly its skills; a skill outside the granted scopes
@@ -38,7 +39,7 @@ automatically). You only need this if you write your own client.
 | Dynamic client registration | `POST {{BASE}}/api/oauth/register` (RFC 7591 — public clients only) |
 | Authorize | `GET {{BASE}}/oauth/authorize` — **PKCE S256 required** |
 | Token | `POST {{BASE}}/api/oauth/token` — `authorization_code`, `refresh_token` |
-| Scopes | per drive: `drive:read`, `drive:write` · account: `profile`, `drives:read`, `drives:write`, `drives:sell` |
+| Scopes | per drive: `drive:read`, `drive:write` · account: `profile`, `drives:read`, `drives:write`, `drives:sell`, `wallet:pay` |
 
 ### 1. Register
 

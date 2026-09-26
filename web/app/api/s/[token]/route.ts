@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { HTTPFacilitatorClient } from "@x402/core/server";
 import { encodePaymentRequiredHeader, decodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentRequirements, PaymentRequired, PaymentPayload } from "@x402/core/types";
-import { createFacilitatorConfig } from "@coinbase/x402";
+import { canSettle, verifyAndSettle } from "@/lib/x402-facilitator";
 import { db } from "@/lib/db";
 import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
@@ -17,29 +16,8 @@ import { onPaymentSettled } from "@/lib/payment-hooks";
 import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork, policyChainViolation } from "@/lib/payment-tokens";
 import { paymasterEnabled } from "@/lib/paymaster";
 
-// Facilitator that verifies/settles the x402 payment, in priority order:
-// explicit AINDRIVE_X402_FACILITATOR URL (self-hosted or any third party),
-// CDP API keys (Coinbase facilitator — URL + per-request JWT auth built in),
-// then the public x402.org default on testnet only. Mainnet has NO default —
-// silently settling real money through a guessed facilitator is exactly the
-// failure mode we refuse (503 below). Server-only env (never NEXT_PUBLIC).
-function resolveFacilitatorConfig(): ConstructorParameters<typeof HTTPFacilitatorClient>[0] | null {
-  if (process.env.AINDRIVE_X402_FACILITATOR) return { url: process.env.AINDRIVE_X402_FACILITATOR };
-  if (process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET) {
-    return createFacilitatorConfig(process.env.CDP_API_KEY_ID, process.env.CDP_API_KEY_SECRET);
-  }
-  return paymentNetwork() === "mainnet" ? null : { url: "https://x402.org/facilitator" };
-}
-const DEV_BYPASS = process.env.AINDRIVE_DEV_BYPASS_X402 === "1";
-
-// Payer address from a v2 exact-evm payload: eip3009 payloads carry
-// authorization.from, permit2 payloads permit2Authorization.from.
-function payerFromPayload(payload: PaymentPayload): string | undefined {
-  const p = payload?.payload as
-    | { authorization?: { from?: string }; permit2Authorization?: { from?: string } }
-    | undefined;
-  return p?.authorization?.from ?? p?.permit2Authorization?.from;
-}
+// The facilitator (resolution, verify→settle with timeouts and retries, the
+// dev bypass) lives in lib/x402-facilitator.ts, shared with the x402_settle skill.
 
 type ShareRow = {
   id: string;
@@ -204,8 +182,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
   // facilitator): better a clear 503 on the FIRST hit than showing the paywall,
   // collecting a signed authorization, and only then failing. DEV_BYPASS skips
   // the facilitator entirely, so it stays exempt.
-  const facilitatorConfig = resolveFacilitatorConfig();
-  if (!DEV_BYPASS && !facilitatorConfig) {
+  if (!canSettle()) {
     console.error("[x402] no facilitator configured for mainnet — set AINDRIVE_X402_FACILITATOR or CDP_API_KEY_ID/SECRET");
     return NextResponse.json(
       { error: "payments are not configured on this server" },
@@ -228,94 +205,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     return paymentGate(402, "invalid PAYMENT-SIGNATURE header");
   }
 
-  let payerWallet: string;
-  let txHash: string;
-
-  if (DEV_BYPASS) {
-    payerWallet = (
-      payerFromPayload(payload) || "0xdemodemodemodemodemodemodemodemodemo0000"
-    ).toLowerCase();
-    txHash = "0xdev_bypass_" + nanoid(20);
-    console.warn(`[x402 DEV BYPASS] accepting share ${token} from ${payerWallet}`);
-  } else {
-    // Run fn with an AbortController that fires after `ms` ms.
-    async function withTimeout<T>(
-      ms: number,
-      fn: (signal: AbortSignal) => Promise<T>,
-    ): Promise<{ ok: true; value: T } | { ok: false; timedOut: boolean; error: unknown }> {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), ms);
-      try {
-        const value = await fn(ac.signal);
-        return { ok: true, value };
-      } catch (e) {
-        return { ok: false, timedOut: ac.signal.aborted, error: e };
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
-    // True for network/timeout errors that warrant a retry.
-    function isFacilitatorUnavailable(e: unknown): boolean {
-      if (e instanceof Error) {
-        const n = e.name;
-        return n === "AbortError" || n === "TimeoutError" || n === "TypeError";
-      }
-      return false;
-    }
-
-    // Strip wallet addresses and cap length for safe user-facing messages.
-    function sanitizeSettleError(msg: string): string {
-      return msg.replace(/0x[0-9a-fA-F]{40,}/g, "0x\u2026").slice(0, 200);
-    }
-
-    const facilitator = new HTTPFacilitatorClient(facilitatorConfig!);
-
-    // --- verify: 10 s timeout, one retry on facilitator error ---
-    type VerifyResult = Awaited<ReturnType<typeof facilitator.verify>>;
-    let verifyRes: VerifyResult | null = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await withTimeout<VerifyResult>(10_000, (_signal) =>
-        facilitator.verify(payload, requirements),
-      );
-      if (r.ok) { verifyRes = r.value; break; }
-      if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
-        console.error(`[x402-diag] verify-fail token=${tok.symbol} method=${tok.transferMethod} net=${requirements.network} timedOut=${r.timedOut} attempt=${attempt} name=${(r.error as Error)?.name} status=${(r.error as { status?: number })?.status ?? "-"} msg=${sanitizeSettleError(String((r.error as Error)?.message ?? r.error))}`);
-        return paymentGate(402, "facilitator unavailable, please retry");
-      }
-    }
-    if (!verifyRes) {
-      return paymentGate(402, "facilitator unavailable, please retry");
-    }
-    if (!verifyRes.isValid) {
-      const reason = verifyRes.invalidReason || "verification failed";
-      // Spec: missing Permit2 allowance is a precondition failure (412), not a
-      // payment rejection — the gate UI answers it with the approve flow.
-      return paymentGate(reason === "permit2_allowance_required" ? 412 : 402, reason);
-    }
-
-    // --- settle: 15 s timeout, one retry on facilitator error ---
-    type SettleResult = Awaited<ReturnType<typeof facilitator.settle>>;
-    let settleRes: SettleResult | null = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await withTimeout<SettleResult>(15_000, (_signal) =>
-        facilitator.settle(payload, requirements),
-      );
-      if (r.ok) { settleRes = r.value; break; }
-      if (!isFacilitatorUnavailable(r.error) || attempt === 1) {
-        console.error(`[x402-diag] settle-fail token=${tok.symbol} method=${tok.transferMethod} net=${requirements.network} timedOut=${r.timedOut} attempt=${attempt} name=${(r.error as Error)?.name} status=${(r.error as { status?: number })?.status ?? "-"} msg=${sanitizeSettleError(String((r.error as Error)?.message ?? r.error))}`);
-        return paymentGate(402, "facilitator unavailable, please retry");
-      }
-    }
-    if (!settleRes) {
-      return paymentGate(402, "facilitator unavailable, please retry");
-    }
-    if (!settleRes.success) {
-      return paymentGate(402, sanitizeSettleError(settleRes.errorReason || "settlement failed"));
-    }
-    payerWallet = (settleRes.payer || payerFromPayload(payload) || "0x0").toLowerCase();
-    txHash = settleRes.transaction;
+  const settled = await verifyAndSettle(payload, requirements, `share ${token} token=${tok.symbol} method=${tok.transferMethod}`);
+  if (!settled.ok) {
+    if (settled.status === 503) return NextResponse.json({ error: settled.reason }, { status: 503 });
+    // Spec: missing Permit2 allowance is a precondition failure (412), not a
+    // payment rejection — the gate UI answers it with the approve flow.
+    return paymentGate(settled.status, settled.reason);
   }
+  const payerWallet = settled.payer;
+  const txHash = settled.transaction;
 
   // Resolve the account this payment credits: a relayed bearer account or a
   // logged-in user wins; else the wallet's linked account; else a freshly

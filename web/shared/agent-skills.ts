@@ -31,8 +31,9 @@ import {
   ShareCreateBody, ShareEditBody, applyPayoutWallet, createShare, editShare, listReceipts, listShares,
   revokeShare, shareUrl, tokenPolicyFromList, type SaleErr,
 } from "@/lib/sales";
+import { runPaySkill } from "@/lib/x402-pay-skills";
 import {
-  MUTATING, isSaleSkill, isSkillName, type SaleSkillName,
+  MUTATING, isPaySkill, isSaleSkill, isSkillName, type SaleSkillName,
 } from "./skill-descriptors";
 export * from "./skill-descriptors";
 
@@ -55,9 +56,10 @@ function splitPath(p: string): { parent: string; base: string } {
  * forbids write_file regardless of the user's role. Both omitted = the
  * legacy account-wide surface (A2A executor, session-auth /mcp).
  * `sell` (account grant with `drives:sell`) unlocks the sale tools; they
- * are refused everywhere else.
+ * are refused everywhere else. `pay` (a session, or an account grant with
+ * `wallet:pay`) unlocks the x402 pay tools — no drive, the account's wallet.
  */
-export type SkillCtx = { userId: string; driveId?: string; scope?: "read" | "write"; sell?: boolean };
+export type SkillCtx = { userId: string; driveId?: string; scope?: "read" | "write"; sell?: boolean; pay?: boolean };
 
 export type SkillOk = { kind: "ok"; structured: unknown; text: string };
 export type SkillErr = {
@@ -91,6 +93,11 @@ export async function runSkill(
       ? "(no drives)"
       : rows.map((r) => `${r.id} — ${r.name}`).join("\n");
     return { kind: "ok", structured: { drives: rows }, text };
+  }
+
+  if (isPaySkill(name)) {
+    if (!ctx.pay) return { kind: "err", code: "forbidden", message: "forbidden (token lacks the wallet:pay scope)" };
+    return runPaySkill(ctx.userId, name, args);
   }
 
   if (isSaleSkill(name) && !ctx.sell) {

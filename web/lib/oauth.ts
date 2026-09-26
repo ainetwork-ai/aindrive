@@ -22,9 +22,11 @@ export const DRIVE_SCOPES = ["drive:read", "drive:write"] as const;
 /**
  * Account grant scopes: profile → /api/oauth/userinfo; drives:read →
  * /api/oauth/drives + the read tools on /mcp/d/*; drives:write → write_file /
- * delete_path there (role editor+); drives:sell → the owner-only sale tools.
+ * delete_path there (role editor+); drives:sell → the owner-only sale tools;
+ * wallet:pay → the x402 pay tools (the account's agent wallet signs, the
+ * server's facilitator settles), when the server has agent wallets on.
  */
-export const ACCOUNT_SCOPES = ["profile", "drives:read", "drives:write", "drives:sell"] as const;
+export const ACCOUNT_SCOPES = ["profile", "drives:read", "drives:write", "drives:sell", "wallet:pay"] as const;
 export type AccountScope = (typeof ACCOUNT_SCOPES)[number];
 export const SCOPES_SUPPORTED = [...DRIVE_SCOPES, ...ACCOUNT_SCOPES] as const;
 

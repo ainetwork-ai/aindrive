@@ -330,6 +330,17 @@ function open() {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_account_tokens_user ON account_tokens(user_id);
+    -- Agent wallets (lib/agent-wallets.ts): a custodial pocket-money key per
+    -- account for x402 payments an agent makes as that account. Not the
+    -- identity wallet (account_wallets). key_enc is AES-GCM under the session secret.
+    CREATE TABLE IF NOT EXISTS agent_wallets (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL UNIQUE,
+      address TEXT NOT NULL UNIQUE,
+      key_enc TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
+    );
     CREATE INDEX IF NOT EXISTS idx_account_tokens_prev_refresh ON account_tokens(prev_refresh_hash);
   `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
