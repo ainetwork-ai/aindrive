@@ -31,8 +31,10 @@ checks the commit out in its own clean worktree (`/mnt/newdata/git/.autodeploy/a
 `web/.env.production` symlinked from the main checkout) and runs
 `scripts/deploy.sh --no-pull` — the same gates, rollback snapshot, health check
 and `web-YYYY.MM.DD` Release as by hand. A merge is live within ~2 min plus the
-build. A commit is tried once; a failed one waits for the next merge
-(`rm ~/.autodeploy/aindrive.tried` to retry). Log: `~/.autodeploy/aindrive.log`.
+build. A failed deploy is retried with exponential backoff (2, 4, 8, 16, 32 min;
+given up after 6 failures until the next merge); `rm ~/.autodeploy/aindrive.retry`
+retries now. Rollback snapshots (`aindrive-web:predeploy-*`) are pruned to the
+newest 5. Log: `~/.autodeploy/aindrive.log`.
 
 ## TL;DR (mainnet release)
 
