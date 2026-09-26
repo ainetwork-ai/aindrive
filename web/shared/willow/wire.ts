@@ -7,9 +7,12 @@ import { fromHex, toHex } from "./bytes";
 
 type B = Uint8Array;
 export type WireEntry = { entry: Entry<B, B, B>; token: B; payload?: B };
+/** `re` names the range (its encoded JSON) a frame answers, so the side that
+ *  opened that range can close it; `synced` = the sender has no open range. */
 export type Frame =
-  | { t: "fp"; range: unknown; fp: string; size: number }
-  | { t: "items"; range: unknown; entries: unknown[]; reply: boolean }
+  | { t: "fp"; range: unknown; fp: string; size: number; re?: string }
+  | { t: "eq"; re: string }
+  | { t: "items"; range: unknown; entries: unknown[]; reply: boolean; re?: string }
   | { t: "live"; entry: unknown }
   | { t: "refused"; path: string[]; subspace: string; reason: string }
   | { t: "synced" };

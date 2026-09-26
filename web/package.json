@@ -39,6 +39,7 @@
     "@tiptap/pm": "^3.26.0",
     "@tiptap/react": "^3.26.0",
     "@tiptap/starter-kit": "^3.26.0",
+    "@tiptap/y-tiptap": "^3.0.9",
     "@x402/core": "~2.14.0",
     "@x402/evm": "~2.14.0",
     "@x402/fetch": "~2.14.0",

@@ -8,7 +8,7 @@ import type { WebSocket } from "ws";
 import { partsOf, toHex } from "@/shared/willow/bytes";
 import { resolvePerson, certsFrom, type Cert } from "@/shared/willow/cert";
 import { mayWrite } from "@/shared/willow/policy";
-import { clientClaimConflict } from "@/shared/willow/doc";
+import { clientClaimConflict, certsIn } from "@/shared/willow/doc";
 import { nowMicros } from "@/shared/willow/schemes";
 import { SyncSession, fullRange } from "@/shared/willow/session";
 import type { AnyStore } from "@/shared/willow/doc";
@@ -22,16 +22,6 @@ import { mkdirSync } from "node:fs";
 
 const RANK: Record<string, number> = { none: 0, viewer: 1, commenter: 2, editor: 3, owner: 4 };
 const WRITE = RANK.editor;
-
-async function certsIn(store: AnyStore): Promise<Cert[]> {
-  const raw: { subspaceHex: string; payload: Uint8Array }[] = [];
-  const enc = new TextEncoder();
-  for await (const [entry, payload] of store.queryRange({ ...fullRange(), pathRange: { start: [enc.encode("_id")], end: [enc.encode("_id\u0000")] } }, "oldest")) {
-    if (partsOf(entry.path)[1] !== "cert" || !payload) continue;
-    raw.push({ subspaceHex: toHex(entry.subspaceId), payload: await payload.bytes() });
-  }
-  return certsFrom(raw); // shape-checked, and only certs in their own device's subspace (review I4)
-}
 
 export function acceptFor(driveId: string, store: AnyStore) {
   return async (w: WireEntry): Promise<string | null> => {

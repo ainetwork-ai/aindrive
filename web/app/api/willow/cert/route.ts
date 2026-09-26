@@ -13,3 +13,8 @@ export async function POST(req: Request) {
   const cert = await certify(user.id, body.deviceKey, typeof body.label === "string" ? body.label : "browser");
   return NextResponse.json({ cert, attestationKey: toHex(attestationKey().publicKey) });
 }
+
+/** GET → aindrive's attestation public key, which clients trust for "vouched by aindrive". */
+export async function GET() {
+  return NextResponse.json({ attestationKey: toHex(attestationKey().publicKey) });
+}

@@ -5,7 +5,8 @@
 // older ["doc",...path,"~u",seq] entries (Willow prefix pruning, same subspace only).
 import * as Y from "yjs";
 import { ANY_SUBSPACE, OPEN_END, type Area } from "@jsr/earthstar__willow-utils";
-import { pathOf, partsOf, toHex } from "./bytes";
+import { pathOf, partsOf, toHex, utf8 } from "./bytes";
+import { certsFrom, type Cert } from "./cert";
 import { nowMicros, type newStore } from "./schemes";
 import type { DeviceKeypair } from "./keys";
 
@@ -69,4 +70,16 @@ export async function authorsByClient(store: AnyStore, docPath: string[]): Promi
 export async function clientClaimConflict(store: AnyStore, docPath: string[], subspaceHex: string, update: Uint8Array): Promise<boolean> {
   const owners = await authorsByClient(store, docPath);
   return clientsOf(update).some((c) => owners.has(c) && owners.get(c) !== subspaceHex);
+}
+
+/** Every device certificate in the store (`_id/cert` entries), through certsFrom:
+ *  shape-checked, and only certificates sitting in their own device's subspace. */
+export async function certsIn(store: AnyStore): Promise<Cert[]> {
+  const raw: { subspaceHex: string; payload: Uint8Array }[] = [];
+  const area = { includedSubspaceId: ANY_SUBSPACE, pathPrefix: [utf8("_id"), utf8("cert")], timeRange: { start: 0n, end: OPEN_END } } as Area<Uint8Array>;
+  for await (const [entry, payload] of store.query({ area, maxCount: 0, maxSize: 0n }, "timestamp")) {
+    if (partsOf(entry.path).length !== 2 || !payload) continue;
+    raw.push({ subspaceHex: toHex(entry.subspaceId), payload: await payload.bytes() });
+  }
+  return certsFrom(raw);
 }

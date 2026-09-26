@@ -12,7 +12,8 @@ import { generateDeviceKey, type DeviceKeypair } from "@/shared/willow/keys";
 import { equalBytes, fromHex, pathOf, toHex, utf8 } from "@/shared/willow/bytes";
 import { SyncSession, fullRange } from "@/shared/willow/session";
 import { bindDoc, clientIdFor } from "@/shared/willow/y-binding";
-import type { AnyStore } from "@/shared/willow/doc";
+import { authorsByClient, certsIn, type AnyStore } from "@/shared/willow/doc";
+import { labelFor } from "@/components/editors/authorship";
 import type { Frame } from "@/shared/willow/wire";
 
 const KEY_DB = "aindrive-device";
@@ -101,8 +102,19 @@ async function connect(driveId: string) {
   };
   open();
 
+  // "who wrote this": Yjs client → signing device → certificate → person
+  let people: Promise<Map<string, string>> | null = null;
+  let attestation: Promise<string[]> | null = null;
+  const authorLabel = async (docPath: string[], client: number): Promise<string | null> => {
+    const device = (await authorsByClient(store, docPath)).get(client);
+    if (!device) return null;
+    people ??= fetch(`/api/willow/people?drive=${encodeURIComponent(driveId)}`).then((r) => r.json()).then((j) => new Map(Object.entries((j.people ?? {}) as Record<string, string>))).catch(() => new Map());
+    attestation ??= fetch("/api/willow/cert").then((r) => r.json()).then((j) => [j.attestationKey as string]).catch(() => []);
+    return labelFor(device, await certsIn(store), { attestationKeys: await attestation, verifyWallet: async () => null }, await people);
+  };
+
   return {
-    store, key, status, initialSync,
+    store, key, status, initialSync, authorLabel,
     openDoc: (docPath: string[], doc: Y.Doc) => { doc.clientID = clientIdFor(key, ++tabCounter + Math.floor(Math.random() * 1e6)); return bindDoc({ store, key, docPath, doc, nextSeq }); },
   };
 }

@@ -45,15 +45,15 @@ server (Phase 2, §10), and ainmem pages (ainmem's own spec).
 | D1 | **Communal namespace per drive.** Each device writes only in its own subspace; nobody holds a namespace secret. | Removes the server-held namespace key (the top risk in today's audit). A communal namespace is standard Meadowcap: a write is authorised by the subspace owner's own signature. |
 | D2 | **Subspace = device key (Ed25519)**, made silently on first use and never exported. | This is the "who wrote it" unit. Per-device keys mean a lost phone is revoked alone. |
 | D3 | **Device certificate binds a device key to a person**, issued inside flows people already do (§4). | No extra steps (goal 3). |
-| D4 | **Membership is checked at ingest**, by every peer, against owner-signed grants stored as Willow entries. | Communal namespaces let anyone write their own subspace; peers must refuse entries from non-members, and do it without asking the server (Phase 2 readiness). |
+| D4 | **Membership is checked at ingest.** In Phase 1 the server peer is the only path between devices and checks the author's role with the web app's own rule; owner-signed grants and client-side `mayWrite` (already in `web/shared/willow/policy.ts`) take over with Phase 2's direct sync. Every peer always checks signatures and certificates. | Communal namespaces let anyone write their own subspace; peers must refuse entries from non-members, and do it without asking the server (Phase 2 readiness). |
 | D5 | **A document is the union of the Yjs updates for its path, across all subspaces.** | Yjs merges updates in any order, so no coordination is needed. Each update is one signed Willow entry. |
 | D6 | **The browser and the phone app run the same JS Willow store** (`@earthstar/willow` with its IndexedDB drivers); the CLI/Mac run it on SQLite. Native Java/Swift keep only file I/O. | One implementation of a subtle protocol instead of three. The mobile shell is already a web app (Capacitor). |
-| D7 | **Sync is WGPS** (`WgpsMessenger`, WebSocket transport) between every client and the server peer. | The spec protocol, already in the library; replaces `willow-sync.js`. |
+| D7 | **Sync is 3D range-based set reconciliation plus live push** (the reconciliation algorithm WGPS uses, on `Store.summarise` / `splitRange` / `queryRange`), over a WebSocket between every client and the server peer. | `WgpsMessenger` in @earthstar/willow 0.6 reconciles only at session start (`DataSender.queueEntry` is never called), so live co-editing cannot ride it. WGPS's private area intersection and read capabilities arrive with Phase 2. Replaces `willow-sync.js`. |
 | D8 | **The folder's agent materialises the merged document into the real file on disk**, and turns external disk edits into signed updates of its own. | Today only the browser writes the file, and only when online. |
 
 ## 4. Identity: device keys and certificates
 
-**Device key.** Browser: WebCrypto Ed25519, `extractable: false`, kept in IndexedDB.
+**Device key.** Browser: kept in IndexedDB as raw bytes in Phase 1 (script on the origin could read it); WebCrypto Ed25519 with `extractable: false` once every target browser supports it.
 CLI/Mac: `~/.aindrive/device.key` (0600). Phone app: the WebView's key, wrapped by
 Android Keystore / iOS Keychain through a small native plugin.
 

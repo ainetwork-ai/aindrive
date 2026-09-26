@@ -66,6 +66,8 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `migrations/` — one-shot idempotent migrations (`run.js` runs all at startup).
 
 **Collab / Willow**
+- `willow/peer.ts` — the server as a Willow peer: a store per drive (`store-node.ts`: SQLite entries via `kv-driver-sqlite.js`, payload files via `payload-driver-fs.ts`), one sync session per `/api/willow/sync` socket, author + role check at ingest. `server.js` imports `peer.bundle.mjs`, built by `scripts/build-willow-peer.mjs` (predev/prebuild). `roles.ts` = role + paywall questions; `attestation.ts` = aindrive's attestation key.
+- `willow/client.ts` — the browser peer: device key + IndexedDB store, certificate, sync session, `openDoc` (Yjs binding), `authorLabel`. `offline.ts` registers `public/sw.js`.
 - `dochub.js` — per-doc WS broadcast hub for Y.js sync; authorizes (viewer=sub, editor=push), does NOT parse Y bytes.
 - `yjs/aindrive-provider.ts` — browser Y.js provider over the doc WS (+ IndexedDB persistence). `yjs/trace-client.ts` — browser trace emitter.
 - `willow/` — Meadowcap capability issuance (`cap-issue.ts`) + Ed25519 schemes (`meadowcap.js`, `schemes.js`).

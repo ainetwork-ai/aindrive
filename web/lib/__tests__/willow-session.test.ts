@@ -85,4 +85,23 @@ describe("SyncSession", () => {
     await settle();
     expect(lives).toBe(0);
   });
+
+  it("reports synced only after everything the peer has has arrived", async () => {
+    const mom = await generateDeviceKey(), kid = await generateDeviceKey();
+    const s1 = newStore("d"), s2 = newStore("d");
+    for (let i = 1; i <= 60; i++) await appendUpdate(s1, mom, ["a.md"], text(`m${i} `, 3000 + i), i);
+    await appendUpdate(s2, kid, ["b.md"], text("k", 4000), 1);
+    const [c1, c2] = pipe();
+    let countAtSynced = -1;
+    const synced = new Promise<void>((resolve) => {
+      const b = new SyncSession({
+        store: s2, channel: c2, ranges: [fullRange()],
+        onSynced: async () => { if (countAtSynced < 0) { countAtSynced = (await s2.summarise(fullRange())).size; resolve(); } },
+      });
+      void b.start();
+    });
+    await new SyncSession({ store: s1, channel: c1, ranges: [fullRange()] }).start();
+    await synced;
+    expect(countAtSynced).toBe(61);
+  });
 });

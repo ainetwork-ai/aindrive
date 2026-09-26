@@ -26,6 +26,8 @@ import {
   Bold, Italic, Heading1, Heading2, List, ListOrdered, Code, Quote, Undo2, Redo2,
 } from "lucide-react";
 import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
+import { absolutePositionToRelativePosition, ySyncPluginKey } from "@tiptap/y-tiptap";
+import { willowClient } from "@/lib/willow/client";
 import { colorForId, sha1Base64 } from "../viewer-utils";
 import type { DriveEntry } from "@/lib/protocol";
 import clsx from "clsx";
@@ -199,6 +201,28 @@ export function RichTextEditor({
     };
   }, [editor, provider, driveId, entry.path, debouncedAutosave]);
 
+  // "Who wrote this": the signed author of the text at the cursor / selection start.
+  const [author, setAuthor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!editor) return;
+    let seq = 0;
+    const onSelection = async () => {
+      const mine = ++seq;
+      const ystate = ySyncPluginKey.getState(editor.state) as { type?: Y.XmlFragment; binding?: { mapping: unknown } } | undefined;
+      if (!ystate?.type || !ystate.binding) return;
+      const at = (pos: number) => absolutePositionToRelativePosition(pos, ystate.type!, ystate.binding!.mapping as never).item?.client;
+      const { from } = editor.state.selection;
+      // the character at the cursor, else the one after, else the one before (start/end of a block)
+      const client = at(from) ?? at(from + 1) ?? (from > 0 ? at(from - 1) : undefined);
+      if (client === undefined) { setAuthor(null); return; }
+      const label = await (await willowClient(driveId)).authorLabel(entry.path.split("/"), client).catch(() => null);
+      if (mine === seq) setAuthor(label);
+    };
+    editor.on("selectionUpdate", onSelection);
+    editor.on("focus", onSelection);
+    return () => { editor.off("selectionUpdate", onSelection); editor.off("focus", onSelection); };
+  }, [editor, driveId, entry.path]);
+
   // Destroy the provider when this file's editor unmounts.
   useEffect(() => () => provider.destroy(), [provider]);
 
@@ -211,6 +235,11 @@ export function RichTextEditor({
         )}
         <EditorContent editor={editor} className="h-full" />
       </div>
+      {author && (
+        <div data-testid="authorship" className="shrink-0 border-t border-drive-border px-5 py-1.5 text-caption text-drive-muted">
+          Written by {author}
+        </div>
+      )}
     </div>
   );
 }

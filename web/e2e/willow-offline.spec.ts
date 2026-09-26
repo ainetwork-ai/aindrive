@@ -81,4 +81,9 @@ test("edit offline, reload offline, reconnect: the text stays and reaches a seco
   const pb = await b.newPage();
   await pb.goto(url);
   await expect(pb.locator(".ProseMirror")).toContainText("offline-edit-1", { timeout: 60_000 });
+
+  // who wrote it: the signed device resolves to the owner, vouched by aindrive
+  await pb.locator(".ProseMirror").getByText("offline-edit-1").click();
+  await pb.keyboard.press("End"); // a selection change, wherever the click landed
+  await expect(pb.getByTestId("authorship")).toContainText("Willow Owner · vouched by aindrive", { timeout: 20_000 });
 });
