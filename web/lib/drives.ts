@@ -44,7 +44,16 @@ export function setPayoutWallet(driveId: string, path: string, wallet: string | 
 
 /** The wallet a sale at `path` pays out to — nearest ancestor's, or null. */
 export function payoutWalletFor(driveId: string, path: string): string | null {
-  return resolvePayoutWallet(listPayoutWallets(driveId), path);
+  const rows = listPayoutWallets(driveId);
+  const found = resolvePayoutWallet(rows, path);
+  if (found || rows.length) return found;
+  // No payout wallet at all, but the owner signs in with a wallet (linked before sign-in wallets
+  // became payout wallets): adopt it as the drive's payout wallet, so selling just works.
+  const owner = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId) as { owner_id: string } | undefined;
+  const [signIn] = owner ? loginWallets(owner.owner_id) : [];
+  if (!signIn) return null;
+  setPayoutWallet(driveId, "", signIn);
+  return signIn;
 }
 
 /** Back-compat: the drive-level payout wallet is the root ("") path wallet. */
