@@ -70,10 +70,13 @@ export async function discover(raw: string, token?: string): Promise<A2aAgent> {
   const u = new URL(s);
   const resolver = new DefaultAgentCardResolver({ fetchImpl: authedFetch(token) });
   // [base, path] pairs for DefaultAgentCardResolver.resolve: the exact card URL, the path's
-  // well-known card, the site's, and the pre-0.3 name.
+  // well-known card, the site's, and the pre-0.3 name. The path is tried WITH a trailing slash first:
+  // the resolver joins the card path relatively, so `…/agents/news` without one loses `news` and asks
+  // `…/agents/.well-known/agent-card.json` — every agent hosted under a path (ainize.ai/agents/<id>) failed.
+  const path = u.pathname.replace(/\/+$/, "");
   const tries: [string, string?][] = /\.json$/i.test(u.pathname)
     ? [[u.toString(), ""]]
-    : [[`${u.origin}${u.pathname.replace(/\/+$/, "")}`], [u.origin], [u.origin, "/.well-known/agent.json"]];
+    : [...(path ? [[`${u.origin}${path}/`] as [string]] : []), [`${u.origin}${path}`], [u.origin], [u.origin, "/.well-known/agent.json"]];
   let lastErr = "";
   for (const [base, path] of tries) {
     try {
