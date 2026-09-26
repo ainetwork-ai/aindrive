@@ -4,6 +4,7 @@ import { isAddress } from "viem";
 import { consumeNonce, linkWalletToAccount, WalletAlreadyLinkedError } from "@/lib/wallet";
 import { parseSiweLoginFields, verifyWalletSignature } from "@/lib/siwe-verify";
 import { getUser } from "@/lib/session";
+import { adoptOwnerPayoutWallet } from "@/lib/drives";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
 
@@ -71,5 +72,7 @@ export async function POST(req: Request) {
     throw e;
   }
 
-  return NextResponse.json({ ok: true, address: address.toLowerCase(), reclaimedReceipts: reclaimed });
+  // A sign-in wallet is also where sales pay out, unless a drive already has a payout wallet.
+  const payoutDrives = body.data.enableLogin === true ? adoptOwnerPayoutWallet(user.id, address) : 0;
+  return NextResponse.json({ ok: true, address: address.toLowerCase(), reclaimedReceipts: reclaimed, payoutDrives });
 }

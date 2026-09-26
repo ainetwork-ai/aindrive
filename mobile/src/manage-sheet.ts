@@ -26,7 +26,15 @@ export class ManageSheet implements Sheet {
   private error: string | null = null;
   private busy = false;
 
-  constructor(private ctx: Ctx, private driveId: string, private name: string, private onDeleted: () => void) { void this.load(); }
+  /** Opened from Sell without a payout wallet: land on Payments with the folder filled in, and go back to selling after saving. */
+  private payoutFor: string | null = null;
+  constructor(private ctx: Ctx, private driveId: string, private name: string, private onDeleted: () => void,
+              opts?: { payoutFor?: string; afterPayout?: () => void }) {
+    if (opts?.payoutFor !== undefined) { this.tab = "payments"; this.payoutFor = opts.payoutFor; }
+    this.afterPayout = opts?.afterPayout;
+    void this.load();
+  }
+  private afterPayout?: () => void;
 
   private async load() {
     this.loading = true; this.ctx.rerender();
@@ -125,8 +133,9 @@ export class ManageSheet implements Sheet {
       <div class="scard"><div class="scard-h">${I.wallet} Payout wallets</div>
         <div class="scard-s">Where sale proceeds go. A folder's wallet overrides the drive's.</div>
         ${this.wallets.length ? `<ul class="list">${this.wallets.map((w) => `<li data-wpath="${esc(w.path)}"><div class="grow"><div class="t mono">${esc(w.wallet)}</div><div class="s">${esc(w.path || "whole drive")}</div></div><button class="iconbtn ghost" data-unpay aria-label="Remove">${icon("trash", 18)}</button></li>`).join("")}</ul>` : `<p class="hint">No payout wallet — sales can't settle until you add one.</p>`}
+        ${this.payoutFor !== null ? `<p class="hint" style="color:var(--accent)">Add a payout wallet to start selling${this.payoutFor ? ` “${esc(this.payoutFor)}”` : ""}.</p>` : ""}
         <input type="text" id="mg-wallet" placeholder="0x… wallet address" style="margin-top:8px" />
-        <input type="text" id="mg-wpath" placeholder="folder (blank = whole drive)" style="margin-top:8px" />
+        <input type="text" id="mg-wpath" placeholder="folder (blank = whole drive)" style="margin-top:8px" value="${esc(this.payoutFor ?? "")}" />
         <button class="btn" id="mg-setpay" ${this.busy ? "disabled" : ""}>${I.plus} Set payout wallet</button></div>
       <div class="scard"><div class="scard-h">${I.dollar} Accepted tokens</div>
         <div class="scard-s">The currencies you can price a sale in. Each sale is paid in one token.</div>
@@ -167,6 +176,7 @@ export class ManageSheet implements Sheet {
       if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) throw new Error("Enter a 0x wallet address (40 hex digits)");
       await this.ctx.web.setPayout(this.driveId, val(root, "mg-wpath").replace(/^\/+|\/+$/g, ""), wallet);
       this.ctx.notify("Payout wallet saved"); this.ctx.forget("mg-wallet", "mg-wpath");
+      if (this.afterPayout) { const back = this.afterPayout; this.afterPayout = undefined; this.payoutFor = null; back(); }
     }));
     on(root, "[data-wpath] [data-unpay]", "click", (el) => this.act(() => this.ctx.web.clearPayout(this.driveId, el.closest<HTMLElement>("[data-wpath]")!.dataset.wpath!).then(() => {})));
     on(root, "#mg-addtok", "click", () => this.act(async () => {

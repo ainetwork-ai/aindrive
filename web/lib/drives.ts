@@ -79,6 +79,9 @@ export async function createDrive(ownerId: string, name: string) {
     namespace_pubkey: Buffer.from(ns.publicKey),
     namespace_secret: Buffer.from(ns.secretKey),
   }).run();
+  // New drives pay out to the owner's sign-in wallet from the start (see adoptOwnerPayoutWallet).
+  const [signIn] = loginWallets(ownerId);
+  if (signIn) setPayoutWallet(driveId, "", signIn);
   const base = env.publicUrl.replace(/\/$/, "");
   return {
     driveId,
@@ -134,4 +137,22 @@ export function listUserDrives(userId: string): DriveRow[] {
     GROUP BY d.id
     ORDER BY d.created_at DESC
   `).all(userId, userId, userId) as DriveRow[];
+}
+
+/**
+ * A wallet the owner signs in with doubles as the default payout wallet: every drive they own that
+ * has NO payout wallet yet gets it at the root. Drives with a wallet already are left alone (the
+ * owner chose one). Returns how many drives were set.
+ */
+export function adoptOwnerPayoutWallet(ownerId: string, wallet: string): number {
+  const bare = db.prepare(`SELECT d.id FROM drives d WHERE d.owner_id = ?
+      AND NOT EXISTS (SELECT 1 FROM drive_payout_wallets p WHERE p.drive_id = d.id)`).all(ownerId) as { id: string }[];
+  for (const d of bare) setPayoutWallet(d.id, "", wallet.toLowerCase());
+  return bare.length;
+}
+
+/** The wallets this account can sign in with (login-enabled links), oldest first. */
+export function loginWallets(accountId: string): string[] {
+  return (db.prepare("SELECT wallet_address FROM account_wallets WHERE account_id = ? AND login_enabled = 1 ORDER BY linked_at")
+    .all(accountId) as { wallet_address: string }[]).map((r) => r.wallet_address);
 }

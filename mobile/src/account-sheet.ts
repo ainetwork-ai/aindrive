@@ -12,7 +12,16 @@ export class AccountSheet implements Sheet {
   private email = "";
   private busy = false;
 
-  constructor(private ctx: Ctx, private onSignOut: () => void) { void this.load(); }
+  constructor(private ctx: Ctx, private onSignOut: () => void) {
+    void this.load();
+    // Wallet sign-in happens in the browser: re-read the account when the app comes back, so the
+    // "Add wallet sign-in" button turns into "Linked: 0x…" without closing the sheet.
+    const again = () => {
+      if (!document.getElementById("ac-close")) { document.removeEventListener("visibilitychange", again); return; }
+      if (document.visibilityState === "visible") void this.load();
+    };
+    document.addEventListener("visibilitychange", again);
+  }
 
   private async load() {
     try { this.me = await this.ctx.web.me(); } catch (e) { this.ctx.notify(msgOf(e), true); }
@@ -33,7 +42,7 @@ export class AccountSheet implements Sheet {
              <input type="text" id="ac-pass" placeholder="New password (8+ characters)" style="margin-top:8px" autocomplete="new-password" />
              <button class="btn" id="ac-verify" ${this.busy ? "disabled" : ""}>Add email</button>`}</div>` : ""}
       <div class="scard"><div class="scard-h">${I.wallet} Wallet sign-in</div>
-        <div class="scard-s">${me?.wallet ? `Linked: <span class="mono">${esc(me.wallet)}</span>` : "Link a wallet so you can sign in with it. Opens aindrive in your browser, where your wallet app can sign."}</div>
+        <div class="scard-s">${me?.wallet ? `Linked: <span class="mono">${esc(me.wallet)}</span><br>You can sign in with it, and sales are paid to it on drives without their own payout wallet.` : "Link a wallet to sign in with it — it also becomes where your sales are paid. Opens aindrive in your browser, where your wallet app can sign."}</div>
         ${me?.wallet ? "" : `<button class="btn secondary" id="ac-wallet">${icon("external", 18)} Add wallet sign-in</button>`}</div>
       <button class="btn danger" id="ac-signout">${I.logout} Sign out</button></div>`;
   }

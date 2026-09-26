@@ -20,7 +20,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   return (
     <WagmiProvider config={getWagmiConfig()} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider>{children}</RainbowKitProvider>
+        {/* English everywhere: without a locale RainbowKit follows the browser (a Korean phone got Korean buttons). */}
+        <RainbowKitProvider locale="en-US">{children}</RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
   );

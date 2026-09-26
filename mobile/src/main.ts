@@ -455,12 +455,14 @@ function bindSheet() {
 /** The drive id a share or remote drive is known by on the server. */
 function driveIdOf(share?: SharedFolder, remote?: RemoteDrive): string | undefined { return remote?.id ?? share?.drive?.driveId; }
 
-function openShareFor(driveId: string | undefined, path: string, name: string) {
+function openShareFor(driveId: string | undefined, path: string, name: string, sell = false) {
   if (!driveId) { notify("Turn the folder on first so it has a drive to share.", true); return; }
-  openSheet((ctx) => new ShareSheet(ctx, driveId, path, name));
+  openSheet((ctx) => new ShareSheet(ctx, driveId, path, name,
+    // Sell without a payout wallet → the payout wallet screen; once saved, back to Sell for this folder.
+    (p) => openManage(driveId, name, { payoutFor: p, afterPayout: () => openShareFor(driveId, path, name, true) }), sell));
 }
 
-function openManage(driveId: string | undefined, name: string) {
+function openManage(driveId: string | undefined, name: string, opts?: { payoutFor?: string; afterPayout?: () => void }) {
   if (!driveId) { notify("Turn the folder on first.", true); return; }
   openSheet((ctx) => new ManageSheet(ctx, driveId, name, () => {
     sheet = null;
@@ -468,7 +470,7 @@ function openManage(driveId: string | undefined, name: string) {
     if (local) { void AindriveAgent.stop({ driveId }).catch(() => {}); state.shares = state.shares.filter((s) => s !== local); void save(); }
     remotes = remotes.filter((d) => d.id !== driveId);
     browse = null; render();
-  }));
+  }, opts));
 }
 
 /** "P2P" on/off: whether the folder is connected to aindrive (others can reach it) or stays on this phone. */
@@ -2147,6 +2149,7 @@ function entryMenu(e: FileEntry, remote: boolean): string {
       <div class="menu">
         <button data-op="open">${icon(e.isDir ? "folder" : "external", 18)} ${e.isDir ? "Open" : "Open"}</button>
         <button data-op="share">${icon("share", 18)} Share…</button>
+        ${remote ? "" : `<button data-op="sell">${icon("dollar", 18)} Sell…</button>`}
         ${e.isDir ? `<button data-op="chat">${icon("chat", 18)} Chat about this folder</button>` : `<button data-op="download">${icon("download", 18)} ${remote ? "Download" : "Open with…"}</button>`}
         <div class="sep"></div>
         <button data-op="rename">${icon("edit", 18)} Rename</button>
@@ -2294,6 +2297,7 @@ function bindBrowse() {
         else if (op === "delete") void browseDelete(entry);
         else if (op === "move") openMove(entry);
         else if (op === "share") openShareFor(driveIdOf(share, b.remote), entry.path, entry.name);
+        else if (op === "sell") openShareFor(driveIdOf(share, b.remote), entry.path, entry.name, true);
         else if (op === "chat") openChat(driveIdOf(share, b.remote), b.remote?.name ?? share.folder.label, entry.path, b.remote ? b.remote.owned !== false : true);
         else if (op === "download") void downloadEntry(entry);
       });
