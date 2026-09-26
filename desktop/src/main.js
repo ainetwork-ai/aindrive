@@ -124,26 +124,47 @@ ipcMain.handle("native:fetch", async (e, req) => {
   if (!/^https?:\/\//i.test(req?.url ?? "")) throw new Error("only http(s)");
   const headers = new Headers();
   for (const [k, v] of req.headers ?? []) if (!/^(cookie|host|origin|content-length)$/i.test(k)) headers.append(k, v);
-  // Session cookies ride along, like the phone's native cookie jar. Redirects are
-  // followed only within the origin asked for: a third party (an A2A agent URL)
-  // must not bounce a request, cookie attached, onto the aindrive server.
-  let url = req.url, method = req.method, body = req.body, res;
-  for (let hop = 0; ; hop++) {
-    res = await net.fetch(url, { method, headers, body, credentials: "include", redirect: "manual" });
-    const to = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
-    if (!to || hop >= 5) break;
-    const next = new URL(to, url);
-    if (next.origin !== new URL(req.url).origin) break; // hand the 3xx back instead
-    if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) { method = "GET"; body = undefined; }
-    url = next.toString();
-  }
-  return {
-    status: res.status,
-    statusText: res.statusText,
-    headers: [...res.headers.entries()].filter(([k]) => k.toLowerCase() !== "set-cookie"),
-    body: new Uint8Array(await res.arrayBuffer()),
-  };
+  return sendRequest(req.url, req.method, headers, req.body);
 });
+
+/**
+ * One http(s) request from this process, with the session's cookies — the
+ * phone's native cookie jar. Redirects are followed only within the origin
+ * asked for: a third party (an A2A agent URL) must not bounce a request, cookie
+ * attached, onto the aindrive server. Any other redirect comes back as its 3xx.
+ */
+function sendRequest(url, method, headers, body) {
+  const origin = new URL(url).origin;
+  return new Promise((resolve, reject) => {
+    const req = net.request({ url, method, redirect: "manual", useSessionCookies: true });
+    for (const [k, v] of headers) req.setHeader(k, v);
+    let hops = 0;
+    req.on("redirect", (status, _method, to, resHeaders) => {
+      if (new URL(to).origin === origin && hops++ < 5) return req.followRedirect();
+      req.abort();
+      resolve({ status, statusText: "", headers: flat(resHeaders), body: new Uint8Array() });
+    });
+    req.on("response", (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode, statusText: res.statusMessage, headers: flat(res.headers), body: new Uint8Array(Buffer.concat(chunks)) }));
+      res.on("error", reject);
+    });
+    req.on("error", reject);
+    if (body) req.write(Buffer.from(body));
+    req.end();
+  });
+}
+
+/** Response headers as pairs, never Set-Cookie (the jar keeps those). */
+function flat(h) {
+  const out = [];
+  for (const [k, v] of Object.entries(h ?? {})) {
+    if (k.toLowerCase() === "set-cookie") continue;
+    for (const x of Array.isArray(v) ? v : [v]) out.push([k, String(x)]);
+  }
+  return out;
+}
 
 // ── window, menu bar ───────────────────────────────────────────────────────
 

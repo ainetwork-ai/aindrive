@@ -713,7 +713,7 @@ async function adoptMacFolders() {
     let added = 0;
     for (const a of r.folders) {
       if (findShare(a.folder.uri)) continue;
-      state.shares.push({ folder: a.folder, drive: { driveId: a.drive.driveId, agentToken: a.drive.agentToken, driveSecret: a.drive.driveSecret, url: a.drive.url }, on: true });
+      state.shares.push({ folder: a.folder, drive: { driveId: a.drive.driveId, agentToken: a.drive.agentToken, driveSecret: a.drive.driveSecret, url: a.drive.url }, on: a.on });
       if (!state.sessionCookie) state.server = normalizeServer(a.serverUrl);
       added++;
     }
@@ -1002,6 +1002,8 @@ async function login() {
     await save();
     log(`Logged in${approved.email ? ` (${approved.email})` : ""}`);
     void ensureDefaultAgent();
+    // Mac: folders carried over from the earlier Mac app come back on as soon as there is a session
+    if (ON_MAC) void (async () => { for (const share of state.shares) if (share.on && !p2pOn(share)) await startShare(share); })();
   } catch (e) {
     fail(e);
   } finally {
