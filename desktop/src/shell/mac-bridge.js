@@ -19,7 +19,7 @@
       methods: [
         ...promise("pickFolder", "requestCallLog", "addFiles", "mkdir", "rename", "writeText", "delete", "listFolder",
           "openFile", "readFile", "googleSignIn", "registerHandoffs", "thumbnail", "start", "stop", "status", "reindex",
-          "ensureModels", "ask", "removeListener", "removeAllListeners"),
+          "ensureModels", "ask", "adoptable", "removeListener", "removeAllListeners"),
         { name: "addListener", rtype: "callback" },
       ],
     },

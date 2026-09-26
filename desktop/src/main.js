@@ -82,7 +82,7 @@ mac.migrate();
 // ── the shell's native calls ───────────────────────────────────────────────
 
 const AGENT_METHODS = new Set(["pickFolder", "requestCallLog", "addFiles", "mkdir", "rename", "writeText", "delete", "listFolder",
-  "openFile", "readFile", "googleSignIn", "registerHandoffs", "thumbnail", "start", "stop", "status", "reindex", "ensureModels", "ask"]);
+  "openFile", "readFile", "googleSignIn", "registerHandoffs", "thumbnail", "start", "stop", "status", "reindex", "ensureModels", "ask", "adoptable"]);
 
 async function cookiesCall(method, o) {
   const ses = session.defaultSession;
@@ -124,8 +124,19 @@ ipcMain.handle("native:fetch", async (e, req) => {
   if (!/^https?:\/\//i.test(req?.url ?? "")) throw new Error("only http(s)");
   const headers = new Headers();
   for (const [k, v] of req.headers ?? []) if (!/^(cookie|host|origin|content-length)$/i.test(k)) headers.append(k, v);
-  // session cookies ride along, like the phone's native cookie jar (credentials: include)
-  const res = await net.fetch(req.url, { method: req.method, headers, body: req.body, credentials: "include", redirect: "follow" });
+  // Session cookies ride along, like the phone's native cookie jar. Redirects are
+  // followed only within the origin asked for: a third party (an A2A agent URL)
+  // must not bounce a request, cookie attached, onto the aindrive server.
+  let url = req.url, method = req.method, body = req.body, res;
+  for (let hop = 0; ; hop++) {
+    res = await net.fetch(url, { method, headers, body, credentials: "include", redirect: "manual" });
+    const to = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    if (!to || hop >= 5) break;
+    const next = new URL(to, url);
+    if (next.origin !== new URL(req.url).origin) break; // hand the 3xx back instead
+    if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) { method = "GET"; body = undefined; }
+    url = next.toString();
+  }
   return {
     status: res.status,
     statusText: res.statusText,
