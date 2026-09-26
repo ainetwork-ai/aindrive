@@ -18,7 +18,9 @@ export class ShareSheet implements Sheet {
   private busy = false;
   private myRole: Role = "viewer";
 
-  constructor(private ctx: Ctx, private driveId: string, private path: string, private name: string) { void this.load(); }
+  /** `onNeedPayout`: selling needs a payout wallet first — open the payout wallet screen for this folder. */
+  constructor(private ctx: Ctx, private driveId: string, private path: string, private name: string,
+              private onNeedPayout?: (path: string) => void) { void this.load(); }
 
   private async load() {
     this.loading = true; this.ctx.rerender();
@@ -156,7 +158,17 @@ export class ShareSheet implements Sheet {
       const price = Number(val(root, "sh-price"));
       if (!(price >= 0.01 && price <= 9999.99)) throw new Error("Price must be between 0.01 and 9999.99");
       const listed = (root.querySelector("#sh-listed") as HTMLInputElement).checked;
-      const r = await this.ctx.web.createShare(this.driveId, { path: this.path, role: "viewer", price_usdc: price, currency: val(root, "sh-cur"), listed });
+      let r;
+      try { r = await this.ctx.web.createShare(this.driveId, { path: this.path, role: "viewer", price_usdc: price, currency: val(root, "sh-cur"), listed }); }
+      catch (e) {
+        // No payout wallet yet: take the owner to set one (web/lib/share-edit.ts "set a payout wallet … before selling").
+        if (this.onNeedPayout && /payout wallet/i.test(msgOf(e))) {
+          this.ctx.notify("Set a payout wallet first — that's where sale proceeds go.");
+          this.onNeedPayout(this.path);
+          return;
+        }
+        throw e;
+      }
       await this.ctx.copy(r.url, "Sale link"); this.ctx.forget("sh-price");
     }));
   }

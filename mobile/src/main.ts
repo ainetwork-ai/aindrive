@@ -457,10 +457,12 @@ function driveIdOf(share?: SharedFolder, remote?: RemoteDrive): string | undefin
 
 function openShareFor(driveId: string | undefined, path: string, name: string) {
   if (!driveId) { notify("Turn the folder on first so it has a drive to share.", true); return; }
-  openSheet((ctx) => new ShareSheet(ctx, driveId, path, name));
+  openSheet((ctx) => new ShareSheet(ctx, driveId, path, name,
+    // Sell without a payout wallet → the payout wallet screen; once saved, back to Sell for this folder.
+    (p) => openManage(driveId, name, { payoutFor: p, afterPayout: () => openShareFor(driveId, path, name) })));
 }
 
-function openManage(driveId: string | undefined, name: string) {
+function openManage(driveId: string | undefined, name: string, opts?: { payoutFor?: string; afterPayout?: () => void }) {
   if (!driveId) { notify("Turn the folder on first.", true); return; }
   openSheet((ctx) => new ManageSheet(ctx, driveId, name, () => {
     sheet = null;
@@ -468,7 +470,7 @@ function openManage(driveId: string | undefined, name: string) {
     if (local) { void AindriveAgent.stop({ driveId }).catch(() => {}); state.shares = state.shares.filter((s) => s !== local); void save(); }
     remotes = remotes.filter((d) => d.id !== driveId);
     browse = null; render();
-  }));
+  }, opts));
 }
 
 /** "P2P" on/off: whether the folder is connected to aindrive (others can reach it) or stays on this phone. */
