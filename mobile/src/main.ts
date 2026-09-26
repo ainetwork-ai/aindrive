@@ -1671,6 +1671,9 @@ function deviceName(d: RemoteDrive): string {
   return h || "Unknown device";
 }
 
+/** The drive as last listed: a folder opened before a refresh keeps its old device name and state otherwise. */
+function liveRemote(d: RemoteDrive): RemoteDrive { return remotes.find((x) => x.id === d.id) ?? d; }
+
 /** Other devices' drives under one heading per device (the one with something online first), online drives first. */
 function byDevice(ds: RemoteDrive[]): [string, RemoteDrive[]][] {
   const groups = new Map<string, RemoteDrive[]>();
@@ -2274,7 +2277,7 @@ function browseSheet(): string {
       : `<div class="empty"><div class="art">${I.folder}</div><h3>This folder is empty</h3><p>Upload files or create a folder.</p></div>`;
     else if (viewOf(b) === "grid") body = `<div class="tiles${mostlyMedia(b.entries) ? " media" : ""}">${list.map((e) => {
       const g = fileGlyph(e.name, e.isDir);
-      const t = !e.isDir && !remote ? thumbs.get(thumbKey(e.path)) : undefined;
+      const t = !e.isDir ? thumbs.get(thumbKey(e.path)) : undefined;
       return `<div class="tile${!e.isDir && isMedia(e.name) ? " pic" : ""}" data-entry="${esc(e.path)}">
         <div class="thumb" data-op="open" data-thumb="${esc(e.path)}">${t ? `<img src="${t}" alt="" />` : `<span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="44" height="44"')}</span>`}</div>
         <div class="cap"><span class="${g.cls}" style="display:inline-flex">${g.svg.replace(/width="22" height="22"/, 'width="16" height="16"')}</span><div class="name" data-op="open">${esc(e.name)}</div>
@@ -2298,7 +2301,7 @@ function browseSheet(): string {
       <div class="bar">
         <button class="iconbtn ghost" id="browse-back" aria-label="Back">${I.back}</button>
         ${b.searching ? `<div class="field">${I.search}<input id="browse-q" type="search" placeholder="Search in this folder" value="${esc(b.query ?? "")}" autocomplete="off" /><button id="browse-q-close" aria-label="Close search">${I.close}</button></div>`
-          : `<div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${crumbs.length ? trail.map((t, i) => `<button data-crumb="${i}">${esc(t)}</button>`).join(" / ") : (remote ? esc(b.remote!.hostname ?? (b.remote!.online ? "Online" : "Offline")) : (driveStatus(share)?.connected ? "Online" : `On this ${DEVICE}`))}</div></div>
+          : `<div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${crumbs.length ? trail.map((t, i) => `<button data-crumb="${i}">${esc(t)}</button>`).join(" / ") : (remote ? esc(liveRemote(b.remote!).hostname ? deviceName(liveRemote(b.remote!)) : (liveRemote(b.remote!).online ? "Online" : "Offline")) : (driveStatus(share)?.connected ? "Online" : `On this ${DEVICE}`))}</div></div>
         <button class="iconbtn ghost" id="browse-search" aria-label="Search in this folder">${I.search}</button>`}
         ${remote ? "" : p2pSwitch(share, "browse-p2p")}
         <button class="iconbtn primary" id="browse-share" aria-label="Share">${I.share}</button>
@@ -2323,11 +2326,13 @@ function browseSheet(): string {
 
 function thumbKey(path: string): string { return `${browse?.key ?? ""}|${path}`; }
 
-/** Grid view: small JPEGs for photos, read on the phone and cached for the session. */
+/** Grid view: small JPEGs for photos, cached for the session — read on this phone, or asked of the device that serves a remote drive. */
 async function loadThumbs() {
   const share = browseShare();
-  if (!browse || !share || browse.remote || viewOf(browse) !== "grid" || !browse.entries) return;
-  const want = browse.entries.filter((e) => !e.isDir && isMedia(e.name) && !thumbs.has(thumbKey(e.path)));
+  const remote = browse?.remote;
+  if (!browse || (!share && !remote) || viewOf(browse) !== "grid" || !browse.entries) return;
+  // A remote drive's thumbnails come through the server's thumbnail route, which serves images only.
+  const want = browse.entries.filter((e) => !e.isDir && (remote ? guessMime(e.name).startsWith("image/") : isMedia(e.name)) && !thumbs.has(thumbKey(e.path)));
   const key = browse.key;
   // Eight at a time, each patched into its tile as it lands — no full re-render per photo.
   for (const e of want) thumbs.set(thumbKey(e.path), null);   // claimed now: a re-render won't queue them twice
@@ -2336,8 +2341,8 @@ async function loadThumbs() {
     while (next < want.length) {
       const e = want[next++];
       try {
-        const r = await AindriveAgent.thumbnail({ folderUri: share.folder.uri, path: e.path, px: 320 });
-        const url = Capacitor.convertFileSrc(r.path);
+        const url = remote ? await web().thumbnail(remote.id, e.path)
+          : Capacitor.convertFileSrc((await AindriveAgent.thumbnail({ folderUri: share!.folder.uri, path: e.path, px: 320 })).path);
         thumbs.set(`${key}|${e.path}`, url);
         if (browse?.key !== key) continue;
         const el = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].find((x) => x.dataset.thumb === e.path);

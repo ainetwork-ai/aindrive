@@ -5,7 +5,7 @@
  * Nothing here talks to the phone's own agent; these are server-side records
  * (members, links, sales, agents, tokens) plus fs/* for drives on OTHER devices.
  */
-import { request } from "./api";
+import { request, requestBlobUrl } from "./api";
 
 export type Role = "viewer" | "editor" | "owner";
 export interface Member { id: string; path: string; role: Role; email: string; name: string; isCreator?: boolean }
@@ -88,6 +88,8 @@ export class Web {
   rename(driveId: string, from: string, to: string) { return this.call<unknown>("POST", this.d(driveId, "/fs/rename"), { from, to }); }
   remove(driveId: string, path: string) { return this.call<unknown>("POST", this.d(driveId, "/fs/delete"), { path }); }
   writeText(driveId: string, path: string, content: string) { return this.call<unknown>("POST", this.d(driveId, "/fs/write"), { path, content, encoding: "utf8" }); }
+  /** A small image of a photo on another device (the server caches it; a phone sends its own thumbnail). */
+  thumbnail(driveId: string, path: string) { return requestBlobUrl(this.server, this.d(driveId, `/fs/thumbnail?path=${encodeURIComponent(path)}`), this.cookie); }
   downloadUrl(driveId: string, path: string) { return this.call<{ url: string }>("GET", this.d(driveId, `/fs/download-token?path=${encodeURIComponent(path)}`)).then((r) => r.url); }
 
   // account

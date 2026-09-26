@@ -59,6 +59,16 @@ export async function request<T>(server: string, method: string, path: string, b
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+/** A binary GET (a thumbnail) as an object URL, with the session cookie like request(). */
+export async function requestBlobUrl(server: string, path: string, cookie?: string): Promise<string> {
+  if (cookie) await CapacitorCookies.setCookie({ url: server, key: "aindrive_session", value: cookie });
+  const res = await fetch(server + path);
+  if (!res.ok) throw new Error(`${path} → ${res.status}`);
+  const blob = await res.blob();
+  if (!blob.size) throw new Error(`${path} → empty`);
+  return URL.createObjectURL(blob);
+}
+
 export function startCliLogin(server: string): Promise<CliStart> {
   return post<CliStart>(server, "/api/auth/cli/start", {});
 }

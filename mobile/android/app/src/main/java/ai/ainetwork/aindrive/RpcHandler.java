@@ -42,7 +42,7 @@ final class RpcHandler {
     private static final Set<String> METHODS = new HashSet<>(Arrays.asList(
             "list", "stat", "read", "write", "mkdir", "rename", "delete",
             "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
-            "agent-ask", "handoff-read"));
+            "agent-ask", "handoff-read", "thumbnail"));
 
     private final SafFs fs;
     private final Context ctx;
@@ -122,6 +122,13 @@ final class RpcHandler {
                 return result(method)
                         .put("data", Base64.encodeToString(data, Base64.NO_WRAP))
                         .put("eof", offset + data.length >= size);
+            }
+            case "thumbnail": {
+                // What a grid on another device shows: the phone's small cached thumbnail, not the original.
+                int px = Math.max(64, Math.min(params.optInt("px", 256), 512));
+                File f = Thumbs.jpeg(ctx, fs, fs.rootDocUri().toString(), params.optString("path", ""), px);
+                byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                return result(method).put("data", Base64.encodeToString(data, Base64.NO_WRAP)).put("mime", "image/jpeg");
             }
             case "handoff-read": {
                 // A file the owner registered for a handoff link (Handoffs) — never a path the server names.

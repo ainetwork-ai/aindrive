@@ -81,10 +81,26 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     }
 
     const dir = thumbsDir(driveId);
-    const key = `${createHash("sha1").update(path).digest("hex")}-${stat.entry.mtimeMs}.${isSvg ? "svg" : "webp"}`;
-    const cached = join(dir, key);
+    const base = `${createHash("sha1").update(path).digest("hex")}-${stat.entry.mtimeMs}`;
+    const cached = join(dir, `${base}.${isSvg ? "svg" : "webp"}`);
     if (existsSync(cached)) {
       return imgResponse(readFileSync(cached), isSvg ? "image/svg+xml" : "image/webp");
+    }
+    const small = join(dir, `${base}.jpg`);
+    if (!isSvg && existsSync(small)) return imgResponse(readFileSync(small), "image/jpeg");
+
+    // A phone agent hands over its own cached thumbnail (tens of KB) instead of the camera
+    // original; an agent without the method says "unknown method" and the original is pulled.
+    if (!isSvg) {
+      try {
+        const t = await callAgent(driveId, drive.drive_secret, { method: "thumbnail", path, px: THUMB_W }) as { data: string };
+        const jpg = Buffer.from(t.data, "base64");
+        if (jpg.length) {
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(small, jpg);
+          return imgResponse(jpg, "image/jpeg");
+        }
+      } catch { /* older agent, or no preview on the device: fall through */ }
     }
 
     const original = Buffer.from(
