@@ -1,18 +1,20 @@
 "use client";
 import * as Y from "yjs";
-import { IndexeddbPersistence } from "y-indexeddb";
 import { Awareness, removeAwarenessStates, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
-import * as syncProtocol from "y-protocols/sync";
-import * as encoding from "lib0/encoding";
-import * as decoding from "lib0/decoding";
 import type { TraceEmitter } from "./trace-client";
 import { hashSV } from "./trace-client";
+import { willowClient } from "@/lib/willow/client";
 
 const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000];
 
 type Listener = (event: string, payload?: unknown) => void;
 
-/** A small Y.js provider that talks to /api/agent/doc on our custom server. */
+/**
+ * A small Y.js provider. Document content lives in the drive's Willow store
+ * (lib/willow/client: signed entries, offline, synced through /api/willow/sync);
+ * this provider keeps the ephemeral side on /api/agent/doc: awareness (cursors,
+ * presence), the role, and "reload" when the file changed on disk.
+ */
 export class AindriveProvider {
   doc = new Y.Doc();
   awareness = new Awareness(this.doc);
@@ -27,8 +29,8 @@ export class AindriveProvider {
   private synced = false;
   private tracer: TraceEmitter | null = null;
 
-  private idb: IndexeddbPersistence | null = null;
-  /** Resolves once both IndexedDB load AND first WS sync attempt have completed. */
+  private unbindWillow: (() => void) | null = null;
+  /** Resolves once the local Willow store is loaded and the first sync with the server is done (or offline). */
   whenReady: Promise<void>;
   private resolveReady!: () => void;
   private idbReady: Promise<void> = Promise.resolve();
@@ -38,19 +40,24 @@ export class AindriveProvider {
     const host = typeof window !== "undefined" ? window.location.host : "localhost:3737";
     this.url = `${proto}//${host}/api/agent/doc?drive=${encodeURIComponent(driveId)}&path=${encodeURIComponent(path)}`;
     this.whenReady = new Promise<void>((res) => { this.resolveReady = res; });
-    // Local IndexedDB persistence — preserves edits across reloads + offline use
     if (typeof window !== "undefined" && typeof indexedDB !== "undefined") {
-      try {
-        this.idb = new IndexeddbPersistence(`aindrive:${driveId}:${path}`, this.doc);
-        this.idbReady = this.idb.whenSynced.then(async () => {
-          const ytext = this.doc.getText("content");
-          const sv = Y.encodeStateVector(this.doc);
-          const svHash = await hashSV(sv);
-          this.tracer?.("idb-load", { textLen: ytext.length, svAfter: svHash });
-        }).catch(() => undefined);
-      } catch (e) { console.warn("y-indexeddb unavailable:", e); }
+      this.idbReady = (async () => {
+        try {
+          const client = await willowClient(driveId);
+          const unbind = await client.openDoc(path.split("/"), this.doc);
+          if (this.destroyed) { unbind(); return; }
+          this.unbindWillow = unbind;
+          await client.initialSync;
+        } catch (e) { console.warn("willow store unavailable:", e); }
+      })();
+      void this.idbReady.then(() => {
+        if (this.destroyed || this.synced) return;
+        this.synced = true;
+        this.resolveReady();
+        this.emit("synced");
+        this.tracer?.("whenReady-resolved");
+      });
     }
-    this.doc.on("update", this.onLocalUpdate);
     this.doc.on("update", this.onDocUpdate);
     this.awareness.on("update", this.onLocalAwareness);
     this.connect();
@@ -66,7 +73,6 @@ export class AindriveProvider {
 
   private tag(origin: unknown): string {
     if (origin === this) return "remote";
-    if (origin === this.idb) return "idb-restore";
     return "local";
   }
 
@@ -80,29 +86,12 @@ export class AindriveProvider {
       this.attempt = 0;
       this.status = "connected"; this.emit("status", this.status);
       this.tracer?.("provider-connect");
-      // Send our initial sync step 1 (state vector)
-      const enc = encoding.createEncoder();
-      syncProtocol.writeSyncStep1(enc, this.doc);
-      this.send({ t: "sync", msg: bytesToB64(encoding.toUint8Array(enc)) });
       // Send our local awareness state if any
       const states = this.awareness.getStates();
       if (states.size > 0) {
         const u = encodeAwarenessUpdate(this.awareness, [this.doc.clientID]);
         this.send({ t: "aware", msg: bytesToB64(u) });
       }
-      // Single-peer case: nobody else online to ack our step1, so after a grace
-      // period we consider ourselves synced. The viewer must wait for BOTH
-      // whenReady AND IndexedDB load before deciding whether to seed.
-      setTimeout(async () => {
-        if (this.synced) return;
-        await this.idbReady;
-        if (!this.synced && this.status === "connected") {
-          this.synced = true;
-          this.resolveReady();
-          this.emit("synced");
-          this.tracer?.("whenReady-resolved");
-        }
-      }, 800);
     });
     ws.addEventListener("message", async (ev) => {
       let frame;
@@ -116,20 +105,6 @@ export class AindriveProvider {
         return;
       }
       if (frame.t === "reload") { this.emit("reload"); this.tracer?.("reload-event"); return; }
-      if (frame.t === "sync") {
-        const dec = decoding.createDecoder(b64ToBytes(frame.msg));
-        const enc = encoding.createEncoder();
-        const messageType = syncProtocol.readSyncMessage(dec, enc, this.doc, this);
-        if (encoding.length(enc) > 0) this.send({ t: "sync", msg: bytesToB64(encoding.toUint8Array(enc)) });
-        if (messageType === syncProtocol.messageYjsSyncStep2 && !this.synced) {
-          await this.idbReady;
-          this.synced = true;
-          this.resolveReady();
-          this.emit("synced");
-          this.tracer?.("whenReady-resolved");
-        }
-        return;
-      }
       if (frame.t === "aware") {
         applyAwarenessUpdate(this.awareness, b64ToBytes(frame.msg), this);
         return;
@@ -165,13 +140,6 @@ export class AindriveProvider {
     });
   };
 
-  private onLocalUpdate = (update: Uint8Array, origin: unknown) => {
-    if (origin === this) return; // do not echo updates that came from the wire
-    const enc = encoding.createEncoder();
-    syncProtocol.writeUpdate(enc, update);
-    this.send({ t: "sync", msg: bytesToB64(encoding.toUint8Array(enc)) });
-  };
-
   private onLocalAwareness = (
     { added, updated, removed }: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown
@@ -199,11 +167,10 @@ export class AindriveProvider {
 
   destroy() {
     this.shutdown();
-    this.doc.off("update", this.onLocalUpdate);
     this.doc.off("update", this.onDocUpdate);
     this.awareness.off("update", this.onLocalAwareness);
     this.awareness.destroy();
-    if (this.idb) { try { this.idb.destroy(); } catch {} }
+    if (this.unbindWillow) { try { this.unbindWillow(); } catch {} }
     this.doc.destroy();
   }
 }

@@ -54,4 +54,18 @@ describe("Y.Doc bound to a Willow store", () => {
     const k = await generateDeviceKey();
     expect(clientIdFor(k, 1)).not.toBe(clientIdFor(k, 2));
   });
+
+  it("rapid typing loses nothing even when nextSeq is slow (appends are serialised)", async () => {
+    const k = await generateDeviceKey();
+    const s = newStore("d");
+    let n = 0;
+    const racySeq = async () => { const v = n; await new Promise((r) => setTimeout(r, 2)); n = v + 1; return v + 1; };
+    const d1 = new Y.Doc();
+    await bindDoc({ store: s, key: k, docPath: ["a.md"], doc: d1, nextSeq: racySeq });
+    for (const ch of "abcdefghijklmnopqrst") d1.getText("content").insert(d1.getText("content").length, ch);
+    await new Promise((r) => setTimeout(r, 400));
+    const d2 = new Y.Doc();
+    await bindDoc({ store: s, key: k, docPath: ["a.md"], doc: d2, nextSeq: racySeq });
+    expect(d2.getText("content").toString()).toBe("abcdefghijklmnopqrst");
+  });
 });

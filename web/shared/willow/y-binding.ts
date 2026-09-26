@@ -16,9 +16,11 @@ export async function bindDoc(o: { store: AnyStore; key: DeviceKeypair; docPath:
   const origin = Symbol("willow");
   for (const u of await readUpdates(o.store, o.docPath)) Y.applyUpdate(o.doc, u.update, origin);
 
+  // appends run one at a time, in the order Yjs produced the updates
+  let chain: Promise<void> = Promise.resolve();
   const onLocal = (update: Uint8Array, from: unknown) => {
     if (from === origin) return;
-    void (async () => appendUpdate(o.store, o.key, o.docPath, update, await o.nextSeq()))();
+    chain = chain.then(async () => appendUpdate(o.store, o.key, o.docPath, update, await o.nextSeq())).catch((e) => console.warn("willow append failed:", e));
   };
   o.doc.on("update", onLocal);
 

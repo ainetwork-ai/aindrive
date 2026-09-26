@@ -9,6 +9,7 @@ import { apiFetch } from "@/lib/api-client";
 import { paidLockFrom, type PaidLock } from "@/lib/paid-lock";
 import { sortEntries, type SortKey, type SortState } from "@/lib/sort-entries";
 import { locationPath, viewerHistory } from "@/lib/drive-location";
+import { registerOffline } from "@/lib/willow/offline";
 import {
   DriveSidebar, DriveHeader, FileTable, ShowcaseSection, LockedPreview,
   type DriveSummary, type ShareSummary, type ViewMode,
@@ -56,6 +57,9 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   // Each history entry carries its Loc: the URL alone can't say file vs
   // folder, and history state survives reloads. Next.js merges its own keys
   // into the object we pass (and keeps ours), so its popstate handling is unaffected.
+  // Offline open: the app shell and visited drive pages come from the service worker.
+  useEffect(() => { registerOffline(); }, []);
+
   useEffect(() => {
     window.history.replaceState({ ...(window.history.state ?? {}), [HISTORY_KEY]: { folder: initialFolder, open: initialOpen ?? null } }, "");
   }, [initialFolder, initialOpen]);

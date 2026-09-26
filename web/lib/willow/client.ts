@@ -60,12 +60,20 @@ async function connect(driveId: string) {
     if (r?.ok) { const { cert } = await r.json(); await store.set({ path: certPath, subspace: key.publicKey, payload: utf8(JSON.stringify(cert)) }, key); }
   }
 
-  // sequence numbers: device-wide, persisted, never reused (two tabs share the device key)
+  // Sequence numbers name update paths, so two appends must never share one (the
+  // newer entry would prune the older). In-memory and strictly increasing per tab,
+  // microseconds × 100 + a per-tab suffix so two tabs of this device never collide.
+  const tabSuffix = Math.floor(Math.random() * 100);
+  let lastSeq = 0;
   const nextSeq = async () => {
-    const n = ((await idb<number | undefined>((os) => os.get(`seq-${driveId}`))) ?? 0) + 1;
-    await idb((os) => os.put(n, `seq-${driveId}`), "readwrite");
-    return Date.now() * 1000 + (n % 1000); // monotonic across tabs even if two read the same n
+    lastSeq = Math.max(lastSeq + 100, Date.now() * 1000 * 100 + tabSuffix);
+    return lastSeq;
   };
+
+  // the first sync with the server, or giving up on it (offline / no access / 3 s)
+  let firstSync!: () => void;
+  const initialSync = new Promise<void>((r) => { firstSync = r; });
+  setTimeout(() => firstSync(), 3000);
 
   let backoff = 500;
   const open = () => {
@@ -79,10 +87,12 @@ async function connect(driveId: string) {
         store, ranges: [fullRange()],
         channel: { send: (f) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(f)), onFrame: (cb) => frames.push(cb), onClose: (cb) => closes.push(cb) },
         onRefused: (f) => status.dispatchEvent(new CustomEvent("refused", { detail: f })),
+        onSynced: () => firstSync(),
       }).start();
     };
     ws.onclose = (ev) => {
       closes.forEach((c) => c());
+      firstSync();
       status.dispatchEvent(new Event("offline"));
       if (ev.code === 4401 || ev.code === 4402) return; // no access: do not hammer
       setTimeout(open, backoff);
@@ -92,7 +102,7 @@ async function connect(driveId: string) {
   open();
 
   return {
-    store, key, status,
+    store, key, status, initialSync,
     openDoc: (docPath: string[], doc: Y.Doc) => { doc.clientID = clientIdFor(key, ++tabCounter + Math.floor(Math.random() * 1e6)); return bindDoc({ store, key, docPath, doc, nextSeq }); },
   };
 }

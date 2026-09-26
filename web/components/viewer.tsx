@@ -9,7 +9,7 @@ import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
 import { traceClient, SESSION_ID } from "@/lib/yjs/trace-client";
 import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
-import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
+import { TEXT_EXT, colorForId, sha1Base64, languageFor } from "./viewer-utils";
 import { ViewerHeader } from "./viewer-parts";
 import { fileIconForName } from "./file-icons";
 import { RichTextEditor } from "./editors/rich-text-editor";
@@ -74,16 +74,11 @@ export function Viewer({
       if (!canEdit || !providerRef.current || !docIdRef.current) return;
       const provider = providerRef.current;
       const text = provider.doc.getText("content").toString();
-      const update = Y.encodeStateAsUpdate(provider.doc);
       try {
         await Promise.all([
           fetch(`/api/drives/${driveId}/fs/write`, {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
-          }),
-          fetch(`/api/drives/${driveId}/yjs`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
           }),
         ]);
       } catch (e) { console.warn("autosave failed:", e); }
@@ -149,27 +144,15 @@ export function Viewer({
           provider.setTracer(tracer);
         }
 
-        // Wait for full readiness (IndexedDB + WS sync) before deciding whether to seed
+        // Wait for the local Willow store + first sync before deciding whether to seed
         await provider.whenReady;
         const ytext = provider.doc.getText("content");
-        // Only seed if BOTH IndexedDB and the server-side Willow Store are empty.
-        // Otherwise the existing CRDT state is authoritative — re-seeding would
-        // duplicate content on every reload.
+        // Seed from disk only when the Willow store has nothing for this file
+        // (after the first sync with the server): the entries are authoritative,
+        // re-seeding would duplicate content on every reload.
         if (ytext.length > 0) {
           tracer?.("disk-seed-skip");
         } else {
-          const yjsRes = await fetch(`/api/drives/${driveId}/yjs?path=${encodeURIComponent(entry.path)}`);
-          if (yjsRes.ok) {
-            const { data } = await yjsRes.json();
-            if (data) {
-              try {
-                const updateBytes = b64ToBytes(data);
-                Y.applyUpdate(provider.doc, updateBytes, provider);
-                tracer?.("yjs-pull-apply", { byteLen: updateBytes.byteLength });
-              }
-              catch (e) { console.warn("y-apply-update failed:", e); }
-            }
-          }
           if (provider.doc.getText("content").length === 0) {
             const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
             if (fileRes.ok) {

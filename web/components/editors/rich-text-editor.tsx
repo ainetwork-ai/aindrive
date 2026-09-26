@@ -26,7 +26,7 @@ import {
   Bold, Italic, Heading1, Heading2, List, ListOrdered, Code, Quote, Undo2, Redo2,
 } from "lucide-react";
 import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
-import { colorForId, sha1Base64, bytesToBase64 } from "../viewer-utils";
+import { colorForId, sha1Base64 } from "../viewer-utils";
 import type { DriveEntry } from "@/lib/protocol";
 import clsx from "clsx";
 
@@ -92,20 +92,15 @@ export function RichTextEditor({
     },
   }, [provider]);
 
-  // Debounced autosave: markdown body to disk + full Yjs update to the store.
+  // Debounced autosave: markdown body to disk (until Plan 3: the agent writes the file from the Willow document).
   const debouncedAutosave = useDebouncedCallback(async () => {
     if (!canEdit || !editor || !docIdRef.current || !readyToSaveRef.current) return;
     const md = editor.getMarkdown();
-    const update = Y.encodeStateAsUpdate(provider.doc);
     try {
       await Promise.all([
         fetch(`/api/drives/${driveId}/fs/write`, {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ path: entry.path, content: md, encoding: "utf8" }),
-        }),
-        fetch(`/api/drives/${driveId}/yjs`, {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
         }),
       ]);
     } catch (e) { console.warn("richtext autosave failed:", e); }
