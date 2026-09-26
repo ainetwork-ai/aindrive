@@ -125,8 +125,11 @@ function handleOf(a: A2aAgent): string {
  * The built-in server agent only speaks drive commands, so it isn't asked general questions.
  */
 function fallbackAgents(): A2aAgent[] {
-  return a2aAgents.filter((a) => !a.builtin);
+  return a2aAgents.filter((a) => !a.builtin && a.enabled);
 }
+
+/** Whether an agent may be used at all — its switch in Model & agents is the owner's approval. */
+const agentOn = (a: A2aAgent) => !!a.builtin || !!a.enabled;
 
 /**
  * The aindrive-cloud agent — the on-device agent's counterpart, run by ainize.ai on Qwen3.8-Flash-Next
@@ -172,15 +175,14 @@ async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | nul
 }
 
 /** Asks, then registers exactly these files on the phone and mints one short-lived link each. */
-async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path: string }[], why = ""): Promise<(Handed & { links: HandoffLink[] }) | null> {
+async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path: string }[]): Promise<(Handed & { links: HandoffLink[] }) | null> {
   if (!picked.length) return { files: [], links: [] };
+  // No per-send confirm: the agent's switch is the owner's standing approval (agentOn).
+  // What went out is shown on the turn ("N files sent to … · Revoke") and in the handoff audit list.
+  if (!agentOn(agent)) return null;
   // The links travel through a drive connected to aindrive (P2P on): any of the owner's will do.
   const carrier = state.shares.find((sh) => sh.drive && driveStatus(sh)?.connected);
   if (!carrier?.drive) { notify("Turn P2P on for a folder first — the files go out through it.", true); return null; }
-  const names = picked.map((x) => x.path.split("/").pop()).join(", ");
-  const ok = await confirmAsync(`Send ${picked.length} file${picked.length === 1 ? "" : "s"} to ${agent.name}?`,
-    `${why}${names}\n\n${agent.name} can read only these files — by link or through MCP — for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this ${DEVICE} until it opens one, and you can revoke them any time.`, "Send links");
-  if (!ok) return null;
   const reg = await AindriveAgent.registerHandoffs({ files: picked, ttlSeconds: HANDOFF_TTL_SECONDS });
   const r = await new Web(state.server, state.sessionCookie!).handoffs({
     driveId: carrier.drive.driveId, audience: agent.name, ttlSeconds: HANDOFF_TTL_SECONDS,
@@ -194,9 +196,9 @@ async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path:
   };
 }
 
-/** The agent a report's notes go to for better summaries: aindrive-cloud when it was added, else the only added agent. */
+/** The agent a report's notes go to for better summaries: aindrive-cloud when it was added, else the only added agent (on or off — the card says which). */
 function summaryAgent(): A2aAgent | undefined {
-  const added = fallbackAgents();
+  const added = a2aAgents.filter((a) => !a.builtin);
   return added.find((a) => handleOf(a) === "aindrive-cloud") ?? (added.length === 1 ? added[0] : undefined);
 }
 
@@ -208,9 +210,10 @@ function summaryAgent(): A2aAgent | undefined {
 async function cloudCallSummaries() {
   const a = askResult?.action, to = summaryAgent();
   if (!a?.files?.length || !a.folderUri || !to) return;
+  if (!agentOn(to)) { modelOpen = true; render(); return; }   // turning it on is the approval
   const picked = a.files.slice(0, HANDOFF_MAX).map((f) => ({ folderUri: a.folderUri!, path: f.split("/").pop()! }));
   let handed: Awaited<ReturnType<typeof handoffPicked>> = null;
-  try { handed = await handoffPicked(to, picked, `The call notes this ${DEVICE} wrote (transcript excerpts and counts — no audio).\n\n`); }
+  try { handed = await handoffPicked(to, picked); }
   catch (e) { notify(`Couldn't prepare the notes: ${msgOf(e)}`, true); return; }
   if (!handed?.files.length) return;
   const q = "Summarise what I usually talk about with each person in these call notes — a short line per person, in the notes' language.";
@@ -1345,6 +1348,7 @@ async function ask(q = askQuery) {
   if (!q) return;
   askQuery = q;
   const direct = mentioned(q);
+  if (direct && !agentOn(direct.agent)) { notify(`${direct.agent.name} is off — turn it on in Model & agents first.`, true); return; }
   if (direct) {
     let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
     try { handed = await handoffFiles(direct.agent, direct.text); }
@@ -1968,7 +1972,9 @@ function searchSheet(): string {
           ${p2pSwitch(actionFolderShare(a), "action-p2p")}
         </div>
         ${a.needsCallLog ? `<p class="hint" style="margin-top:8px">Without call-log access the ranking counts recordings only. <button class="link" id="action-calllog">Allow call log</button></p>` : ""}
-        ${a.report === "calls" && a.files?.length && a.folderUri && summaryAgent() ? `<p class="hint" style="margin-top:8px">${a.unsummarised ? `${a.unsummarised} ${a.unsummarised === 1 ? "person has" : "people have"} topic words only. ` : ""}Summarised on this ${DEVICE}. <button class="link" id="action-cloud-summary">Better summaries with ${esc(summaryAgent()!.name)}</button> — sends the text notes, not the audio, after you confirm.</p>` : ""}
+        ${a.report === "calls" && a.files?.length && a.folderUri && summaryAgent() ? `<p class="hint" style="margin-top:8px">${a.unsummarised ? `${a.unsummarised} ${a.unsummarised === 1 ? "person has" : "people have"} topic words only. ` : ""}Summarised on this ${DEVICE}. ${agentOn(summaryAgent()!)
+          ? `<button class="link" id="action-cloud-summary">Better summaries with ${esc(summaryAgent()!.name)}</button> — it reads only these text notes, never the audio.`
+          : `<button class="link" id="action-cloud-summary">Turn on ${esc(summaryAgent()!.name)}</button> in Model &amp; agents for better summaries — it would read only these text notes.`}</p>` : ""}
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
         ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
       </div>`;
@@ -2078,8 +2084,9 @@ function modelDrawer(): string {
         <span class="ft-doc" style="display:inline-flex">${icon("globe", 20)}</span>
         <div style="flex:1;min-width:0"><div style="font-weight:600">${esc(a.name)}${a.version ? ` <span class="hint">v${esc(a.version)}</span>` : ""}</div>
           <div class="hint mono" style="word-break:break-all">${esc(new URL(a.url).host)} · @${esc(handleOf(a))}</div></div>
-        ${a.builtin ? `<span class="badge">Default</span>` : `<button class="iconbtn ghost" data-agent-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}">${icon("trash", 16)}</button>`}
+        ${a.builtin ? `<span class="badge">Default</span>` : `<button class="switch" role="switch" aria-checked="${!!a.enabled}" data-agent-toggle="${esc(a.id)}" aria-label="Use ${esc(a.name)}"></button><button class="iconbtn ghost" data-agent-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}">${icon("trash", 16)}</button>`}
       </div>
+      ${a.builtin ? "" : `<p class="hint" style="margin:6px 0 0">${a.enabled ? `On — gets what this ${DEVICE} can't do, and reads the files those turns refer to (links + MCP, 15 min, revocable).` : "Off — never asked, never sent a file."}</p>`}
       ${a.description ? `<p class="note" style="margin:6px 0 0">${esc(a.description.length > 180 ? a.description.slice(0, 177) + "…" : a.description)}</p>` : ""}
       ${a.skills.length ? `<div class="chips" style="margin-top:8px">${a.skills.slice(0, 8).map((k) => `<span class="badge" title="${esc(k.description ?? "")}">${esc(k.name)}</span>`).join("")}</div>` : ""}
     </div>`).join("");
@@ -2088,7 +2095,7 @@ function modelDrawer(): string {
     ${local}
     <p class="note group">A2A agents in this chat</p>
     ${agents || `<p class="hint" style="margin:0 0 8px">None yet. Add agents to help with what this ${DEVICE} can't do.</p>`}
-    ${a2aAgents.length ? `<p class="hint" style="margin:0 0 10px">Your files stay with the on-device agent. Anything it can't do goes to these agents; start a message with @name to ask one directly.</p>` : ""}
+    ${a2aAgents.length ? `<p class="hint" style="margin:0 0 10px">Your files stay with the on-device agent. Anything it can't do goes to the agents that are on — turning one on lets it read the files those turns refer to; start a message with @name to ask one directly.</p>` : ""}
     <p class="note group" style="margin-top:14px">Add an A2A agent</p>
     <div class="field" style="margin-bottom:8px">${icon("link", 18)}<input id="a2a-url" type="url" inputmode="url" placeholder="Paste an A2A agent URL" autocomplete="off" value="${esc(a2aDraft.url)}" /></div>
     <div class="field" style="margin-bottom:8px">${icon("lock", 18)}<input id="a2a-token" type="password" placeholder="Access token (optional)" autocomplete="off" value="${esc(a2aDraft.token)}" /></div>
@@ -2115,6 +2122,11 @@ function bindSearch() {
   bind("model-switch", () => { modelOpen = true; a2aAdd = { busy: false }; render(); });
   bind("model-close", () => { modelOpen = false; render(); });
   document.getElementById("model-scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { modelOpen = false; render(); } });
+  document.querySelectorAll<HTMLElement>("[data-agent-toggle]").forEach((el) => el.addEventListener("click", () => {
+    const id = el.dataset.agentToggle!;
+    a2aAgents = a2aAgents.map((a) => a.id === id && !a.builtin ? { ...a, enabled: !a.enabled } : a);
+    void saveAgents(a2aAgents, "local"); render();
+  }));
   document.querySelectorAll<HTMLElement>("[data-agent-remove]").forEach((el) => el.addEventListener("click", () => {
     const id = el.dataset.agentRemove!;
     a2aAgents = a2aAgents.filter((a) => a.id !== id || a.builtin);
