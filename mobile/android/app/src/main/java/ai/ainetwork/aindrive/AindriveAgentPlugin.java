@@ -52,9 +52,11 @@ public class AindriveAgentPlugin extends Plugin {
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         // "initial": open the picker AT a folder ("Call", "DCIM") so the user only has to confirm.
+        // With none, open at internal storage's root: the picker otherwise resumes wherever it was last,
+        // which after a (re)install is the empty "Recent" view — the person sees nothing to pick.
         String initial = call.getString("initial");
-        if (initial != null && Build.VERSION.SDK_INT >= 26) {
-            Uri at = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + initial);
+        if (Build.VERSION.SDK_INT >= 26) {
+            Uri at = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + (initial == null ? "" : initial));
             intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, at);
         }
         startActivityForResult(call, intent, "folderPicked");
