@@ -41,7 +41,12 @@ internals.
   `rpcMethodNames()` + `rotate-credentials`, and `caps: []`. The CLI does not claim
   `ask.v2`: `agent-ask` here runs the owner's LLM agent, which has no read-only mode
   or root filter yet, so the server's `ask` skill refuses questions to CLI drives.
-  The Mac app runs this same agent, so its drives also say `cli`.
+  The Mac app runs this same agent, so its drives also say `cli`. `appVersion` is
+  read at run time from `../package.json` next to the bundle (as `--version` in
+  `main.js` always has): `cli/package.json` for the npm CLI, but in the Mac app,
+  whose bundle is `desktop/cli/aindrive.mjs`, it is `desktop/package.json` — the
+  desktop app's version (0.1.0 today), not the CLI's. Treat it as "the version of
+  what is running", not as a CLI release number.
 - **`willow-store.js`: the `yjs_entries` mirror is the source of truth for reads**;
   the Willow `Store` write is write-only decoration today.
 - **Tests**: vitest (`npm test`). `__tests__/*.test.mjs` includes characterization

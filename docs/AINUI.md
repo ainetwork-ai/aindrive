@@ -35,13 +35,28 @@ the `agent-ask` RPC. The first frame on a host's socket is
   "read_only"}` and the answer says it only looked. `"act"` or no `mode`: as before.
   Any other `mode` is refused (`bad_mode`).
 - `root`: every source, count and the answer are over files at or below it (exact,
-  case-sensitive prefix; NFC or NFD spelling). Normalized like `normalizePath`; `..`
-  or a `.aindrive/` root is refused (`bad_root`). In `act` a collected folder is made
-  inside `root`, and a call report is refused inside a folder (`reason:
-  "outside_root"`).
+  case-sensitive prefix; a file stored in NFC or NFD matches). Normalized like
+  `normalizePath`; `..` or a `.aindrive/` root is refused (`bad_root`). Every source
+  `path` (and action `files`) comes back in the server's spelling — NFC, no edge
+  slashes — so it literally equals `root` or starts with `root + "/"`; the host
+  resolves that spelling back to an NFD-named file as it does for any path. In `act` a
+  collected folder is made inside `root`, and a call report is refused inside a folder
+  (`reason: "outside_root"`).
 - `context`: accepted and ignored. The reply adds `action` when the question asked for
   one (never the phone's `folderUri`).
 
 Android advertises `ask.v2` (`mobile/android/…/agent/AskScope.java`). iOS (it refuses
 `agent-ask`) and the desktop CLI (its LLM agent has no read-only mode yet) send
 `caps: []`, so the server's `ask` skill turns their questions away up front.
+
+- **Trust assumption.** The frame HMAC does not cover `params`: `web/lib/sig.js`
+  canonicalises with a top-level key allowlist, which filters nested keys too. So
+  `mode` and `root` are protected by TLS on the host socket and by the server's own
+  checks (role and scope before the call, source filtering after it), not by the
+  signature. Signing the full canonical JSON is a protocol v2 item (not in this round).
+- **Reply deadlines.** A host drops a reply the server can no longer be waiting for:
+  Android admits a response only until the server's timeout for that method, counted
+  from when the request arrived, less 2 s — 25 s by default, 120 s for `upload-chunk`,
+  `rename` and `download-chunk`, 90 s for `agent-ask` (`mobile/android/…/RpcBudget.java`).
+  A new or longer server timeout must be added there too; `RpcBudgetTest` fails when a
+  `timeoutMs` literal in `web/` exceeds the longest budget.

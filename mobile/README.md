@@ -32,7 +32,7 @@ drive and a laptop drive are the same thing to the server.
 | `src/device.ts` | phone or Mac: the same shell is also the Mac app (`desktop/`, platform `electron`), so device names in copy and phone-only features (call/camera sources, models, Google picker) go through `ON_MAC` / `DEVICE` |
 | `src/ui.css`, `src/icons.ts` | the web's design language: tokens mirror `web/tailwind.config.ts` (cool-gray page, white cards, `#0b57d0`, Inter bundled via `@fontsource-variable/inter`, pill buttons, soft slate shadows, light only) and lucide icons like `web/components`. Change the web tokens → change these |
 | `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
-| `android/…/{Hello,SendGate}.java` | the protocol v2 `agent-hello` (platform, appVersion, methods, caps `ask.v2`) and the send gate every frame goes through |
+| `android/…/{Hello,SendGate,RpcBudget}.java` | the protocol v2 `agent-hello` (platform, appVersion, methods, caps `ask.v2`); the send gate every RPC response goes through; each drive's worker lanes and each request's deadline |
 | `android/…/SafFs.java` | filesystem over the picked SAF tree (real device storage) |
 | `android/…/RpcHandler.java` | RPC method dispatch, mirroring `cli/src/rpc.js` |
 | `android/…/Sig.java` | HMAC frame signing, byte-compatible with `web/lib/sig.js` |
@@ -62,7 +62,10 @@ drive and a laptop drive are the same thing to the server.
   order — so a nested `result` keeps only the top-level key names it shares
   (`{"result":{"ok":true}}`), not `{}`. `SigCompatTest` pins this against vectors
   generated from `web/lib/sig.js`; regenerate them from Node rather than
-  editing them to match new output.
+  editing them to match new output. The same allowlist means `params` (a
+  request's `method`, `path`, an ask's `mode` and `root`) are **not signed**:
+  read-only asks rely on TLS on the socket and on the server's own checks, not
+  on the HMAC. Signing the full canonical JSON is a protocol v2 item.
 - **Reserved paths match `cli/src/rpc.js`.** `.aindrive/**` is refused over RPC
   except `agents/` and `uploads/` (`ReservedPath`, `DriveFs.resolve`; any letter case).
   This is a second layer behind the web's own gate.
@@ -171,20 +174,46 @@ drive and a laptop drive are the same thing to the server.
   Protocol v2 (`caps: ["ask.v2"]` in the hello; contract in `docs/AINUI.md` §6
   "Drive hosts"): `mode: "read"` never collects, moves, lists files for deletion,
   writes or opens the call log; `root` limits every source, count and answer to
-  one folder; the reply carries `action`. The server sends `read` for everyone but
-  the drive owner. The in-app chat still asks with act over the whole drive.
-- **Every frame goes through `SendGate`.** OkHttp's `send()` never blocks: it
-  queues, and closes the socket when the queue would pass 16 MiB. So one RPC
-  response is admitted at a time, only while the queue stays under 12 MiB
-  (waiting up to 60 s for it to drain); a single frame over 12 MiB is answered
-  with `response too large` instead. iOS sets `maximumMessageSize` to 16 MiB:
-  the 1 MiB default refused the first 4 MiB upload chunk.
+  one folder, and every source path comes back in NFC (the server's spelling)
+  even for a file a Mac named in NFD; the reply carries `action`. The server's
+  `ask` skill sends `read` always, to the drive owner too, and `act` only when the
+  owner explicitly asks for it and holds the write group; ainmem never sends
+  `act`. No `mode` (the owner's older `/ask` route) and the in-app chat act over
+  the whole drive, as before.
+- **Every RPC response goes through `SendGate`.** OkHttp's `send()` never
+  blocks: it queues, and closes the socket when the queue would pass 16 MiB. So
+  a big response is admitted only while the queue stays under 12 MiB, a small
+  one (≤ 1 MiB: list, stat, errors) up to 15 MiB, and a single frame over 12 MiB
+  is answered with `response too large` instead. The wait is outside the gate's
+  lock (a reply that fits goes out at once) and ends at the request's deadline:
+  the server's timeout for that method less 2 s, counted from when the frame
+  arrived (`RpcBudget`: 25 s by default, 120 s for upload-chunk / rename /
+  download-chunk, 90 s for agent-ask — keep it in step with the web; its test
+  reads `web/`). Once the gate has timed how fast the socket drains, it also
+  drops a reply that would still be leaving after the deadline; a read-only
+  request still waiting for a worker at its deadline is skipped. The one frame
+  sent around the gate is the agent-hello: the first frame on a fresh socket,
+  whose queue is empty.
+- **Each drive has its own RPC workers**, in two lanes: `read`,
+  `download-chunk`, `handoff-read` and `yjs-read` (replies up to ≈ 11 MB of
+  base64) on 2 threads, everything else on 4. A drive pulling whole photos for a
+  thumbnail grid over a slow uplink holds neither another drive's requests nor
+  its own list/stat (which still leave after the bytes already queued: the
+  socket is one FIFO, up to 12 MiB ahead).
+- iOS sets `maximumMessageSize` to 16 MiB: the 1 MiB default refused the first
+  4 MiB upload chunk.
 - **Uploads are indexed as they land.** After a `write`, an upload's publish
   (`rename` from `.aindrive/uploads/*.part`) or a `delete`, the drive's index
   is updated for that path on the index thread (a moved file keeps its photo
-  vector and transcript), so a fresh upload is findable at once. Only for a
-  drive indexed at least once; edits made in the in-app browser still wait for
-  the next index run.
+  vector and transcript), so a fresh upload is findable at once by name, kind,
+  date and place, and a photo by what it shows. A recording or video is not
+  transcribed then (minutes of work on the one index thread every drive
+  shares): its transcript comes with the next index run. The update queues
+  behind whatever the index thread is doing — a full run or a model download
+  can hold it for a long time. Only for a drive indexed at least once; edits
+  made in the in-app browser still wait for the next index run. The index has a
+  `path` index for these look-ups, created on open (a schema bump would rebuild
+  the table and drop hours of vectors and transcripts).
 - **Recognition is real and on-device.** Photos get a MobileCLIP vector (the
   question's content words become "a photo of …" and rank photos by cosine;
   ≥ 0.17 and within 0.08 of the best counts as a match), recordings and videos
@@ -195,7 +224,9 @@ drive and a laptop drive are the same thing to the server.
 - **`yjs-*` keeps only the latest snapshot**, not the append-only Willow store,
   because there is no Y.js in the native process. That is the same fallback path
   the desktop agent still supports: collaboration converges through the server,
-  local edit history is what is lost.
+  local edit history is what is lost. A snapshot over ≈ 8.9 MiB
+  (`RpcHandler.MAX_YJS_BYTES`) is refused on `yjs-write` — its `yjs-read` reply
+  would not fit one frame — so the last snapshot kept stays readable.
 - **`.aindrive/` is not written into the user's folder.** Drive config lives in
   app storage and yjs snapshots in app-private storage — a phone's Documents
   directory should not sprout a control directory the user cannot clean up.
