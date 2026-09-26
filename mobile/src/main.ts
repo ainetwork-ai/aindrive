@@ -17,12 +17,12 @@ import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
-import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
+import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, type RemoteDrive } from "./api";
 import { DEVICE, ON_MAC } from "./device";
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
-import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
+import { loadAgents, saveAgents, discover, askDevice, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
 import { prepareFolderHandoff } from "./folder-handoff";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
@@ -425,7 +425,6 @@ let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: st
 let remotes: RemoteDrive[] = [];
 let remotesAt = 0;
 /** agentId per remote drive, created on first ask (the record lives in that drive). */
-const remoteAgents = new Map<string, string>();
 /** Share link minted for the agent's last collected folder. */
 let actionShare: { folder: string; url?: string; busy: boolean; error?: string } | null = null;
 let toast: { msg: string; error?: boolean; timer?: number } | null = null;
@@ -1503,18 +1502,15 @@ async function ask(q = askQuery) {
     const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined, driveId: scope?.driveId }) : null;
     // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
     const offTopic = local?.query === "chat" || local?.query === "out";
-    const targets = offTopic || scope ? [] : remotes.filter((d) => d.online);
+    // The account's own drives on other devices, each asked through its A2A agent (/a2a/d/<id>).
+    const targets = offTopic || scope ? [] : remotes.filter((d) => d.online && d.owned !== false);
     const askId = "q_" + (crypto.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/[^A-Za-z0-9]/g, "");
     const remoteResults = await Promise.all([
       ...targets.map(async (d) => {
         try {
-          const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
-          remoteAgents.set(d.id, agentId);
-          const r = await askRemote(state.server, state.sessionCookie!, d.id, agentId, q, askId);
+          const r = await askDevice(state.server, state.sessionCookie!, d, q, askId);
           return { drive: d, r, error: null as string | null, skipped: false };
         } catch (e) {
-          // A drive shared TO this account (not owned) has no agent we may create: leave it out quietly.
-          if (/403|not_owner/.test(msgOf(e))) return { drive: d, r: null, error: null, skipped: true };
           return { drive: d, r: null, error: msgOf(e) };
         }
       }),

@@ -71,6 +71,38 @@ function factory(bearer?: string): ClientFactory {
   }));
 }
 
+/** What another device's agent answered (web/lib/device-agent-a2a.ts `ai.aindrive/ask-result`). */
+export interface DeviceAnswer {
+  answer: string;
+  sources: { path: string; snippet: string; matchedBy?: string }[];
+  action?: { type: string; folder?: string; copied?: number; failed?: number; share?: boolean; skipped?: boolean; reason?: string };
+}
+
+/**
+ * Ask the on-device agent of one of the account's drives on another device, over A2A: the server's
+ * `/a2a/d/<driveId>` forwards it to that device. Its card is built here (the server's is the same),
+ * so a question is one request. `askId` tags the calls of one question sent to several drives —
+ * the server charges them as one ask. Throws when the device can't answer now.
+ */
+export async function askDevice(server: string, sessionBearer: string, drive: { id: string; name: string }, q: string, askId?: string): Promise<DeviceAnswer> {
+  const url = `${server.replace(/\/+$/, "")}/a2a/d/${encodeURIComponent(drive.id)}`;
+  const card = {
+    name: drive.name, description: "On-device agent", version: "1", url, preferredTransport: "JSONRPC", protocolVersion: "0.3",
+    capabilities: { streaming: false }, defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain", "application/json"], skills: [],
+  } as unknown as AgentCard;
+  const client = await factory(sessionBearer).createFromAgentCard(card);
+  const message: Message = {
+    kind: "message", role: "user", messageId: crypto.randomUUID?.() ?? `m-${Date.now()}`,
+    parts: [{ kind: "text", text: q }], ...(askId ? { metadata: { askId } } : {}),
+  };
+  const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
+  const parts = (r.kind === "message" ? r.parts : (r as Task).status?.message?.parts) ?? [];
+  const data = parts.find((p) => p.kind === "data" && (p.metadata as Record<string, unknown> | undefined)?.type === "ai.aindrive/ask-result") as { data: Record<string, unknown> } | undefined;
+  const text = textOf(parts);
+  if (!data || data.data.error) throw new Error(text.replace(/^\[\w+\]\s*/, "") || "no answer");
+  return { answer: String(data.data.answer ?? text), sources: (data.data.sources as DeviceAnswer["sources"]) ?? [], ...(data.data.action ? { action: data.data.action as DeviceAnswer["action"] } : {}) };
+}
+
 /** The pasted text → the agent's card. Accepts the card URL, the site, or a path under it. */
 export async function discover(raw: string, token?: string): Promise<A2aAgent> {
   let s = raw.trim();
