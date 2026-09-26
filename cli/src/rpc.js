@@ -51,7 +51,7 @@ export { cliTrace, docIdFor };
 // Keyed by NFC: the write names the path as the server does (NFC), the watcher
 // as the disk spells it (NFD for macOS-made names).
 const _suppressedPaths = new Map(); // NFC path → expireMs
-function _suppressFsChange(path, ttlMs = 2000) {
+export function suppressFsChange(path, ttlMs = 2000) {
   _suppressedPaths.set(path.normalize("NFC"), Date.now() + ttlMs);
 }
 export function isSelfWrite(path) {
@@ -205,7 +205,7 @@ export async function handleRpc(params, root) {
       const encoding = params.encoding === "base64" ? "base64" : "utf8";
       const data = Buffer.from(params.content, encoding);
       // Suppress fs-changed for 2s after our own write so reload loop doesn't fire
-      try { _suppressFsChange(params.path); } catch {}
+      try { suppressFsChange(params.path); } catch {}
       await fsp.writeFile(abs, data);
       try { cliTrace(root, docIdFor(root, params.path), "disk-write", { extra: { path: params.path, byteLen: data.length } }); } catch {}
       return { method: "write", ok: true, bytes: data.length };

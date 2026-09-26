@@ -5,6 +5,7 @@ import { join, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
 import { signPayload, verifyPayload } from "./sig.js";
 import { startWillowPeer } from "./willow-peer.js";
+import { startMaterializer } from "./willow-materializer.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
@@ -81,8 +82,11 @@ export async function runAgent({ root, drive, server }) {
 
   // Documents as signed Willow entries, synced with the server on their own socket
   // (replaces the old yjs_entries gossip on this one).
-  try { willowPeer = await startWillowPeer({ root, drive, server, log }); }
-  catch (e) { log.warn({ err: e.message || String(e) }, "willow peer unavailable"); }
+  try {
+    willowPeer = await startWillowPeer({ root, drive, server, log });
+    // …and writes each document into its file here, the folder's own copy
+    startMaterializer({ root, store: willowPeer.store, log });
+  } catch (e) { log.warn({ err: e.message || String(e) }, "willow peer unavailable"); }
 
   while (!shuttingDown) {
     try {
