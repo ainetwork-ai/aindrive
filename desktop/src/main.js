@@ -48,11 +48,23 @@ const store = createStore(join(app.getPath("userData"), "folders.json"));
 const agents = new AgentManager({
   spawn: (folder, firstRun) => {
     const cfgServer = serverOf(folder);
-    return utilityProcess.fork(
+    const child = utilityProcess.fork(
       join(root, "cli", "aindrive.mjs"),
       [folder, "--server", cfgServer, ...(firstRun ? [] : ["--no-open"])],
-      { cwd: folder, stdio: "pipe", serviceName: `aindrive agent (${basename(folder)})`, env: { ...process.env, NODE_ENV: "production" } },
+      // AINDRIVE_ASK_VIA_PARENT: the child hands `agent-ask` to this process (below) instead of its own LLM agent.
+      { cwd: folder, stdio: "pipe", serviceName: `aindrive agent (${basename(folder)})`, env: { ...process.env, NODE_ENV: "production", AINDRIVE_ASK_VIA_PARENT: "1" } },
     );
+    // A question that reached this folder over the server (from a phone, the web) is answered by the
+    // Mac's on-device agent — the same one the window uses — scoped to that folder's drive.
+    child.on("message", (m) => {
+      if (m?.type !== "agent-ask") return;
+      const driveId = (store.get().drives ?? []).find((d) => d.folder === m.root)?.driveId;
+      Promise.resolve()
+        .then(() => mac.ask({ query: m.query, driveId }))
+        .then((result) => child.postMessage({ type: "agent-ask", id: m.id, result: { answer: result.answer, sources: result.sources ?? [], ...(result.action ? { action: result.action } : {}) } }),
+              (e) => child.postMessage({ type: "agent-ask", id: m.id, error: e?.message ?? String(e) }));
+    });
+    return child;
   },
 });
 /** The server a folder was paired with (its CLI config), else the default. */
