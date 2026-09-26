@@ -129,6 +129,16 @@ public class RouterTest {
         assertTrue(failures.size() + " of " + questions.size() + " file questions were turned away:\n" + String.join("\n", failures), failures.isEmpty());
     }
 
+    /** A city typed in lowercase is still the city, not something the photos should look like. */
+    @Test
+    public void lowercaseCitiesArePlaces() {
+        for (String[] c : new String[][]{{"photos from tokyo", "Tokyo"}, {"pictures from paris", "Paris"}, {"photos taken in seoul", "Seoul"}, {"london photos", "London"}}) {
+            SearchQuery q = Router.route(parser, c[0], NOW, null, false).query;
+            assertEquals(c[0], c[1], q.city);
+            assertTrue(c[0] + " → " + q.keywords, q.keywords.isEmpty());
+        }
+    }
+
     @Test
     public void followUpsOfAFileQuestionStayFileQuestions() {
         SearchQuery prev = Router.route(parser, "photos from Paris", NOW, null, false).query;
