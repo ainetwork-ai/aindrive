@@ -92,7 +92,7 @@ export async function runAgent({ root, drive, server }) {
 }
 
 /**
- * Terminate `ws` once the server has been silent (no ping, no message) for
+ * Terminate `ws` once the server has been silent (no ping, no bytes) for
  * `limitMs`. A half-open connection — network blip, laptop sleep, a proxy
  * dropping it without a close — never fires "close", so without this the
  * reconnect loop never runs and the drive stays offline. terminate() fires
@@ -103,6 +103,9 @@ export function watchServerSilence(ws, { limitMs = SERVER_SILENCE_LIMIT_MS, chec
   const heard = () => { lastHeard = Date.now(); };
   ws.on("ping", heard);
   ws.on("message", heard);
+  // Bytes still arriving count too: a big frame over a slow link delays the
+  // ping queued behind it (mirrors the server's startHeartbeat).
+  ws._socket?.on("data", heard);
   const timer = setInterval(() => {
     if (Date.now() - lastHeard < limitMs) return;
     log.warn({ silentSec: Math.round((Date.now() - lastHeard) / 1000) }, "server went silent — dropping the connection to reconnect");
