@@ -112,12 +112,33 @@ function textOf(parts: unknown): string {
 /** A file handed to the agent as a link (web/lib/handoff.ts): the agent fetches `uri` if it needs the bytes. */
 export interface LinkedFile { uri: string; name: string; mimeType: string }
 
-export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, files: LinkedFile[] = []): Promise<{ text: string; contextId?: string }> {
+/** The same handoff as an MCP server (web/lib/handoff-mcp.ts): list_files / read_file over exactly those files. */
+export interface HandoffMcp { url: string; token: string; expiresAt: string }
+
+/** What a turn hands an agent: a link per file, and the MCP view of the same files when the server made one. */
+export interface Handed { files: LinkedFile[]; mcp?: HandoffMcp }
+
+/**
+ * The MCP view rides as a data part an MCP-capable agent can connect to (Streamable HTTP, bearer
+ * token); the file parts stay for agents that only fetch links.
+ */
+export const HANDOFF_MCP_PART = "ai.aindrive/handoff-mcp";
+
+export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }): Promise<{ text: string; contextId?: string }> {
+  const files = handed.files;
   const f = factory(agent.token || sessionBearer);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
     kind: "message", role: "user", messageId: crypto.randomUUID?.() ?? `m-${Date.now()}`,
-    parts: [{ kind: "text", text }, ...files.map((f) => ({ kind: "file" as const, file: { uri: f.uri, name: f.name, mimeType: f.mimeType } }))],
+    parts: [
+      { kind: "text", text },
+      ...files.map((f) => ({ kind: "file" as const, file: { uri: f.uri, name: f.name, mimeType: f.mimeType } })),
+      ...(handed.mcp ? [{
+        kind: "data" as const,
+        data: { mcpServers: [{ name: "aindrive-handoff", transport: "streamable-http", url: handed.mcp.url, headers: { Authorization: `Bearer ${handed.mcp.token}` }, expiresAt: handed.mcp.expiresAt, tools: ["list_files", "read_file"] }] },
+        metadata: { type: HANDOFF_MCP_PART },
+      }] : []),
+    ],
     ...(contextId ? { contextId } : {}),
   };
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });

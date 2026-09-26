@@ -11,6 +11,7 @@ panel from the drive sidebar → **MCP** (`components/mcp-modal.tsx`).
 | Path | Auth | Scope |
 |------|------|-------|
 | `/mcp/d/[driveId]` | `Authorization: Bearer <MCP token>` | one drive, `read` or `write` ceiling. **Use this.** |
+| `/mcp/h/[grantId]` | `Authorization: Bearer aind_hg_…` (minted with a file handoff, `POST /api/handoffs`) | exactly the files handed off together: `list_files`, `read_file` (text, ≤ 1 MiB). Expires/revokes with those links (`lib/handoff-mcp.ts`). |
 | `/mcp` | session JWT as bearer, or session cookie | legacy, account-wide (all drives). Not advertised. |
 
 Drive endpoint tools: `list_files`, `read_file`, `stat`, `search`, plus

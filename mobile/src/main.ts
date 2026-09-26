@@ -21,7 +21,7 @@ import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, c
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
-import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type LinkedFile } from "./a2a";
+import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
 import { ManageSheet } from "./manage-sheet";
@@ -163,7 +163,7 @@ const HANDOFF_MAX = 10;
  * asks first, registers exactly those files on the phone, mints one link per file, and returns them
  * for the A2A message. Bytes go phone → server → agent only when the agent fetches the link.
  */
-async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<{ files: LinkedFile[]; links: HandoffLink[] } | null> {
+async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<(Handed & { links: HandoffLink[] }) | null> {
   const src = from?.sources ?? [];
   if (!src.length || !REFERS_TO_FILES.test(text)) return { files: [], links: [] };
   const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ path: s.path, folderUri: localFolderFor(s.driveId)?.folder.uri })).filter((x) => x.folderUri);
@@ -171,14 +171,14 @@ async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | nul
 }
 
 /** Asks, then registers exactly these files on the phone and mints one short-lived link each. */
-async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path: string }[], why = ""): Promise<{ files: LinkedFile[]; links: HandoffLink[] } | null> {
+async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path: string }[], why = ""): Promise<(Handed & { links: HandoffLink[] }) | null> {
   if (!picked.length) return { files: [], links: [] };
   // The links travel through a drive connected to aindrive (P2P on): any of the owner's will do.
   const carrier = state.shares.find((sh) => sh.drive && driveStatus(sh)?.connected);
   if (!carrier?.drive) { notify("Turn P2P on for a folder first — the files go out through it.", true); return null; }
   const names = picked.map((x) => x.path.split("/").pop()).join(", ");
   const ok = await confirmAsync(`Send ${picked.length} file${picked.length === 1 ? "" : "s"} to ${agent.name}?`,
-    `${why}${names}\n\n${agent.name} gets a link to each file that works for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this phone until it opens a link, and you can revoke them any time.`, "Send links");
+    `${why}${names}\n\n${agent.name} can read only these files — by link or through MCP — for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this phone until it opens one, and you can revoke them any time.`, "Send links");
   if (!ok) return null;
   const reg = await AindriveAgent.registerHandoffs({ files: picked, ttlSeconds: HANDOFF_TTL_SECONDS });
   const r = await new Web(state.server, state.sessionCookie!).handoffs({
@@ -189,6 +189,7 @@ async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path:
   return {
     files: r.links.map((l) => ({ uri: l.url, name: l.name, mimeType: mime.get(l.deviceKey) ?? "application/octet-stream" })),
     links: r.links.map((l) => ({ id: l.id, name: l.name, expiresAt: l.expiresAt })),
+    ...(r.mcp ? { mcp: r.mcp } : {}),
   };
 }
 
@@ -214,7 +215,7 @@ async function cloudCallSummaries() {
   const q = "Summarise what I usually talk about with each person in these call notes — a short line per person, in the notes' language.";
   askBusy = true; render();
   try {
-    const r = await askA2a([to], q, handed.files);
+    const r = await askA2a([to], q, handed);
     askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
     thread.push({ q: `Better call summaries from ${to.name}`, r: askResult, at: Date.now(), via: to.name, handoffs: handed.links, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
   } finally { askBusy = false; await saveThread(); render(); }
@@ -239,11 +240,11 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
 }
 
 /** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
-async function askA2a(agents: A2aAgent[], text: string, files: LinkedFile[] = []): Promise<{ answer: string; errors: string[] }> {
+async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }): Promise<{ answer: string; errors: string[] }> {
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
-      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, files);
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed);
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
@@ -1333,7 +1334,7 @@ async function ask(q = askQuery) {
     if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
     try {
-      const r = await askA2a([direct.agent], direct.text, handed.files);
+      const r = await askA2a([direct.agent], direct.text, handed);
       askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
       thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(handed.links.length ? { handoffs: handed.links } : {}), ...(r.answer ? {} : { error: r.errors.join("\n") }) });
     } finally { askBusy = false; askQuery = ""; await saveThread(); render(); }
@@ -1354,7 +1355,7 @@ async function ask(q = askQuery) {
       let handed: Awaited<ReturnType<typeof handoffFiles>> = null;
       try { handed = await handoffFiles(to, q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
       if (handed?.files.length) {
-        const r = await askA2a([to], q, handed.files);
+        const r = await askA2a([to], q, handed);
         askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
         thread.push({ q, r: askResult, at: Date.now(), via: to.name, handoffs: handed.links, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
         askQuery = ""; await saveThread();
@@ -1406,7 +1407,7 @@ async function ask(q = askQuery) {
       const to = fallbackAgents();
       let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
       if (to.length === 1) { try { handed = await handoffFiles(to[0], q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); } }
-      const r = await askA2a(to, q, handed?.files ?? []);
+      const r = await askA2a(to, q, handed ?? { files: [] });
       if (r.answer) {
         askResult = { answer: r.answer, sources: [], query: "a2a" };
         thread.push({ q, r: askResult, at: Date.now(), via: to.map((x) => x.name).join(", "), ...(handed?.links.length ? { handoffs: handed.links } : {}) });

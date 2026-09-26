@@ -142,6 +142,18 @@ function open() {
       FOREIGN KEY(handoff_id) REFERENCES file_handoffs(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_file_handoff_fetches ON file_handoff_fetches(handoff_id);
+    -- One grant per handoff batch: the MCP view (/mcp/h/<id>) of exactly the files handed off
+    -- together. Its bearer secret is kept as a hash; the files' own expiry/revocation still apply.
+    CREATE TABLE IF NOT EXISTS handoff_grants (
+      id TEXT PRIMARY KEY,
+      secret_hash TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      audience TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      FOREIGN KEY(owner_id) REFERENCES users(id) ON DELETE CASCADE
+    );
     -- Invites for emails that don't have an account yet. On signup these convert
     -- to drive_members (upgrade-only) and are deleted; a registered invitee is
     -- granted immediately and never lands here. UNIQUE keeps one pending grant
@@ -222,6 +234,8 @@ function open() {
     // the app that started a sign-in pairing (null = the aindrive CLI) — only
     // to word the approval page; self-reported, never trusted for access
     "ALTER TABLE cli_link_requests ADD COLUMN client_name TEXT",
+    // the handoff_grants row a link was minted in (null: minted before grants existed)
+    "ALTER TABLE file_handoffs ADD COLUMN grant_id TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;
