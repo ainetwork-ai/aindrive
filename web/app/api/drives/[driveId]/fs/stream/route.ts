@@ -42,7 +42,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   try { path = normalizePath(rawPath); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
 
-  const gate = await requireDriveRole(driveId, path, { min: "viewer" });
+  // Cookie, or a session JWT as bearer (server-side asset proxies, docs/AINUI.md §2).
+  const gate = await requireDriveRole(driveId, path, { min: "viewer", req });
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
 

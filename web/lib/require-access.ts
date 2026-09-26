@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getUser } from "@/lib/session";
+import { getRequestUser, getUser } from "@/lib/session";
 import { getDrive, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role, type RoleOrNone } from "@/lib/access";
 import { paidAccessDenial, type PaidDenial } from "./sale-access.js";
@@ -46,11 +46,17 @@ export function readDenial(driveId: string, canonicalPath: string, role: RoleOrN
  *   - insufficient role, anon  -> 401 { error: "forbidden" }
  * The JSON error body only ever appears on the failure path, so streaming
  * routes (fs/read, fs/download) keep full control of their success response.
+ *
+ * `opts.req` (byte routes: fs/thumbnail, fs/stream, fs/download) also accepts
+ * `Authorization: Bearer <session JWT>` in place of the cookie, for server-side
+ * hosts that proxy file bytes (AINUI assets, docs/AINUI.md §2). Only session
+ * JWTs — not MCP/OAuth tokens — and an invalid bearer is a 401, never a fall
+ * back to the cookie. Every check below applies unchanged.
  */
 export async function requireDriveRole(
   driveId: string,
   targetPath: string,
-  opts: { min: Role },
+  opts: { min: Role; req?: Request },
 ): Promise<DriveGate | NextResponse> {
   // `.aindrive/` holds the agent token, drive secret and agent API keys: no
   // role, not even owner, reaches it through a drive route. Checked on the
@@ -59,7 +65,8 @@ export async function requireDriveRole(
   try { canonical = normalizePath(targetPath); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
   if (isSystemPath(canonical)) return NextResponse.json({ error: "reserved path" }, { status: 403 });
-  const user = await getUser();
+  const user = opts.req ? await getRequestUser(opts.req) : await getUser();
+  if (user === "invalid") return NextResponse.json({ error: "invalid bearer token" }, { status: 401 });
   const drive = getDrive(driveId);
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
   const role = await resolveAccess(driveId, targetPath, user?.id ?? null);

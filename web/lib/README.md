@@ -21,7 +21,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `access-core.js` — pure role algebra: `ROLE_RANK`, `bestMatchingRole`, `computeEntry`, `mergeRoleUpgradeOnly`. No DB, no session.
 - `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members`.
 - `drive-location.ts` — pure: `?path` + membership + stat kind → the drive page's folder, open file, breadcrumb root and grant listing (`locationPath` is the reverse, for the URL).
-- `require-access.ts` — `requireDriveRole()` auth gate for drive-scoped API routes (getUser→getDrive→resolveAccess→atLeast).
+- `require-access.ts` — `requireDriveRole()` auth gate for drive-scoped API routes (getUser→getDrive→resolveAccess→atLeast). With `opts.req` (fs/thumbnail, fs/stream, fs/download) it also takes the session JWT as `Authorization: Bearer` (`session.ts` `getRequestUser`; an invalid bearer is a 401, never a cookie fallback) — for hosts that proxy AINUI assets.
 - `member-guard.ts` — `canRemoveMember`: the drive creator's row is unremovable.
 - `invites.js` — `drive_invites` for emails without an account; converts to `drive_members` (upgrade-only) on signup.
 - `showcase.ts` — read-only upsell view of listed paid shares the caller doesn't yet cover. Depends on access, never reverse.
@@ -53,6 +53,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `agui.ts` — AG-UI 1.0 agent (`/agui`, `/agui/d/[id]`): RunAgentInput in, one skill per run, events back (TOOL_CALL_*, `a2ui-surface` activity, state, text).
 - `agent-auth.ts` — one bearer → SkillCtx resolver for A2A and AG-UI (PAT, OAuth, account token, session JWT).
 - `mcp-http.ts` / `mcp-ui.ts` / `mcp-tokens.ts` / `oauth.ts` — remote MCP (tools, MCP Apps view, A2UI results), its tokens and the OAuth server. See `app/mcp/README.md`.
+- `ainui.ts` — server side of AINUI (`docs/AINUI.md`): wires `shared/a2ui/ainui.ts` (builders + action dispatcher) to runSkill, the transport's allow-list, the caller's live role and `mime.ts`. Used by `mcp-http.ts` (`X-AINUI: 1`), `agui.ts` (`forwardedProps.ainui`) and `aindrive-agent.ts` (`metadata.ainui`).
 
 **Storage / DB**
 - `db.js` — singleton better-sqlite3 + drizzle; bootstraps schema, runs idempotent ALTERs, starts maintenance.

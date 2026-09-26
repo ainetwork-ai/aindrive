@@ -13,6 +13,10 @@
  * client activates the A2UI extension (X-A2A-Extensions or
  * metadata.a2uiRendererCapabilities) or sent an A2UI action — a DataPart of
  * A2UI messages (metadata.mimeType application/a2ui+json). See /docs/a2a.
+ *
+ * AINUI (docs/AINUI.md): message `metadata.ainui = true` → the DataPart carries
+ * an AINUI surface, and an A2UI action runs through the AINUI dispatcher
+ * (lib/ainui.ts; write actions, multi-step replies) under the same grant checks.
  */
 
 import type {
@@ -27,8 +31,10 @@ import { skillPermitted, type AgentAuth } from "./agent-auth";
 import { runSkill, SKILL_DESCRIPTORS, isSkillName, type SkillCtx } from "@/shared/agent-skills";
 import {
   A2UI_A2A_EXTENSION, A2UI_BASIC_CATALOG, A2UI_MIME, a2uiForSkill, actionToSkill, commandToSkill, parseA2uiAction,
-  type SkillCall,
+  type A2uiAction, type A2uiMessage, type SkillCall,
 } from "@/shared/a2ui";
+import { AINUI_CATALOG, type AinuiStep } from "@/shared/a2ui/ainui";
+import { ainuiAction, ainuiSurface, type AinuiHost } from "./ainui";
 
 /** A `User` carrying the resolved grant (lib/agent-auth). */
 export class AindriveUser implements User {
@@ -56,9 +62,11 @@ export function aindriveAgentCard(): AgentCard {
       pushNotifications: false,
       extensions: [{
         uri: A2UI_A2A_EXTENSION,
-        description: "Replies include A2UI v0.9 surfaces (basic catalog) as application/a2ui+json DataParts.",
+        description:
+          "Replies include A2UI v0.9 surfaces (basic catalog) as application/a2ui+json DataParts. " +
+          "Send message metadata.ainui = true for AINUI surfaces (the AINUI catalog: basic + grid, tiles, file viewer, write actions).",
         required: false,
-        params: { supportedCatalogIds: [A2UI_BASIC_CATALOG] },
+        params: { supportedCatalogIds: [A2UI_BASIC_CATALOG, AINUI_CATALOG] },
       }],
     },
     securitySchemes: {
@@ -128,6 +136,19 @@ export function interpretMessage(message: Message, ctx: SkillCtx): { call: Skill
   return { error: "send a DataPart {skill, ...args}, an A2UI action, or a text command — see the agent card" };
 }
 
+/** The A2UI action a message carries, if its first skill-or-action DataPart is an action (as interpretMessage). */
+export function actionInMessage(message: Message): A2uiAction | null {
+  for (const p of (message.parts ?? []) as Part[]) {
+    if (p.kind !== "data") continue;
+    const d = (p as DataPart).data as Record<string, unknown>;
+    if (!d || typeof d !== "object" || Array.isArray(d)) continue;
+    if (typeof d.skill === "string") return null;
+    const action = parseA2uiAction(d);
+    if (action) return action;
+  }
+  return null;
+}
+
 export class AindriveExecutor implements AgentExecutor {
   async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
     const user = requestContext.context?.user;
@@ -140,6 +161,10 @@ export class AindriveExecutor implements AgentExecutor {
 
     if (!ctx) return done(errMessage(msgId, contextId, "unauthorized — missing or invalid bearer token"));
     if (!message || !Array.isArray(message.parts)) return done(errMessage(msgId, contextId, "message.parts required"));
+
+    if ((message.metadata as Record<string, unknown> | undefined)?.ainui === true) {
+      return this.executeAinui(auth!, message, requestContext, msgId, done);
+    }
 
     const interpreted = interpretMessage(message, ctx);
     if ("error" in interpreted) return done(errMessage(msgId, contextId, interpreted.error));
@@ -177,6 +202,58 @@ export class AindriveExecutor implements AgentExecutor {
         { kind: "text", text: result.text },
         { kind: "data", data: (result.structured ?? {}) as Record<string, unknown> },
         ...a2uiPart,
+      ],
+    });
+  }
+
+  /** AINUI reply: always carries the (AINUI) surface; actions go through the AINUI dispatcher. */
+  private async executeAinui(
+    auth: Extract<AgentAuth, { ok: true }>,
+    message: Message,
+    requestContext: RequestContext,
+    msgId: string,
+    done: (m: Message) => void,
+  ): Promise<void> {
+    const ctx = auth.ctx;
+    const contextId = requestContext.contextId;
+    const host: AinuiHost = { ctx, allowed: (skill) => skillPermitted(auth, skill) === null };
+    let final: AinuiStep;
+    let surface: A2uiMessage[];
+    const action = actionInMessage(message);
+    if (action) {
+      const reply = await ainuiAction(host, action);
+      if (reply.kind === "invalid") return done(errMessage(msgId, contextId, reply.error));
+      if (reply.kind === "refused") {
+        return done(errMessage(msgId, contextId, `[forbidden] ${skillPermitted(auth, reply.skill) ?? reply.skill}`));
+      }
+      ({ final, surface } = reply);
+    } else {
+      const interpreted = interpretMessage(message, ctx);
+      if ("error" in interpreted) return done(errMessage(msgId, contextId, interpreted.error));
+      const { call } = interpreted;
+      const denied = skillPermitted(auth, call.skill);
+      if (denied) return done(errMessage(msgId, contextId, `[forbidden] ${denied}`));
+      final = { ...call, result: await runSkill(ctx, call.skill, call.args) };
+      surface = await ainuiSurface(host, call.skill, call.args, final.result);
+    }
+
+    requestContext.context?.addActivatedExtension(A2UI_A2A_EXTENSION);
+    const a2uiPart = { kind: "data", data: surface as unknown as Record<string, unknown>, metadata: { mimeType: A2UI_MIME } } as Part;
+    const result = final.result;
+    if (result.kind === "err") {
+      const m = errMessage(msgId, contextId, `[${result.code}] ${result.message}`);
+      m.parts.push(a2uiPart);
+      return done(m);
+    }
+    done({
+      kind: "message",
+      role: "agent",
+      messageId: msgId,
+      contextId,
+      parts: [
+        { kind: "text", text: result.text },
+        { kind: "data", data: (result.structured ?? {}) as Record<string, unknown> },
+        a2uiPart,
       ],
     });
   }

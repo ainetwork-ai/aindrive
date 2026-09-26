@@ -28,6 +28,17 @@ There is no `drive_id` argument; the URL fixes it.
   also embeds the surface as an `application/a2ui+json` resource.
 - Clicks in the view come back as `tools/call a2ui_action {action}`. That tool
   is limited to the same tool allow-list as the token.
+- **AINUI** ([`docs/AINUI.md`](../../../docs/AINUI.md)): with `X-AINUI: 1` on the request,
+  every `_meta` surface — tool results and `a2ui_action` replies — uses the AINUI catalog
+  (basic + `Grid`, `Tile`, `FileView`, `Breadcrumbs`, `Segmented`; file bytes as `{$asset}`
+  references), and `a2ui_action` also takes `aindrive.view` / `edit` / `new_file` /
+  `save` / `delete`. Each skill such an action runs must be in this token's tools list
+  (else `unknown tool: <skill>`, nothing runs) and then passes runSkill like a direct
+  call; `new_file` → editor, `save` → file view and `delete` → parent folder are answered
+  server-side. Without the header the output is exactly the basic A2UI. Builders and
+  dispatcher: `shared/a2ui/ainui.ts`; server glue: `lib/ainui.ts`; tests:
+  `lib/__tests__/ainui*.test.ts`. Hosts resolve assets through `fs/thumbnail|stream|download`,
+  which accept the session JWT as a bearer (`lib/require-access.ts`).
 - Public guide: `/docs/mcp`, `/docs/a2ui` (source `app/docs/content/`).
 
 ## Tokens (`lib/mcp-tokens.ts`, table `mcp_tokens`)
