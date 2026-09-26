@@ -19,6 +19,7 @@ import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
 import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
 import { DEVICE, ON_MAC } from "./device";
+import { md } from "./md";
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
@@ -325,7 +326,7 @@ function liveTurn(q: string, via: string, handoffs?: HandoffLink[]) {
       const t = ensure();
       t.r!.answer = text;
       const el = document.querySelector<HTMLElement>(".turn.last .answer");
-      if (el) { el.textContent = text; el.scrollIntoView?.({ block: "end" }); }
+      if (el) { el.innerHTML = md(text); el.scrollIntoView?.({ block: "end" }); }
     },
     finish(r: { answer: string; errors: string[] }) {
       const t = ensure();
@@ -2224,7 +2225,7 @@ function searchSheet(): string {
             return `<div class="card handoff">${icon("link", 16)}<span>${t.handoffs!.length} file${t.handoffs!.length === 1 ? "" : "s"} sent to <b>${esc(t.via ?? "")}</b> as links · ${live.length ? `open until ${esc(until)}` : "links closed"}</span>${live.length ? `<button class="btn small secondary" data-revoke-turn="${i}">Revoke</button>` : ""}</div>`;
           })() : ""}
           ${speaker(t)}
-          <p class="answer">${esc(t.r.answer)}</p>
+          <div class="answer md">${md(t.r.answer)}</div>
           ${hitsList(t.r, i, last)}` : ""}
       </div>`;
   }).join("");
