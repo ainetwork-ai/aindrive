@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 
 import androidx.annotation.Nullable;
@@ -271,7 +272,7 @@ public class AgentService extends Service {
                     try {
                         socket.send(new JSONObject()
                                 .put("type", "agent-hello")
-                                .put("hostname", Build.MODEL != null ? Build.MODEL : "android")
+                                .put("hostname", deviceName())
                                 .toString());
                     } catch (Exception ignored) { }
                     notifyStatus();
@@ -767,6 +768,18 @@ public class AgentService extends Service {
     }
 
     /** Mirrors toWsUrl in cli/src/agent.js. */
+    /**
+     * How this phone is named next to its drives on other devices: the name in Settings → About phone
+     * ("Galaxy S21+ 5G", or whatever the owner renamed it to), else the model code (SM-G996N).
+     */
+    String deviceName() {
+        try {
+            String n = Settings.Global.getString(getContentResolver(), Settings.Global.DEVICE_NAME);
+            if (n != null && !n.trim().isEmpty()) return n.trim();
+        } catch (Exception ignored) { }
+        return Build.MODEL != null ? Build.MODEL : "android";
+    }
+
     static String toWsUrl(String server, String driveId) {
         String base = server.replaceAll("/+$", "");
         String scheme = base.startsWith("https://") ? "wss://" : "ws://";
