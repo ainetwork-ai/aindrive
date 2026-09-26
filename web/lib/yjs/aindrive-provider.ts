@@ -36,12 +36,27 @@ export class AindriveProvider {
   syncComplete = false;
   /** The drive's agent writes this document into its file itself: the browser does not save it. */
   agentMaterializes = false;
+  private driveIdForAgent = "";
+
+  /** Asks the server now (the agent may have just become ready); offline, the last answer for this drive. */
+  async agentWrites(): Promise<boolean> {
+    const memo = `aindrive-willow-agent-${this.driveIdForAgent}`;
+    try {
+      const j = await fetch(`/api/willow/agent?drive=${encodeURIComponent(this.driveIdForAgent)}`).then((r) => r.json());
+      this.agentMaterializes = !!j.materializes;
+      try { localStorage.setItem(memo, this.agentMaterializes ? "1" : "0"); } catch {}
+    } catch {
+      try { this.agentMaterializes = localStorage.getItem(memo) === "1"; } catch {}
+    }
+    return this.agentMaterializes;
+  }
   /** Resolves once the local Willow store is loaded and the first sync with the server is done (or offline). */
   whenReady: Promise<void>;
   private resolveReady!: () => void;
   private idbReady: Promise<void> = Promise.resolve();
 
   constructor(driveId: string, path: string, canEdit = true) {
+    this.driveIdForAgent = driveId;
     const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = typeof window !== "undefined" ? window.location.host : "localhost:3737";
     this.url = `${proto}//${host}/api/agent/doc?drive=${encodeURIComponent(driveId)}&path=${encodeURIComponent(path)}`;
@@ -54,13 +69,7 @@ export class AindriveProvider {
           if (this.destroyed) { unbind(); return; }
           this.unbindWillow = unbind;
           this.willowBound = true;
-          // does the agent write the file? asked online, remembered per drive for offline
-          const memo = `aindrive-willow-agent-${driveId}`;
-          try { this.agentMaterializes = localStorage.getItem(memo) === "1"; } catch {}
-          void fetch(`/api/willow/agent?drive=${encodeURIComponent(driveId)}`).then((r) => r.json()).then((j) => {
-            this.agentMaterializes = !!j.materializes;
-            try { localStorage.setItem(memo, this.agentMaterializes ? "1" : "0"); } catch {}
-          }).catch(() => {});
+          void this.agentWrites();
           client.status.addEventListener("refused", (ev) => this.emit("refused", (ev as CustomEvent).detail));
           this.syncComplete = await client.initialSync;
         } catch (e) { console.warn("willow store unavailable:", e); }

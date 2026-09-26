@@ -21,8 +21,8 @@ async function readUpdates(store, docPath) {
   }
   return out;
 }
-async function loadDoc(store, docPath) {
-  const doc = new Y.Doc();
+async function loadDoc(store, docPath, opts = {}) {
+  const doc = new Y.Doc({ gc: opts.gc ?? true });
   for (const u of await readUpdates(store, docPath)) {
     try {
       Y.applyUpdate(doc, u.update);

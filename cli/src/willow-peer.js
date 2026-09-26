@@ -79,6 +79,10 @@ export async function startWillowPeer(o) {
   };
 
   let stopped = false, attempt = 0, current = null, timer = null, session = null;
+  // healthy = this agent really materialises: it has its certificate and has synced
+  // at least once since connecting; the agent advertises "willow" only then (review I5)
+  let certOk = false, healthy = false;
+  const setHealthy = (h) => { if (h !== healthy) { healthy = h; try { o.onHealth?.(h); } catch {} } };
   const connect = o.connect ?? ((url, h) => new WebSocket(url, { headers: h, maxPayload: 8 * 1024 * 1024 }));
   const open = () => {
     if (stopped) return;
@@ -89,10 +93,12 @@ export async function startWillowPeer(o) {
     ws.on("open", () => {
       attempt = 0;
       log.info({ driveId: o.drive.driveId }, "willow sync connected");
+      try { o.onConnected?.(); } catch {}
       session = new SyncSession({
         store, ranges: [fullRange()],
         channel: { send: (f) => { if (ws.readyState === 1) ws.send(JSON.stringify(f)); }, onFrame: (cb) => frames.push(cb), onClose: (cb) => closes.push(cb) },
         onRefused: (f) => log.warn({ path: f.path.join("/"), reason: f.reason }, "willow: server refused an entry"),
+        onSynced: () => setHealthy(certOk),
       });
       void session.start();
     });
@@ -100,18 +106,19 @@ export async function startWillowPeer(o) {
       closes.forEach((c) => c());
       if (stopped) return;
       const wait = BACKOFF_MS[Math.min(attempt++, BACKOFF_MS.length - 1)];
-      if (code === 4401) log.warn({}, "willow sync: not authorised");
+      if (code === 4401) { log.warn({}, "willow sync: not authorised"); setHealthy(false); }
       timer = setTimeout(open, wait);
     });
     ws.on("error", () => {});
   };
 
-  try { await ensureCert(); } catch (e) { log.warn({ err: e.message }, "willow certificate unavailable; retrying on next start"); }
+  try { await ensureCert(); certOk = true; } catch (e) { log.warn({ err: e.message }, "willow certificate unavailable; retrying on next start"); }
   if (o.beforeSync) { try { await o.beforeSync(store, key); } catch (e) { log.warn({ err: e.message }, "willow beforeSync failed"); } }
   open();
 
   return {
     store, key,
+    get healthy() { return healthy; },
     /** Stops syncing, lets the frame in hand finish, then closes the store. */
     async stop() {
       stopped = true;

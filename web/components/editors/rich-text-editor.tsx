@@ -97,7 +97,7 @@ export function RichTextEditor({
   // Debounced autosave: markdown body to disk, only for agents that do not materialise Willow documents themselves.
   const debouncedAutosave = useDebouncedCallback(async () => {
     if (!canEdit || !editor || !docIdRef.current || !readyToSaveRef.current) return;
-    if (provider.agentMaterializes) return; // the agent writes the file from the Willow document
+    if (provider.willowBound && (await provider.agentWrites())) return; // the agent writes the file from the Willow document
     const md = editor.getMarkdown();
     try {
       await Promise.all([

@@ -5,7 +5,7 @@ import { join, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
 import { signPayload, verifyPayload } from "./sig.js";
 import { startWillowPeer } from "./willow-peer.js";
-import { startMaterializer, reconcileFile, knownDocs } from "./willow-materializer.js";
+import { createDisk } from "./willow-materializer.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
@@ -70,8 +70,14 @@ function installShutdownHandlers() {
   process.on("SIGINT",  () => doShutdown("SIGINT"));
 }
 
-/** The running Willow peer (store + device key), for the materializer. */
+/** The running Willow peer (store + device key). */
 export let willowPeer = null;
+
+/** Tell the server who we are; "willow" = this agent writes documents into their files (browsers stop saving). */
+function sendHello() {
+  if (!activeWs || activeWs.readyState !== 1) return;
+  try { activeWs.send(JSON.stringify({ type: "agent-hello", hostname: osHostname(), capabilities: willowPeer?.healthy ? ["willow"] : [] })); } catch {}
+}
 
 export async function runAgent({ root, drive, server }) {
   setTraceServer(server); // direct trace POSTs to the right server
@@ -83,18 +89,31 @@ export async function runAgent({ root, drive, server }) {
   // Documents as signed Willow entries, synced with the server on their own socket
   // (replaces the old yjs_entries gossip on this one).
   try {
+    let disk = null;
     willowPeer = await startWillowPeer({
       root, drive, server, log,
-      // before syncing: take any edit made on disk while the agent was off, so the
-      // materializer can never overwrite it with what the server has
+      // before syncing: take any edit made on disk while the agent was off (three-way,
+      // against the base), so nothing from either side is lost
       beforeSync: async (store, key) => {
-        for (const docPath of await knownDocs(store)) {
-          await reconcileFile(root, store, key, docPath.join("/")).catch((e) => log.warn({ err: e.message }, "willow: startup reconcile"));
-        }
+        disk = createDisk({ root, store, key, log });
+        await disk.reconcileAll();
       },
+      // after every reconnect too: disk edits made while the socket was down (review I4)
+      onConnected: () => { void disk?.reconcileAll(); },
+      // advertise "willow" only while this agent really materialises (review I5)
+      onHealth: () => sendHello(),
     });
-    // …and writes each document into its file here, the folder's own copy
-    startMaterializer({ root, store: willowPeer.store, log });
+    // one watcher for the agent's whole life: a file edited on disk becomes a signed update
+    try {
+      const pending = new Map();
+      watch(root, { recursive: true }, (_event, filename) => {
+        if (!filename || !disk) return;
+        const rel = filename.split(sep).join("/");
+        if (rel === ".aindrive" || rel.startsWith(".aindrive/")) return;
+        clearTimeout(pending.get(rel));
+        pending.set(rel, setTimeout(() => { pending.delete(rel); disk.reconcile(rel).catch((e) => log.warn({ path: rel, err: e.message }, "willow: disk edit not taken")); }, FS_DEBOUNCE_MS));
+      });
+    } catch (e) { log.warn({ err: e.message }, "willow: fs.watch unavailable"); }
   } catch (e) { log.warn({ err: e.message || String(e) }, "willow peer unavailable"); }
 
   while (!shuttingDown) {
@@ -166,8 +185,7 @@ function connectOnce({ root, drive, wsUrl }) {
       log.info({ driveId: drive.driveId }, "connected");
       // Tell the server which machine this agent is running on so it can show
       // the hostname next to the drive in the UI.
-      // "willow": this agent writes documents into their files itself (browsers stop saving)
-      try { ws.send(JSON.stringify({ type: "agent-hello", hostname: osHostname(), capabilities: willowPeer ? ["willow"] : [] })); } catch {}
+      sendHello();
       // Start fs watcher — sends {type:'fs-changed', path} frames so the server can
       // broadcast 'reload' to any open editors of that path.
       try {
@@ -185,8 +203,6 @@ function connectOnce({ root, drive, wsUrl }) {
               return;
             }
             try { cliTrace(root, docIdFor(root, rel), "fs-changed", { extra: { path: rel } }); } catch {}
-            // an edit made on disk becomes a signed update of that document
-            if (willowPeer) reconcileFile(root, willowPeer.store, willowPeer.key, rel).catch((e) => log.warn({ path: rel, err: e.message }, "willow: disk edit not taken"));
             try { ws.send(JSON.stringify({ type: "fs-changed", path: rel })); }
             catch (e) { log.warn({ err: e.message }, "fs-changed send failed"); }
           }, FS_DEBOUNCE_MS);

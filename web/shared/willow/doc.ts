@@ -34,8 +34,9 @@ export async function readUpdates(store: AnyStore, docPath: string[]) {
   return out;
 }
 
-export async function loadDoc(store: AnyStore, docPath: string[]): Promise<Y.Doc> {
-  const doc = new Y.Doc();
+/** `gc: false` keeps deleted items, so a snapshot taken earlier can be mapped onto the doc (three-way disk merge). */
+export async function loadDoc(store: AnyStore, docPath: string[], opts: { gc?: boolean } = {}): Promise<Y.Doc> {
+  const doc = new Y.Doc({ gc: opts.gc ?? true });
   for (const u of await readUpdates(store, docPath)) {
     // one corrupt update must not make the document unloadable for everyone
     try { Y.applyUpdate(doc, u.update); } catch {}
