@@ -66,13 +66,22 @@ export class SyncSession {
       this.o.store.addEventListener(name, push);
       this.off.push(() => this.o.store.removeEventListener(name, push));
     }
-    for (const r of this.o.ranges) await this.sendFp(r);
-    if (this.o.ranges.length === 0) this.o.channel.send({ t: "synced" });
+    // the opening fingerprints go through the same queue, so drained() covers them too
+    this.queue = this.queue.then(async () => {
+      for (const r of this.o.ranges) if (!this.closed) await this.sendFp(r);
+      if (this.o.ranges.length === 0) this.o.channel.send({ t: "synced" });
+    });
+    await this.queue;
   }
 
   close() {
     this.closed = true;
     for (const f of this.off.splice(0)) f();
+  }
+
+  /** Resolves once the frame being handled (if any) is done: close() first, then await this before closing the store. */
+  drained(): Promise<void> {
+    return this.queue;
   }
 
   private allowed(e: Entry<B, B, B>) {

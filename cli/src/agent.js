@@ -4,7 +4,7 @@ import { hostname as osHostname } from "node:os";
 import { join, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
 import { signPayload, verifyPayload } from "./sig.js";
-import { attachSync } from "./willow-sync.js";
+import { startWillowPeer } from "./willow-peer.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
@@ -69,12 +69,20 @@ function installShutdownHandlers() {
   process.on("SIGINT",  () => doShutdown("SIGINT"));
 }
 
+/** The running Willow peer (store + device key), for the materializer. */
+export let willowPeer = null;
+
 export async function runAgent({ root, drive, server }) {
   setTraceServer(server); // direct trace POSTs to the right server
   const wsUrl = toWsUrl(server, drive.driveId);
   let attempt = 0;
 
   installShutdownHandlers();
+
+  // Documents as signed Willow entries, synced with the server on their own socket
+  // (replaces the old yjs_entries gossip on this one).
+  try { willowPeer = await startWillowPeer({ root, drive, server, log }); }
+  catch (e) { log.warn({ err: e.message || String(e) }, "willow peer unavailable"); }
 
   while (!shuttingDown) {
     try {
@@ -146,8 +154,6 @@ function connectOnce({ root, drive, wsUrl }) {
       // Tell the server which machine this agent is running on so it can show
       // the hostname next to the drive in the UI.
       try { ws.send(JSON.stringify({ type: "agent-hello", hostname: osHostname() })); } catch {}
-      // Multi-device sync: gossip yjs_entries with peers via the same WS
-      try { attachSync(ws, drive, root); } catch (e) { log.warn({ err: e.message }, "attachSync failed"); }
       // Start fs watcher — sends {type:'fs-changed', path} frames so the server can
       // broadcast 'reload' to any open editors of that path.
       try {
