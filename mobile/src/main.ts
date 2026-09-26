@@ -317,27 +317,36 @@ function mentionToken(input: HTMLInputElement): { start: number; text: string } 
   return m ? { start: at - m[1].length - 1, text: m[1] } : null;
 }
 
-type MentionItem = { agent: A2aAgent } | { folder: FolderMention };
-const itemHandle = (m: MentionItem) => ("agent" in m ? handleOf(m.agent) : m.folder.handle);
+/** What @ can complete to: this device's own agent, an A2A agent, or a folder. */
+type MentionItem = { device: true } | { agent: A2aAgent } | { folder: FolderMention };
+const DEVICE_HANDLE = "aindrive-on-device";
+const itemHandle = (m: MentionItem) => ("device" in m ? DEVICE_HANDLE : "agent" in m ? handleOf(m.agent) : m.folder.handle);
 
 /** Agents by handle prefix, then folders by handle or name (a folder's name may be anywhere in its handle). */
-function mentionCandidates(text: string): MentionItem[] {
-  const key = text.toLowerCase();
-  const agents = a2aAgents.filter((a) => agentOn(a) && handleOf(a).toLowerCase().startsWith(key)).map((agent) => ({ agent }));
-  const folders = mentionFolders().filter((f) => f.handle.toLowerCase().includes(key) || f.label.toLowerCase().includes(key)).slice(0, 8).map((folder) => ({ folder }));
-  return [...agents, ...folders];
+/**
+ * Two stages: the first @ picks who answers (this device's agent, or an A2A agent that is on); once
+ * an agent leads the message, the next @ picks a folder to hand it.
+ */
+function mentionCandidates(input: HTMLInputElement, tok: { start: number; text: string }): MentionItem[] {
+  const key = tok.text.toLowerCase();
+  const lead = mentioned(input.value.slice(0, tok.start));
+  if (!lead?.agent && !lead?.device) {
+    const agents: MentionItem[] = [{ device: true }, ...a2aAgents.filter((a) => agentOn(a) && !a.builtin).map((agent) => ({ agent }))];
+    return agents.filter((m) => itemHandle(m).toLowerCase().startsWith(key));
+  }
+  return mentionFolders().filter((f) => f.handle.toLowerCase().includes(key) || f.label.toLowerCase().includes(key)).slice(0, 8).map((folder) => ({ folder }));
 }
 
 function mentionMenu(input: HTMLInputElement | null) {
   document.getElementById("mention-menu")?.remove();
   if (!input) return;
   const tok = mentionToken(input);
-  const list = tok ? mentionCandidates(tok.text) : [];
+  const list = tok ? mentionCandidates(input, tok) : [];
   if (!tok || !list.length) return;
   mentionPick = Math.min(mentionPick, list.length - 1);
   const menu = document.createElement("div");
   menu.id = "mention-menu"; menu.className = "mention-menu"; menu.setAttribute("role", "listbox");
-  menu.innerHTML = list.map((m, i) => `<button type="button" role="option" data-i="${i}" class="${i === mentionPick ? "sel" : ""}" aria-selected="${i === mentionPick}">${"agent" in m ? (m.agent.builtin ? icon("cpu", 14) : icon("cloud", 14)) : icon("folder", 14)}<b>@${esc(itemHandle(m))}</b><span>${esc("agent" in m ? m.agent.name : m.folder.label)}</span></button>`).join("");
+  menu.innerHTML = list.map((m, i) => `<button type="button" role="option" data-i="${i}" class="${i === mentionPick ? "sel" : ""}" aria-selected="${i === mentionPick}">${"device" in m ? icon("cpu", 14) : "agent" in m ? icon("cloud", 14) : icon("folder", 14)}<b>@${esc(itemHandle(m))}</b><span>${esc("device" in m ? `This ${DEVICE}'s agent — then @ a folder` : "agent" in m ? m.agent.name : m.folder.label)}</span></button>`).join("");
   menu.addEventListener("mousedown", (e) => e.preventDefault());   // keep the input focused
   menu.addEventListener("click", (e) => { const b = (e.target as HTMLElement).closest<HTMLElement>("[data-i]"); if (b) mentionAccept(input, list[Number(b.dataset.i)]); });
   input.closest(".composer")?.appendChild(menu);
@@ -361,7 +370,7 @@ function mentionKey(input: HTMLInputElement, e: KeyboardEvent): boolean {
   const menu = document.getElementById("mention-menu");
   if (!menu) return false;
   const tok = mentionToken(input);
-  const list = tok ? mentionCandidates(tok.text) : [];
+  const list = tok ? mentionCandidates(input, tok) : [];
   if (!list.length) { mentionMenu(null); return false; }
   if (e.key === "ArrowDown" || e.key === "ArrowUp") { mentionPick = (mentionPick + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length; mentionMenu(input); e.preventDefault(); return true; }
   if (e.key === "Tab" || e.key === "Enter") { mentionAccept(input, list[mentionPick]); e.preventDefault(); return true; }
@@ -374,8 +383,8 @@ function mentionKey(input: HTMLInputElement, e: KeyboardEvent): boolean {
  * is in here?" → the agent, the folders, and the question. Reads the leading run of @-words, each an
  * agent (exact handle, else a prefix) or a folder (exact handle); the first other word starts the text.
  */
-function mentioned(q: string): { agent?: A2aAgent; folders: FolderMention[]; text: string } | null {
-  let rest = q.trim(), agent: A2aAgent | undefined;
+function mentioned(q: string): { agent?: A2aAgent; folders: FolderMention[]; device: boolean; text: string } | null {
+  let rest = q.trim(), agent: A2aAgent | undefined, device = false;
   const folders: FolderMention[] = [];
   const all = mentionFolders();
   for (let m = /^@(\S+)\s*/.exec(rest); m; m = /^@(\S+)\s*/.exec(rest)) {
@@ -383,12 +392,13 @@ function mentioned(q: string): { agent?: A2aAgent; folders: FolderMention[]; tex
     const folder = all.find((f) => f.handle.toLowerCase() === key);
     const a = folder ? undefined : a2aAgents.find((x) => handleOf(x).toLowerCase() === key) ?? a2aAgents.find((x) => handleOf(x).toLowerCase().startsWith(key));
     if (folder) { if (!folders.includes(folder)) folders.push(folder); }
-    else if (a && !agent) agent = a;
+    else if (key === DEVICE_HANDLE && !agent) device = true;   // "@aindrive-on-device": this device only, no cloud
+    else if (a && !agent && !device) agent = a;
     else break;
     rest = rest.slice(m[0].length);
   }
-  if (!agent && !folders.length) return null;
-  return { agent, folders, text: rest || q.trim() };
+  if (!agent && !folders.length && !device) return null;
+  return { agent, folders, device, text: rest || q.trim() };
 }
 
 /** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
@@ -1563,6 +1573,9 @@ async function ask(q = askQuery) {
   askQuery = q;
   const said = mentioned(q);
   const direct = said?.agent ? { ...said, agent: said.agent } : null;
+  // "@aindrive-on-device …": this device answers; nothing goes to a cloud agent for this turn.
+  const noCloud = !!said?.device && !said.agent;
+  if (noCloud) q = said!.text;
   // "@Photos what's in here?" with no agent: the folder is the scope, asked as a folder chat would be
   const onlyFolders = said && !said.agent ? said.folders : null;
   if (direct && !agentOn(direct.agent)) { notify(`${direct.agent.name} is off — turn it on in Model & agents first.`, true); return; }
@@ -1633,7 +1646,7 @@ async function ask(q = askQuery) {
     if (local?.context && typeof local.context === "object") askContext = local.context as Record<string, unknown>;
     // aindrive-on-device can't do it ("summarize these", "book a table…"): hand it to aindrive-cloud,
     // with the files it refers to as handoff links (after the owner confirms).
-    if (merged.query === "out" && fallbackAgents().length) {
+    if (merged.query === "out" && fallbackAgents().length && !noCloud) {
       const to = fallbackAgents();
       let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
       if (to.length === 1) {
@@ -1653,7 +1666,7 @@ async function ask(q = askQuery) {
     // match, a folder it can't read): the owner asked that every such turn go to aindrive-cloud, with
     // this device's answer as context and, in a folder chat, that folder's files as handoff links.
     const cloud = fallbackAgents();
-    if (cloud.length && local && !merged.sources.length && !merged.action && merged.query !== "chat" && merged.query !== "out") {
+    if (!noCloud && cloud.length && local && !merged.sources.length && !merged.action && merged.query !== "chat" && merged.query !== "out") {
       thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
       let handed: Awaited<ReturnType<typeof handoffFiles>> = null;
       if (cloud.length === 1) {
