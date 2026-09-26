@@ -32,6 +32,11 @@ beforeAll(() => {
     .run("r-mp", DRIVE, NFD, "0xw", "tx-mp", 1, "base", "s-mp", MEMBER);
   db.prepare("INSERT INTO drive_payout_wallets (id, drive_id, path, wallet) VALUES (?,?,?,?)")
     .run("p-mp", DRIVE, NFD, "0xpayout");
+  // Two payout wallets for one folder, one per spelling.
+  db.prepare("INSERT INTO drive_payout_wallets (id, drive_id, path, wallet) VALUES (?,?,?,?)")
+    .run("p-mp-nfc", DRIVE, "사진".normalize("NFC"), "0xcanonical");
+  db.prepare("INSERT INTO drive_payout_wallets (id, drive_id, path, wallet) VALUES (?,?,?,?)")
+    .run("p-mp-nfd", DRIVE, "사진".normalize("NFD"), "0xother");
   db.prepare("INSERT INTO drive_invites (id, drive_id, email, path, role) VALUES (?,?,?,?,?)")
     .run("i-mp", DRIVE, "later@e.com", NFD, "viewer");
   // Two grants for one folder, one per spelling: the NFD one is the higher role.
@@ -55,6 +60,11 @@ describe("0001-normalize-paths — stored paths become NFC", () => {
   it("two grants on one folder merge into one, keeping the higher role", () => {
     const rows = db.prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?").all(DRIVE, MEMBER);
     expect(rows).toEqual([{ path: NFC, role: "editor" }]);
+  });
+
+  it("two payout wallets on one folder: the canonical row's wallet is kept (both are logged)", () => {
+    const rows = db.prepare("SELECT path, wallet FROM drive_payout_wallets WHERE drive_id = ? AND path = ?").all(DRIVE, "사진".normalize("NFC"));
+    expect(rows).toEqual([{ path: "사진".normalize("NFC"), wallet: "0xcanonical" }]);
   });
 
   it("is idempotent", () => {

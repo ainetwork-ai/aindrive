@@ -113,7 +113,9 @@ export function safeResolve(root, rel) {
  */
 export function matchSpelling(root, abs, fsx = { existsSync, readdirSync }) {
   if (abs === root || fsx.existsSync(abs)) return abs;
-  const parts = path.relative(root, abs).split(path.sep);
+  const rel = path.relative(root, abs);
+  if (!/[^\x00-\x7f]/.test(rel)) return abs; // ASCII has one spelling — don't list folders for a missing name
+  const parts = rel.split(path.sep);
   let cur = root;
   for (let i = 0; i < parts.length; i++) {
     const exact = path.join(cur, parts[i]);

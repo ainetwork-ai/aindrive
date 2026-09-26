@@ -168,7 +168,9 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
       // A folder (or a ?path) the viewer hasn't paid for answers 402 with its
       // gate: that's the paywall, not a load failure.
       const lock = paidLockFrom(res.status, res.body);
-      if (lock) { setEntries([]); setPaywall(lock); } else setErr(res.error || "failed to list");
+      // Only a viewer gets a 402 (editor+ bypass), so drop any edit affordances
+      // the previous folder's role left behind.
+      if (lock) { setEntries([]); setPaywall(lock); setRole("viewer"); } else setErr(res.error || "failed to list");
       setLoading(false);
       return;
     }

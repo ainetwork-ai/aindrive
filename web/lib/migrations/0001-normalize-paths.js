@@ -25,7 +25,9 @@ const TABLES = [
   { name: "payment_receipts" },
   { name: "drive_members", unique: ["drive_id", "user_id"], role: true },
   { name: "drive_invites", unique: ["drive_id", "email"], role: true },
-  { name: "drive_payout_wallets", unique: ["drive_id"] },
+  // `shown`: logged for both rows on a collision, so an operator can see a
+  // payout destination that changed.
+  { name: "drive_payout_wallets", unique: ["drive_id"], shown: ["wallet"] },
 ];
 
 export function runNormalizePathsMigration({ dryRun = false } = {}) {
@@ -34,7 +36,7 @@ export function runNormalizePathsMigration({ dryRun = false } = {}) {
   let skippedInvalid = 0;
 
   for (const t of TABLES) {
-    const cols = ["id", "path", ...(t.unique ?? []), ...(t.role ? ["role"] : [])];
+    const cols = ["id", "path", ...(t.unique ?? []), ...(t.role ? ["role"] : []), ...(t.shown ?? [])];
     const rows = db.prepare(`SELECT ${cols.join(", ")} FROM ${t.name}`).all();
     for (const r of rows) {
       let norm;
@@ -48,7 +50,11 @@ export function runNormalizePathsMigration({ dryRun = false } = {}) {
       if (norm === r.path) continue;
 
       if (dryRun) {
-        log.info({ table: t.name, id: r.id, from: r.path, to: norm }, "[migrate dry] would update");
+        const twin = t.unique && db
+          .prepare(`SELECT id FROM ${t.name} WHERE ${t.unique.map((c) => `${c} = ?`).join(" AND ")} AND path = ?`)
+          .get(...t.unique.map((c) => r[c]), norm);
+        log.info({ table: t.name, id: r.id, from: r.path, to: norm, collidesWith: twin?.id },
+          twin ? "[migrate dry] would drop (collides with the canonical row)" : "[migrate dry] would update");
         changed++;
         continue;
       }
@@ -58,13 +64,14 @@ export function runNormalizePathsMigration({ dryRun = false } = {}) {
       } catch (e) {
         if (/UNIQUE/i.test(e.message) && t.unique) {
           const keep = db
-            .prepare(`SELECT id${t.role ? ", role" : ""} FROM ${t.name} WHERE ${t.unique.map((c) => `${c} = ?`).join(" AND ")} AND path = ?`)
+            .prepare(`SELECT ${["id", ...(t.role ? ["role"] : []), ...(t.shown ?? [])].join(", ")} FROM ${t.name} WHERE ${t.unique.map((c) => `${c} = ?`).join(" AND ")} AND path = ?`)
             .get(...t.unique.map((c) => r[c]), norm);
           if (t.role && keep) {
             db.prepare(`UPDATE ${t.name} SET role = ? WHERE id = ?`).run(mergeRoleUpgradeOnly(keep.role, r.role), keep.id);
           }
+          const shown = Object.fromEntries((t.shown ?? []).map((c) => [c, { dropped: r[c], kept: keep?.[c] }]));
           log.warn(
-            { table: t.name, id: r.id, keptId: keep?.id, from: r.path, to: norm },
+            { table: t.name, id: r.id, keptId: keep?.id, from: r.path, to: norm, ...shown },
             "[migrate] UNIQUE collision — dropping the non-canonical row",
           );
           db.prepare(`DELETE FROM ${t.name} WHERE id = ?`).run(r.id);

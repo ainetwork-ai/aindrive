@@ -39,6 +39,14 @@ describe("matchSpelling", () => {
     expect(matchSpelling(ROOT, path.join(ROOT, NFC("앨범")), fsx)).toBe(path.join(ROOT, NFC("앨범")));
   });
 
+  it("an ASCII-only path never lists a folder — it has no other Unicode spelling", () => {
+    const fsx = byteExactFs(["big"]);
+    let listed = 0;
+    const counting = { ...fsx, readdirSync: (d) => { listed++; return fsx.readdirSync(d); } };
+    expect(matchSpelling(ROOT, path.join(ROOT, "big/missing.txt"), counting)).toBe(path.join(ROOT, "big/missing.txt"));
+    expect(listed).toBe(0);
+  });
+
   it("a path with nothing on disk comes back unchanged", () => {
     const fsx = byteExactFs([]);
     expect(matchSpelling(ROOT, path.join(ROOT, "a/b.txt"), fsx)).toBe(path.join(ROOT, "a/b.txt"));
