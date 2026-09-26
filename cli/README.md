@@ -109,3 +109,10 @@ AINDRIVE_SERVER=https://drive.example.com aindrive ~/work
 ## License
 
 MIT
+
+## Willow and media (2026-09)
+
+- `src/willow-peer.js` — the agent as a Willow peer: device key `.aindrive/device.key`, store `.aindrive/willow-store.sqlite`, certificate from the server with the agent token, sync on `/api/willow/sync`.
+- `src/willow-materializer.js` — writes each collaborative document into its file and turns disk edits into signed updates, merged three-way against the base in `.aindrive/willow-base/`.
+- `src/willow-shared/` — GENERATED from `web/shared/willow` + `web/shared/media/chunks.ts` by `web/scripts/mirror-willow-to-cli.mjs`; do not edit.
+- `src/media-index.js` — the `media-index` RPC: a file's 1 MiB chunk hash list for the server's verifying media cache.

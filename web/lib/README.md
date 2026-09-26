@@ -65,6 +65,9 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `sqlite-maintenance.js` — periodic WAL checkpoint / VACUUM / optimize.
 - `migrations/` — one-shot idempotent migrations (`run.js` runs all at startup).
 
+**Media**
+- `media/cache.ts` — the server as a verifying cache for large files: `media-index` (the device's 1 MiB chunk hash list) + `download-chunk`, every chunk checked (`shared/media/chunks.ts`), kept under `<data>/media-cache/<drive>/<root>/`, LRU per drive (`AINDRIVE_MEDIA_CACHE_MB`), cached ranges served while the device is offline. `bytesFor` is what fs/stream and fs/download call.
+
 **Collab / Willow**
 - `willow/peer.ts` — the server as a Willow peer: a store per drive (`store-node.ts`: SQLite entries via `kv-driver-sqlite.js`, payload files via `payload-driver-fs.ts`), one sync session per `/api/willow/sync` socket, author + role check at ingest. `server.js` imports `peer.bundle.mjs`, built by `scripts/build-willow-peer.mjs` (predev/prebuild). `roles.ts` = role + paywall questions; `attestation.ts` = aindrive's attestation key.
 - `willow/client.ts` — the browser peer: device key + IndexedDB store, certificate, sync session, `openDoc` (Yjs binding), `authorLabel`. `offline.ts` registers `public/sw.js`.

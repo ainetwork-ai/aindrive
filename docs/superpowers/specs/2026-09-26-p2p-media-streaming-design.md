@@ -42,6 +42,18 @@ Rejected: iroh-blobs (verified BLAKE3/Bao streaming with NAT traversal). A good 
 for native peers, but it needs Rust in the Android, iOS and Node agents and has no
 first-class browser path. Revisit if Phase 2's direct transport ends up on iroh anyway.
 
+### Amendments (2026-09-26, while building step 1)
+
+- **The Willow record of a media file is a manifest**, not the file as a Willow
+  payload: the store's payload digest is SHA-256 over a whole payload and cannot check
+  a slice. The chunk hash list comes from the device (`media-index`) and every chunk
+  is checked against it; bytes move on the chunk channel (M3).
+- **Phones answer `media-index` unsigned until they hold a Willow key** (the phone
+  shell peer): the server still verifies every chunk against that list, so integrity
+  and "carried once" hold now; signed authorship of the manifest follows.
+- **Cached ranges play while the device is unreachable**: the server keeps the last
+  manifest per file and serves any range whose chunks are all cached.
+
 ## 4. Components
 
 | Unit | Where | Does |
@@ -89,7 +101,8 @@ first-class browser path. Revisit if Phase 2's direct transport ends up on iroh 
 
 ## 8. Order
 
-1. Chunked digest + indexer + server cache peer (M1–M4, M7). This alone fixes replay
-   and multi-viewer, and makes today's streaming path verifiable.
+1. Chunked digest + indexer + server cache peer (M1–M4). **Shipped**
+   (`web/lib/media/cache.ts`, `media-index` on the CLI, Android and iOS). M7 (binary
+   frames) is still open: chunks still travel as base64 inside `download-chunk`.
 2. Playback copy (M6).
 3. Direct WebRTC path (M5), together with Phase 2's direct transport.
