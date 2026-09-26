@@ -3,7 +3,8 @@
 //   node scripts/build-mac.mjs            # arm64 + x64
 //   node scripts/build-mac.mjs arm64      # one arch
 //
-// 1. bundles the CLI agent into cli/ (prepare-cli.mjs)
+// 1. bundles the CLI agent into cli/ (prepare-cli.mjs) and the mobile shell into
+//    shell/ (prepare-shell.mjs)
 // 2. per arch: puts that arch's prebuilt better-sqlite3 (Electron ABI) in
 //    node_modules, packages aindrive.app with electron-builder (`dir` target)
 // 3. signs the app ad-hoc with rcodesign — Apple Silicon refuses to run
@@ -114,6 +115,7 @@ function dmg(app, arch) {
 }
 
 run(process.execPath, ["scripts/prepare-cli.mjs"]);
+run(process.execPath, ["scripts/prepare-shell.mjs"]);
 const abi = electronAbi();
 const sqliteTarget = join(desktop, "node_modules/better-sqlite3/build/Release/better_sqlite3.node");
 for (const arch of archs) {

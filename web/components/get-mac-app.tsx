@@ -56,7 +56,7 @@ export function GetMacApp({ server, available = true, compact = false }: { serve
               2. Open it. The first time, macOS asks to confirm an app from outside the App Store: go to
               System Settings → <b>Privacy &amp; Security</b> → <b>Open Anyway</b>.
             </li>
-            <li>3. Click <b>Share a folder…</b>, pick one, and approve in this browser.</li>
+            <li>3. <b>Sign in with your browser</b>, approve, then <b>Choose a folder</b> — the same app as on your phone.</li>
           </ol>
         </>
       ) : null}

@@ -29,6 +29,7 @@ drive and a laptop drive are the same thing to the server.
 | `src/a2a.ts` | A2A agents in the chat, on the official `@a2a-js/sdk` client (same SDK as `web/app/a2a`): paste a URL → the SDK resolves the AgentCard; turns the on-device agent can't do, and `@name` messages, go to them with `message/send` (contextId kept per chat). The signed-in server's own agent is added as a built-in default (can't be removed); the **aindrive-cloud agent** — the on-device agent's counterpart, run by ainize.ai on Qwen3.8-Flash-Next (`https://ainize.ai/agents/aindrive-cloud`, `@aindrive-cloud`) — is offered once on first launch (removable; it opens handed-off links only when an answer needs the file); the top-bar chip opens *Model & agents*; files from the last answer go to an agent as **handoff links** (FileParts with `uri`, `web/lib/handoff.ts`) after a confirm — `Handoffs.java` registers exactly those files and `handoff-read` serves only them, through any connected drive, so DCIM files work too; a Revoke button closes them |
 | `src/api.ts` | pairing calls — `/api/auth/cli/start`, `/poll`, `/api/drives` — and the shared `request()` |
 | `src/plugin.ts` | typed face of the native `AindriveAgent` plugin |
+| `src/device.ts` | phone or Mac: the same shell is also the Mac app (`desktop/`, platform `electron`), so device names in copy and phone-only features (call/camera sources, models, Google picker) go through `ON_MAC` / `DEVICE` |
 | `src/ui.css`, `src/icons.ts` | the web's design language: tokens mirror `web/tailwind.config.ts` (cool-gray page, white cards, `#0b57d0`, Inter bundled via `@fontsource-variable/inter`, pill buttons, soft slate shadows, light only) and lucide icons like `web/components`. Change the web tokens → change these |
 | `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
 | `android/…/SafFs.java` | filesystem over the picked SAF tree (real device storage) |
@@ -48,6 +49,11 @@ drive and a laptop drive are the same thing to the server.
 
 ## Contracts
 
+- **The shell is also the Mac app.** `desktop/` builds this `src/` into its
+  window and implements `AindriveAgent` on the Mac (`desktop/src/mac-agent.js`,
+  headers in `desktop/src/shell/mac-bridge.js`). A new plugin method needs a Mac
+  side too (or it fails there as "not implemented on electron"); phone-only UI
+  goes behind `ON_MAC` (`src/device.ts`).
 - **Frame signing must match Node byte-for-byte.** The canonical form is
   `JSON.stringify(payload, Object.keys(payload).sort())`, whose second argument
   is a key *allowlist* applied to every object in the tree, in allowlist
