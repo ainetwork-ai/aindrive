@@ -27,12 +27,17 @@ web, which the `ask` skill relies on.
 A **drive host** is the device holding the folder; it answers questions through
 the `agent-ask` RPC. The first frame on a host's socket is
 `agent-hello {hostname, platform, appVersion, methods, caps}`: `platform` is
-`android` | `ios` | `cli`, `methods` every RPC method the host answers, and
-`caps: ["ask.v2"]` means it takes the v2 `agent-ask` params:
+`android` | `ios` | `cli` | `desktop`, `methods` every RPC method the host answers, and
+`caps: ["ask.v2"]` means it takes the v2 `agent-ask` params. The Mac app runs the CLI's
+agent, so today its drives say `cli`, with `appVersion` the Mac app's own version
+(`desktop/package.json`, read next to the bundled agent); no host sends `desktop` yet.
+iOS leaves `agent-ask` out of `methods`: it only refuses it, and its `caps: []` already
+has the server turn questions away. A host that sent no hello, or no `caps`, has `caps: []`.
 
 - `mode: "read"`: no collect / move / delete / write, no call report, the call log is
   not read. An asked-for act comes back as `action: {type, skipped: true, reason:
-  "read_only"}` and the answer says it only looked. `"act"` or no `mode`: as before.
+  "read_only"}` and the answer says it only looked. Small talk gets a fixed reply (the
+  phone's on-device LLM is not started for it). `"act"` or no `mode`: as before.
   Any other `mode` is refused (`bad_mode`).
 - `root`: every source, count and the answer are over files at or below it (exact,
   case-sensitive prefix; a file stored in NFC or NFD matches). Normalized like
@@ -44,6 +49,10 @@ the `agent-ask` RPC. The first frame on a host's socket is
   (`reason: "outside_root"`).
 - `context`: accepted and ignored. The reply adds `action` when the question asked for
   one (never the phone's `folderUri`).
+- Sources are paths in the asked drive. A call report (`act`, whole drive) also counts
+  the phone's call-recordings folders, which are not drives, but lists as sources only
+  recordings inside the asked drive. The server still filters every returned path as
+  untrusted input (inside `root`, not a system path, readable at the caller's role).
 
 Android advertises `ask.v2` (`mobile/android/…/agent/AskScope.java`). iOS (it refuses
 `agent-ask`) and the desktop CLI (its LLM agent has no read-only mode yet) send
@@ -53,10 +62,15 @@ Android advertises `ask.v2` (`mobile/android/…/agent/AskScope.java`). iOS (it 
   canonicalises with a top-level key allowlist, which filters nested keys too. So
   `mode` and `root` are protected by TLS on the host socket and by the server's own
   checks (role and scope before the call, source filtering after it), not by the
-  signature. Signing the full canonical JSON is a protocol v2 item (not in this round).
+  signature. Hosts also keep no `issuedAt` window or `reqId` replay cache yet. Signing
+  the full canonical JSON, with the ±120 s window and the replay cache on every host, is
+  tracked in `docs/PRODUCTION_TODO.md` §1 and is needed before non-owners rely on read mode.
 - **Reply deadlines.** A host drops a reply the server can no longer be waiting for:
   Android admits a response only until the server's timeout for that method, counted
   from when the request arrived, less 2 s — 25 s by default, 120 s for `upload-chunk`,
   `rename` and `download-chunk`, 90 s for `agent-ask` (`mobile/android/…/RpcBudget.java`).
-  A new or longer server timeout must be added there too; `RpcBudgetTest` fails when a
-  `timeoutMs` literal in `web/` exceeds the longest budget.
+  A new or longer server timeout must be added there too. `RpcBudgetTest` reads every
+  `callAgent(` / `sendRpc(` call in `web/` and fails when one gives its method (a string
+  literal) more than the phone's budget for that method, when its `timeoutMs` is neither
+  a number nor a numeric constant, or when a call whose method is not a literal gets more
+  than the default. A timeout passed in through a variable options object is not seen.

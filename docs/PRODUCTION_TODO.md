@@ -67,6 +67,12 @@
 - [ ] **P0** `npm audit` gate in CI + Dependabot
 - [ ] **P1** CSP, HSTS, X-Frame-Options via Next.js middleware
 - [ ] **P1** Use `crypto.timingSafeEqual` for share-token compares
+- [ ] **P1** Drive-host RPC frames: sign the full canonical JSON, `params` included
+  (`web/lib/sig.js` filters nested keys, so an ask's `mode`/`root` are unsigned today), and
+  add an `issuedAt` ±120 s window plus a `reqId` replay cache on every host (Android, iOS,
+  CLI). Needs one coordinated change to web, `cli/src/sig.js`, `Sig.java` and `Sig.swift`,
+  and a clock-skew plan for phones with a wrong clock. Required before non-owners rely on
+  read-only asks (`docs/AINUI.md` §6 "Drive hosts", trust assumption).
 - [ ] **P1** Path-traversal coverage for cap-bearer + payment-bearer flows
 - [ ] **P1** MCP tool input revalidation with Zod (SDK only checks JSON Schema shape)
 - [ ] **P1** Document secret rotation: `driveSecret`, `SESSION_SECRET`, payout wallet

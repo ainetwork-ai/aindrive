@@ -179,7 +179,11 @@ drive and a laptop drive are the same thing to the server.
   `ask` skill sends `read` always, to the drive owner too, and `act` only when the
   owner explicitly asks for it and holds the write group; ainmem never sends
   `act`. No `mode` (the owner's older `/ask` route) and the in-app chat act over
-  the whole drive, as before.
+  the whole drive, as before. Read-mode small talk gets the fixed `SocialReply`:
+  the ~1.6 GB LLM is not loaded for a turn any allowed caller can send. Over the
+  socket (`AskScope.remote`) every source is a file of the asked drive: a call
+  report still counts the call-recordings sources but lists only recordings in
+  the drive (their paths would mean other files there).
 - **Every RPC response goes through `SendGate`.** OkHttp's `send()` never
   blocks: it queues, and closes the socket when the queue would pass 16 MiB. So
   a big response is admitted only while the queue stays under 12 MiB, a small
@@ -189,9 +193,11 @@ drive and a laptop drive are the same thing to the server.
   the server's timeout for that method less 2 s, counted from when the frame
   arrived (`RpcBudget`: 25 s by default, 120 s for upload-chunk / rename /
   download-chunk, 90 s for agent-ask — keep it in step with the web; its test
-  reads `web/`). Once the gate has timed how fast the socket drains, it also
-  drops a reply that would still be leaving after the deadline; a read-only
-  request still waiting for a worker at its deadline is skipped. The one frame
+  reads `web/` and checks each call site's method). Once the gate has timed how
+  fast the socket drains, it also drops a reply that would still be leaving after
+  the deadline even at 1.5× that rate (the measurement can come out low, and a
+  wrong drop costs a reply the server still wants); a read-only request still
+  waiting for a worker at its deadline is skipped. The one frame
   sent around the gate is the agent-hello: the first frame on a fresh socket,
   whose queue is empty.
 - **Each drive has its own RPC workers**, in two lanes: `read`,
@@ -199,21 +205,29 @@ drive and a laptop drive are the same thing to the server.
   base64) on 2 threads, everything else on 4. A drive pulling whole photos for a
   thumbnail grid over a slow uplink holds neither another drive's requests nor
   its own list/stat (which still leave after the bytes already queued: the
-  socket is one FIFO, up to 12 MiB ahead).
+  socket is one FIFO, up to 12 MiB ahead). Across all drives at most 4 bulk
+  replies (tens of MB each at peak, no large heap) are in memory at once
+  (`RpcBudget.MAX_BULK_IN_FLIGHT`, the old process-wide pool's ceiling); a bulk
+  request with no slot by its deadline is skipped.
 - iOS sets `maximumMessageSize` to 16 MiB: the 1 MiB default refused the first
   4 MiB upload chunk.
 - **Uploads are indexed as they land.** After a `write`, an upload's publish
   (`rename` from `.aindrive/uploads/*.part`) or a `delete`, the drive's index
   is updated for that path on the index thread (a moved file keeps its photo
   vector and transcript), so a fresh upload is findable at once by name, kind,
-  date and place, and a photo by what it shows. A recording or video is not
-  transcribed then (minutes of work on the one index thread every drive
+  date and place, and a photo by what it shows when the photo model is already
+  in memory (an index run or a photo question loads it; one upload never loads
+  ~400 MB, the vector then comes with the next index run). A recording or video
+  is not transcribed then (minutes of work on the one index thread every drive
   shares): its transcript comes with the next index run. The update queues
   behind whatever the index thread is doing — a full run or a model download
   can hold it for a long time. Only for a drive indexed at least once; edits
   made in the in-app browser still wait for the next index run. The index has a
-  `path` index for these look-ups, created on open (a schema bump would rebuild
-  the table and drop hours of vectors and transcripts).
+  `path` index for these look-ups, added to an existing database on the index
+  thread when the drive starts (`FileIndex.ensurePathIndex`: seconds, once, on a
+  big old index, so never on the main thread; the app's status shows the last
+  counts meanwhile). A schema bump would rebuild the table and drop hours of
+  vectors and transcripts.
 - **Recognition is real and on-device.** Photos get a MobileCLIP vector (the
   question's content words become "a photo of …" and rank photos by cosine;
   ≥ 0.17 and within 0.08 of the best counts as a match), recordings and videos
