@@ -94,8 +94,8 @@ function rebuildTrayMenu() {
           label: `${DOT[f.state]} ${f.name}`,
           sublabel: LABEL[f.state],
           submenu: [
-            { label: "Open in aindrive", enabled: !!f.url, click: () => f.url && shell.openExternal(f.url) },
-            { label: "Show in Finder", click: () => reveal(f.folder) },
+            { label: "Open folder", click: () => reveal(f.folder) },
+            { label: "Open on the web", enabled: !!f.url, click: () => f.url && shell.openExternal(f.url) },
             f.state === "stopped"
               ? { label: "Resume sharing", click: () => resume(f.folder) }
               : { label: "Pause sharing", click: () => pause(f.folder) },
