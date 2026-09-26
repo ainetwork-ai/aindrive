@@ -113,15 +113,36 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // List/grid preference. Starts "list" so SSR + first client render agree
   // (no hydration mismatch); the persisted choice is read in an effect below.
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [savedView, setSavedView] = useState<ViewMode>("list");
+  // A pick made IN a folder sticks to that folder; one never made there leaves
+  // a folder of photos to open as a grid (see viewMode below).
+  const [folderViews, setFolderViews] = useState<Record<string, ViewMode>>({});
   useEffect(() => {
     const saved = localStorage.getItem("aindrive:view");
-    if (saved === "list" || saved === "grid") setViewMode(saved);
+    if (saved === "list" || saved === "grid") setSavedView(saved);
+    try {
+      const f = JSON.parse(localStorage.getItem("aindrive:view:folders") || "{}");
+      if (f && typeof f === "object") setFolderViews(f as Record<string, ViewMode>);
+    } catch { /* a bad value just means no per-folder picks */ }
   }, []);
+  const folderKey = `${driveId}:${loc.folder}`;
   const changeViewMode = useCallback((v: ViewMode) => {
-    setViewMode(v);
+    setSavedView(v);
     localStorage.setItem("aindrive:view", v);
-  }, []);
+    setFolderViews((cur) => {
+      // keep the most recent 200 folders
+      const next = Object.fromEntries([...Object.entries(cur).filter(([k]) => k !== folderKey), [folderKey, v]].slice(-200));
+      localStorage.setItem("aindrive:view:folders", JSON.stringify(next));
+      return next;
+    });
+  }, [folderKey]);
+  // a folder that is mostly photos opens as a grid unless a view was picked there
+  const photoFolder = useMemo(() => {
+    const files = entries.filter((e) => !e.isDir);
+    const photos = files.filter((e) => (e.mime || "").startsWith("image/") || /^(jpe?g|png|gif|webp|heic|heif|avif|bmp|tiff?)$/i.test(e.ext || ""));
+    return photos.length >= 4 && photos.length * 2 >= files.length;
+  }, [entries]);
+  const viewMode: ViewMode = folderViews[folderKey] ?? (photoFolder ? "grid" : savedView);
   // Sort preference — same SSR-safe pattern as viewMode (default first, read
   // the persisted choice in an effect).
   const [sort, setSortState] = useState<SortState>({ key: "name", dir: "asc" });

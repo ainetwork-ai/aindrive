@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import sharp from "sharp";
+import { agentByteStream } from "@/lib/agent-stream";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
@@ -23,7 +24,10 @@ import { classifyKind } from "@/lib/mime";
  */
 
 const THUMB_W = 256;
-const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16 * 1024 * 1024), 10);
+// A camera original is often 10–40 MB. The agent's `read` stops at 8 MiB
+// (truncated, which decoded as a broken image → 422), so the bytes come over
+// download-chunk RPCs like fs/stream; this caps how much one thumbnail pulls.
+const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_THUMB_MAX_BYTES ?? String(64 * 1024 * 1024), 10);
 
 // Mirrors lib/db.js dataDir (not exported there).
 function thumbsDir(driveId: string): string {
@@ -83,9 +87,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
       return imgResponse(readFileSync(cached), isSvg ? "image/svg+xml" : "image/webp");
     }
 
-    const result = await callAgent(driveId, drive.drive_secret, { method: "read", path, encoding: "base64" }) as
-      { content: string };
-    const original = Buffer.from(result.content, "base64");
+    const original = Buffer.from(
+      await new Response(agentByteStream(driveId, drive.drive_secret, path, 0, stat.entry.size)).arrayBuffer(),
+    );
 
     // SVG passes through untouched (vector — already small to render);
     // raster images are EXIF-rotated and downscaled to a 256px webp.
@@ -93,7 +97,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     try {
       out = isSvg
         ? original
-        : await sharp(original)
+        : await sharp(original, { failOn: "none" })
             .rotate()
             .resize({ width: THUMB_W, height: THUMB_W, fit: "inside", withoutEnlargement: true })
             .webp({ quality: 78 })
