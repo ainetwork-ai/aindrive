@@ -23,6 +23,7 @@ import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
 import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
+import { prepareFolderHandoff } from "./folder-handoff";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
 import { ManageSheet } from "./manage-sheet";
@@ -164,17 +165,28 @@ const HANDOFF_MAX = 10;
 
 /**
  * Files from the last answer to hand to an A2A agent, as short-lived links (web/lib/handoff.ts):
- * asks first, registers exactly those files on the phone, mints one link per file, and returns them
+ * uses the enabled agent's standing approval, registers those files, mints links, and returns them
  * for the A2A message. Bytes go phone → server → agent only when the agent fetches the link.
  */
 async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<(Handed & { links: HandoffLink[] }) | null> {
+  if (!agentOn(agent)) return null;
+  // Explicit folder chats must work on the first turn, without a search result
+  // or an English pronoun match. Native listFolder exists on Android and Mac.
+  if (chatScope) {
+    const scope = chatScope;
+    if (!findShare(scope.uri)) throw new Error("This folder is no longer available. Open it again before asking the agent.");
+    const selectedPaths = REFERS_TO_FILES.test(text)
+      ? from?.sources.filter((s) => localFolderFor(s.driveId)?.folder.uri === scope.uri).map((s) => s.path)
+      : undefined;
+    return prepareFolderHandoff(scope, (opts) => AindriveAgent.listFolder(opts), (files) => handoffPicked(agent, files), selectedPaths);
+  }
   const src = from?.sources ?? [];
   if (!src.length || !REFERS_TO_FILES.test(text)) return { files: [], links: [] };
   const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ path: s.path, folderUri: localFolderFor(s.driveId)?.folder.uri })).filter((x) => x.folderUri);
   return handoffPicked(agent, picked as { folderUri: string; path: string }[]);
 }
 
-/** Asks, then registers exactly these files on the phone and mints one short-lived link each. */
+/** Registers exactly these files on the device and mints one short-lived link each. */
 async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path: string }[]): Promise<(Handed & { links: HandoffLink[] }) | null> {
   if (!picked.length) return { files: [], links: [] };
   // No per-send confirm: the agent's switch is the owner's standing approval (agentOn).
@@ -1449,8 +1461,12 @@ async function ask(q = askQuery) {
     if (merged.query === "out" && fallbackAgents().length) {
       const to = fallbackAgents();
       let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
-      if (to.length === 1) { try { handed = await handoffFiles(to[0], q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); } }
-      const r = await askA2a(to, q, handed ?? { files: [] });
+      if (to.length === 1) {
+        try { handed = await handoffFiles(to[0], q, prevResult); }
+        catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
+        if (!handed) return;
+      }
+      const r = await askA2a(to, q, handed);
       if (r.answer) {
         askResult = { answer: r.answer, sources: [], query: "a2a" };
         thread.push({ q, r: askResult, at: Date.now(), via: to.map((x) => x.name).join(", "), ...(handed?.links.length ? { handoffs: handed.links } : {}) });

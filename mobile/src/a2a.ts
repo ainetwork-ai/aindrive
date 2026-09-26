@@ -6,6 +6,9 @@
 // (JSON-RPC or REST) and sends `message/send`; the reply is a Message or a Task
 // (status.message / artifacts). The contextId it returns is sent back so the
 // agent keeps the conversation.
+import { handoffParts, type Handed } from "./a2a-parts";
+export type { Handed, LinkedFile, HandoffMcp } from "./a2a-parts";
+export { HANDOFF_MCP_PART } from "./a2a-parts";
 import { Preferences } from "@capacitor/preferences";
 import { ClientFactory, ClientFactoryOptions, DefaultAgentCardResolver, JsonRpcTransportFactory, RestTransportFactory } from "@a2a-js/sdk/client";
 import type { AgentCard, Message, Task } from "@a2a-js/sdk";
@@ -114,37 +117,12 @@ function textOf(parts: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
-/** One chat turn to an A2A agent. Returns the reply text and the contextId to send next time. */
-/** A file handed to the agent as a link (web/lib/handoff.ts): the agent fetches `uri` if it needs the bytes. */
-export interface LinkedFile { uri: string; name: string; mimeType: string }
-
-/** The same handoff as an MCP server (web/lib/handoff-mcp.ts): list_files / read_file over exactly those files. */
-export interface HandoffMcp { url: string; token: string; expiresAt: string }
-
-/** What a turn hands an agent: a link per file, and the MCP view of the same files when the server made one. */
-export interface Handed { files: LinkedFile[]; mcp?: HandoffMcp }
-
-/**
- * The MCP view rides as a data part an MCP-capable agent can connect to (Streamable HTTP, bearer
- * token); the file parts stay for agents that only fetch links.
- */
-export const HANDOFF_MCP_PART = "ai.aindrive/handoff-mcp";
-
 export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }): Promise<{ text: string; contextId?: string }> {
-  const files = handed.files;
   const f = factory(agent.token || sessionBearer);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
     kind: "message", role: "user", messageId: crypto.randomUUID?.() ?? `m-${Date.now()}`,
-    parts: [
-      { kind: "text", text },
-      ...files.map((f) => ({ kind: "file" as const, file: { uri: f.uri, name: f.name, mimeType: f.mimeType } })),
-      ...(handed.mcp ? [{
-        kind: "data" as const,
-        data: { mcpServers: [{ name: "aindrive-handoff", transport: "streamable-http", url: handed.mcp.url, headers: { Authorization: `Bearer ${handed.mcp.token}` }, expiresAt: handed.mcp.expiresAt, tools: ["list_files", "read_file"] }] },
-        metadata: { type: HANDOFF_MCP_PART },
-      }] : []),
-    ],
+    parts: handoffParts(text, handed),
     ...(contextId ? { contextId } : {}),
   };
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
