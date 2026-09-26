@@ -27,7 +27,7 @@ import java.util.List;
  */
 public final class AskScope {
     /** The in-app chat's own asks: act, whole drive — exactly the behaviour before v2. */
-    public static final AskScope ACT_ALL = new AskScope(false, "");
+    public static final AskScope ACT_ALL = new AskScope(false, "", false);
 
     static final int MAX_ROOT_BYTES = 4096;
     public static final String READ_ONLY = "read_only";
@@ -37,10 +37,23 @@ public final class AskScope {
     public final boolean readOnly;
     /** Normalized: NFC, no leading/trailing "/", no "." segments; "" = the whole drive. */
     public final String root;
+    /**
+     * Asked through the drive's socket (the server's `agent-ask`), not by the in-app chat: every
+     * source path must name a file of THIS drive, because the server reads it as one. So a call
+     * report lists only recordings in this drive, never the phone's call-recordings folders
+     * (agent sources, which are not served), even in act mode over the whole drive.
+     */
+    public final boolean remote;
 
+    /** An `agent-ask` scope (remote). */
     public AskScope(boolean readOnly, String root) {
+        this(readOnly, root, true);
+    }
+
+    private AskScope(boolean readOnly, String root, boolean remote) {
         this.readOnly = readOnly;
         this.root = root;
+        this.remote = remote;
     }
 
     /**

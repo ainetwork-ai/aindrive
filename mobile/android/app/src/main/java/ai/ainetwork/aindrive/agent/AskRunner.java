@@ -151,12 +151,15 @@ public final class AskRunner {
      * The same, limited by `scope` (phone protocol v2, {@link AskScope}): with a root, every
      * source, count and place/year summary is computed over files at or below it; read-only,
      * nothing is collected, moved or marked for deletion and no call report runs (the call log
-     * is never read) — the action comes back skipped with reason "read_only".
+     * is never read) — the action comes back skipped with reason "read_only". Read-only small
+     * talk gets the template reply: the on-device LLM (~1.6 GB, loaded and freed per reply) is
+     * not started for a question anyone the server lets ask can send. Asked over the socket
+     * ({@link AskScope#remote}), a call report's sources are this drive's own recordings only.
      */
     public JSONObject ask(String question, @Nullable JSONObject context, AskScope scope) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
         Router.Turn turn = Router.understand(parser, question, System.currentTimeMillis(), context);
-        if (turn.social) {
+        if (turn.social && !scope.readOnly) {
             String said = chatReply(question);
             if (said != null) return replyOf(turn).put("answer", said);
         }
@@ -175,7 +178,10 @@ public final class AskRunner {
                     .put("query", "calls").put("context", context == null ? JSONObject.NULL : context);
         }
         if (q.calls) {
-            try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).withOpener(callOpener).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
+            CallReport report = new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).withOpener(callOpener);
+            // The call-recordings folders are other folders on the phone: over the socket their paths would be read as this drive's.
+            if (scope.remote) report.onlyOwnSources();
+            try { return report.run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
         }
         // The whole drive's count, on purpose: "the index is empty" means this drive was never

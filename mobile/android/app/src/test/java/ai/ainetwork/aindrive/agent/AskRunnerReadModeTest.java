@@ -15,8 +15,12 @@ import org.junit.Test;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * AskRunner.ask end to end in `mode: "read"` (phone protocol v2), through the file-search
@@ -150,6 +154,63 @@ public class AskRunnerReadModeTest {
         // Not read-only: no action to report, the answer is as before.
         JSONObject act = runner(ix).ask("gather my Tokyo photos", null, AskScope.ACT_ALL);
         assertFalse(act.has("action"));
+    }
+
+    /** Small talk: in read mode the on-device LLM is never loaded (anyone the server lets ask can send it). */
+    @Test
+    public void readModeSmallTalkNeverLoadsTheLlm() throws Exception {
+        for (String q : new String[]{"I just got back from a long walk, it was lovely", "I love cooking pasta for my friends"}) {
+            List<String> loads = new ArrayList<>();
+            List<String> released = new ArrayList<>();
+            AskRunner r = new AskRunner(drive(), geo, () -> null, ops, () -> { callLogReads.add("calls"); return new ArrayList<>(); },
+                    () -> null, () -> { loads.add(q); return null; }, () -> released.add(q), () -> false);
+            JSONObject read = r.ask(q, null, new AskScope(true, ""));
+            assertEquals(q, "chat", read.getString("query"));
+            assertFalse(q + ": " + read, read.getString("answer").isEmpty());
+            assertEquals(q, 0, read.getJSONArray("sources").length());
+            assertTrue(q + " loaded the LLM in read mode", loads.isEmpty() && released.isEmpty());
+            // Control: the same turn in act mode is small talk the LLM would answer.
+            JSONObject act = r.ask(q, null, new AskScope(false, ""));
+            assertEquals(q, "chat", act.getString("query"));
+            assertEquals(q + " is not small talk", 1, loads.size());
+        }
+        assertTrue(ops.touched.isEmpty() && callLogReads.isEmpty());
+    }
+
+    private static String recording(String who, long daysAgo) {
+        return "Call recording " + who + "_" + new SimpleDateFormat("yyMMdd_HHmmss", Locale.US).format(new Date(System.currentTimeMillis() - daysAgo * 86_400_000L)) + ".m4a";
+    }
+
+    /**
+     * A call report asked over the socket (act, whole drive) counts the phone's call-recordings
+     * folders but lists as sources only recordings in the asked drive: the server reads every
+     * source path as a path in that drive. The in-app chat still lists them all.
+     */
+    @Test
+    public void aRemoteCallReportListsOnlyThisDrivesRecordings() throws Exception {
+        MemIndex ix = drive();
+        String ownAmy = "Calls/" + recording("Amy Jang", 40);
+        ix.add(ownAmy, FileIndex.AUDIO, null, null, WHEN);
+        MemIndex calls = new MemIndex();                               // the call-recordings folder: another folder
+        String newerAmy = recording("Amy Jang", 3), bob = recording("Bob Stone", 5);
+        calls.add(newerAmy, FileIndex.AUDIO, null, null, WHEN);
+        calls.add(bob, FileIndex.AUDIO, null, null, WHEN);
+
+        JSONObject remote = runner(ix).withCallIndexes(() -> Arrays.asList(calls)).ask(
+                "sort my call history by who I talk to most and summarize it", null, new AskScope(false, ""));
+        assertEquals("calls", remote.getString("query"));
+        List<String> paths = new ArrayList<>();
+        JSONArray s = remote.getJSONArray("sources");
+        for (int i = 0; i < s.length(); i++) paths.add(s.getJSONObject(i).getString("path"));
+        assertEquals(Arrays.asList(ownAmy), paths);
+        assertTrue(remote.getString("answer"), remote.getString("answer").contains("Bob Stone"));   // still counted
+
+        JSONObject local = runner(ix).withCallIndexes(() -> Arrays.asList(calls)).ask(
+                "sort my call history by who I talk to most and summarize it", null);
+        List<String> all = new ArrayList<>();
+        s = local.getJSONArray("sources");
+        for (int i = 0; i < s.length(); i++) all.add(s.getJSONObject(i).getString("path"));
+        assertTrue(all.toString(), all.contains(newerAmy) && all.contains(bob) && !all.contains(ownAmy));
     }
 
     @Test

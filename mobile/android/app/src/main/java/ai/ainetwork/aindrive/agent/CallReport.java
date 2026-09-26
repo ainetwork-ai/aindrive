@@ -99,6 +99,16 @@ public final class CallReport {
         return this;
     }
 
+    /** True when every source must be a recording in `index` itself (see {@link #onlyOwnSources}). */
+    private boolean ownSourcesOnly;
+
+    /**
+     * List as sources only recordings from `index` (the drive being asked), never from the other
+     * call folders: a report asked over the drive's socket goes to the server, which reads every
+     * source path as a path in that drive. The report itself still counts every folder.
+     */
+    public CallReport onlyOwnSources() { ownSourcesOnly = true; return this; }
+
     /** Opens a document of one of `indexes` — the recording asked for may live in another call folder than `index`. */
     public interface Opener {
         @Nullable android.os.ParcelFileDescriptor open(FileIndex ix, String docId) throws Exception;
@@ -359,7 +369,9 @@ public final class CallReport {
         int recordings = 0, transcribed = 0, inWindow = 0;
         List<FileIndex.Row> all = new ArrayList<>();
         java.util.Set<String> ownIds = new HashSet<>();
-        for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) { all.add(r); if (ix == index) ownIds.add(r.docId); }
+        // By identity: a drive holding the call folder indexes the same file (same docId) under another path.
+        java.util.Set<FileIndex.Row> ownRows = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) { all.add(r); if (ix == index) { ownIds.add(r.docId); ownRows.add(r); } }
         for (FileIndex.Row r : all) {
             String who = personOf(r.name);
             if (who == null) continue;
@@ -434,8 +446,10 @@ public final class CallReport {
             if (p.summary != null) a.append("\n   ").append(p.summary.replace("\n", " "));
             else if (!p.topics.isEmpty()) a.append(ko ? " · 주로 " : " · usually ").append(String.join(", ", p.topics));
             a.append("\n");
-            if (!p.recordings.isEmpty()) {
-                FileIndex.Row r = p.recordings.get(0);
+            // The newest recording (newest of this drive's own when only those may be listed).
+            FileIndex.Row r = null;
+            for (FileIndex.Row x : p.recordings) if (!ownSourcesOnly || ownRows.contains(x)) { r = x; break; }
+            if (r != null) {
                 sources.put(describeCall(new JSONObject().put("path", r.path).put("matchedBy", "speech")
                         .put("snippet", p.topics.isEmpty() ? (ko ? "녹음 " + p.recordings.size() + "개" : p.recordings.size() + " recordings") : String.join(" · ", p.topics)),
                         r, null, p.summary != null ? p.summary : p.topics.isEmpty() ? null : String.join(" · ", p.topics)));
