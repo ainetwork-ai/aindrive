@@ -45,6 +45,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
   try {
+    // A doc outlives its file: rename/delete leave it on the agent under the old
+    // path's id. With no file there, serve nothing — the content may have moved
+    // behind a paywall, or been deleted on purpose.
+    const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path });
+    if (!stat.entry || stat.entry.isDir) return NextResponse.json({ method: "yjs-read", data: "", bytes: 0 });
     const result = await callAgent(driveId, drive.drive_secret, { method: "yjs-read", docId: docIdFor(driveId, path) });
     return NextResponse.json(result);
   } catch (e) {

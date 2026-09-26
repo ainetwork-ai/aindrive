@@ -17,14 +17,18 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-// Fake agent: records which doc each yjs call touched.
-const touched = vi.hoisted(() => ({ calls: [] as Array<{ method: string; docId: string }> }));
+// Fake agent: records which doc each yjs call touched; `gone` paths stat as missing.
+const touched = vi.hoisted(() => ({ calls: [] as Array<{ method: string; docId: string }>, gone: new Set<string>() }));
 vi.mock("@/lib/rpc", () => {
   class AgentError extends Error {
     status: number;
     constructor(msg: string, status = 502) { super(msg); this.status = status; }
   }
-  async function callAgent(_d: string, _s: string, params: { method: string; docId: string }) {
+  async function callAgent(_d: string, _s: string, params: { method: string; docId: string; path?: string }) {
+    if (params.method === "stat") {
+      const p = params.path ?? "";
+      return { method: "stat", entry: touched.gone.has(p) ? null : { name: p.split("/").pop(), path: p, isDir: false, size: 1, mtimeMs: 0, ext: "md", mime: "text/markdown" } };
+    }
     touched.calls.push({ method: params.method, docId: params.docId });
     return params.method === "yjs-read" ? { method: "yjs-read", data: "", bytes: 0 } : { method: "yjs-write", ok: true };
   }
@@ -81,6 +85,14 @@ describe("yjs route — the doc is the one the authorized path names", () => {
     const nfd = "drafts/메모.md".normalize("NFD");
     await GET(new Request(`http://x/api/drives/${DRIVE}/yjs?path=${encodeURIComponent("./" + nfd)}`), ctx);
     expect(touched.calls).toEqual([{ method: "yjs-read", docId: docIdFor(DRIVE, "drafts/메모.md".normalize("NFC")) }]);
+  });
+
+  it("a path with no file (moved or deleted) reads no doc — its old edits may now sit behind a paywall", async () => {
+    touched.gone.add("drafts/moved.md");
+    const res = await GET(new Request(`http://x/api/drives/${DRIVE}/yjs?path=drafts/moved.md`), ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ data: "" });
+    expect(touched.calls).toEqual([]);
   });
 
   it("the paid doc itself is still behind the paywall", async () => {
