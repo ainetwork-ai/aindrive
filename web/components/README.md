@@ -103,3 +103,5 @@ Design system:
 - Protocol/access/payment-token logic the shells call: `../lib`, `../shared`
 
 `folder-chat.tsx` mounts `ain-ui/react`'s FolderChat keyed by drive and folder. It offers exact-folder local agents and, for owners, remote agents from the folder-chat API. Remote exports are confirmed per agent and folder. Context IDs remain scoped to each agent and folder; unmount cancels the active response. Local agents retain their JSON response API.
+
+AIN-UI 0.2.1 fixes gallery tile sizing for long filenames and failed thumbnails. The producer displays counts from the current listing, with photos separate from folders and other files; these are not recursive totals.

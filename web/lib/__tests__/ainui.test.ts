@@ -102,7 +102,7 @@ describe("AINUI builders", () => {
     const d = data(msgs);
     expect(d).toMatchObject({ drive_id: "d1", path: "Camera", parent: "", view: "grid", query: "", new_name: "" });
     expect(d.crumbs).toEqual([{ label: "Family", path: "", is_dir: true }, { label: "Camera", path: "Camera", is_dir: true }]);
-    expect(byId(comps, "root")!.children).toEqual(["crumbs", "toolbar", "grid"]);
+    expect(byId(comps, "root")!.children).toEqual(["crumbs", "toolbar", "inventory", "grid"]);
     expect(byId(comps, "toolbar")!.children).toEqual(["search_field", "search_btn", "view"]);
     expect(byId(comps, "grid")).toMatchObject({ component: "Grid", children: { componentId: "tile", path: "/items" } });
     expect(byId(comps, "tile")).toMatchObject({
@@ -157,8 +157,9 @@ describe("AINUI builders", () => {
     expect(byId(comps, "row_label")).toMatchObject({ text: { path: "label" } });
     const docs = ainuiForSkill("list_files", { path: "" }, ok({ entries: [PHOTOS[3]] }), "d1", SERVER_ENV);
     expect(data(docs).view).toBe("list");
+    expect(data(docs).inventory).toContain("this folder only");
     const empty = ainuiForSkill("list_files", { path: "" }, ok({ entries: [] }), "d1", SERVER_ENV);
-    expect(byId(validate(empty), "root")!.children).toEqual(["crumbs", "toolbar", "empty"]);
+    expect(byId(validate(empty), "root")!.children).toEqual(["crumbs", "toolbar", "inventory", "empty"]);
   });
 
   it("new-file button only when the caller may write", () => {
