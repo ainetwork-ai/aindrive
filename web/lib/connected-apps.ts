@@ -129,7 +129,7 @@ export async function spacesForFolder(userId: string, driveId: string, path: str
   const rows = db
     .prepare("SELECT id, name, origin, spaces_url, app_key FROM connected_apps WHERE user_id = ? ORDER BY created_at")
     .all(userId) as Row[];
-  const q = `?${new URLSearchParams({ driveId, path })}`;
+  const q = `?${new URLSearchParams({ driveId, path })}`;   // lookups need no name; PUT carries it
   return Promise.all(
     rows.map(async (row) => {
       const app = { id: row.id, name: row.name, origin: row.origin };
@@ -145,10 +145,14 @@ export async function setFolderShared(
   userId: string,
   appId: string,
   spaceId: string,
-  input: { driveId: string; path: string; shared: boolean }
+  input: { driveId: string; path: string; shared: boolean; driveName?: string }
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
   const row = appRow(userId, appId);
   if (!row) return { ok: false, status: 404, error: "app not connected" };
-  const r = await callApp(row, "PUT", `/${encodeURIComponent(spaceId)}`, input);
+  // The app shows this folder by `name`: the folder's own name, or the drive's name when the
+  // whole drive is shared (path "") — without it an app can only fall back to "aindrive".
+  const leaf = input.path.split("/").filter(Boolean).pop();
+  const body = { driveId: input.driveId, path: input.path, shared: input.shared, name: leaf || input.driveName || "aindrive", driveName: input.driveName ?? null };
+  const r = await callApp(row, "PUT", `/${encodeURIComponent(spaceId)}`, body);
   return r.ok ? { ok: true } : { ok: false, status: r.status >= 500 ? 502 : r.status, error: String(r.data.error ?? `${row.name} answered ${r.status}`) };
 }

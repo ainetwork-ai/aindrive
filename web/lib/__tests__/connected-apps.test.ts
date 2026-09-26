@@ -60,7 +60,10 @@ describe("connected apps", () => {
     expect((calls[0].init.headers as Record<string, string>).authorization).toBe(`Bearer ${"j".repeat(20)}`);
     expect(await setFolderShared("u1", app.id, "ts1", { driveId: "d1", path: "photos", shared: false })).toEqual({ ok: true });
     expect(calls[1].url).toBe("https://8.8.8.8/api/aindrive-app/spaces/ts1");
-    expect(JSON.parse(String(calls[1].init.body))).toEqual({ driveId: "d1", path: "photos", shared: false });
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ driveId: "d1", path: "photos", shared: false, name: "photos", driveName: null });
+    // The whole drive (path "") is named after the drive, so the app doesn't fall back to "aindrive".
+    await setFolderShared("u1", app.id, "ts1", { driveId: "d1", path: "", shared: true, driveName: "Recordings (1)" });
+    expect(JSON.parse(String(calls[calls.length - 1].init.body))).toMatchObject({ path: "", name: "Recordings (1)", driveName: "Recordings (1)" });
     expect(await setFolderShared("u2", app.id, "ts1", { driveId: "d1", path: "", shared: true })).toMatchObject({ ok: false, status: 404 });
   });
 
