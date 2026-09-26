@@ -35,6 +35,31 @@ async function whoAmI(): Promise<string | null> {
   return id;
 }
 
+// ── before sign-in: a key the wallet sign-in can certify (plan 4) ─────────────
+
+const PENDING_DB = "aindrive-device-pending";
+
+/** A device key made before anyone is signed in; its line goes into the SIWE resources. */
+export async function pendingDeviceKey(): Promise<DeviceKeypair> {
+  const hit = await idb<{ s: string; p: string } | undefined>(PENDING_DB, (os) => os.get("key"));
+  if (hit) return { secretKey: fromHex(hit.s), publicKey: fromHex(hit.p) };
+  const kp = await generateDeviceKey();
+  await idb(PENDING_DB, (os) => os.put({ s: toHex(kp.secretKey), p: toHex(kp.publicKey) }, "key"), "readwrite");
+  return kp;
+}
+
+/** After a wallet sign-in: the pending key becomes this user's device key (unless they
+ *  already have one here), and the wallet's certificate for it is kept until the store writes it. */
+export async function adoptWalletSignIn(userId: string, cert: { deviceKey: string } | null | undefined) {
+  const pending = await idb<{ s: string; p: string } | undefined>(PENDING_DB, (os) => os.get("key"));
+  const userDb = `aindrive-device-${userId}`;
+  const existing = await idb<{ s: string; p: string } | undefined>(userDb, (os) => os.get("key"));
+  if (pending && !existing) await idb(userDb, (os) => os.put(pending, "key"), "readwrite");
+  await idb(PENDING_DB, (os) => os.delete("key"), "readwrite");
+  const mine = existing ?? pending;
+  if (cert && mine && cert.deviceKey === mine.p) { try { localStorage.setItem(`aindrive-willow-wallet-cert-${userId}`, JSON.stringify(cert)); } catch {} }
+}
+
 /** The device key of this browser FOR THIS USER (review C4): a second person
  *  signing in on the same browser gets their own key, stores and certificate. */
 export async function deviceKey(userId: string): Promise<DeviceKeypair> {
@@ -76,6 +101,17 @@ async function connect(driveId: string) {
   for await (const [entry, payload] of store.query({ area: { includedSubspaceId: key.publicKey, pathPrefix: certPath, timeRange: { start: 0n, end: OPEN_END } }, maxCount: 1, maxSize: 0n }, "timestamp")) {
     if (!equalBytes(entry.subspaceId, key.publicKey) || !payload) continue;
     try { hasCert = JSON.parse(new TextDecoder().decode(await payload.bytes())).userId === me.id; } catch {}
+  }
+  // a wallet sign-in certified this key: that certificate replaces the attested one (same path, newer)
+  let walletCert: string | null = null;
+  try { walletCert = localStorage.getItem(`aindrive-willow-wallet-cert-${me.id}`); } catch {}
+  if (walletCert) {
+    try {
+      if (JSON.parse(walletCert).deviceKey === toHex(key.publicKey)) {
+        const r = await store.set({ path: certPath, subspace: key.publicKey, payload: utf8(walletCert) }, key);
+        if (r.kind === "success") { hasCert = true; localStorage.removeItem(`aindrive-willow-wallet-cert-${me.id}`); }
+      }
+    } catch {}
   }
   if (!hasCert) {
     const r = await fetch("/api/willow/cert", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceKey: toHex(key.publicKey), label: navigator.userAgent.slice(0, 60) }) }).catch(() => null);

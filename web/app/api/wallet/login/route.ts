@@ -8,6 +8,7 @@ import { adoptOwnerPayoutWallet } from "@/lib/drives";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
 import { activeChainId } from "@/lib/payment-tokens";
+import { walletCertFromLogin } from "@/lib/willow/wallet-cert";
 
 // The SIWE message must be signed FOR this origin; binding verify() to our
 // canonical host rejects a signature phished on another site.
@@ -78,5 +79,7 @@ export async function POST(req: Request) {
   await setCookie(accountId);
   // The wallet you sign in with is also where your sales pay out (drives without a payout wallet).
   adoptOwnerPayoutWallet(accountId, address);
-  return NextResponse.json({ ok: true, address: address.toLowerCase() });
+  // the same signature certifies this browser's device key, when the message names one (Willow)
+  const cert = await walletCertFromLogin({ message, signature, address, userId: accountId, label: (req.headers.get("user-agent") ?? "browser").slice(0, 60) }).catch(() => null);
+  return NextResponse.json({ ok: true, address: address.toLowerCase(), userId: accountId, cert });
 }

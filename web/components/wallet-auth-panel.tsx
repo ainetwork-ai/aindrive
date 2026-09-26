@@ -48,6 +48,8 @@ import { useRouter } from "next/navigation";
 import { Wallet } from "lucide-react";
 import { getWagmiConfig } from "@/lib/wagmi-config";
 import { walletConnectSiweRequest, extractSiweAuth } from "@/lib/base-siwe";
+import { adoptWalletSignIn, pendingDeviceKey } from "@/lib/willow/client";
+import { walletCertMessageLine } from "@/shared/willow/cert";
 
 // Mirrors server activeChainId() (web/lib/payment-tokens.ts). We stamp the SIWE
 // message with the APP's chain, not the wallet's connected chain, so it always
@@ -147,6 +149,9 @@ function WalletButtons({ next }: { next: string }) {
         setError(msg);
         return false;
       }
+      // the same signature certified this browser's device key (Willow): keep it for this account
+      const ok = (await r.json().catch(() => ({}))) as { userId?: string; cert?: { deviceKey: string } | null };
+      if (ok.userId) await adoptWalletSignIn(ok.userId, ok.cert).catch(() => {});
       router.push(next);
       return true;
     },
@@ -202,6 +207,8 @@ function WalletButtons({ next }: { next: string }) {
       setError(null);
       try {
         const nonce = await takeNonce();
+        // this browser's device key rides in the resources: the one signature also certifies it
+        const device = await pendingDeviceKey().catch(() => null);
         const message = new SiweMessage({
           domain: window.location.host,
           address: addr,
@@ -210,6 +217,7 @@ function WalletButtons({ next }: { next: string }) {
           version: "1",
           chainId: CHAIN_ID,
           nonce,
+          ...(device ? { resources: [walletCertMessageLine(device.publicKey)] } : {}),
         }).prepareMessage();
 
         // The wallet's own signature prompt — this is the one step the user sees.
