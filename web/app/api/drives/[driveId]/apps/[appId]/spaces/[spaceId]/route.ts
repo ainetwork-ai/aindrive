@@ -16,7 +16,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ driveId:
   if (!drive || drive.owner_id !== user.id) return NextResponse.json({ error: "only the drive creator can share it into apps" }, { status: 403 });
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  const r = await setFolderShared(user.id, appId, spaceId, { driveId, path: body.data.path, shared: body.data.shared });
+  const r = await setFolderShared(user.id, appId, spaceId, { driveId, path: body.data.path, shared: body.data.shared, driveName: drive.name });
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status });
   return NextResponse.json({ ok: true, shared: body.data.shared });
 }
