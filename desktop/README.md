@@ -40,6 +40,9 @@ Releases: `docs/RELEASING.md` (desktop track; tag `desktop-vX.Y.Z` → `.github/
   through `mobile/src/device.ts` (`ON_MAC`, `DEVICE`). A new `AindriveAgent`
   method needs a Mac version in `mac-agent.js` and a header in `mac-bridge.js`
   (without one it fails as "not implemented on electron", not silently).
+- **Same screens, wide layout.** A window ≥ 1024 px wide shows home, the open
+  folder and the agent side by side (`mobile/src/main.ts` `renderScreens`,
+  `#app.wide` in `ui.css`) — the phone's screens as panes, not a second UI.
 - **Not on the Mac (yet):** call-log / camera-roll agent sources, recognition
   models (photo contents, transcripts) and the on-device LLM — `ask` understands
   like the phone but matches by kind, date, place and name only — and Google's
