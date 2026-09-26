@@ -8,8 +8,9 @@
  *   openFile            Quick Look, like iOS
  *   thumbnail           macOS thumbnails, served as app://thumb/…
  *   ask                 aindrive-on-device: the phone's agent over this Mac's folders (agent/)
+ *   ensureModels        the local model that reads unclear questions (agent/llm.js), downloaded on request
  *
- * What only the phone has — call log, on-device recognition models, Google's
+ * What only the phone has — call log, photo/speech recognition models, Google's
  * account picker, handoff links (served by the phone agent's `handoff-read`) —
  * answers with a clear "not on the Mac" instead of pretending.
  *
@@ -22,8 +23,19 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { driveUrlOf, isFolder } from "./agents.js";
 import { createDeviceAgent } from "./agent/device-agent.js";
+import { GeoLookup } from "./agent/geo-lookup.js";
+import { createLlm, createModelStore } from "./agent/llm.js";
+
+/**
+ * The local model that reads unclear questions (agent/llm.js); its manifest is assets/llm/<id>.json, the phone's
+ * shape plus `budgetMs`. Two are shipped: "qwen2.5-3b-instruct" (fastest, Qwen Research License — non-commercial)
+ * and "qwen3-4b" (Apache-2.0, needs 3 s). Switching is this one line.
+ */
+export const DEFAULT_LLM = "qwen2.5-3b-instruct";
+const LLM_MANIFESTS = fileURLToPath(new URL("../assets/llm/", import.meta.url));
 
 const MIME = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic", ".svg": "image/svg+xml",
@@ -145,8 +157,12 @@ export function writeHandoffs(add, file = HANDOFFS_FILE, now = Date.now()) {
   renameSync(tmp, file);
 }
 
-export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = join(thumbsDir, "..", "index"), emit }) {
+export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = join(thumbsDir, "..", "index"), modelsDir = join(thumbsDir, "..", "models"), llmId = DEFAULT_LLM, emit }) {
   const { dialog, nativeImage, shell, getWindow } = electron;
+  // The model is opt-in (the shell's "Download models" button) and never bundled; without it `ask` is rules-only.
+  const manifest = llmId ? JSON.parse(readFileSync(join(LLM_MANIFESTS, `${llmId}.json`), "utf8")) : null;
+  const models = manifest ? createModelStore({ dir: modelsDir, manifest, onChange: () => emit(status()) }) : null;
+  const llm = models ? createLlm({ modelPath: () => (models.ready() ? models.modelPath() : null), geo: GeoLookup.loadDefault(), budgetMs: manifest.budgetMs, log: (m) => console.log(m) }) : null;
   /** driveId → { folder, label, localOnly } for everything started here */
   const drives = () => store.get().drives ?? [];
   const picked = () => new Set(store.get().picked ?? []);
@@ -172,13 +188,14 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
 
   /** aindrive-on-device: the phone's agent over the folders this Mac holds (agent/device-agent.js). */
   const device = createDeviceAgent({
-    indexDir, inside, mimeOf,
+    indexDir, inside, mimeOf, llm,
     folders: () => drives().filter((d) => isFolder(d.folder)).map((d) => ({ driveId: d.driveId, folder: d.folder, label: d.label ?? basename(d.folder) })),
     onChange: () => emit(status()),
   });
   const indexSoon = (d) => { if (d && isFolder(d.folder)) void device.reindex({ driveId: d.driveId, folder: d.folder, label: d.label ?? basename(d.folder) }); };
-  // Folders restored at launch are indexed too (incremental: only new or changed files are read).
-  setTimeout(() => { for (const d of drives()) indexSoon(d); }, 2000).unref?.();
+  // Folders restored at launch are indexed too (incremental: only new or changed files are read); a downloaded
+  // model is loaded ahead of the first question (and let go again after 5 idle minutes).
+  setTimeout(() => { for (const d of drives()) indexSoon(d); llm?.warm(); }, 2000).unref?.();
 
   function status() {
     const list = agents.list();
@@ -197,7 +214,12 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
         index: device.indexStatus(d.driveId),
       };
     });
-    return { running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out };
+    // `models` is the phone's ModelsStatus (mobile/src/plugin.ts): the Mac has one model, the LLM — no photo or speech model.
+    const m = models?.status();
+    return {
+      running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out,
+      ...(m ? { models: { list: m.list, llm: m.ready, photos: false, speech: false, ready: m.ready, downloading: m.downloading, done: m.done, total: m.total, error: m.error } } : {}),
+    };
   }
   agents.on("change", () => emit(status()));
 
@@ -384,7 +406,8 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
       for (const d of drives()) if (!opts?.driveId || d.driveId === opts.driveId) indexSoon(d);
       return status();
     },
-    async ensureModels() { return status(); },
+    /** Start (or resume) the model download; progress arrives through statusChanged, like the phone's. */
+    async ensureModels() { models?.ensure(); return status(); },
 
     /** The phone's on-device agent, on this Mac's folders: small talk, dates, places (EXIF GPS), kinds, names, tasks. */
     async ask({ query, context, driveId }) {

@@ -5,8 +5,11 @@
 //
 // 1. bundles the CLI agent into cli/ (prepare-cli.mjs) and the mobile shell into
 //    shell/ (prepare-shell.mjs)
-// 2. per arch: puts that arch's prebuilt better-sqlite3 (Electron ABI) in
-//    node_modules, packages aindrive.app with electron-builder (`dir` target)
+// 2. per arch: puts that arch's prebuilt better-sqlite3 (Electron ABI) and
+//    node-llama-cpp binary (@node-llama-cpp/mac-<arch>, N-API so no ABI pin) in
+//    node_modules, packages aindrive.app with electron-builder (`dir` target,
+//    the other arch's llama binary left out). The LLM itself (a 2 GB GGUF) is
+//    never bundled: the app downloads it on request (src/agent/llm.js)
 // 3. signs the app ad-hoc with rcodesign — Apple Silicon refuses to run
 //    unsigned code, and packaging changed Electron's bundle. Not notarized:
 //    see README ("Opening it the first time").
@@ -14,7 +17,7 @@
 //    scripts/dmg/: xorrisofs + libdmg-hfsplus), with an /Applications link.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +25,7 @@ const desktop = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(desktop, "package.json"), "utf8"));
 const electronVersion = JSON.parse(readFileSync(join(desktop, "node_modules/electron/package.json"), "utf8")).version;
 const sqliteVersion = JSON.parse(readFileSync(join(desktop, "node_modules/better-sqlite3/package.json"), "utf8")).version;
+const llamaVersion = JSON.parse(readFileSync(join(desktop, "node_modules/node-llama-cpp/package.json"), "utf8")).version;
 const cache = join(desktop, ".cache");
 const archs = process.argv.slice(2).length ? process.argv.slice(2) : ["arm64", "x64"];
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: "inherit", cwd: desktop, ...opts });
@@ -35,6 +39,11 @@ const ELECTRON_ABI = { 42: 146 };
 const SQLITE_SHA256 = {
   "better-sqlite3-v12.11.1-electron-v146-darwin-arm64.tar.gz": "5b3b7a2850fb510de1f7c5cfda39dbb165d948f0c820827988c9ed05e93d1ead",
   "better-sqlite3-v12.11.1-electron-v146-darwin-x64.tar.gz": "59b9b7c23bd3cc23cd8e2ac05eae666a2aa1b19d2ce1f9426ab17525dd162ecb",
+};
+/** node-llama-cpp's prebuilt binary package per arch (npm `dist.integrity`, sha512); the version is node-llama-cpp's. */
+const LLAMA_BINS = {
+  arm64: { name: "mac-arm64-metal", sha512: { "3.21.1": "6MIDAZV7DXD9R1+jEXWJkFuolni3GATGE6mmuyFYc6ZmtOh9djAy15df0T0AXK3sCmVKL+fQcOAWZezxx4MvQQ==" } },
+  x64: { name: "mac-x64", sha512: { "3.21.1": "Q4nyNmbcNiKygBZQZjX+qLk2w3YzoiFpLWsxNURQN7xjyUi2p2rWxjRa7Otg0FrjGf/ri4aQ+X3Uj5Y0zD06eg==" } },
 };
 const RCODESIGN = { version: "0.29.0", sha256: "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002" };
 
@@ -68,6 +77,35 @@ function sqliteFor(arch, abi) {
     run("tar", ["-xzf", tgz, "-C", dir]);
   }
   return join(dir, "build/Release/better_sqlite3.node");
+}
+
+/**
+ * `node_modules/@node-llama-cpp/<pkg>` for this arch — npm only installs the host's, so the other one is
+ * fetched from the registry against its pinned integrity hash. Returns the package to leave out of the app.
+ */
+function llamaFor(arch) {
+  const want = LLAMA_BINS[arch], other = LLAMA_BINS[arch === "x64" ? "arm64" : "x64"];
+  const dir = join(desktop, "node_modules/@node-llama-cpp", want.name);
+  const installed = existsSync(join(dir, "package.json")) && JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version === llamaVersion;
+  if (!installed) {
+    const sha512 = want.sha512[llamaVersion];
+    if (!sha512) throw new Error(`@node-llama-cpp/${want.name}@${llamaVersion}: add its sha512 to LLAMA_BINS`);
+    const tgz = join(cache, `${want.name}-${llamaVersion}.tgz`);
+    run("curl", ["-fsSL", "-o", tgz, `https://registry.npmjs.org/@node-llama-cpp/${want.name}/-/${want.name}-${llamaVersion}.tgz`]);
+    const got = createHash("sha512").update(readFileSync(tgz)).digest("base64");
+    if (got !== sha512) { rmSync(tgz, { force: true }); throw new Error(`integrity mismatch for @node-llama-cpp/${want.name}: ${got}`); }
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    run("tar", ["-xzf", tgz, "-C", dir, "--strip-components=1"]);
+  }
+  return other.name;
+}
+
+/** electron-builder's config for one arch: package.json's `build`, minus the other arch's llama binary. */
+function builderConfig(arch, omitLlama) {
+  const file = join(cache, `electron-builder-${arch}.json`);
+  writeFileSync(file, JSON.stringify({ ...pkg.build, files: [...pkg.build.files, `!node_modules/@node-llama-cpp/${omitLlama}/**`] }, null, 2));
+  return file;
 }
 
 function rcodesign() {
@@ -121,7 +159,8 @@ const sqliteTarget = join(desktop, "node_modules/better-sqlite3/build/Release/be
 for (const arch of archs) {
   mkdirSync(dirname(sqliteTarget), { recursive: true });
   copyFileSync(sqliteFor(arch, abi), sqliteTarget);
-  run("npx", ["electron-builder", "--mac", "dir", `--${arch}`, "--publish", "never"]);
+  const omitLlama = llamaFor(arch);
+  run("npx", ["electron-builder", "--mac", "dir", `--${arch}`, "--publish", "never", "--config", builderConfig(arch, omitLlama)]);
   const app = join(desktop, "dist", arch === "x64" ? "mac" : `mac-${arch}`, "aindrive.app");
   sign(app);
   console.log(`✓ ${dmg(app, arch)}`);

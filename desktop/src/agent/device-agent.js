@@ -6,14 +6,18 @@ import { createAskRunner } from "./ask-runner.js";
 import { FileIndex } from "./file-index.js";
 import { GeoLookup } from "./geo-lookup.js";
 import { indexFolder } from "./indexer.js";
+import { merge } from "./llm.js";
 import { contentWords, QueryParser } from "./query-parser.js";
 import * as router from "./router.js";
+import { unsure } from "./unsure.js";
 
 /**
  * @param {{ indexDir: string, folders: () => { driveId: string, folder: string, label: string }[],
- *   inside: (root: string, rel: string) => string, mimeOf: (name: string) => string, onChange?: () => void }} o
+ *   inside: (root: string, rel: string) => string, mimeOf: (name: string) => string, onChange?: () => void,
+ *   llm?: { ready: () => boolean, understand: (o: { text: string, context: object | null, nowMs: number }) => Promise<object | null> } | null }} o
+ *   llm: the local model (llm.js), asked only when the rules are unsure (unsure.js); without one, nothing changes.
  */
-export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange = () => {} }) {
+export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange = () => {}, llm = null }) {
   let geo = null;
   const geoLookup = () => (geo ??= GeoLookup.loadDefault());
   /** driveId → { index, runner, state } */
@@ -68,7 +72,8 @@ export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange 
   async function ask(query, context, driveId) {
     const all = folders().filter((d) => !driveId || d.driveId === driveId);
     if (!all.length) throw new Error(driveId ? "That folder isn't open on this Mac" : "No folder is shared on this Mac yet");
-    const routed = entry(all[0]).runner.route(query, context);
+    const turn = await understand(entry(all[0]).parser, query, context);
+    const routed = entry(all[0]).runner.route(query, context, turn);
     // A turn the router reads as chat but that names a file here ("AI Network - 2.001") is a search by name:
     // the router knows language, only the index knows what is on this Mac.
     if (routed?.query === "chat") {
@@ -79,7 +84,7 @@ export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange 
     if (routed) return { ...routed, answer: forMac(routed.answer) };
     await ensureIndexed(all);
     const results = [];
-    for (const d of all) results.push({ d, r: await entry(d).runner.ask(query, context) });
+    for (const d of all) results.push({ d, r: await entry(d).runner.ask(query, context, turn) });
     if (results.length === 1) {
       const { d, r } = results[0];
       for (const s of r.sources) s.driveId = d.driveId;
@@ -106,6 +111,18 @@ export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange 
     }
     const context0 = results.find(({ r }) => r.context)?.r.context ?? null;
     return { answer, sources, query: results[0].r.query, context: context0, ...(action ? { action } : {}) };
+  }
+
+  /**
+   * Rules first, model second: the router decides every turn; the model is asked only when that
+   * decision was thin (unsure.js) and a model is ready, and its answer is merged only when it parsed
+   * and passed llm.js's guards (llm.js `merge`: upgrade-only). Understood once per question, not once per folder.
+   */
+  async function understand(parser, query, context) {
+    const nowMs = Date.now();
+    const turn = router.understand(parser, query, nowMs, context ?? null);
+    if (!llm?.ready() || !unsure(turn)) return turn;
+    return merge(turn, await llm.understand({ text: query, context: context ?? null, nowMs }), geoLookup());
   }
 
   /** A folder never indexed yet is indexed before its first answer (a later run is incremental and in the background). */
