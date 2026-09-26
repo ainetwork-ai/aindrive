@@ -92,7 +92,7 @@
   },
   "overrides": {
     "ws": "$ws",
-    "postcss": "$postcss",
+    "postcss": "^8.5.28",
     "dompurify": "^3.4.10",
     "@base-org/account": "^2.5.7",
     "axios": "^1.18.1",
@@ -103,6 +103,7 @@
     "browserslist": "^4.28.7",
     "fast-uri": "^4.2.1",
     "ip-address": "^10.7.2",
-    "nanoid": "$nanoid"
+    "nanoid": "$nanoid",
+    "monaco-editor": "0.55.1"
   }
 }
