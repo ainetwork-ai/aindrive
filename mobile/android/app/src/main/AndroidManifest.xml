@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- hasFragileUserData: the index and the downloaded models (up to a few GB) are worth keeping — the
+         uninstall dialog offers to keep the app's data, and `adb uninstall -k` keeps it, so reinstalling
+         does not mean re-downloading and re-indexing. Android still wipes it without that choice. -->
     <application
+        android:hasFragileUserData="true"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

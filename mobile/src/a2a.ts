@@ -3,17 +3,16 @@
 // add any agent by pasting its URL, then chat with it from the agent sheet
 // instead of the on-device agent. The SDK resolves the AgentCard
 // (/.well-known/agent-card.json), picks the transport the card offers
-// (JSON-RPC or REST) and streams the turn (`message/stream`, folded in a2a-stream.ts;
-// `message/send` when the card has no streaming). The contextId it returns is sent back so the
+// (JSON-RPC or REST) and sends `message/send`; the reply is a Message or a Task
+// (status.message / artifacts). The contextId it returns is sent back so the
 // agent keeps the conversation.
 import { handoffParts, type Handed } from "./a2a-parts";
 export type { Handed, LinkedFile, HandoffMcp } from "./a2a-parts";
 export { HANDOFF_MCP_PART } from "./a2a-parts";
 import { Preferences } from "@capacitor/preferences";
+import { a2aReplyStart, a2aReplyText, foldA2aEvent } from "./a2a-stream";
 import { ClientFactory, ClientFactoryOptions, DefaultAgentCardResolver, JsonRpcTransportFactory, RestTransportFactory } from "@a2a-js/sdk/client";
-import type { AgentCard, Message } from "@a2a-js/sdk";
-import { a2aReplyStart, a2aReplyText, foldA2aEvent, type A2aReply } from "./a2a-stream";
-export type { A2aReply } from "./a2a-stream";
+import type { AgentCard, Message, Task } from "@a2a-js/sdk";
 
 export interface A2aAgent {
   id: string;
@@ -73,6 +72,38 @@ function factory(bearer?: string): ClientFactory {
   }));
 }
 
+/** What another device's agent answered (web/lib/device-agent-a2a.ts `ai.aindrive/ask-result`). */
+export interface DeviceAnswer {
+  answer: string;
+  sources: { path: string; snippet: string; matchedBy?: string }[];
+  action?: { type: string; folder?: string; copied?: number; failed?: number; share?: boolean; skipped?: boolean; reason?: string };
+}
+
+/**
+ * Ask the on-device agent of one of the account's drives on another device, over A2A: the server's
+ * `/a2a/d/<driveId>` forwards it to that device. Its card is built here (the server's is the same),
+ * so a question is one request. `askId` tags the calls of one question sent to several drives —
+ * the server charges them as one ask. Throws when the device can't answer now.
+ */
+export async function askDevice(server: string, sessionBearer: string, drive: { id: string; name: string }, q: string, askId?: string): Promise<DeviceAnswer> {
+  const url = `${server.replace(/\/+$/, "")}/a2a/d/${encodeURIComponent(drive.id)}`;
+  const card = {
+    name: drive.name, description: "On-device agent", version: "1", url, preferredTransport: "JSONRPC", protocolVersion: "0.3",
+    capabilities: { streaming: false }, defaultInputModes: ["text/plain"], defaultOutputModes: ["text/plain", "application/json"], skills: [],
+  } as unknown as AgentCard;
+  const client = await factory(sessionBearer).createFromAgentCard(card);
+  const message: Message = {
+    kind: "message", role: "user", messageId: crypto.randomUUID?.() ?? `m-${Date.now()}`,
+    parts: [{ kind: "text", text: q }], ...(askId ? { metadata: { askId } } : {}),
+  };
+  const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
+  const parts = (r.kind === "message" ? r.parts : (r as Task).status?.message?.parts) ?? [];
+  const data = parts.find((p) => p.kind === "data" && (p.metadata as Record<string, unknown> | undefined)?.type === "ai.aindrive/ask-result") as { data: Record<string, unknown> } | undefined;
+  const text = textOf(parts);
+  if (!data || data.data.error) throw new Error(text.replace(/^\[\w+\]\s*/, "") || "no answer");
+  return { answer: String(data.data.answer ?? text), sources: (data.data.sources as DeviceAnswer["sources"]) ?? [], ...(data.data.action ? { action: data.data.action as DeviceAnswer["action"] } : {}) };
+}
+
 /** The pasted text → the agent's card. Accepts the card URL, the site, or a path under it. */
 export async function discover(raw: string, token?: string): Promise<A2aAgent> {
   let s = raw.trim();
@@ -107,12 +138,19 @@ export async function discover(raw: string, token?: string): Promise<A2aAgent> {
   throw new Error(`No A2A agent card found at that address (${lastErr})`);
 }
 
-/**
- * One turn with an agent, streamed (`message/stream`): `onLive` sees the answer grow and the step the agent
- * is on. An agent whose card does not offer streaming gets `message/send` instead (the SDK falls back), so
- * this is the only way a turn is sent.
- */
-export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }, onLive?: (live: A2aReply) => void): Promise<{ text: string; contextId?: string }> {
+/** Text of the parts of a Message / Artifact. */
+function textOf(parts: unknown): string {
+  if (!Array.isArray(parts)) return "";
+  return parts.map((p) => {
+    const o = p as Record<string, unknown>;
+    if ((o.kind === "text" || o.type === "text") && typeof o.text === "string") return o.text;
+    if (o.kind === "data" && o.data) return "```\n" + JSON.stringify(o.data, null, 2) + "\n```";
+    if (o.kind === "file" && o.file) return `📎 ${String((o.file as Record<string, unknown>).name ?? "file")}`;
+    return "";
+  }).filter(Boolean).join("\n");
+}
+
+export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }, onDelta?: (text: string) => void): Promise<{ text: string; contextId?: string }> {
   const f = factory(agent.token || sessionBearer);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
@@ -120,10 +158,36 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
     parts: handoffParts(text, handed),
     ...(contextId ? { contextId } : {}),
   };
-  let reply = a2aReplyStart(contextId);
-  for await (const event of client.sendMessageStream({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } })) {
+  // Streaming (message/stream, server-sent events) when the card offers it: the reply shows as it is
+  // written instead of after the whole answer. Any stream failure falls back to one blocking call.
+  if (onDelta && agent.card?.capabilities?.streaming) {
+    try { return await stream(client, message, contextId, onDelta); }
+    catch { /* fall through */ }
+  }
+  const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
+  if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? contextId };
+  // A Task: its status message, then any artifacts.
+  const task = r as Task;
+  const said = task.status?.message ? textOf(task.status.message.parts) : "";
+  const arts = (task.artifacts ?? []).map((a) => textOf(a.parts)).filter(Boolean).join("\n\n");
+  const out = [said, arts].filter(Boolean).join("\n\n");
+  const state = task.status?.state ?? "";
+  if (out) return { text: out, contextId: task.contextId ?? contextId };
+  return { text: state === "input-required" ? "The agent needs more input." : state ? `Task ${state}.` : "(empty reply)", contextId: task.contextId ?? contextId };
+}
+
+/**
+ * One streamed turn, folded by a2a-stream.ts: a working step shows until answer text arrives, appended
+ * chunks grow the answer, and the final status (the whole answer) replaces the chunks rather than adding
+ * to them. The composed text goes to `onDelta` whenever it changes and is returned at the end.
+ */
+async function stream(client: { sendMessageStream(p: { message: Message; configuration?: Record<string, unknown> }): AsyncGenerator<unknown> },
+                      message: Message, contextId: string | undefined, onDelta: (text: string) => void): Promise<{ text: string; contextId?: string }> {
+  let reply = a2aReplyStart(contextId), last = "";
+  for await (const event of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
     reply = foldA2aEvent(reply, event);
-    onLive?.(reply);
+    const now = reply.text || reply.step || "";
+    if (now && now !== last) { last = now; onDelta(now); }
     if (reply.done) break;
   }
   return { text: a2aReplyText(reply), contextId: reply.contextId };

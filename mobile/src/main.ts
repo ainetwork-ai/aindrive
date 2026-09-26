@@ -17,12 +17,13 @@ import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
-import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
+import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, type RemoteDrive } from "./api";
 import { DEVICE, ON_MAC } from "./device";
+import { md } from "./md";
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
-import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type A2aReply, type Handed } from "./a2a";
+import { loadAgents, saveAgents, discover, askDevice, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
 import { prepareFolderHandoff } from "./folder-handoff";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
@@ -89,7 +90,7 @@ let askQuery = "";
 let askResult: AskResult | null = null;
 /** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
 interface HandoffLink { id: string; name: string; expiresAt: string; revoked?: boolean }
-interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Files handed to the A2A agent as links (revocable). */ handoffs?: HandoffLink[]; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
+interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Being written by an A2A agent right now (streamed). */ streaming?: boolean; /** Files handed to the A2A agent as links (revocable). */ handoffs?: HandoffLink[]; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
 /** A2A agents added to this chat, next to the on-device agent (which is always here). */
 let a2aAgents: A2aAgent[] = [];
 /** Each agent's A2A conversation id for this thread, so it keeps context. */
@@ -309,36 +310,49 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
   return agent ? { agent, text: m[2] || m[0] } : null;
 }
 
+/** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
 /**
- * The answer an agent is writing right now, shown where "Working…" was until the turn lands in the thread.
- * Painted in place (paintAskLive), not through render(): a re-render per streamed word would rebuild the
- * composer under the keyboard.
+ * A turn that shows up on the first streamed chunk and grows in place: the text is patched in the DOM
+ * (no re-render per chunk) and kept on the Turn, so a re-render mid-stream shows the same text.
  */
-let askLive: A2aReply | null = null;
-const askLiveHtml = () => askLive?.text
-  ? `<p class="answer">${esc(askLive.text)}</p>`
-  : `<div class="searching"><span class="spinner"></span> ${esc(askLive?.step ?? "Working…")}</div>`;
-function paintAskLive() {
-  const el = document.getElementById("ask-live");
-  if (!el) return;
-  el.innerHTML = askLiveHtml();
-  const bodyEl = document.getElementById("ask-body");
-  if (bodyEl && askScroll.atBottom) bodyEl.scrollTop = bodyEl.scrollHeight;
+function liveTurn(q: string, via: string, handoffs?: HandoffLink[]) {
+  let turn: Turn | null = null;
+  const ensure = () => {
+    if (turn) return turn;
+    turn = { q, r: { answer: "", sources: [], query: "a2a" }, at: Date.now(), via, streaming: true, ...(handoffs?.length ? { handoffs } : {}) };
+    thread.push(turn); render();
+    return turn;
+  };
+  return {
+    update(text: string) {
+      const t = ensure();
+      t.r!.answer = text;
+      const el = document.querySelector<HTMLElement>(".turn.last .answer");
+      if (el) { el.innerHTML = md(text); el.scrollIntoView?.({ block: "end" }); }
+    },
+    finish(r: { answer: string; errors: string[] }) {
+      const t = ensure();
+      t.streaming = false;
+      t.r = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
+      if (!r.answer) t.error = r.errors.join("\n");
+      askResult = t.r;
+      return t;
+    },
+  };
 }
 
-/** Ask A2A agents in parallel; one line per agent ("Name: reply"). A single agent's answer streams in (askLive). */
-async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }): Promise<{ answer: string; errors: string[] }> {
-  askLive = null;
-  const onLive = agents.length === 1 ? (live: A2aReply) => { askLive = live; paintAskLive(); } : undefined;
+async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }, onDelta?: (answer: string) => void): Promise<{ answer: string; errors: string[] }> {
+  // Partial replies per agent, composed like the final answer, so the live turn reads like the finished one.
+  const partial = new Map<string, string>();
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
-      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed, onLive);
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed,
+        onDelta && ((t) => { partial.set(agent.id, agents.length > 1 ? `${agent.name}: ${t}` : t); onDelta(agents.map((a) => partial.get(a.id)).filter(Boolean).join("\n\n")); }));
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
   }));
-  askLive = null;
   return { answer: parts.filter((p) => p.ok).map((p) => p.line).join("\n\n"), errors: parts.filter((p) => !p.ok).map((p) => p.line) };
 }
 let thread: Turn[] = [];
@@ -414,7 +428,6 @@ let viewer: { share?: SharedFolder; remote?: RemoteDrive; path: string; name: st
 let remotes: RemoteDrive[] = [];
 let remotesAt = 0;
 /** agentId per remote drive, created on first ask (the record lives in that drive). */
-const remoteAgents = new Map<string, string>();
 /** Share link minted for the agent's last collected folder. */
 let actionShare: { folder: string; url?: string; busy: boolean; error?: string } | null = null;
 let toast: { msg: string; error?: boolean; timer?: number } | null = null;
@@ -1469,9 +1482,10 @@ async function ask(q = askQuery) {
     if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
     try {
-      const r = await askA2a([direct.agent], direct.text, handed);
-      askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
-      thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(handed.links.length ? { handoffs: handed.links } : {}), ...(r.answer ? {} : { error: r.errors.join("\n") }) });
+      const live = liveTurn(q, direct.agent.name, handed.links);
+      live.update(`Calling @${handleOf(direct.agent)}…`);   // shown at once; replaced by the first streamed chunk, or the whole reply
+      const r = await askA2a([direct.agent], direct.text, handed, (t) => live.update(t));
+      live.finish(r);
     } finally { askBusy = false; askQuery = ""; await saveThread(); render(); }
     return;
   }
@@ -1491,18 +1505,15 @@ async function ask(q = askQuery) {
     const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined, driveId: scope?.driveId }) : null;
     // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
     const offTopic = local?.query === "chat" || local?.query === "out";
-    const targets = offTopic || scope ? [] : remotes.filter((d) => d.online);
+    // The account's own drives on other devices, each asked through its A2A agent (/a2a/d/<id>).
+    const targets = offTopic || scope ? [] : remotes.filter((d) => d.online && d.owned !== false);
     const askId = "q_" + (crypto.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/[^A-Za-z0-9]/g, "");
     const remoteResults = await Promise.all([
       ...targets.map(async (d) => {
         try {
-          const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
-          remoteAgents.set(d.id, agentId);
-          const r = await askRemote(state.server, state.sessionCookie!, d.id, agentId, q, askId);
+          const r = await askDevice(state.server, state.sessionCookie!, d, q, askId);
           return { drive: d, r, error: null as string | null, skipped: false };
         } catch (e) {
-          // A drive shared TO this account (not owned) has no agent we may create: leave it out quietly.
-          if (/403|not_owner/.test(msgOf(e))) return { drive: d, r: null, error: null, skipped: true };
           return { drive: d, r: null, error: msgOf(e) };
         }
       }),
@@ -1533,13 +1544,37 @@ async function ask(q = askQuery) {
         catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
         if (!handed) return;
       }
-      const r = await askA2a(to, q, handed);
+      const live = liveTurn(q, to.map((x) => x.name).join(", "), handed?.links);
+      const r = await askA2a(to, q, handed, (t) => live.update(t));
       if (r.answer) {
-        askResult = { answer: r.answer, sources: [], query: "a2a" };
-        thread.push({ q, r: askResult, at: Date.now(), via: to.map((x) => x.name).join(", "), ...(handed?.links.length ? { handoffs: handed.links } : {}) });
+        live.finish(r);
         askQuery = ""; await saveThread();
         return;
       }
+    }
+    // The on-device agent could not answer — nothing to show and nothing done (an empty index, no
+    // match, a folder it can't read): the owner asked that every such turn go to aindrive-cloud, with
+    // this device's answer as context and, in a folder chat, that folder's files as handoff links.
+    const cloud = fallbackAgents();
+    if (cloud.length && local && !merged.sources.length && !merged.action && merged.query !== "chat" && merged.query !== "out") {
+      thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
+      let handed: Awaited<ReturnType<typeof handoffPicked>> = null;
+      if (scope && cloud.length === 1) {
+        const sh = findShare(scope.uri);
+        if (sh) {
+          try {
+            const listed = await AindriveAgent.listFolder({ folderUri: sh.folder.uri, path: "" });
+            const picked = (listed.entries ?? []).filter((e) => !e.isDir).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, HANDOFF_MAX).map((e) => ({ folderUri: sh.folder.uri, path: e.path }));
+            if (picked.length) handed = await handoffPicked(cloud[0], picked);
+          } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
+        }
+      }
+      const live = liveTurn(q, cloud.map((x) => x.name).join(", "), handed?.links);
+      live.update(`Calling @${handleOf(cloud[0])}…`);
+      const r = await askA2a(cloud, `${q}\n\n(The on-device agent could not answer; it said: ${merged.answer})`, handed ?? { files: [] }, (t) => live.update(t));
+      live.finish(r);
+      askQuery = ""; await saveThread();
+      return;
     }
     thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
     askQuery = "";
@@ -2188,13 +2223,13 @@ function searchSheet(): string {
             return `<div class="card handoff">${icon("link", 16)}<span>${t.handoffs!.length} file${t.handoffs!.length === 1 ? "" : "s"} sent to <b>${esc(t.via ?? "")}</b> as links · ${live.length ? `open until ${esc(until)}` : "links closed"}</span>${live.length ? `<button class="btn small secondary" data-revoke-turn="${i}">Revoke</button>` : ""}</div>`;
           })() : ""}
           ${speaker(t)}
-          <p class="answer">${esc(t.r.answer)}</p>
+          <div class="answer md">${md(t.r.answer)}</div>
           ${hitsList(t.r, i, last)}` : ""}
       </div>`;
   }).join("");
   const body = `
     ${turns}
-    ${askBusy ? `<div id="ask-live">${askLiveHtml()}</div>` : ""}
+    ${askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>` : ""}
     ${!thread.length && !askBusy && chatScope ? `<p class="hint" style="margin:8px 2px">Ask anything about the files in “${esc(chatScope.label)}”.</p>` : ""}
     ${!thread.length && !askBusy && !chatScope ? `
       ${SUGGESTIONS.map((g) => `

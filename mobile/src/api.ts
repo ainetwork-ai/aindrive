@@ -134,32 +134,3 @@ export async function remoteRead(server: string, sessionCookie: string, driveId:
   return { base64: r.content, mime: r.mime };
 }
 
-/**
- * The agent on another device is reached through the web's agent-ask, which
- * needs an agent record on that drive. Phones ignore the record's LLM
- * settings (they run their own recogniser), so any valid provider will do.
- */
-export async function ensureRemoteAgent(server: string, sessionCookie: string, driveId: string): Promise<string> {
-  const list = await request<{ agents: { id: string; name: string }[] }>(server, "GET", `/api/drives/${encodeURIComponent(driveId)}/agents`, undefined, sessionCookie);
-  const mine = list.agents.find((a) => a.name === "Phone agent") ?? list.agents[0];
-  if (mine) return mine.id;
-  const made = await post<{ agent: { id: string } }>(server, `/api/drives/${encodeURIComponent(driveId)}/agents`, {
-    name: "Phone agent",
-    description: "Finds files on this device by asking — photos by what they show, recordings by what was said.",
-    knowledge: { strategy: "dump-all-text" },
-    llm: { provider: "openai", model: "on-device" },
-  }, sessionCookie);
-  return made.agent.id;
-}
-
-export interface RemoteAsk {
-  answer: string;
-  sources: { path: string; snippet: string; matchedBy?: string }[];
-  action?: { type: string; folder?: string; copied?: number; failed?: number; share?: boolean; skipped?: boolean; reason?: string };
-}
-
-/** `askId`: one id for every drive asked the same question — the server charges it as one ask (web/lib/ask-fanout.ts). */
-export function askRemote(server: string, sessionCookie: string, driveId: string, agentId: string, q: string, askId?: string): Promise<RemoteAsk> {
-  return request<RemoteAsk>(server, "POST", `/api/drives/${encodeURIComponent(driveId)}/agents/${encodeURIComponent(agentId)}/ask`, { q }, sessionCookie,
-    askId ? { "x-aindrive-ask": askId } : undefined);
-}

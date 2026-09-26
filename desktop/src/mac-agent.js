@@ -36,7 +36,7 @@ import { createClip } from "./agent/clip.js";
  * shape plus `budgetMs`. Two are shipped: "qwen2.5-3b-instruct" (fastest, Qwen Research License — non-commercial)
  * and "qwen3-4b" (Apache-2.0, needs 3 s). Switching is this one line.
  */
-export const DEFAULT_LLM = "qwen2.5-3b-instruct";
+export const DEFAULT_LLM = "qwen3-4b";
 const LLM_MANIFESTS = fileURLToPath(new URL("../assets/llm/", import.meta.url));
 
 const MIME = {
