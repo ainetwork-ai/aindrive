@@ -1,3 +1,4 @@
+import { ainuiPayment } from "@/shared/a2ui/payment";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { encodePaymentRequiredHeader, decodePaymentSignatureHeader } from "@x402/core/http";
@@ -163,6 +164,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
       resource: { url: req.url, description: `aindrive: access to share ${token}`, mimeType: "application/json" },
       accepts: [requirements],
     };
+    const paymentRequiredHeader = encodePaymentRequiredHeader(paymentRequired);
     return NextResponse.json(
       // gasSponsorship: display/flow hint like `currency` — tells the gate UI a
       // sponsored (buyer pays no gas) approve MAY be available for this permit2
@@ -172,9 +174,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
         accepts: [requirements],
         currency: payCurrency,
         gasSponsorship,
+        ...(req.headers.get("x-ainui") === "1" ? { messages: ainuiPayment({
+          shareToken: token, title: "Unlock permanent access", required: paymentRequired,
+          paymentRequired: paymentRequiredHeader, symbol: tok!.symbol, decimals: tok!.decimals,
+        }) } : {}),
         error,
       },
-      { status, headers: { "PAYMENT-REQUIRED": encodePaymentRequiredHeader(paymentRequired) } },
+      { status, headers: { "PAYMENT-REQUIRED": paymentRequiredHeader } },
     );
   }
 

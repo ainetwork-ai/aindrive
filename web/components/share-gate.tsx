@@ -1,4 +1,8 @@
 "use client";
+
+import { AinuiSurface } from "ain-ui/react";
+import { X402_PAY_ACTION, type A2uiMessage } from "ain-ui";
+import "ain-ui/styles.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAccount, useDisconnect, usePublicClient, useSwitchChain, useWalletClient } from "wagmi";
@@ -73,6 +77,7 @@ function walletClientToSigner(wc: ConnectedWalletClient) {
 type CheckResponse =
   | { ok: true; driveId: string; driveName: string; path: string; role: string; txHash?: string }
   | {
+      messages?: A2uiMessage[];
       x402Version: number;
       accepts: PaymentRequirements[];
       // Display-only token info from the drive's policy; absent on legacy
@@ -166,7 +171,7 @@ export function ShareGate({ token }: { token: string }) {
 
   async function check() {
     setState("loading");
-    const res = await fetch(`/api/s/${token}`);
+    const res = await fetch(`/api/s/${token}`, { headers: { "X-AINUI": "1" } });
     const body = await res.json();
     setData(body);
     if (res.ok && "driveId" in body) {
@@ -579,17 +584,13 @@ export function ShareGate({ token }: { token: string }) {
               </p>
             </>
           ) : (
-            <Button
-              variant="filled"
-              size="md"
-              loading={paying}
-              disabled={paying}
-              icon={<Wallet className="w-4 h-4" />}
-              onClick={pay}
-              className="w-full justify-center"
-            >
-              {paying ? "Signing & settling…" : `Pay ${amountLabel}`}
-            </Button>
+            data && "messages" in data && data.messages ? (
+              <fieldset disabled={paying} className="min-w-0">
+                <AinuiSurface messages={data.messages} onAction={async (action) => {
+                  if (action.name === X402_PAY_ACTION) await pay();
+                }} />
+              </fieldset>
+            ) : <p role="alert">Payment screen unavailable. Refresh to try again.</p>
           )}
           {/* The connected wallet, with the switch-wallet entry point the old
               standalone ConnectButton chip used to provide. */}

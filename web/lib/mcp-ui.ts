@@ -15,6 +15,7 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 
 export const MCP_APP_URI = "ui://aindrive/browser";
 export const MCP_APP_MIME = "text/html;profile=mcp-app";
@@ -45,7 +46,7 @@ export function mcpAppHtml(): string {
   const bundle = exposeAppGlobal(
     readFileSync(root("node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js"), "utf8"),
   );
-  const renderer = readFileSync(root("shared/a2ui/renderer.js"), "utf8");
+  const renderer = readFileSync(createRequire(import.meta.url).resolve("ain-ui/renderer"), "utf8");
   const css = renderer.match(/A2UI_RENDERER_CSS = `([\s\S]*?)`;/)?.[1] ?? "";
   const rendererCode = renderer.replace(/export const A2UI_RENDERER_CSS[\s\S]*$/, "").replace(/^export /gm, "");
   // `</script` inside inlined JS would end the tag early.

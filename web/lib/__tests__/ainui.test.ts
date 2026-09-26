@@ -30,6 +30,8 @@ const isAction = (v: unknown) => !!v && typeof (v as any).event?.name === "strin
 
 /** Spec §3 props: required / optional, and their shapes. */
 const AINUI: Record<string, { req: Record<string, (v: unknown) => boolean>; opt: Record<string, (v: unknown) => boolean> }> = {
+  FileUpload: { req: { label: isDyn, action: isAction }, opt: { maxBytes: (v) => typeof v === "number" && v > 0 } },
+  X402Payment: { req: { amount: isDyn, currency: isDyn, network: isDyn, payTo: isDyn, action: isAction }, opt: {} },
   Grid: { req: { children: isChildren }, opt: { minItemWidth: (v) => typeof v === "number", gap: (v) => typeof v === "number" } },
   Tile: { req: { kind: isDyn, label: isDyn }, opt: { media: isDyn, caption: isDyn, action: isAction } },
   FileView: { req: { src: isDyn, name: isDyn }, opt: { mime: isDyn, size: isDyn } },
@@ -162,8 +164,9 @@ describe("AINUI builders", () => {
   it("new-file button only when the caller may write", () => {
     const ro = validate(ainuiFolder({ driveId: "d1", path: "a", items: [], env: SERVER_ENV }));
     expect(byId(ro, "new_btn")).toBeUndefined();
+    expect(byId(ro, "upload")).toBeUndefined();
     const rw = validate(ainuiFolder({ driveId: "d1", path: "a", items: [], env: { ...SERVER_ENV, canWrite: true } }));
-    expect(byId(rw, "toolbar")!.children).toEqual(["search_field", "search_btn", "view", "new_btn"]);
+    expect(byId(rw, "toolbar")!.children).toEqual(["search_field", "search_btn", "view", "new_btn", "upload"]);
     expect(byId(rw, "new_btn")).toMatchObject({
       action: { event: { name: "aindrive.new_file", context: { drive_id: { path: "/drive_id" }, path: { path: "/path" }, name: { path: "/new_name" } } } },
     });

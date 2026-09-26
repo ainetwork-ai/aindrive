@@ -68,6 +68,19 @@ describe("x402 v2 verify/settle protocol", () => {
     settleMock.mockReset();
   });
 
+  it("negotiates AIN-UI with the exact same x402 quote", async () => {
+    const res = await GET(new Request("http://localhost/api/s/tok1", { headers: { "X-AINUI": "1" } }), { params: Promise.resolve({ token: "tok1" }) });
+    expect(res.status).toBe(402);
+    const body = await res.json();
+    expect(body.messages[0].createSurface.catalogId).toContain("/ainui/v1/");
+    const model = body.messages.find((m: any) => m.updateDataModel).updateDataModel.value;
+    expect(model.paymentRequired).toBe(res.headers.get("PAYMENT-REQUIRED"));
+    expect(body.messages.find((m: any) => m.updateComponents).updateComponents.components.some((c: any) => c.component === "X402Payment")).toBe(true);
+    expect(settleMock).not.toHaveBeenCalled();
+    const plain = await GET(new Request("http://localhost/api/s/tok1"), { params: Promise.resolve({ token: "tok1" }) });
+    expect((await plain.json()).messages).toBeUndefined();
+  });
+
   it("maps permit2_allowance_required to 412 and never settles", async () => {
     verifyMock.mockResolvedValue({ isValid: false, invalidReason: "permit2_allowance_required" });
     const res = await GET(payingReq("tok1"), { params: Promise.resolve({ token: "tok1" }) });
