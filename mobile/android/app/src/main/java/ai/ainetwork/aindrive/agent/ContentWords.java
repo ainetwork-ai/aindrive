@@ -54,7 +54,9 @@ public final class ContentWords {
             v = new java.util.HashSet<>();
             for (Map.Entry<String, String> e : KO.entrySet()) {
                 v.add(e.getKey());
-                for (String w : e.getValue().toLowerCase(Locale.ROOT).split("\\s+")) v.add(w);
+                // Proper nouns in the English glosses ("Shibuya crossing in Tokyo", "the Eiffel Tower") are
+                // places and landmarks, not things a photo shows: "photos from tokyo" is a place search.
+                for (String w : e.getValue().split("\\s+")) if (!w.isEmpty() && !Character.isUpperCase(w.charAt(0))) v.add(w.toLowerCase(Locale.ROOT));
             }
             for (String l : ai.ainetwork.aindrive.clip.SceneLabels.VOCAB) for (String w : l.split("\\s+")) v.add(w);
             v.removeAll(java.util.Arrays.asList("a", "an", "the", "of", "in", "at", "and", "on", "with"));
