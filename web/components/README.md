@@ -23,6 +23,10 @@ Convention: `X.tsx` = stateful shell (owns state/effects/actions); `X-parts.tsx`
 = pure presentational render fns receiving data+handlers; `X-utils.ts` = pure
 helpers. Shells lazy-load heavy children via `next/dynamic`.
 
+Landing:
+- `landing` — the signed-out home (`app/page.tsx`): hero, then the four ways in
+  (Web / Mac / Android / Terminal) as tabs deep-linked by `#web|#mac|#android|#terminal`.
+
 Browser shell:
 - `drive-shell(.tsx/-parts)` — file browser: sidebar, header/breadcrumbs,
   grid+list, selection, sort/search, showcase section. Its location (listed
