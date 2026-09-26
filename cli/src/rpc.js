@@ -185,6 +185,38 @@ async function loadSharp() {
   return _sharp;
 }
 
+/**
+ * Where `agent-ask` is answered when this agent runs inside the Mac app: the app's on-device agent,
+ * reached over the utility process's parent port (desktop/src/main.js). Null = the CLI's own LLM agent.
+ * @type {null | ((q: { root: string, query: string, agentId: string }) => Promise<{ answer: string, sources: unknown[], action?: unknown }>)}
+ */
+let askBridge = null;
+export function setAskBridge(fn) { askBridge = fn; }
+
+/**
+ * The parent-port bridge itself: one message out, one reply back by id, a timeout so a busy
+ * app never wedges the socket. Installed by the entry point when the app sets AINDRIVE_ASK_VIA_PARENT.
+ */
+export function parentPortAskBridge(port, timeoutMs = 60_000) {
+  const pending = new Map();
+  let seq = 0;
+  port.on("message", (ev) => {
+    const m = ev?.data ?? ev;
+    const p = m?.type === "agent-ask" ? pending.get(m.id) : null;
+    if (!p) return;
+    pending.delete(m.id);
+    clearTimeout(p.timer);
+    if (m.error) p.reject(new Error(String(m.error))); else p.resolve(m.result);
+  });
+  port.start?.();
+  return ({ root, query, agentId }) => new Promise((resolve, reject) => {
+    const id = ++seq;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error("the Mac's agent did not answer in time")); }, timeoutMs);
+    pending.set(id, { resolve, reject, timer });
+    port.postMessage({ type: "agent-ask", id, root, query, agentId });
+  });
+}
+
 export async function handleRpc(params, root) {
   if (!params || !RPC_METHODS.has(params.method)) throw new Error("unknown method");
 
@@ -343,7 +375,9 @@ export async function handleRpc(params, root) {
       // llm.apiKey stays on the owner's machine.
       const agentId = String(params.agentId || "");
       const query = String(params.query || "");
-      const result = await runAgentAsk({ root, agentId, query });
+      // Inside the Mac app the folder's questions go to its on-device agent (no API key needed);
+      // the plain CLI keeps the LLM agent in .aindrive/agents.
+      const result = askBridge ? await askBridge({ root, query, agentId }) : await runAgentAsk({ root, agentId, query });
       return { method: "agent-ask", ...result };
     }
   }

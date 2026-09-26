@@ -1655,6 +1655,8 @@ function bindLogin() {
 function homeScreen(): string {
   const running = status.drives.filter((d) => d.running && !d.source).length;
   const anyPaired = state.shares.length > 0;
+  // "Agent can read" (call recordings, camera roll) is not gated on a shared folder: the agent reads
+  // those sources on their own, and hiding the section made the Allow buttons vanish after a reinstall.
   const folders = state.shares.map(folderCard).join("");
   const empty = `
     <div class="card empty">
@@ -1687,7 +1689,7 @@ function homeScreen(): string {
       <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; ${ON_MAC ? "the menu-bar icon shows it, and Quit is the off switch" : "the notification is the off switch"}.</p>`
       : empty}
 
-    ${anyPaired && !ON_MAC ? sourcesSection() : ""}
+    ${!ON_MAC ? sourcesSection() : ""}
 
     ${others.length ? `
       <div class="section"><h2>My drives on other devices</h2><button class="link" id="refresh-remotes">${icon("refresh", 16)} Refresh</button></div>
@@ -2031,7 +2033,7 @@ function searchSheet(): string {
     : `<div class="card" style="margin:0 0 12px;padding:12px 14px">
         <b style="font-size:14px">Recognise what's inside</b>
         <p class="note" style="margin:4px 0 10px">${ON_MAC
-          ? `Find photos by what they show — "tree photos", "receipts" — on this Mac, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (the phone's photo model).`
+          ? `Find photos by what they show — "tree photos", "receipts" — and understand questions the rules can't, on this Mac, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (the phone's photo model and a small language model).`
           : `Find photos by what they show, recordings by what was said, and get real summaries in the call report — all on this phone, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (photo + speech models, and a small language model for summaries).`}</p>
         ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
         <button class="btn small" id="ensure-models">Download models</button>
@@ -2155,7 +2157,7 @@ function searchSheet(): string {
 /** Top-bar model switch: what's answering now, the agents to switch to, and "paste an A2A URL" to add one. */
 function modelDrawer(): string {
   const m = status.models;
-  const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes summaries and chats" };
+  const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes summaries and chats; also reads unclear questions" };
   const size = (b: number) => (b / 1e6) >= 1000 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
   const local = `<div class="card" style="padding:6px 16px;margin-bottom:12px">
         <div class="row model"><span class="k">${icon("cpu", 16)}</span><span class="v" style="text-align:left;flex:1;margin-left:12px"><b>aindrive-on-device</b><br><span class="hint">Your files, on this ${DEVICE} — nothing is sent to a cloud model</span></span></div>

@@ -102,7 +102,8 @@ public final class AskRunner {
      * before fanning a question out to every folder and device.
      */
     public @Nullable JSONObject route(String question, @Nullable JSONObject context) throws Exception {
-        Router.Turn t = Router.understand(parser, question, System.currentTimeMillis(), context);
+        long now = System.currentTimeMillis();
+        Router.Turn t = maybeUnderstand(Router.understand(parser, question, now, context), question, now, context);
         if (t.social) {
             String said = chatReply(question);
             if (said != null) return replyOf(t).put("answer", said);
@@ -110,11 +111,101 @@ public final class AskRunner {
         return replyOf(t);
     }
 
+    // ------------------------------------------------------------ understanding (the on-device model)
+
+    private @Nullable Supplier<Understander.Model> understandModel;
+    private @Nullable UnderstandGate gate;
+    private long understandBudgetMs = Understander.BUDGET_MS;
+    /** How long a resident model is kept after an understanding call (the Mac does the same). */
+    public static final long UNDERSTAND_IDLE_MS = 5 * 60_000;
+    /** One model per service, so one worker and one idle timer for every drive's runner. */
+    private static final java.util.concurrent.ExecutorService UNDERSTAND_POOL = java.util.concurrent.Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "understand"); t.setDaemon(true); return t; });
+    private static final java.util.concurrent.ScheduledExecutorService IDLE = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "understand-idle"); t.setDaemon(true); return t; });
+    private static final java.util.concurrent.atomic.AtomicBoolean UNDERSTANDING = new java.util.concurrent.atomic.AtomicBoolean();
+    private static @Nullable java.util.concurrent.ScheduledFuture<?> idleRelease;
+
+    /**
+     * Turn on the model for unsure turns. {@code model} loads it (null when not downloaded);
+     * {@code gate} remembers whether this device is fast enough; the budget is the most a person
+     * waits, load included.
+     */
+    public AskRunner withUnderstanding(Supplier<Understander.Model> model, UnderstandGate gate, long budgetMs) {
+        understandModel = model; this.gate = gate; understandBudgetMs = budgetMs; return this;
+    }
+
+    /**
+     * The rules' turn, or the on-device model's reading of it when the rules were unsure
+     * ({@link UnderstandTrigger}), the model is downloaded and this device has not proved too slow
+     * ({@link UnderstandGate}). Without a model this returns {@code rules} untouched.
+     *
+     * The clock starts BEFORE the load: a person never waits longer than the budget, load
+     * included. Past it the rules' answer goes out and the call finishes in the background — its
+     * time is what the gate records, and the model then stays resident for
+     * {@link #UNDERSTAND_IDLE_MS} so a fast device does not pay the load on every turn.
+     */
+    /**
+     * Model-assisted understanding is OFF by default: the owner turned it off on 2026-09-27 ("답변 너무
+     * 느리다 예전방식으로 바꿔") — on the phones we have, Gemma takes 13–17 s a call, so every unsure turn
+     * paid a load and a timeout for nothing. Flip only when a device passes the speed gate by a wide margin.
+     */
+    public static volatile boolean MODEL_UNDERSTANDING = false;
+
+    private Router.Turn maybeUnderstand(Router.Turn rules, String question, long nowMs, @Nullable JSONObject context) {
+        if (!MODEL_UNDERSTANDING) return rules;
+        if (understandModel == null || gate == null || !gate.allowed()) return rules;
+        if (!UnderstandTrigger.unsure(rules, rules.query != null ? rules.query : rules.parsed)) return rules;
+        if (!UNDERSTANDING.compareAndSet(false, true)) return rules;   // a previous turn's call is still running: one at a time
+        final long t0 = System.currentTimeMillis();
+        java.util.concurrent.Future<Router.Turn> f = UNDERSTAND_POOL.submit(() -> {
+            try {
+                cancelIdleRelease();
+                Understander.Model m = understandModel.get();
+                if (m == null) return null;
+                long t1 = System.currentTimeMillis();
+                Router.Turn t = new Understander(geo, m).understandNow(question, nowMs, context, rules);
+                long call = System.currentTimeMillis() - t1;
+                gate.record(call, understandBudgetMs);
+                android.util.Log.i("AindriveAgent", "understand load=" + (t1 - t0) + "ms call=" + call + "ms" + (call > understandBudgetMs ? " (too slow: model off for understanding)" : "")
+                        + " rules=" + rules.route + "/" + rules.intent + " model=" + (t == null ? "unusable" : t.route + "/" + t.intent + (t.query == null ? "" : " " + t.query)));
+                return t;
+            } finally {
+                UNDERSTANDING.set(false);
+                scheduleRelease();
+            }
+        });
+        try {
+            Router.Turn t = f.get(understandBudgetMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return t == null ? rules : t;
+        } catch (java.util.concurrent.TimeoutException e) {
+            android.util.Log.i("AindriveAgent", "understand budget " + understandBudgetMs + "ms passed; rules' answer used (the call finishes in the background)");
+            return rules;
+        } catch (Exception e) {
+            return rules;
+        }
+    }
+
+    private void scheduleRelease() {
+        if (releaseSummarizer == null) return;
+        synchronized (IDLE) {
+            cancelIdleRelease();
+            idleRelease = IDLE.schedule(() -> { if (!UNDERSTANDING.get()) releaseSummarizer.run(); }, UNDERSTAND_IDLE_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private static void cancelIdleRelease() {
+        synchronized (IDLE) { if (idleRelease != null) { idleRelease.cancel(false); idleRelease = null; } }
+    }
+
     /** Chit-chat answered by the on-device LLM when it's there (null → the template reply). */
     private @Nullable String chatReply(String question) {
         if (summarizer == null) return null;
+        // The same speed gate as understanding: on a phone where the model takes 15+ s a call, a greeting
+        // must not load it and make the person wait — the template reply is instant and fine.
+        if (gate != null && !gate.allowed()) return null;
         ai.ainetwork.aindrive.llm.Summarizer llm = null;
+        final long t0 = System.currentTimeMillis();
         try {
+            cancelIdleRelease();   // a resident model must not be freed under this generation
             llm = summarizer.get();
             if (llm == null) return null;
             String out = llm.generate(
@@ -123,6 +214,7 @@ public final class AskRunner {
                     + "one or two short sentences, in the user's language. Never pretend to be human or to do things you can't. Only when it fits, "
                     + "suggest one thing you could find for them.",
                     question, "chat");
+            if (gate != null) gate.record(System.currentTimeMillis() - t0, understandBudgetMs > 0 ? understandBudgetMs : 4000);
             return out == null ? null : out.trim();
         } catch (RuntimeException e) {
             return null;
@@ -158,7 +250,10 @@ public final class AskRunner {
      */
     public JSONObject ask(String question, @Nullable JSONObject context, AskScope scope) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
-        Router.Turn turn = Router.understand(parser, question, System.currentTimeMillis(), context);
+        long now = System.currentTimeMillis();
+        Router.Turn turn = Router.understand(parser, question, now, context);
+        // Read-only (anyone the server lets ask): the rules only — the model is not loaded for them, as for small talk.
+        if (!scope.readOnly) turn = maybeUnderstand(turn, question, now, context);
         if (turn.social && !scope.readOnly) {
             String said = chatReply(question);
             if (said != null) return replyOf(turn).put("answer", said);
@@ -182,6 +277,7 @@ public final class AskRunner {
                     .put("query", "calls").put("context", context == null ? JSONObject.NULL : context);
         }
         if (q.calls) {
+            cancelIdleRelease();   // the report loads the same model; a pending idle release must not free it mid-summary
             CallReport report = new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).withOpener(callOpener);
             // The call-recordings folders are other folders on the phone: over the socket their paths would be read as this drive's.
             if (scope.remote) report.onlyOwnSources();

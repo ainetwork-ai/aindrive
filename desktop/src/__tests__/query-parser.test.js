@@ -202,3 +202,17 @@ test("\"what's in this folder?\" is where to look, not a task; only \"into a fol
   assert.equal(parse("photos in this folder").kind, "photo");
   for (const q of ["collect them into a folder", "put the Tokyo photos in a folder", "make an album of the Paris photos", "폴더로 모아줘"]) assert.equal(parse(q).collect, true, q);
 });
+
+test("dateWindow: a fragment of time words, by parse()'s own rules — no places, no side effects on parse()", () => {
+  const w = (s) => { const r = QueryParser.dateWindow(s, NOW); return r == null ? null : [new Date(r.dateFrom), new Date(r.dateTo)].map((d) => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`); };
+  assert.deepEqual(w("last spring"), ["2025-3-1", "2025-6-1"]);
+  assert.deepEqual(w("이번 여름"), ["2026-6-1", "2026-9-1"]);
+  assert.deepEqual(w("3 days ago"), ["2026-9-20", "2026-9-21"]);
+  assert.deepEqual(w("2024년 5월"), ["2024-5-1", "2024-6-1"]);
+  assert.equal(w("Paris"), null);
+  assert.equal(w(null), null);
+  assert.equal(w(""), null);
+  // the same words inside a question parse the same
+  const q = parse("photos from last spring");
+  assert.deepEqual([q.dateFrom, q.dateTo], [QueryParser.dateWindow("last spring", NOW).dateFrom, QueryParser.dateWindow("last spring", NOW).dateTo]);
+});

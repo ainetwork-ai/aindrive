@@ -575,6 +575,20 @@ export class QueryParser {
     return q;
   }
 
+  /**
+   * The date window a fragment of time words means ("last spring", "지난 여름", "3 days ago", "2024년 5월"),
+   * resolved against `nowMs` by the same rules `parse` applies — for a model that hands the words back
+   * to code (llm.js). Places are not looked up, so "spring" is never Spring, TX. Null when no date.
+   * @param {string} fragment
+   * @param {number} nowMs
+   * @returns {{ dateFrom: number, dateTo: number } | null}
+   */
+  static dateWindow(fragment, nowMs) {
+    if (fragment == null || javaTrim(String(fragment)) === "") return null;
+    const q = NO_PLACES.parseOne(String(fragment), nowMs);
+    return q.dateFrom == null ? null : { dateFrom: q.dateFrom, dateTo: q.dateTo };
+  }
+
   /** @private */
   placeOf(raw) {
     const p = this.geo.byPlaceName(raw);
@@ -582,4 +596,39 @@ export class QueryParser {
     const stripped = stripPlaceParticles(raw);
     return stripped === raw ? null : this.geo.byPlaceName(stripped);
   }
+}
+
+/** A parser without a gazetteer: only dates and kinds are recognised. */
+const NO_PLACES = new QueryParser({ byPlaceName: () => null });
+
+/** The message asks to collect ("모아서", "into a folder", "gather"): a model may claim `collect` only then. */
+export function asksToCollect(question) {
+  return tokenize(normalise(String(question ?? ""))).some((raw, i, tokens) => {
+    const lower = stripParticles(raw).toLowerCase();
+    return !pointedAt(tokens, i) && (startsWithAny(raw.toLowerCase(), COLLECT_WORDS) || startsWithAny(lower, COLLECT_WORDS));
+  });
+}
+
+/** Follow-up cues a model tends to copy into `content` ("switch to Turkey", "narrow it down", "limit it"). */
+const FOLLOWUP_WORDS = new Set(["switch", "change", "narrow", "limit", "rest", "same", "ones", "refine", "restrict", "widen", "keep"]);
+
+/**
+ * The words of a model's `content` as the parser would keep them: stop words, kind words and date words
+ * dropped, the rest kept as written. Never a verb like "show" (STOP) — the prompt forbids them, this enforces it.
+ * @param {string[]} phrases
+ * @returns {string[]}
+ */
+export function contentKeywords(phrases) {
+  const out = [];
+  for (const phrase of phrases ?? []) {
+    for (const raw of tokenize(String(phrase ?? ""))) {
+      const t = stripParticles(raw), lower = t.toLowerCase();
+      if (t === "" || STOP.has(lower) || STOP.has(raw.toLowerCase()) || KIND_WORDS.has(lower) || DATE_WORDS.has(lower) || TRIP_WORDS.has(lower)) continue;
+      if (startsWithAny(lower, TASK_FILLER) || RECENT_N_WORDS.has(lower) || SIZE_WORDS.has(lower)) continue;
+      if ([MOVE_WORDS, DELETE_WORDS, COLLECT_WORDS, SHARE_WORDS, COUNT_WORDS, OLDEST_WORDS].some((set) => startsWithAny(lower, set))) continue;
+      if (FOLLOWUP_WORDS.has(lower) || RECORDING_WORDS.has(lower) || KO_PARTICLES.includes(lower)) continue;
+      if (!out.includes(t)) out.push(t);
+    }
+  }
+  return out;
 }

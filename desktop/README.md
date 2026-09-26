@@ -14,7 +14,8 @@ Electron utility process, kept running from the menu bar and restored at login.
 | `src/agents.js` | one CLI process per folder (spawner injected); state from its output; restarts, backoff, clean stop. No Electron imports — unit-tested |
 | `src/shell/mac-bridge.js` | loaded first in the shell: Capacitor plugin headers + `nativePromise`/`nativeCallback` (so `AindriveAgent`, `CapacitorCookies` are "native"), and `fetch` → main process with the session cookie (CapacitorHttp's job) |
 | `src/preload.cjs` | the window's only bridge: `native:call`, `native:event`, `native:fetch` |
-| `src/agent/` | **aindrive-on-device** on the Mac: the phone's query understanding ported by hand from `mobile/android/.../agent/` (`router.js`, `query-parser.js`, `social-reply.js`, `geo-lookup.js`; `java-regex.js` pins Java regex semantics), a per-folder file index with EXIF date + GPS → city (`file-index.js`, `indexer.js`), answers and tasks (`ask-runner.js`), and the multi-folder merge (`device-agent.js`). **Photos by what they show**: the phone's MobileCLIP2-S2 on `onnxruntime-node` (`clip.js`, `clip-tokenizer.js`, `scene-labels.js` — same preprocessing, tokenizer ids and zero-shot scene match as the phone; `model-store.js` downloads the ~400 MB model on "Download models", sha256-checked; vocab/merges/manifest copied into `assets/clip/`). Recognition runs after the file pass, in the background (`indexer.js` `recognise`). Parity with the phone is tested on the same dialogue benchmark and SGD / Persona-chat guards (`src/__tests__/`) |
+| `src/agent/` | **aindrive-on-device** on the Mac: the phone's query understanding ported by hand from `mobile/android/.../agent/` (`router.js`, `query-parser.js`, `social-reply.js`, `geo-lookup.js`; `java-regex.js` pins Java regex semantics), a per-folder file index with EXIF date + GPS → city (`file-index.js`, `indexer.js`), answers and tasks (`ask-runner.js`), and the multi-folder merge (`device-agent.js`). **Photos by what they show**: the phone's MobileCLIP2-S2 on `onnxruntime-node` (`clip.js`, `clip-tokenizer.js`, `scene-labels.js` — same preprocessing, tokenizer ids and zero-shot scene match as the phone; the ~400 MB model is downloaded with the LLM store (`llm.js` `createModelStore`) on "Download models", sha256-checked; vocab/merges/manifest copied into `assets/clip/`). Recognition runs after the file pass, in the background (`indexer.js` `recognise`). Parity with the phone is tested on the same dialogue benchmark and SGD / Persona-chat guards (`src/__tests__/`) |
+| `src/agent/unsure.js`, `llm.js`, `assets/llm/` | the **local LLM** that reads a turn the rules were unsure about (`docs/superpowers/specs/2026-09-27-llm-understanding-design.md`): `unsure.js` is the trigger (pure), `llm.js` the model store (manifest in `assets/llm/<id>.json`, phone's shape; downloaded to `<userData>/models/`, sha256-checked) and the `node-llama-cpp` run (JSON-schema grammar, 2 s budget, unloaded after 5 idle min). `mac-agent.js` shows it as `status.models` / `ensureModels()` |
 | `src/store.js` | `folders.json` in the app's data dir: drives served here, folders picked here |
 | `scripts/prepare-shell.mjs`, `prepare-cli.mjs` | build `../mobile` into `shell/` (+ bridge, CSP) and `../cli` into `cli/` |
 | `scripts/build-mac.mjs`, `after-pack.cjs`, `dmg/` | `.app` + `.dmg` per arch from Linux or macOS; fuses off; pinned downloads |
@@ -44,14 +45,22 @@ Releases: `docs/RELEASING.md` (desktop track; tag `desktop-vX.Y.Z` → `.github/
   folder and the agent side by side (`mobile/src/main.ts` `renderScreens`,
   `#app.wide` in `ui.css`) — the phone's screens as panes, not a second UI.
 - **Not on the Mac (yet):** call-log / camera-roll agent sources, speech
-  transcripts and the on-device LLM, and Google's account picker (sign-in goes
-  through the browser). Photo recognition needs Apple silicon: `onnxruntime-node`
-  ships no Intel-Mac build, so the x64 app leaves it out (`after-pack.cjs`).
-- **Photos are decoded by QuickLook** (HEIC, RAW…). Its thumbnail's 1× bitmap is
-  the photo squeezed into the requested square — read pixels from its PNG
-  (`mac-agent.js` `loadImage`), or CLIP sees a distorted photo.
-- **Release ONNX sessions before quitting** (`mac.shutdown()` in `before-quit`):
-  live sessions abort the process on exit (`recursive_mutex lock failed`).
+  transcripts, and Google's account picker (sign-in goes through the browser).
+- **Photo recognition needs Apple silicon:** `onnxruntime-node` ships no
+  Intel-Mac build, so the x64 app leaves it out (`after-pack.cjs`) and photos are
+  matched by name, date and place there. Photos are decoded by QuickLook (HEIC,
+  RAW…); its thumbnail's 1× bitmap is the photo squeezed into the requested
+  square — read pixels from its PNG (`mac-agent.js` `loadImage`), or CLIP sees a
+  distorted photo. Release the ONNX sessions before quitting (`mac.shutdown()` in
+  `before-quit`): live sessions abort the process on exit.
+- **The LLM is opt-in and never bundled.** The `.app` ships `node-llama-cpp` and
+  the arch's `@node-llama-cpp/mac-*` binary (N-API, so no Electron ABI pin;
+  `build-mac.mjs` fetches the other arch's from npm against a pinned hash and
+  leaves the wrong one out; `node-llama-cpp/llama/` — the source bundle — is
+  excluded, the app never compiles). The 2 GB model comes from the shell's
+  "Download models" button → `ensureModels()`; without it every turn is
+  rules-only and byte-identical to before (`llm.test.js`, `dialogue-dataset.test.js`).
+  `build: "never"` in `llm.js` keeps it that way at runtime.
 - **Handoff links** (files handed to aindrive-cloud): `registerHandoffs` writes
   random keys to `~/.aindrive/handoffs.json` (0600); the bundled CLI serves only
   those keys over `handoff-read` (`cli/src/handoffs.js`).
