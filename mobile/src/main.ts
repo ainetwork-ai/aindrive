@@ -455,11 +455,16 @@ function bindSheet() {
 /** The drive id a share or remote drive is known by on the server. */
 function driveIdOf(share?: SharedFolder, remote?: RemoteDrive): string | undefined { return remote?.id ?? share?.drive?.driveId; }
 
+/** The drive's own name (its folder on this phone, or the remote drive), not a file inside it. */
+function driveName(driveId: string): string | undefined {
+  return state.shares.find((s) => s.drive?.driveId === driveId)?.folder.label ?? remotes.find((d) => d.id === driveId)?.name;
+}
+
 function openShareFor(driveId: string | undefined, path: string, name: string, sell = false) {
   if (!driveId) { notify("Turn the folder on first so it has a drive to share.", true); return; }
   openSheet((ctx) => new ShareSheet(ctx, driveId, path, name,
     // Sell without a payout wallet → the payout wallet screen; once saved, back to Sell for this folder.
-    (p) => openManage(driveId, name, { payoutFor: p, afterPayout: () => openShareFor(driveId, path, name, true) }), sell));
+    (p) => openManage(driveId, driveName(driveId) ?? name, { payoutFor: p, afterPayout: () => openShareFor(driveId, path, name, true) }), sell));
 }
 
 function openManage(driveId: string | undefined, name: string, opts?: { payoutFor?: string; afterPayout?: () => void }) {

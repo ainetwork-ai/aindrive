@@ -165,3 +165,9 @@ export function loginWallets(accountId: string): string[] {
   return (db.prepare("SELECT wallet_address FROM account_wallets WHERE account_id = ? AND login_enabled = 1 ORDER BY linked_at")
     .all(accountId) as { wallet_address: string }[]).map((r) => r.wallet_address);
 }
+
+/** At sign-in: the owner's sign-in wallet becomes the payout wallet of their drives that have none. */
+export function adoptSignInPayoutWallet(ownerId: string): number {
+  const [w] = loginWallets(ownerId);
+  return w ? adoptOwnerPayoutWallet(ownerId, w) : 0;
+}

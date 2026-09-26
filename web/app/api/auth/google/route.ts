@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { sign, setCookie } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { googleClientIds, verifyGoogleIdToken, resolveAccountForGoogle } from "@/lib/google-auth";
+import { adoptSignInPayoutWallet } from "@/lib/drives";
 
 const Body = z.object({ idToken: z.string().min(20).max(8192) });
 
@@ -33,6 +34,7 @@ export async function POST(req: Request) {
   }
   const { id, created } = resolveAccountForGoogle(identity);
   const user = db.prepare("SELECT id, email, name FROM users WHERE id = ?").get(id) as { id: string; email: string; name: string };
+  adoptSignInPayoutWallet(id);
   await setCookie(id);
   return NextResponse.json({ token: await sign(id), user, created });
 }

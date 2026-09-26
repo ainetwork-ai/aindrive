@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { sign } from "@/lib/session";
+import { adoptSignInPayoutWallet } from "@/lib/drives";
 
 const Body = z.object({
   linkId: z.string().min(8).max(64),
@@ -51,6 +52,7 @@ export async function POST(req: Request) {
     .get(row.user_id) as { id: string; email: string; name: string } | undefined;
   if (!user) return NextResponse.json({ error: "user not found" }, { status: 404 });
 
+  adoptSignInPayoutWallet(user.id);
   const token = await sign(user.id);
   return NextResponse.json({ status: "approved", token, user });
 }

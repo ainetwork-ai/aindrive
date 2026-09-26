@@ -166,13 +166,23 @@ export class ShareSheet implements Sheet {
       let r;
       try { r = await this.ctx.web.createShare(this.driveId, { path: this.path, role: "viewer", price_usdc: price, currency: val(root, "sh-cur"), listed }); }
       catch (e) {
-        // No payout wallet yet: take the owner to set one (web/lib/share-edit.ts "set a payout wallet … before selling").
-        if (this.onNeedPayout && /payout wallet/i.test(msgOf(e))) {
+        // No payout wallet yet (web/lib/share-edit.ts "set a payout wallet … before selling").
+        // The account's sign-in wallet is the payout wallet: set it on the drive and sell again.
+        if (/payout wallet/i.test(msgOf(e))) {
+          const me = await this.ctx.web.me().catch(() => null);
+          if (me?.wallet) {
+            await this.ctx.web.setPayout(this.driveId, "", me.wallet);
+            this.ctx.notify(`Sales go to your sign-in wallet ${me.wallet.slice(0, 6)}…${me.wallet.slice(-4)}`);
+            r = await this.ctx.web.createShare(this.driveId, { path: this.path, role: "viewer", price_usdc: price, currency: val(root, "sh-cur"), listed });
+          }
+        }
+        // No sign-in wallet either: take the owner to set a payout wallet.
+        if (!r && this.onNeedPayout && /payout wallet/i.test(msgOf(e))) {
           this.ctx.notify("Set a payout wallet first — that's where sale proceeds go.");
           this.onNeedPayout(this.path);
           return;
         }
-        throw e;
+        if (!r) throw e;
       }
       await this.ctx.copy(r.url, "Sale link"); this.ctx.forget("sh-price");
     }));
