@@ -11,6 +11,8 @@
  *   CapacitorHttp     every http(s) fetch leaves from this process with the
  *                     session cookie (shell/mac-bridge.js → native:fetch)
  *   CapacitorCookies  that cookie jar (the default session's)
+ *   Finder            remote drives (other devices', shared with you) mounted
+ *                     as /Volumes/aindrive — webdav.js on loopback, finder.js
  *
  * Drives keep being served with the window closed (menu-bar icon) and come
  * back at login — the phone's foreground service. `aindrive://share` from the
@@ -24,6 +26,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { AgentManager } from "./agents.js";
 import { createMacAgent } from "./mac-agent.js";
 import { createStore } from "./store.js";
+import { createDavServer } from "./webdav.js";
+import { MOUNT_POINT, mountVolume, mountedUrl, serverApi, unmountVolume } from "./finder.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -166,6 +170,68 @@ function flat(h) {
   return out;
 }
 
+// ── remote drives in Finder ────────────────────────────────────────────────
+
+/** The server this app is signed in to: one it paired folders with, else the default — whichever has the session cookie. */
+async function signedInServer() {
+  const s = store.get();
+  const candidates = [...new Set([...(s.drives ?? []).map((d) => d.server), s.server, DEFAULT_SERVER].filter(Boolean))];
+  for (const url of candidates) if ((await session.defaultSession.cookies.get({ url })).length) return url.replace(/\/+$/, "");
+  return null;
+}
+
+let finderServer = null;
+/** A call to the signed-in server with the session's cookies; the response body streams. */
+function serverRequest(method, path, { headers = {}, body, json } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!finderServer) return reject(Object.assign(new Error("not signed in"), { status: 401 }));
+    const req = net.request({ url: finderServer + path, method, redirect: "error", useSessionCookies: true });
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
+    req.on("response", (res) => {
+      const h = {};
+      for (const [k, v] of Object.entries(res.headers)) h[k.toLowerCase()] = Array.isArray(v) ? v[0] : String(v);
+      resolve({ status: res.statusCode, headers: h, body: res });
+    });
+    req.on("error", reject);
+    (async () => {
+      if (json !== undefined) { req.setHeader("content-type", "application/json"); req.end(JSON.stringify(json)); return; }
+      if (!body) { req.end(); return; }
+      if (Buffer.isBuffer(body)) { req.end(body); return; }
+      req.chunkedEncoding = true;
+      for await (const c of body) req.write(Buffer.from(c));
+      req.end();
+    })().catch((e) => { req.abort(); reject(e); });
+  });
+}
+
+let dav = null;
+let davUrl = null;
+let finderMounted = false;
+/** Mount the remote drives when signed in and there are any; unmount when turned off. Idempotent — runs every minute. */
+async function syncFinder() {
+  try {
+    if (store.get().finder === false) { await unmountVolume(); finderMounted = false; return; }
+    finderServer = await signedInServer();
+    if (!finderServer) return;
+    if (!dav) {
+      dav = createDavServer({
+        api: serverApi(serverRequest),
+        // this Mac's own folders are in Finder already, as themselves
+        excludeIds: () => new Set((store.get().drives ?? []).map((d) => d.driveId)),
+        log: (m) => console.warn(m),
+      });
+      davUrl = await dav.listen();
+    }
+    const own = new Set((store.get().drives ?? []).map((d) => d.driveId));
+    const remote = (await serverApi(serverRequest).drives()).filter((d) => !own.has(d.id));
+    if (!remote.length) return;
+    dav.refresh();
+    finderMounted = await mountVolume(davUrl);
+  } catch (e) {
+    console.warn(`finder: ${e?.message ?? e}`);   // signed out (401), offline: try again next time
+  } finally { rebuildTrayMenu(); }
+}
+
 // ── window, menu bar ───────────────────────────────────────────────────────
 
 function showWindow() {
@@ -232,6 +298,11 @@ function rebuildTrayMenu() {
         })
       : [{ label: "No folders shared yet", enabled: false }]),
     { type: "separator" },
+    { label: "Open remote drives in Finder", enabled: finderMounted, click: () => void shell.openPath(MOUNT_POINT) },
+    {
+      label: "Remote drives in Finder", type: "checkbox", checked: store.get().finder !== false,
+      click: (item) => { store.update((s) => ({ ...s, finder: item.checked })); void syncFinder(); },
+    },
     { label: "Open aindrive on the web", click: () => shell.openExternal(DEFAULT_SERVER) },
     { type: "separator" },
     { label: "Quit aindrive (stops sharing)", click: () => app.quit() },
@@ -271,6 +342,9 @@ app.whenReady().then(() => {
     store.update((s) => ({ ...s, loginItemSet: true }));
   }
   rebuildTrayMenu();
+  // Remote drives in Finder: once signed in (the shell may still be signing in), then every minute.
+  setTimeout(() => void syncFinder(), 3_000);
+  setInterval(() => void syncFinder(), 60_000);
   // Started at login: stay in the menu bar; opened by hand: show the window.
   // macOS 13+ (SMAppService) no longer reports "opened at login", so a launch
   // in the first minutes after boot, with folders to serve, counts as one.
@@ -287,6 +361,8 @@ app.on("before-quit", async (e) => {
   if (quitting) return;
   quitting = true;
   e.preventDefault();
+  // the volume's server lives in this process: leave no dead mount behind
+  if (dav && (await mountedUrl()) === davUrl) await unmountVolume();
   await agents.stopAll();
   app.quit();
 });
