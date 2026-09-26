@@ -25,7 +25,7 @@ import java.util.Set;
  * ask for. Rows are keyed by the SAF document id, which survives renames, so
  * a moved file is not re-read.
  */
-public final class FileIndex extends SQLiteOpenHelper {
+public class FileIndex extends SQLiteOpenHelper {
     private static final int SCHEMA = 3;
 
     /** Coarse file categories a person names in a question ("screenshots", "PDF", "영상"). */
@@ -68,6 +68,14 @@ public final class FileIndex extends SQLiteOpenHelper {
         super(ctx, dbPath(ctx, driveId), null, SCHEMA);
     }
 
+    /**
+     * Tests only: no database file behind it. SQLite isn't on the JVM, so a test subclass
+     * overrides what the agent reads (count, query) to run AskRunner end to end.
+     */
+    protected FileIndex() {
+        super(null, null, null, SCHEMA);
+    }
+
     private static String dbPath(Context ctx, String driveId) {
         File dir = new File(ctx.getFilesDir(), "index");
         if (!dir.exists()) dir.mkdirs();
@@ -83,6 +91,23 @@ public final class FileIndex extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX files_when ON files(when_ms)");
         db.execSQL("CREATE INDEX files_kind ON files(kind)");
         db.execSQL("CREATE INDEX files_country ON files(country)");
+        ensurePathIndex(db);
+    }
+
+    @Override
+    public void onOpen(SQLiteDatabase db) {
+        // Only a speed-up: a database that can't take it (full disk) still opens and answers.
+        if (!db.isReadOnly()) { try { ensurePathIndex(db); } catch (RuntimeException ignored) { } }
+    }
+
+    /**
+     * An index on `path`: the incremental updates after an upload, a rename or a delete look rows
+     * up by path (a folder rename re-keys every file in it), which is a full scan without one.
+     * Added with IF NOT EXISTS on open rather than by a schema bump, because onUpgrade rebuilds
+     * the table and would throw away hours of photo vectors and transcripts.
+     */
+    private static void ensurePathIndex(SQLiteDatabase db) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS files_path ON files(path)");
     }
 
     @Override

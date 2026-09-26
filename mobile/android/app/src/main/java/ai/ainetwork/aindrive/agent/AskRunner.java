@@ -178,14 +178,20 @@ public final class AskRunner {
             try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).withOpener(callOpener).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
         }
+        // The whole drive's count, on purpose: "the index is empty" means this drive was never
+        // indexed. A root with nothing in it is answered by the search below ("nothing matched").
         int indexed = index.count();
         JSONObject out = new JSONObject().put("query", q.toString()).put("context", q.toJson()).put("followUp", q.followUp);
 
         if (indexed == 0) {
-            return out.put("answer", q.korean
+            out.put("answer", (q.korean
                     ? "아직 인덱스가 비어 있어요. 앱에서 'Index files'를 눌러 주세요."
                     : "The index is empty — tap 'Index files' in the app first.")
+                    + (blocked != null ? AskScope.onlyLooked(q.korean) : ""))
                     .put("sources", new JSONArray());
+            // Read-only: an asked-for act is reported skipped here too, never silently dropped.
+            if (blocked != null) out.put("action", blocked);
+            return out;
         }
 
         List<String> relaxed = new ArrayList<>();

@@ -76,10 +76,15 @@ public final class AskScope {
         return String.join("/", segs);
     }
 
+    /** A drive path as the server spells it: NFC, no leading or trailing "/". */
+    public static String canonical(String path) {
+        return Normalizer.normalize(stripSlashes(path), Normalizer.Form.NFC);
+    }
+
     /** True when `path` is the root itself or below it (compared in NFC: a Mac-made name may be NFD on the phone). */
     public boolean inside(@Nullable String path) {
         if (path == null) return false;
-        String p = Normalizer.normalize(stripSlashes(path), Normalizer.Form.NFC);
+        String p = canonical(path);
         if (isSystem(p)) return false;
         if (root.isEmpty()) return true;
         return p.equals(root) || p.startsWith(root + "/");
@@ -138,6 +143,11 @@ public final class AskScope {
      * filters by root, so normally nothing is dropped; if something is, the free-text answer may
      * describe dropped files and is replaced by a neutral count of what was kept, and a count
      * action is corrected to match.
+     *
+     * Every path that leaves is in the server's spelling ({@link #canonical}: NFC, no edge
+     * slashes), so it literally equals the root or starts with root + "/" even for a file a Mac
+     * wrote in NFD. The phone resolves that spelling back to the file (SafFs → ChildNameMatch),
+     * as it does for every path the server sends.
      */
     public JSONObject confine(JSONObject result) throws Exception {
         JSONArray all = result.optJSONArray("sources");
@@ -145,13 +155,17 @@ public final class AskScope {
         JSONArray kept = new JSONArray();
         for (int i = 0; i < all.length(); i++) {
             JSONObject s = all.optJSONObject(i);
-            if (s != null && inside(s.optString("path", null))) kept.put(s);
+            String path = s == null ? null : s.optString("path", null);
+            if (inside(path)) kept.put(s.put("path", canonical(path)));
         }
         JSONObject action = result.optJSONObject("action");
         JSONArray files = action == null ? null : action.optJSONArray("files");
         if (files != null) {
             JSONArray keptFiles = new JSONArray();
-            for (int i = 0; i < files.length(); i++) if (inside(files.optString(i, null))) keptFiles.put(files.get(i));
+            for (int i = 0; i < files.length(); i++) {
+                String path = files.optString(i, null);
+                if (inside(path)) keptFiles.put(canonical(path));
+            }
             action.put("files", keptFiles);
         }
         if (kept.length() == all.length()) return result;
