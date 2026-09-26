@@ -25,13 +25,14 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
     return { answer: t.reply, sources: [], query: t.route === "CHAT" ? "chat" : "out", context: t.nextContext ?? null };
   }
 
-  function route(question, context) {
-    return replyOf(router.understand(parser, question, now(), context ?? null));
+  /** @param {import("./router.js").Turn} [turn] the turn already understood (device-agent.js, once per question, maybe by the model) */
+  function route(question, context, turn) {
+    return replyOf(turn ?? router.understand(parser, question, now(), context ?? null));
   }
 
-  async function ask(question, context) {
+  async function ask(question, context, turn) {
     if (!question?.trim()) throw new Error("empty_query");
-    const turn = router.understand(parser, question, now(), context ?? null);
+    turn ??= router.understand(parser, question, now(), context ?? null);
     const routed = replyOf(turn);
     if (routed) return routed;
     const q = turn.query;

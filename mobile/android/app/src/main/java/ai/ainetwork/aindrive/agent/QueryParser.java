@@ -137,9 +137,34 @@ public final class QueryParser {
     /** "recent" = the last N days. */
     public static final int RECENT_DAYS = 30;
 
-    private final GeoLookup geo;
+    private final @Nullable GeoLookup geo;
 
     public QueryParser(GeoLookup geo) { this.geo = geo; }
+
+    /**
+     * The date rules alone, over one fragment ("last spring", "이번 여름", "March 2024"): [from, to)
+     * against {@code nowMs}, or null when the words name no date. For the LLM path (`Understander`):
+     * the model returns the time words as written and THIS resolves them, so "last spring" means the
+     * same whether the rules or the model found it. No gazetteer, so nothing in the fragment is a place.
+     */
+    public static @Nullable long[] dateWindow(@Nullable String fragment, long nowMs) {
+        if (fragment == null || fragment.trim().isEmpty()) return null;
+        SearchQuery q = new QueryParser(null).parseOne(fragment, nowMs);
+        return q.dateFrom == null ? null : new long[]{q.dateFrom, q.dateTo == null ? Long.MAX_VALUE : q.dateTo};
+    }
+
+    /**
+     * A word the rules never keep as content — a stop word ("show", "the", "찾아줘"), a kind word, a
+     * folder noun, a date word ("이번", "last"), or (for photos and videos, {@code media}) a trip word: the occasion, not what the
+     * picture shows. For filtering a model's content list the way step 4 filters the rules' own.
+     */
+    public static boolean isStopOrKind(String w, boolean media) {
+        for (String t : new String[]{w.toLowerCase(Locale.ROOT), stripParticles(w.toLowerCase(Locale.ROOT))}) {
+            if (STOP.contains(t) || KIND_WORDS.containsKey(t) || DATE_WORDS.contains(t) || media && TRIP_WORDS.contains(t)) return true;
+            for (String n : PLACE_NOUNS) if (t.equals(n) || t.equals(n + "s")) return true;
+        }
+        return false;
+    }
 
     /** "통화 내역 / call history / who I call most": a report over the call log, not a file search. */
     private static final Pattern CALLS_TASK = Pattern.compile(
@@ -464,6 +489,7 @@ public final class QueryParser {
     // ------------------------------------------------------------ helpers
 
     private @Nullable GeoLookup.Place placeOf(String raw) {
+        if (geo == null) return null;
         GeoLookup.Place p = geo.byPlaceName(raw);
         if (p != null) return p;
         String stripped = stripPlaceParticles(raw);

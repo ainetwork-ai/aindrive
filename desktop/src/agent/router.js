@@ -165,12 +165,22 @@ export function outOfScope(ko, again, weak) {
     : "That's not something I can do. I find and organise the files on this phone — photos, videos, recordings, documents and your call history. Try “photos taken in Tokyo”, “collect this month's food photos and share them”, or “who do I call the most?”.") + hint;
 }
 
+/** The text asks something ("?", or a Korean question ending) — Java's Router.QUESTION. */
+const QUESTION = jre("\\?|(있어|있나|있니|있나요|있을까|없어|없나|뭐야|뭐지|어디|언제|몇)[요]?[.!]*$");
+
 /**
- * @typedef {{ route: string, reply: string | null, query: SearchQuery | null, social: boolean }} Decision
+ * @typedef {{ branch: string, weak: boolean, seen: boolean, question: boolean }} Basis
+ *   Which branch of route() decided, and on what — read by unsure.js, never by the answer:
+ *   branch: smallTalk | closing | greeting | calls | named | followUp | searchBox | out | social;
+ *   weak: a weak kind word was seen ("music", "notes"); seen: a place, date or kind word was recognised;
+ *   question: the text asks something.
+ */
+/**
+ * @typedef {{ route: string, reply: string | null, query: SearchQuery | null, social: boolean, basis: Basis }} Decision
  *   route: a Route value; reply: the canned answer for CHAT/OUT; query: the parsed question for FILES/CALLS;
  *   social: chit-chat that deserves a real reply (an LLM writes one when there is one).
  */
-const decision = (route, reply, query, social = false) => ({ route, reply, query, social });
+const decision = (route, reply, query, social = false, basis = { branch: "", weak: false, seen: false, question: false }) => ({ route, reply, query, social, basis });
 
 /**
  * Route one turn.
@@ -184,15 +194,16 @@ const decision = (route, reply, query, social = false) => ({ route, reply, query
  */
 export function route(parser, question, nowMs, prev, wasOut, wasSocial = false) {
   const t = question == null ? "" : javaTrim(question);
-  if (t === "") return decision(Route.CHAT, greeting(false), null);
+  const on = (branch) => ({ branch, weak: false, seen: false, question: QUESTION.test(t) });
+  if (t === "") return decision(Route.CHAT, greeting(false), null, false, on("greeting"));
   const chat = smallTalk(t);
-  if (chat != null) return decision(Route.CHAT, chat, null);
+  if (chat != null) return decision(Route.CHAT, chat, null, false, on("smallTalk"));
   const ko = hasHangul(t);
-  if (CLOSING.test(t) || onlyWords(t, CLOSING_WORDS, CLOSING_ANCHORS)) return decision(Route.CHAT, ko ? "천만에요!" : "You're welcome!", null);
-  if (onlyWords(t, GREETING_WORDS, GREETING_ANCHORS) || GREET_NAME.test(t)) return decision(Route.CHAT, greeting(ko), null);
+  if (CLOSING.test(t) || onlyWords(t, CLOSING_WORDS, CLOSING_ANCHORS)) return decision(Route.CHAT, ko ? "천만에요!" : "You're welcome!", null, false, on("closing"));
+  if (onlyWords(t, GREETING_WORDS, GREETING_ANCHORS) || GREET_NAME.test(t)) return decision(Route.CHAT, greeting(ko), null, false, on("greeting"));
 
   const q = parser.parse(t, nowMs, prev);
-  if (q.calls) return decision(Route.CALLS, null, q);
+  if (q.calls) return decision(Route.CALLS, null, q, false, on("calls"));
 
   const kinds = kindWords(t);
   let named = false, weak = false;
@@ -221,20 +232,22 @@ export function route(parser, question, nowMs, prev, wasOut, wasSocial = false) 
     || (fileish && (q.city != null || q.country != null || q.dateFrom != null || OPENS_OWNED.test(t)
       || ABOUT.test(t) || (words(t) <= 4 && !SENTENCE.test(t)))));
   if (aboutSelf || (wasSocial && !asks)) weakMeansFiles = false;
-  if (named || (!aboutSelf && !(wasSocial && !asks) && FILE_WORDS.test(t)) || weakMeansFiles) return decision(Route.FILES, null, q);
+  // What the decision below rests on (unsure.js asks a model when it is thin); the decision itself is unchanged.
+  const basis = (branch) => ({ branch, weak, seen: kinds.length > 0 || q.city != null || q.country != null || q.dateFrom != null, question: QUESTION.test(t) });
+  if (named || (!aboutSelf && !(wasSocial && !asks) && FILE_WORDS.test(t)) || weakMeansFiles) return decision(Route.FILES, null, q, false, basis("named"));
   // A follow-up of a file question is short and about the files — not "Me too! I'm sure it will be bright for you."
   if (prev != null && !aboutSelf && (words(t) <= 10 || asks) && (q.followUp || q.isTaskOnly() || (few(q, 2) && q.ignoredWords <= 1 && words(t) <= 7)))
-    return decision(Route.FILES, null, q);
+    return decision(Route.FILES, null, q, false, basis("followUp"));
   // A search-box query opening the conversation: "Paris", "last winter in Tokyo", "dog".
   if (!wasOut && !wasSocial && prev == null && few(q, 1) && q.ignoredWords === 0 && !weak && words(t) <= 5 && !SENTENCE.test(t)
     && (q.keywords.length === 0 ? q.city != null || q.country != null || q.dateFrom != null : isVisual(q.keywords[0])))
-    return decision(Route.FILES, null, q);
+    return decision(Route.FILES, null, q, false, basis("searchBox"));
   // Not about files. A service request (book, weather, a ride…) is out of scope — and so is the rest of that
   // conversation; anything else is people talking, which gets a friendly reply.
   if ((wasOut && !SELF_TALK.test(t)) || (SERVICE.test(t) && !(wasSocial && YOU.test(t)))
     || (!wasSocial && !SOCIAL_Q.test(t) && ((IMPERATIVE.test(t) && !YOU.test(t)) || (FACT_Q.test(t) && !YOU.test(t) && !SELF_TALK.test(t)))))
-    return decision(Route.OUT, outOfScope(ko, wasOut, weak), null);
-  return decision(Route.CHAT, socialReply(t, ko, kinds.length > 0), null, true);
+    return decision(Route.OUT, outOfScope(ko, wasOut, weak), null, false, basis("out"));
+  return decision(Route.CHAT, socialReply(t, ko, kinds.length > 0), null, true, basis("social"));
 }
 
 /** The intent name of a file question, as the dialogue benchmark labels it. */
@@ -248,9 +261,11 @@ export function intentOf(q) {
 }
 
 /**
- * @typedef {{ route: string, intent: string, reply: string | null, query: SearchQuery | null, nextContext: object | null, social: boolean }} Turn
+ * @typedef {{ route: string, intent: string, reply: string | null, query: SearchQuery | null, nextContext: object | null, social: boolean,
+ *   basis: Basis & { afterFiles: boolean } }} Turn
  *   intent: Chat | OutOfScope | CallReport | WhoLikesMe | TranscribeCall | FindFiles | CountFiles | CollectFiles | ShareFiles | MoveFiles | DeleteFiles;
- *   nextContext: what the shell keeps for the next turn — {scope: "social"|"out"}, a SearchQuery.toJson(), or the context passed in.
+ *   nextContext: what the shell keeps for the next turn — {scope: "social"|"out"}, a SearchQuery.toJson(), or the context passed in;
+ *   basis: how thin the evidence was (see Basis); afterFiles: the context handed in came from a FILES turn.
  */
 
 /**
@@ -266,7 +281,8 @@ export function understand(parser, question, nowMs, context) {
   const scope = context == null || context.scope == null ? "" : String(context.scope);
   const wasOut = scope === "out", wasSocial = scope === "social";
   const d = route(parser, question, nowMs, wasOut || wasSocial ? null : SearchQuery.fromJson(context), wasOut, wasSocial);
-  const turn = (intent, next) => ({ route: d.route, intent, reply: d.reply, query: d.query, nextContext: next, social: d.social });
+  const afterFiles = context != null && context.scope == null && Object.keys(context).length > 0;
+  const turn = (intent, next) => ({ route: d.route, intent, reply: d.reply, query: d.query, nextContext: next, social: d.social, basis: { ...d.basis, afterFiles } });
   switch (d.route) {
     case Route.CHAT: return turn("Chat", d.social ? { scope: "social" } : context);
     case Route.OUT: return turn("OutOfScope", { scope: "out" });

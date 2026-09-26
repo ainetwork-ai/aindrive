@@ -34,13 +34,27 @@ public final class Router {
 
     public enum Route { CHAT, OUT, CALLS, FILES }
 
+    /**
+     * WHICH branch of {@link #route} decided — the evidence behind a route, not the route. The
+     * LLM trigger ({@link UnderstandTrigger}) asks the model only after the thin ones, so a
+     * decision must say whether it came from a pattern, a named kind word, a follow-up of the
+     * previous search, a bare search-box query, or the out-of-scope fall-through.
+     */
+    public enum Why { PATTERN, CALLS, NAMED, FOLLOW_UP, SEARCH_BOX, OUT, SOCIAL, MODEL }
+
     public static final class Decision {
         public final Route route;
         public final @Nullable String reply;
         public final @Nullable SearchQuery query;
         /** Chit-chat that deserves a real reply (the on-device LLM writes one when it's there). */
         public boolean social;
+        public Why why = Why.PATTERN;
+        /** The rules' parse of the text, kept even when the route is not FILES (an OUT turn's kind/place/date words). */
+        public @Nullable SearchQuery parsed;
+        /** A weak kind word, a place, a date or a kind word was seen — an OUT turn that might still be about files. */
+        public boolean hint;
         Decision(Route r, @Nullable String reply, @Nullable SearchQuery q) { route = r; this.reply = reply; query = q; }
+        Decision by(Why w, @Nullable SearchQuery p, boolean h) { why = w; parsed = p; hint = h; return this; }
     }
 
     /** Kind words that are also everyday words: "live music", "a text", "a movie tonight", "the slides at the park". */
@@ -124,7 +138,7 @@ public final class Router {
         if (onlyWords(t, GREETING_WORDS, GREETING_ANCHORS) || GREET_NAME.matcher(t).matches()) return new Decision(Route.CHAT, AskRunner.greeting(ko), null);
 
         SearchQuery q = parser.parse(t, nowMs, prev);
-        if (q.calls) return new Decision(Route.CALLS, null, q);
+        if (q.calls) return new Decision(Route.CALLS, null, q).by(Why.CALLS, q, false);
 
         boolean named = false, weak = false;
         for (String k : QueryParser.kindWords(t)) {
@@ -153,20 +167,23 @@ public final class Router {
                 || fileish && (q.city != null || q.country != null || q.dateFrom != null || OPENS_OWNED.matcher(t).find()
                         || ABOUT.matcher(t).find() || words(t) <= 4 && !SENTENCE.matcher(t).find()));
         if (aboutSelf || wasSocial && !asks) weakMeansFiles = false;
-        if (named || !aboutSelf && !(wasSocial && !asks) && FILE_WORDS.matcher(t).find() || weakMeansFiles) return new Decision(Route.FILES, null, q);
+        if (named || !aboutSelf && !(wasSocial && !asks) && FILE_WORDS.matcher(t).find() || weakMeansFiles) return new Decision(Route.FILES, null, q).by(Why.NAMED, q, true);
         // A follow-up of a file question is short and about the files — not "Me too! I'm sure it will be bright for you."
         if (prev != null && !aboutSelf && (words(t) <= 10 || asks) && (q.followUp || q.isTaskOnly() || few(q, 2) && q.ignoredWords <= 1 && words(t) <= 7))
-            return new Decision(Route.FILES, null, q);
+            return new Decision(Route.FILES, null, q).by(Why.FOLLOW_UP, q, true);
         // A search-box query opening the conversation: "Paris", "last winter in Tokyo", "dog".
         if (!wasOut && !wasSocial && prev == null && few(q, 1) && q.ignoredWords == 0 && !weak && words(t) <= 5 && !SENTENCE.matcher(t).find()
                 && (q.keywords.isEmpty() ? q.city != null || q.country != null || q.dateFrom != null : ContentWords.isVisual(q.keywords.get(0))))
-            return new Decision(Route.FILES, null, q);
+            return new Decision(Route.FILES, null, q).by(Why.SEARCH_BOX, q, true);
         // Not about files. A service request (book, weather, a ride…) is out of scope — and so is the rest of that
         // conversation; anything else is people talking, which gets a friendly reply.
+        // The sentence had no file word — but a weak one, a place, a date or a kind word means it might still be
+        // about files ("the slides at the park", "the stuff from Jeju last spring"): the trigger's hint, for both fall-throughs.
+        boolean hint = weak || q.city != null || q.country != null || q.dateFrom != null || !QueryParser.kindWords(t).isEmpty();
         if (wasOut && !SELF_TALK.matcher(t).find() || SERVICE.matcher(t).find() && !(wasSocial && YOU.matcher(t).find())
                 || !wasSocial && !SOCIAL_Q.matcher(t).find() && (IMPERATIVE.matcher(t).find() && !YOU.matcher(t).find() || FACT_Q.matcher(t).find() && !YOU.matcher(t).find() && !SELF_TALK.matcher(t).find()))
-            return new Decision(Route.OUT, outOfScope(ko, wasOut, weak), null);
-        Decision d = new Decision(Route.CHAT, SocialReply.reply(t, ko, !QueryParser.kindWords(t).isEmpty()), null);
+            return new Decision(Route.OUT, outOfScope(ko, wasOut, weak), null).by(Why.OUT, q, hint);
+        Decision d = new Decision(Route.CHAT, SocialReply.reply(t, ko, !QueryParser.kindWords(t).isEmpty()), null).by(Why.SOCIAL, q, hint);
         d.social = true;
         return d;
     }
@@ -220,9 +237,21 @@ public final class Router {
         public final @Nullable SearchQuery query;
         public final @Nullable org.json.JSONObject nextContext;
         public boolean social;
+        /** How the rules decided (see {@link Why}); {@code MODEL} when the on-device LLM's reading replaced theirs. */
+        public Why why = Why.PATTERN;
+        /** The rules' parse, whatever the route — what an OUT turn's words looked like as a search. */
+        public @Nullable SearchQuery parsed;
+        /** See {@link Decision#hint}. */
+        public boolean hint;
+        /** The turn followed a file search (there was a previous search to refine). */
+        public boolean afterFiles;
+        /** The text asks something ("?", or a Korean question ending). */
+        public boolean question;
         Turn(Route route, String intent, @Nullable String reply, @Nullable SearchQuery query, @Nullable org.json.JSONObject next) {
             this.route = route; this.intent = intent; this.reply = reply; this.query = query; nextContext = next;
         }
+        Turn by(Decision d, boolean afterFiles) { why = d.why; parsed = d.parsed; hint = d.hint; this.afterFiles = afterFiles; return this; }
+        Turn asking(String text) { question = QUESTION.matcher(text).find(); return this; }
     }
 
     /**
@@ -233,21 +262,31 @@ public final class Router {
     public static Turn understand(QueryParser parser, String question, long nowMs, @Nullable org.json.JSONObject context) {
         boolean wasOut = context != null && "out".equals(context.optString("scope"));
         boolean wasSocial = context != null && "social".equals(context.optString("scope"));
-        Decision d = route(parser, question, nowMs, wasOut || wasSocial ? null : SearchQuery.fromJson(context), wasOut, wasSocial);
+        SearchQuery prev = wasOut || wasSocial ? null : SearchQuery.fromJson(context);
+        Decision d = route(parser, question, nowMs, prev, wasOut, wasSocial);
+        Turn tn;
         switch (d.route) {
             case CHAT: {
                 org.json.JSONObject next = context;
                 if (d.social) { next = new org.json.JSONObject(); try { next.put("scope", "social"); } catch (org.json.JSONException ignored) { } }
-                Turn tn = new Turn(d.route, "Chat", d.reply, null, next); tn.social = d.social; return tn;
+                tn = new Turn(d.route, "Chat", d.reply, null, next).by(d, prev != null); tn.social = d.social; break;
             }
-            case OUT: {
-                org.json.JSONObject out = new org.json.JSONObject();
-                try { out.put("scope", "out"); } catch (org.json.JSONException ignored) { }
-                return new Turn(d.route, "OutOfScope", d.reply, null, out);
-            }
-            case CALLS: return new Turn(d.route, d.query.likes ? "WhoLikesMe" : d.query.transcribe ? "TranscribeCall" : "CallReport", null, d.query, context);
-            default: return new Turn(d.route, intentOf(d.query), null, d.query, d.query.toJson());
+            case OUT: tn = outTurn(d.reply, d, prev != null); break;
+            case CALLS: tn = new Turn(d.route, d.query.likes ? "WhoLikesMe" : d.query.transcribe ? "TranscribeCall" : "CallReport", null, d.query, context).by(d, prev != null); break;
+            default: tn = new Turn(d.route, intentOf(d.query), null, d.query, d.query.toJson()).by(d, prev != null);
         }
+        return tn.asking(question == null ? "" : question);
+    }
+
+    /** "…?", "…있어", "…있나요", "…뭐야": the person asked something. */
+    private static final Pattern QUESTION = Pattern.compile("\\?|(있어|있나|있니|있나요|있을까|없어|없나|뭐야|뭐지|어디|언제|몇)[요]?[.!]*$");
+
+    /** An out-of-scope turn: the reply plus the context that keeps the rest of the conversation out. */
+    static Turn outTurn(@Nullable String reply, @Nullable Decision d, boolean afterFiles) {
+        org.json.JSONObject out = new org.json.JSONObject();
+        try { out.put("scope", "out"); } catch (org.json.JSONException ignored) { }
+        Turn t = new Turn(Route.OUT, "OutOfScope", reply, null, out);
+        return d == null ? t : t.by(d, afterFiles);
     }
 
     static String intentOf(SearchQuery q) {

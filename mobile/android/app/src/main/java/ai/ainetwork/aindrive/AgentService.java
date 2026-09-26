@@ -344,6 +344,8 @@ public class AgentService extends Service {
         synchronized AskRunner askRunner() {
             if (ask == null) ask = new AskRunner(index, geo(), AgentService.this::clipOrNull, fileOps(), AgentService.this::callLog, AgentService.this::speechOrNull,
                     AgentService.this::summarizerOrNull, AgentService.this::releaseSummarizer, () -> anyIndexerRunning())
+                    .withUnderstanding(() -> { ai.ainetwork.aindrive.llm.Summarizer s = summarizerOrNull(); return s == null ? null : ai.ainetwork.aindrive.agent.Understander.of(s); },
+                            new ai.ainetwork.aindrive.agent.UnderstandGate(understandStore(), understandModelId()), ai.ainetwork.aindrive.agent.Understander.BUDGET_MS)
                     .withCallIndexes(AgentService.this::callIndexes)
                     .withCallOpener(new ai.ainetwork.aindrive.agent.CallReport.Opener() {
                         @Override public android.os.ParcelFileDescriptor open(FileIndex ix, String docId) throws Exception {
@@ -675,6 +677,21 @@ public class AgentService extends Service {
             catch (Exception e) { Log.w(TAG, "summariser unavailable: " + e.getMessage()); }
         }
         return summarizer;
+    }
+
+    /** The understanding gate's memory (see UnderstandGate): app-private preferences. */
+    private ai.ainetwork.aindrive.agent.UnderstandGate.Store understandStore() {
+        android.content.SharedPreferences p = getSharedPreferences("understand", MODE_PRIVATE);
+        return new ai.ainetwork.aindrive.agent.UnderstandGate.Store() {
+            @Override public @Nullable String get(String key) { return p.getString(key, null); }
+            @Override public void put(String key, String value) { p.edit().putString(key, value).apply(); }
+        };
+    }
+
+    /** Identifies the model FILE, so a swapped or re-downloaded model is measured afresh; "none" while there is none. */
+    private String understandModelId() {
+        try { java.io.File f = llmStore().file("model"); return f.getName() + ":" + f.length() + ":" + f.lastModified(); }
+        catch (Exception e) { return "none"; }
     }
 
     /** Free the ~1.6 GB model after a report. */
