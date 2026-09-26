@@ -18,6 +18,7 @@ import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
 import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
+import { DEVICE, ON_MAC } from "./device";
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
@@ -173,7 +174,7 @@ async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | nul
   if (!carrier?.drive) { notify("Turn P2P on for a folder first — the files go out through it.", true); return null; }
   const names = picked.map((x) => x.s.path.split("/").pop()).join(", ");
   const ok = await confirmAsync(`Send ${picked.length} file${picked.length === 1 ? "" : "s"} to ${agent.name}?`,
-    `${names}\n\n${agent.name} gets a link to each file that works for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this phone until it opens a link, and you can revoke them any time.`, "Send links");
+    `${names}\n\n${agent.name} gets a link to each file that works for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this ${DEVICE} until it opens a link, and you can revoke them any time.`, "Send links");
   if (!ok) return null;
   const reg = await AindriveAgent.registerHandoffs({ files: picked.map((x) => ({ folderUri: x.folder!.folder.uri, path: x.s.path })), ttlSeconds: HANDOFF_TTL_SECONDS });
   const r = await new Web(state.server, state.sessionCookie!).handoffs({
@@ -482,7 +483,7 @@ function openManage(driveId: string | undefined, name: string, opts?: { payoutFo
 function p2pSwitch(share: SharedFolder | undefined, id: string): string {
   if (!share) return "";
   const on = p2pOn(share), busy = busyShares.has(shareKey(share));
-  return `<label class="p2p" title="${on ? "Connected to aindrive" : "Only on this phone"}"><span>P2P</span>
+  return `<label class="p2p" title="${on ? "Connected to aindrive" : `Only on this ${DEVICE}`}"><span>P2P</span>
     <button class="switch ${busy ? "busy" : ""}" role="switch" id="${id}" aria-checked="${on}" aria-label="Connect ${esc(share.folder.label)} to aindrive" ${busy ? "disabled" : ""}></button></label>`;
 }
 
@@ -705,6 +706,21 @@ async function openBrowser(share: SharedFolder, path = "") {
 }
 
 /** SAF's ways of saying "that document is gone". */
+/** Mac: folders the earlier Mac app shared join the list, switch on, with their drives. */
+async function adoptMacFolders() {
+  try {
+    const r = await AindriveAgent.adoptable!();
+    let added = 0;
+    for (const a of r.folders) {
+      if (findShare(a.folder.uri)) continue;
+      state.shares.push({ folder: a.folder, drive: { driveId: a.drive.driveId, agentToken: a.drive.agentToken, driveSecret: a.drive.driveSecret, url: a.drive.url }, on: a.on });
+      if (!state.sessionCookie) state.server = normalizeServer(a.serverUrl);
+      added++;
+    }
+    if (added) { await save(); log(`${added} folder${added === 1 ? "" : "s"} shared before carried over`); }
+  } catch { /* nothing to adopt */ }
+}
+
 function isGone(msg: string): boolean {
   return /FileNotFound|No such file|not found|Missing file|does not exist|ENOENT|is child of/i.test(msg);
 }
@@ -949,7 +965,7 @@ async function browseDelete(entry: FileEntry) {
   const ok = await confirmAsync(
     `Delete "${entry.name}"?`,
     browse.remote ? `It is deleted on ${browse.remote.hostname ?? "the device that serves this drive"}.`
-      : entry.isDir ? "The folder and everything inside it is deleted from this phone." : "The file is deleted from this phone.",
+      : entry.isDir ? `The folder and everything inside it is deleted from this ${DEVICE}.` : `The file is deleted from this ${DEVICE}.`,
     "Delete", true,
   );
   if (!ok) return;
@@ -986,6 +1002,8 @@ async function login() {
     await save();
     log(`Logged in${approved.email ? ` (${approved.email})` : ""}`);
     void ensureDefaultAgent();
+    // Mac: folders carried over from the earlier Mac app come back on as soon as there is a session
+    if (ON_MAC) void (async () => { for (const share of state.shares) if (share.on && !p2pOn(share)) await startShare(share); })();
   } catch (e) {
     fail(e);
   } finally {
@@ -995,7 +1013,7 @@ async function login() {
 }
 
 async function logout() {
-  const ok = await confirmAsync("Log out?", "Folders on this phone stop being shared and their credentials are removed from this device. Nothing on the server is deleted.", "Log out", true);
+  const ok = await confirmAsync("Log out?", `Folders on this ${DEVICE} stop being shared and their credentials are removed from this device. Nothing on the server is deleted.`, "Log out", true);
   if (!ok) return;
   await AindriveAgent.stop().catch(() => {});
   state = { server: state.server, shares: [] };
@@ -1144,7 +1162,7 @@ function sourcesSection(): string {
     <div class="section"><h2>Agent can read</h2><button class="link" id="add-source">${I.plus} Add folder</button></div>
     ${(state.sources ?? []).map(sourceCard).join("")}
     ${suggested}
-    <p class="hint">Read only by the agent on this phone, for its tasks. Never shared. What it makes is saved into a shared folder.</p>`;
+    <p class="hint">Read only by the agent on this ${DEVICE}, for its tasks. Never shared. What it makes is saved into a shared folder.</p>`;
 }
 
 async function allowCallLog() {
@@ -1223,7 +1241,7 @@ async function pruneMissing() {
       await AindriveAgent.stop({ driveId: share.drive.driveId }).catch(() => {});
       if (state.sessionCookie) await deleteDrive(state.server, state.sessionCookie, share.drive.driveId).catch(() => {});
     }
-    log(`${share.folder.label} was deleted on the phone — removed from the list`);
+    log(`${share.folder.label} was deleted on the ${DEVICE} — removed from the list`);
   }
   state.shares = state.shares.filter((s) => !gone.includes(s));
   await save();
@@ -1238,8 +1256,8 @@ async function removeShare(share: SharedFolder) {
   const ok = await confirmAsync(
     `Stop sharing "${share.folder.label}"?`,
     share.drive
-      ? "The drive is deleted from the server: members lose access and share links stop working. Files on this phone are not deleted."
-      : "It is removed from this list. Files on this phone are not deleted.",
+      ? `The drive is deleted from the server: members lose access and share links stop working. Files on this ${DEVICE} are not deleted.`
+      : `It is removed from this list. Files on this ${DEVICE} are not deleted.`,
     "Remove", true);
   if (!ok) return;
   const key = shareKey(share);
@@ -1354,7 +1372,7 @@ async function ask(q = askQuery) {
     // Merge: this phone first, then each other device, sources tagged with where they live.
     const merged: AskResult = { answer: "", sources: [], query: local?.query };
     const parts: string[] = [];
-    if (local) { parts.push(targets.length ? `This phone: ${local.answer}` : local.answer); merged.sources.push(...local.sources); merged.action = local.action; }
+    if (local) { parts.push(targets.length ? `This ${DEVICE}: ${local.answer}` : local.answer); merged.sources.push(...local.sources); merged.action = local.action; }
     for (const rr of remoteResults) {
       if ((rr as { skipped?: boolean }).skipped) continue;
       if (rr.error) { parts.push(`${rr.drive.name}: couldn't ask (${rr.error})`); continue; }
@@ -1484,17 +1502,21 @@ function loginScreen(): string {
   return `
     <div class="hero">
       <div class="brand">${I.drive} aindrive</div>
-      <p>Turn a folder on this phone into a shared drive — and find anything in it by asking.</p>
+      <p>Turn a folder on this ${DEVICE} into a shared drive — and find anything in it by asking.</p>
     </div>
     <ul class="features">
-      <li><span class="ic">${I.phone}</span><div><b>Files stay on your phone</b><span>Nothing is uploaded. The server only relays requests to this device.</span></div></li>
+      <li><span class="ic">${ON_MAC ? I.folder : I.phone}</span><div><b>Files stay on your ${DEVICE}</b><span>Nothing is uploaded. The server only relays requests to this device.</span></div></li>
       <li><span class="ic">${I.lock}</span><div><b>Only the folders you pick</b><span>You choose each folder; the app can't see anything else.</span></div></li>
-      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"photos taken in Paris", "last week's screenshots", "the contract pdf" — answered on-device, offline.</span></div></li>
+      <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"photos taken in Paris", "last week's screenshots", "the contract pdf" — ${ON_MAC ? "found by name, on this Mac" : "answered on-device, offline"}.</span></div></li>
     </ul>
     <div class="card">
-      <button class="btn google" id="login-google" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : `${GOOGLE_G} Continue with Google`}</button>
+      ${ON_MAC
+        // no Google account picker on the Mac: sign in in the browser, where Google, email and wallet all work
+        ? `<button class="btn" id="login" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : "Sign in with your browser"}</button>
+      <p class="hint">aindrive opens in your browser — sign in with Google, email or a wallet, then approve this Mac.</p>`
+        : `<button class="btn google" id="login-google" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : `${GOOGLE_G} Continue with Google`}</button>
       <p class="hint">Pick your Google account — no password to type. aindrive only gets your name and email.</p>
-      <button class="link small" id="login" ${busy ? "disabled" : ""}>Other ways to sign in (email, wallet)</button>
+      <button class="link small" id="login" ${busy ? "disabled" : ""}>Other ways to sign in (email, wallet)</button>`}
       <details class="adv">
         <summary>Advanced · server</summary>
         <label for="server">Server</label>
@@ -1548,7 +1570,7 @@ function homeScreen(): string {
     <div class="card empty">
       <div class="art">${I.folder}</div>
       <h3>Share your first folder</h3>
-      <p>Pick a folder on this phone. It becomes a drive you can open on the web, share with people, and search by asking.</p>
+      <p>Pick a folder on this ${DEVICE}. It becomes a drive you can open on the web, share with people, and search by asking.</p>
       <button class="btn" id="add-first" style="max-width:280px">${I.plus} Choose a folder</button>
     </div>`;
   const acts = activity.slice(0, showAllActivity ? 30 : 4);
@@ -1566,16 +1588,16 @@ function homeScreen(): string {
 
     ${anyPaired ? `
       <div class="section">
-        <h2>On this phone</h2>
+        <h2>On this ${DEVICE}</h2>
         ${state.shares.length > 1 ? (running < state.shares.length
           ? `<button class="link" id="start-all">Turn all on</button>`
           : `<button class="link" id="stop-all">Turn all off</button>`) : ""}
       </div>
       ${folders}
-      <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; the notification is the off switch.</p>`
+      <p class="hint">A folder is shared only while its switch is on. Sharing keeps running in the background; ${ON_MAC ? "the menu-bar icon shows it, and Quit is the off switch" : "the notification is the off switch"}.</p>`
       : empty}
 
-    ${anyPaired ? sourcesSection() : ""}
+    ${anyPaired && !ON_MAC ? sourcesSection() : ""}
 
     ${others.length ? `
       <div class="section"><h2>My drives on other devices</h2><button class="link" id="refresh-remotes">${icon("refresh", 16)} Refresh</button></div>
@@ -1645,7 +1667,7 @@ function folderCard(share: SharedFolder): string {
       <button data-act="chat">${icon("chat", 18)} Chat with agents</button>
       <button data-act="mcp">${icon("plug", 18)} MCP</button>
       <div class="sep"></div>` : ""}
-      <button data-act="addfiles">${icon("upload", 18)} Add files from this phone…</button>
+      <button data-act="addfiles">${icon("upload", 18)} Add files from this ${DEVICE}…</button>
       ${driveUrl(share) ? `<button data-act="open">${icon("external", 18)} Open on the web</button>` : ""}
       ${share.drive ? `<button data-act="copy">${icon("copy", 18)} Copy drive ID</button>` : ""}
       <div class="sep"></div>
@@ -1873,7 +1895,7 @@ function searchSheet(): string {
   const activeName = activeDrive ? (activeDrive.folderLabel || "a folder") : "";
   const recognised = ix.reduce((n, i) => n + (i.recognisedTotal ?? 0), 0);
   const models = status.models;
-  const indexLine = active
+  const indexLine = ON_MAC ? "" : active
     ? (active.phase === "recognising"
       ? `<div class="indexline"><div style="flex:1">${activeDrive?.driveId.startsWith("src-calls") ? "Transcribing calls" : "Recognising photos & recordings"} in ${esc(activeName)}… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
       : `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`)
@@ -1966,14 +1988,14 @@ function searchSheet(): string {
       ${SUGGESTIONS.map((g) => `
         <p class="note group">${esc(g.title)}</p>
         <div class="chips">${g.items.map((s) => `<button class="chip" data-suggest="${esc(s)}">${esc(s)}</button>`).join("")}</div>`).join("")}
-      <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Follow-ups work: "…and share them", "only the ones from Paris". Runs on this phone; only sharing needs the server.</p>` : ""}
+      <p class="hint">Finds files by type, name, date, size, where and when photos were taken, what photos show and what recordings say — and can collect the results into a new folder and share it. Follow-ups work: "…and share them", "only the ones from Paris". Runs on this ${DEVICE}; only sharing needs the server.</p>` : ""}
     ${thread.length && !askBusy ? (() => { const chips = followUps(askResult, askContext); return chips.length ? `<div class="chips followups">${chips.map((q) => `<button class="chip" data-suggest="${esc(q)}">${esc(q)}</button>`).join("")}</div>` : ""; })() : ""}`;
   return `
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
         <div class="crumbs">${chatScope
-          ? `<div class="title scoped">${icon("folder", 18)}<span>${esc(chatScope.label)}</span></div><div class="sub">Folder chat · on this phone`
+          ? `<div class="title scoped">${icon("folder", 18)}<span>${esc(chatScope.label)}</span></div><div class="sub">Folder chat · on this ${DEVICE}`
           : `<div class="title">Agent</div><div class="sub">aindrive-on-device`}${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
         <button class="iconbtn" id="model-switch" aria-label="Model and agents" title="Model and agents">${icon("cpu", 20)}${a2aAgents.length ? `<span class="count-badge">${a2aAgents.length}</span>` : ""}</button>
         <!-- Always shown (with a label) so past conversations are findable even before the first "New chat". -->
@@ -2006,12 +2028,12 @@ function modelDrawer(): string {
   const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes summaries and chats" };
   const size = (b: number) => (b / 1e6) >= 1000 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
   const local = `<div class="card" style="padding:6px 16px;margin-bottom:12px">
-        <div class="row model"><span class="k">${icon("cpu", 16)}</span><span class="v" style="text-align:left;flex:1;margin-left:12px"><b>aindrive-on-device</b><br><span class="hint">Your files, on this phone — nothing is sent to a cloud model</span></span></div>
+        <div class="row model"><span class="k">${icon("cpu", 16)}</span><span class="v" style="text-align:left;flex:1;margin-left:12px"><b>aindrive-on-device</b><br><span class="hint">Your files, on this ${DEVICE} — nothing is sent to a cloud model</span></span></div>
         ${(m?.list ?? []).map((x) => `
           <div class="row model"><span class="k">${esc(x.role)}</span>
             <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0"><b>${esc(x.name)}</b><br>
               <span class="hint">${esc(what[x.id] ?? "")} · ${size(x.bytes)} · ${esc((x.license ?? "").replace(/\s*\(.*$/, ""))}</span></span>
-            <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? "On this phone" : "Not downloaded"}"></span>
+            <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? `On this ${DEVICE}` : "Not downloaded"}"></span>
           </div>`).join("")}
         ${m && !(m.ready && m.llm) ? `<p style="margin:8px 0"><button class="btn small secondary" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download models"}</button></p>` : ""}
       </div>`;
@@ -2030,7 +2052,7 @@ function modelDrawer(): string {
     <div class="head"><h3>Model &amp; agents</h3><button class="iconbtn ghost" id="model-close" aria-label="Close">${I.close}</button></div>
     ${local}
     <p class="note group">A2A agents in this chat</p>
-    ${agents || `<p class="hint" style="margin:0 0 8px">None yet. Add agents to help with what this phone can't do.</p>`}
+    ${agents || `<p class="hint" style="margin:0 0 8px">None yet. Add agents to help with what this ${DEVICE} can't do.</p>`}
     ${a2aAgents.length ? `<p class="hint" style="margin:0 0 10px">Your files stay with the on-device agent. Anything it can't do goes to these agents; start a message with @name to ask one directly.</p>` : ""}
     <p class="note group" style="margin-top:14px">Add an A2A agent</p>
     <div class="field" style="margin-bottom:8px">${icon("link", 18)}<input id="a2a-url" type="url" inputmode="url" placeholder="Paste an A2A agent URL" autocomplete="off" value="${esc(a2aDraft.url)}" /></div>
@@ -2124,7 +2146,7 @@ function bindSearch() {
     if (share) { searchOpen = false; void openBrowser(share, a.folder); return; }
     const remote = remotes.find((d) => d.id === a.driveId);
     if (remote) { searchOpen = false; void openRemoteBrowser(remote, a.folder); return; }
-    notify("That folder isn't on this phone any more.", true);
+    notify(`That folder isn't on this ${DEVICE} any more.`, true);
   });
 }
 
@@ -2175,7 +2197,7 @@ function browseSheet(): string {
   const remote = !!b.remote;
   let body: string;
   if (b.loading && !b.entries) body = `<div class="searching"><span class="spinner"></span> Loading…</div>`;
-  else if (b.error && isGone(b.error) && !b.path && !remote) body = `<div class="empty"><h3>This folder no longer exists</h3><p>It was deleted or moved on the phone.</p><button class="btn secondary" id="browse-forget">Remove from list</button></div>`;
+  else if (b.error && isGone(b.error) && !b.path && !remote) body = `<div class="empty"><h3>This folder no longer exists</h3><p>It was deleted or moved on the ${DEVICE}.</p><button class="btn secondary" id="browse-forget">Remove from list</button></div>`;
   else if (b.error) body = `<div class="empty"><div class="art">${I.info}</div><h3>Couldn’t read this folder</h3><p>${esc(b.error)}</p><button class="btn secondary" id="browse-retry" style="max-width:220px">${I.refresh} Try again</button></div>`;
   else {
     const list = sortedEntries(b.entries ?? []);
@@ -2207,7 +2229,7 @@ function browseSheet(): string {
       <div class="bar">
         <button class="iconbtn ghost" id="browse-back" aria-label="Back">${I.back}</button>
         ${b.searching ? `<div class="field">${I.search}<input id="browse-q" type="search" placeholder="Search in this folder" value="${esc(b.query ?? "")}" autocomplete="off" /><button id="browse-q-close" aria-label="Close search">${I.close}</button></div>`
-          : `<div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${crumbs.length ? trail.map((t, i) => `<button data-crumb="${i}">${esc(t)}</button>`).join(" / ") : (remote ? esc(b.remote!.hostname ?? (b.remote!.online ? "Online" : "Offline")) : (driveStatus(share)?.connected ? "Online" : "On this phone"))}</div></div>
+          : `<div class="crumbs"><div class="title">${esc(title)}</div><div class="sub">${crumbs.length ? trail.map((t, i) => `<button data-crumb="${i}">${esc(t)}</button>`).join(" / ") : (remote ? esc(b.remote!.hostname ?? (b.remote!.online ? "Online" : "Offline")) : (driveStatus(share)?.connected ? "Online" : `On this ${DEVICE}`))}</div></div>
         <button class="iconbtn ghost" id="browse-search" aria-label="Search in this folder">${I.search}</button>`}
         ${remote ? "" : p2pSwitch(share, "browse-p2p")}
         <button class="iconbtn primary" id="browse-share" aria-label="Share">${I.share}</button>
@@ -2537,6 +2559,7 @@ async function boot() {
   await loadThread();
   await loadHistory();
   await pruneMissing();
+  if (ON_MAC) await adoptMacFolders();
   // Everything that was on comes back by itself: sources, and the shares whose switch was on.
   void (async () => {
     for (const share of state.shares) if (share.on && state.sessionCookie && !p2pOn(share)) await startShare(share);
