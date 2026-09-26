@@ -19,6 +19,31 @@ export type AgentSummary = {
   access: { policies: string[] };
 };
 
+/** Folder Chat's built-in cloud agent (lib/cloud-agent.ts) — not an agent record on the drive. */
+export const CLOUD_ID = "__aindrive-cloud__";
+export const CLOUD_AGENT_SUMMARY: AgentSummary = {
+  id: CLOUD_ID,
+  name: "aindrive-cloud",
+  description: "The on-device agent's cloud counterpart on ainize.ai. Reads this folder's files only when an answer needs them.",
+  persona: "",
+  folder: "",
+  llm: { provider: "ainize.ai", model: "Qwen3.8-Flash-Next" },
+  access: { policies: [] },
+};
+
+/** A record the phone app made so the drive's device is asked with its own recogniser (mobile/src/api.ts). */
+export const isOnDevice = (a: AgentSummary) => a.llm.model === "on-device";
+
+/** Which device serves this drive (its hostname) and whether it is connected now. */
+export type DeviceInfo = { hostname: string | null; online: boolean };
+
+/** How an agent reads in the picker: an on-device agent by the device it runs on. */
+export function agentLabel(a: AgentSummary, device: DeviceInfo | null): string {
+  if (a.id === CLOUD_ID) return "aindrive-cloud · ainize.ai";
+  if (isOnDevice(a)) return `On-device agent · ${device?.hostname || "this drive's device"}`;
+  return `${a.name} — ${a.folder || "/"}`;
+}
+
 export type Source = {
   path: string;
   snippet: string;
@@ -48,8 +73,9 @@ export function ChatHeader({ onClose }: { onClose?: () => void }) {
 }
 
 export function AgentPicker({
-  agents, agentId, setAgentId, selectedAgent, isOwner, onEdit, onDelete,
+  agents, agentId, setAgentId, selectedAgent, isOwner, onEdit, onDelete, device,
 }: {
+  device: DeviceInfo | null;
   agents: AgentSummary[] | null;
   agentId: string | null;
   setAgentId: (id: string) => void;
@@ -73,16 +99,27 @@ export function AgentPicker({
           >
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.name} — {a.folder || "/"}
+                {agentLabel(a, device)}
               </option>
             ))}
           </Select>
           {selectedAgent && (
             <div className="mt-1.5 flex items-center justify-between gap-2">
-              <p className="text-caption text-drive-muted font-mono truncate">
-                {selectedAgent.llm.provider} · {selectedAgent.llm.model}
-              </p>
-              {isOwner && (
+              {selectedAgent.id === CLOUD_ID ? (
+                <p className="text-caption text-drive-muted truncate" title={selectedAgent.description}>
+                  {selectedAgent.llm.model} · reads this folder&apos;s files only when needed
+                </p>
+              ) : (
+                <p className="text-caption text-drive-muted truncate flex items-center gap-1.5" data-testid="agent-device">
+                  {/* every drive agent runs on the drive's device — say which, and whether it is on */}
+                  <span className={`inline-block w-1.5 h-1.5 shrink-0 rounded-full ${device?.online ? "bg-green-500" : "bg-gray-300"}`} />
+                  <span className="truncate">
+                    {device?.hostname || "device"} · {device?.online ? "online" : "offline"}
+                    {!isOnDevice(selectedAgent) && <span className="font-mono"> · {selectedAgent.llm.provider}/{selectedAgent.llm.model}</span>}
+                  </span>
+                </p>
+              )}
+              {isOwner && selectedAgent.id !== CLOUD_ID && (
                 <div className="flex items-center gap-0.5 shrink-0">
                   <IconButton size="sm" variant="text" aria-label="Edit agent" onClick={() => onEdit(selectedAgent)}>
                     <Pencil className="w-3.5 h-3.5" />

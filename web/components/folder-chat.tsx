@@ -5,8 +5,8 @@ import { apiFetch } from "@/lib/api-client";
 import { pathCovers } from "@/shared/domain/policy/path";
 import { CreateAgentModal, type EditableAgent } from "./create-agent-modal";
 import {
-  ChatHeader, AgentPicker, MessageList, ChatInput,
-  type AgentSummary, type Source, type Msg,
+  ChatHeader, AgentPicker, MessageList, ChatInput, CLOUD_ID, CLOUD_AGENT_SUMMARY, isOnDevice,
+  type AgentSummary, type Source, type Msg, type DeviceInfo,
 } from "./folder-chat-parts";
 
 /**
@@ -38,6 +38,22 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<EditableAgent | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  // the drive's device: every drive agent runs there
+  const [device, setDevice] = useState<DeviceInfo | null>(null);
+  // aindrive-cloud keeps its conversation per chat
+  const [cloudContext, setCloudContext] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    let cancel = false;
+    const load = () => void apiFetch<{ drives: { id: string; hostname: string | null; online: boolean }[] }>("/api/drives").then((r) => {
+      if (cancel || !r.ok) return;
+      const d = r.data.drives.find((x) => x.id === driveId);
+      setDevice(d ? { hostname: d.hostname, online: d.online } : null);
+    });
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { cancel = true; clearInterval(t); };
+  }, [driveId]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Load agent list. For owners we fetch the private list endpoint;
@@ -55,14 +71,15 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
         setAgents([]);
         return;
       }
-      const list: AgentSummary[] = r.data.agents ?? [];
+      // aindrive-cloud is the owner's to use: it hands the folder's files out as links
+      const list: AgentSummary[] = [...(r.data.agents ?? []), ...(isOwner ? [CLOUD_AGENT_SUMMARY] : [])];
       setAgents(list);
       // Prefer one whose folder is an ancestor of (or equal to) currentFolder.
       const preferred = pickAgentForFolder(list, currentFolder) ?? list[0] ?? null;
       if (preferred) setAgentId(preferred.id);
     })();
     return () => { cancel = true; };
-  }, [driveId, currentFolder, reloadTick]);
+  }, [driveId, currentFolder, reloadTick, isOwner]);
 
   async function onDelete(target: AgentSummary) {
     if (!confirm(`Delete agent "${target.name}"? This removes the agent JSON from the drive.`)) return;
@@ -101,10 +118,34 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
     const q = input.trim();
     if (!q || !agentId || busy) return;
     const append = (msg: Msg) => setMsgs((m) => [...m, msg].slice(-MAX_MSGS));
+    if (agentId === CLOUD_ID) {
+      const key = `aindrive:cloud-ok:${driveId}`;
+      let ok = false;
+      try { ok = localStorage.getItem(key) === "1"; } catch { /* private mode: ask every time */ }
+      if (!ok) {
+        ok = confirm(
+          "Ask aindrive-cloud (ainize.ai)?\n\nYour question, this folder's file list, and 15-minute links to its files go to ainize.ai. " +
+          "It opens a file only when the answer needs it. Nothing else on the drive is reachable.",
+        );
+        if (!ok) return;
+        try { localStorage.setItem(key, "1"); } catch { /* fine */ }
+      }
+    }
     append({ role: "user", text: q });
     setInput("");
     setBusy(true);
     try {
+      if (agentId === CLOUD_ID) {
+        const c = await apiFetch<{ answer: string; contextId: string | null; handed: number }>(`/api/drives/${driveId}/cloud-ask`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q, path: currentFolder, contextId: cloudContext }),
+        });
+        if (!c.ok) { append({ role: "error", text: c.error || `HTTP ${c.status}` }); return; }
+        setCloudContext(c.data.contextId ?? undefined);
+        append({ role: "agent", text: c.data.answer, sources: [], policyName: c.data.handed ? `${c.data.handed} file links, 15 min` : undefined });
+        return;
+      }
       const r = await apiFetch<{ answer: string; sources?: Source[]; policyName?: string }>(
         `/api/drives/${driveId}/agents/${agentId}/ask`,
         {
@@ -120,7 +161,11 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
         const err =
           b?.error === "rate_limited"
             ? `Rate limited (retry in ${Math.ceil((b.retryAfterMs ?? 0) / 1000)}s)`
-            : r.error || `HTTP ${r.status}`;
+            // an on-device agent asked on a computer: the recogniser lives in the phone app
+            : selectedAgent && isOnDevice(selectedAgent) && /no_api_key/.test(r.error || "")
+              ? `The on-device agent runs in the aindrive phone app, and this drive is on ${device?.hostname || "a computer"}. ` +
+                (isOwner ? "Pick aindrive-cloud above to ask about this folder." : "Ask the owner to add an agent with an API key.")
+              : r.error || `HTTP ${r.status}`;
         append({ role: "error", text: err });
         return;
       }
@@ -140,6 +185,7 @@ export function FolderChat({ driveId, currentFolder, onClose, isOwner }: Props) 
         setAgentId={setAgentId}
         selectedAgent={selectedAgent}
         isOwner={isOwner}
+        device={device}
         onEdit={onEdit}
         onDelete={onDelete}
       />

@@ -7,19 +7,25 @@
  * streaming `handoff-read` RPCs from the device through its carrier drive's socket — nothing is
  * cached on the server, and the device serves only keys it registered (so a link can never reach
  * other files, even in the same folder). Owners list and revoke their links (/api/handoffs).
+ *
+ * A handoff made on the web instead (Folder Chat asking a cloud agent, lib/cloud-agent.ts) names
+ * its file by drive path (`drivePath`): the web picked exactly those files, and their bytes come
+ * over the download-chunk RPC every agent serves — `readHandoffChunk` hides which kind a row is.
  */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { nanoid } from "nanoid";
 import { db } from "./db";
+import { callAgent } from "./rpc";
 
 export const MAX_TTL_SECONDS = 60 * 60;
 export const DEFAULT_TTL_SECONDS = 15 * 60;
 export const MAX_FILES = 20;
 
-export interface HandoffFile { deviceKey: string; name: string; mime: string; size: number }
+export interface HandoffFile { deviceKey: string; name: string; mime: string; size: number; drivePath?: string }
 export interface HandoffRow {
   id: string; secret_hash: string; owner_id: string; drive_id: string; device_key: string; name: string; mime: string;
   size: number; audience: string; created_at: string; expires_at: string; revoked_at: string | null; grant_id: string | null;
+  drive_path: string | null;
 }
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -29,11 +35,11 @@ const expiryOf = (ttlSeconds: number) =>
 
 export function createHandoffs(ownerId: string, driveId: string, files: HandoffFile[], audience: string, ttlSeconds: number, grantId: string | null = null) {
   const expires = expiryOf(ttlSeconds);
-  const insert = db.prepare(`INSERT INTO file_handoffs (id, secret_hash, owner_id, drive_id, device_key, name, mime, size, audience, expires_at, grant_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT INTO file_handoffs (id, secret_hash, owner_id, drive_id, device_key, name, mime, size, audience, expires_at, grant_id, drive_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   return db.transaction(() => files.map((f) => {
     const id = nanoid(16), secret = randomBytes(24).toString("base64url");
-    insert.run(id, sha256(secret), ownerId, driveId, f.deviceKey, f.name, f.mime, f.size, audience, expires, grantId);
+    insert.run(id, sha256(secret), ownerId, driveId, f.deviceKey, f.name, f.mime, f.size, audience, expires, grantId, f.drivePath ?? null);
     return { id, secret, name: f.name, deviceKey: f.deviceKey, expiresAt: expires.replace(" ", "T") + "Z" };
   }))();
 }
@@ -101,4 +107,15 @@ export function revokeHandoffs(ownerId: string, which: { id?: string; audience?:
   if (which.id) return db.prepare("UPDATE file_handoffs SET revoked_at = datetime('now') WHERE id = ? AND owner_id = ? AND revoked_at IS NULL").run(which.id, ownerId).changes;
   if (which.audience) return db.prepare("UPDATE file_handoffs SET revoked_at = datetime('now') WHERE audience = ? AND owner_id = ? AND revoked_at IS NULL").run(which.audience, ownerId).changes;
   return 0;
+}
+
+/** One chunk of a handoff's bytes, from wherever the row says they are. */
+export async function readHandoffChunk(
+  h: HandoffRow, driveSecret: string, offset: number, length: number,
+): Promise<{ data: string; eof: boolean; size: number }> {
+  if (h.drive_path) {
+    const r = await callAgent(h.drive_id, driveSecret, { method: "download-chunk", path: h.drive_path, offset, length }) as { data: string; eof: boolean };
+    return { data: r.data, eof: r.eof, size: h.size };
+  }
+  return await callAgent(h.drive_id, driveSecret, { method: "handoff-read", key: h.device_key, offset, length }) as { data: string; eof: boolean; size: number };
 }

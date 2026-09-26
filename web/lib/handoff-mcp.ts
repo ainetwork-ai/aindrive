@@ -8,9 +8,9 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { getDrive } from "./drives";
-import { callAgent, AgentError } from "./rpc";
+import { AgentError } from "./rpc";
 import { DOWNLOAD_CHUNK_BYTES } from "./agent-stream";
-import { grantFiles, logFetch, type HandoffRow } from "./handoff";
+import { grantFiles, logFetch, readHandoffChunk, type HandoffRow } from "./handoff";
 import { withCors } from "./mcp-http";
 
 /** Text an agent reads in one call; longer files come back cut, and say so. */
@@ -41,9 +41,7 @@ async function readText(f: HandoffRow, meta: Meta): Promise<{ text: string; trun
   let offset = 0, size = Infinity;
   try {
     while (offset < Math.min(size, READ_MAX_BYTES)) {
-      const r = await callAgent(f.drive_id, drive.drive_secret, {
-        method: "handoff-read", key: f.device_key, offset, length: Math.min(DOWNLOAD_CHUNK_BYTES, READ_MAX_BYTES - offset),
-      });
+      const r = await readHandoffChunk(f, drive.drive_secret, offset, Math.min(DOWNLOAD_CHUNK_BYTES, READ_MAX_BYTES - offset));
       size = r.size;
       const buf = Buffer.from(r.data, "base64");
       if (!buf.length) break;
