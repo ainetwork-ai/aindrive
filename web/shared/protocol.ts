@@ -17,7 +17,8 @@ export type RpcMethod =
   | "rename"
   | "delete"
   | "upload-chunk"
-  | "download-chunk";
+  | "download-chunk"
+  | "media-index";
 
 export const RPC_METHODS: ReadonlySet<RpcMethod> = new Set([
   "list",
@@ -29,6 +30,7 @@ export const RPC_METHODS: ReadonlySet<RpcMethod> = new Set([
   "delete",
   "upload-chunk",
   "download-chunk",
+  "media-index",
 ]);
 
 export type RpcParams =
@@ -40,7 +42,9 @@ export type RpcParams =
   | { method: "rename"; from: string; to: string }
   | { method: "delete"; path: string }
   | { method: "upload-chunk"; path: string; chunkId: number; total: number; data: string }
-  | { method: "download-chunk"; path: string; offset: number; length: number };
+  | { method: "download-chunk"; path: string; offset: number; length: number }
+  /** A file's 1 MiB chunk hash list (P2P media): the server verifies every chunk against it. */
+  | { method: "media-index"; path: string };
 
 export type DriveEntry = {
   name: string;
@@ -61,7 +65,8 @@ export type RpcResult =
   | { method: "rename"; ok: true }
   | { method: "delete"; ok: true }
   | { method: "upload-chunk"; ok: true; receivedBytes: number }
-  | { method: "download-chunk"; data: string; eof: boolean };
+  | { method: "download-chunk"; data: string; eof: boolean }
+  | { method: "media-index"; size: number; mtimeMs: number; chunk: number; leaves: string[] };
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;

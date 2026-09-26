@@ -2,7 +2,7 @@ export const PROTOCOL_VERSION = 1;
 
 export type RpcMethod =
   | "list" | "stat" | "read" | "write" | "mkdir" | "rename" | "delete"
-  | "upload-chunk" | "download-chunk"
+  | "upload-chunk" | "download-chunk" | "media-index"
   | "yjs-write" | "yjs-read"
   | "agent-ask"
   // Device-only (mobile/): bytes of one file the owner registered for a handoff link (lib/handoff.ts).
@@ -18,6 +18,7 @@ export type RpcParams =
   | { method: "delete"; path: string }
   | { method: "upload-chunk"; path: string; chunkId: number; total: number; data: string }
   | { method: "download-chunk"; path: string; offset: number; length: number }
+  | { method: "media-index"; path: string }
   | { method: "yjs-write"; docId: string; data: string }
   | { method: "yjs-read"; docId: string }
   | { method: "agent-ask"; agentId: string; query: string }
@@ -58,6 +59,7 @@ export type RpcResult =
   | { method: "delete"; ok: true }
   | { method: "upload-chunk"; ok: true; receivedBytes: number }
   | { method: "download-chunk"; data: string; eof: boolean }
+  | { method: "media-index"; size: number; mtimeMs: number; chunk: number; leaves: string[] }
   | { method: "yjs-write"; ok: true; bytes: number }
   | { method: "yjs-read"; data: string; bytes: number }
   | { method: "agent-ask"; answer: string; sources: AskSource[]; action?: Record<string, unknown> }

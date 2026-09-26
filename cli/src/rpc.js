@@ -1,5 +1,6 @@
 import { promises as fsp, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { mediaIndex } from "./media-index.js";
 import path from "node:path";
 import * as Y from "yjs";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
@@ -65,7 +66,7 @@ export function isSelfWrite(path) {
 const RPC_METHODS = new Set([
   "list", "stat", "read", "write", "mkdir", "rename", "delete",
   "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
-  "agent-ask",
+  "agent-ask", "media-index",
 ]);
 
 const HIDDEN = new Set([".aindrive", ".DS_Store", ".git"]);
@@ -297,6 +298,11 @@ export async function handleRpc(params, root) {
       const docId = String(params.docId || "");
       if (!/^[A-Za-z0-9_-]{8,64}$/.test(docId)) throw new Error("invalid docId");
       return { method: "yjs-stats", ...statsForDoc(root, docId) };
+    }
+    case "media-index": {
+      // a file's chunk hash list, for the server's verifying cache (P2P media)
+      const abs = safeResolve(root, params.path);
+      return { method: "media-index", ...(await mediaIndex(abs)) };
     }
     case "agent-ask": {
       // Web side has already verified caller identity + access policy.
