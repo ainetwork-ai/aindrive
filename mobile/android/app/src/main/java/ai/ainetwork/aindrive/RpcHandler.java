@@ -32,7 +32,15 @@ import java.util.Set;
  *              what is lost is local edit history, not correctness.
  *  - agent-ask: answered by the on-device photo-search agent (agent/AskRunner)
  *              over this drive's local index — no LLM API key on the phone,
- *              no network. Same {answer, sources} shape as the desktop agent.
+ *              no network. Same {answer, sources} shape as the desktop agent,
+ *              plus `action` when the question asked for one. Protocol v2
+ *              (advertised as cap "ask.v2" in the hello, {@link Hello}):
+ *              `mode` read|act, `root` folder prefix, `context` ignored —
+ *              see agent/AskScope.
+ *
+ * Every write that lands (write, a published upload's rename, delete) is
+ * reported to {@link Changes} so the drive's index follows without a full
+ * reindex: a fresh upload is findable by name, kind, date and place at once.
  *
  * Yjs snapshots live in app-private storage, never in the user's folder: the
  * phone's Documents directory should not grow an .aindrive/ control directory
@@ -44,17 +52,53 @@ final class RpcHandler {
             "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
             "agent-ask", "handoff-read", "thumbnail"));
 
+    /**
+     * The largest yjs snapshot kept (≈ 8.95 MiB): its yjs-read reply — base64 (4/3) plus the
+     * response envelope, well under 64 KiB — must fit one frame ({@link SendGate#MAX_MESSAGE_BYTES}).
+     */
+    static final int MAX_YJS_BYTES = (int) ((SendGate.MAX_MESSAGE_BYTES - 64 * 1024) / 4 * 3);
+
     private final SafFs fs;
     private final Context ctx;
     private final File yjsDir;
     private final java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask;
+    private final Changes changes;
+
+    /** What changed in the folder after an RPC wrote to it — the service keeps the index in step. */
+    interface Changes {
+        /** A file was written in place (the `write` RPC). */
+        void written(String path);
+        /** `from` was renamed to `to` — how an upload is published (.aindrive/uploads/x.part → its real path). */
+        void moved(String from, String to);
+        /** `path` (a file or a folder) is gone. */
+        void removed(String path);
+
+        Changes NONE = new Changes() {
+            @Override public void written(String path) { }
+            @Override public void moved(String from, String to) { }
+            @Override public void removed(String path) { }
+        };
+    }
 
     RpcHandler(Context ctx, SafFs fs, String driveId,
                java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask) {
+        this(ctx, fs, driveId, ask, Changes.NONE);
+    }
+
+    RpcHandler(Context ctx, SafFs fs, String driveId,
+               java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask, Changes changes) {
         this.fs = fs;
         this.ctx = ctx.getApplicationContext();
         this.yjsDir = new File(ctx.getFilesDir(), "yjs/" + sanitizeId(driveId));
         this.ask = ask;
+        this.changes = changes == null ? Changes.NONE : changes;
+    }
+
+    /** Every RPC method this host answers, sorted — sent as `methods` in the agent-hello. */
+    static List<String> methods() {
+        List<String> out = new java.util.ArrayList<>(METHODS);
+        java.util.Collections.sort(out);
+        return out;
     }
 
     JSONObject handle(JSONObject params) throws Exception {
@@ -91,6 +135,7 @@ final class RpcHandler {
                 String path = params.optString("path", "");
                 byte[] data = decodeBody(params.optString("content", ""), params.optString("encoding"));
                 fs.write(path, data, false);
+                changes.written(path);
                 return result(method).put("ok", true).put("bytes", data.length);
             }
             case "mkdir": {
@@ -98,11 +143,15 @@ final class RpcHandler {
                 return result(method).put("ok", true);
             }
             case "rename": {
-                fs.rename(params.optString("from", ""), params.optString("to", ""));
+                String from = params.optString("from", ""), to = params.optString("to", "");
+                fs.rename(from, to);
+                changes.moved(from, to);
                 return result(method).put("ok", true);
             }
             case "delete": {
-                fs.delete(params.optString("path", ""));
+                String path = params.optString("path", "");
+                fs.delete(path);
+                changes.removed(path);
                 return result(method).put("ok", true);
             }
             case "upload-chunk": {
@@ -138,7 +187,9 @@ final class RpcHandler {
             case "yjs-write": {
                 String docId = requireDocId(params.optString("docId", ""));
                 byte[] data = Base64.decode(params.optString("data", ""), Base64.DEFAULT);
-                if (data.length > 4 * SafFs.MAX_CHUNK_BYTES) throw new IOException("yjs blob too large");
+                // Only what can be read back: a bigger snapshot would be stored, then refused on every
+                // yjs-read ("response too large"). Refused here, the previous snapshot stays readable.
+                if (data.length > MAX_YJS_BYTES) throw new IOException("yjs blob too large");
                 if (!yjsDir.exists() && !yjsDir.mkdirs()) throw new IOException("cannot create yjs dir");
                 File f = new File(yjsDir, docId + ".bin");
                 writeFileBytes(f, data);
@@ -166,17 +217,36 @@ final class RpcHandler {
             case "agent-ask": {
                 // The web side already checked who may ask; the phone has exactly
                 // one kind of agent (photo search over this drive's index), so
-                // agentId is validated for shape only and agent.json is never read.
+                // agentId is validated for shape only and agent.json is never read
+                // (the server sends "agt_device" for a drive with no agent record).
                 String agentId = params.optString("agentId", "");
                 if (!agentId.matches("agt_[A-Za-z0-9_-]{6,32}")) throw new IOException("bad_agent_id");
-                JSONObject r = ask.get().ask(params.optString("query", ""));
-                return result(method).put("answer", r.getString("answer")).put("sources", r.getJSONArray("sources"));
+                // v2: mode (read|act; absent = act, as before) and root (folder prefix). `context`
+                // is accepted and ignored — follow-up filters are the in-app chat's, not the server's.
+                ai.ainetwork.aindrive.agent.AskScope scope = ai.ainetwork.aindrive.agent.AskScope.fromParams(params);
+                JSONObject r = scope.confine(ask.get().ask(params.optString("query", ""), null, scope));
+                return askResult(r);
             }
         }
         throw new IOException("unknown method");
     }
 
     // ------------------------------------------------------------ helpers
+
+    /**
+     * The agent-ask reply: answer, sources and, when the question asked for one, the action —
+     * minus `folderUri`, a content:// URI of this phone's storage that only the in-app shell uses.
+     */
+    static JSONObject askResult(JSONObject r) throws Exception {
+        JSONObject out = result("agent-ask").put("answer", r.getString("answer")).put("sources", r.getJSONArray("sources"));
+        JSONObject action = r.optJSONObject("action");
+        if (action != null) {
+            JSONObject a = new JSONObject(action.toString());
+            a.remove("folderUri");
+            out.put("action", a);
+        }
+        return out;
+    }
 
     private static JSONObject result(String method) throws Exception {
         return new JSONObject().put("method", method);
