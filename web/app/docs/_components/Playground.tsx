@@ -100,8 +100,12 @@ function answer(skill: string, args: Record<string, unknown>): A2uiMessage[] {
 const AINUI_ENV: AinuiEnv = { canWrite: true, canDelete: true, rootLabel: DRIVE };
 
 /** Asset refs resolve to the fake drive's bytes (a real host uses its authorized route). */
-function resolveAsset(a: { path: string; mime: string }): string {
-  return a.mime === "image/svg+xml" && FILES[a.path] ? `data:image/svg+xml;base64,${FILES[a.path]}` : "";
+function resolveAsset(a: { path: string; mime: string }, opts?: { download?: boolean }): string {
+  const bytes = FILES[a.path];
+  if (bytes === undefined) return "";
+  if (a.mime === "image/svg+xml") return bytes ? `data:image/svg+xml;base64,${bytes}` : "";
+  // Text files have no inline preview here, but FileView's download link still saves them.
+  return opts?.download ? `data:text/plain;charset=utf-8,${encodeURIComponent(bytes)}` : "";
 }
 
 type Mode = "basic" | "ainui";

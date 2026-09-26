@@ -8,7 +8,7 @@ mapping from the user's clicks back to skills. MCP, A2A and AG-UI all send the
 |------|------|
 | `index.ts` | `a2uiForSkill(skill, args, result, driveId)` → A2UI messages; `parseA2uiAction` / `actionToSkill` (clicks → skill); `commandToSkill` (text grammar shared by A2A + AG-UI); protocol constants (MIME, catalog, A2A extension URI, AG-UI activity type, MCP `_meta` key). Pure; importable from client code. |
 | `ainui.ts` | AINUI v1 (`docs/AINUI.md`): the same messages with the AINUI catalog — `ainuiForSkill(skill, args, result, driveId, env)` (folder grid/list, file view with `{$asset}` refs, editor) and `dispatchAinuiAction(action, deps)` (open/search/view/edit/new_file/save/delete, multi-step). Pure; IO (runSkill, allow-list, role, lib/mime) is injected by `lib/ainui.ts`. Only sent to clients that opt in. |
-| `renderer.js` | Dependency-free renderer for the emitted subset (plain ESM, browser), basic + AINUI components; `{$asset}` resolves via `opts.resolveAsset` or aindrive's own fs routes. Inlined into the MCP Apps view (`lib/mcp-ui.ts`) and used by the `/docs/a2ui` playground. |
+| `renderer.js` | Dependency-free renderer for the emitted subset (plain ESM, browser), basic + AINUI components; `{$asset}` resolves via `opts.resolveAsset` or aindrive's own fs routes, and FileView always adds a download link (`resolveAsset(asset, { download: true })`, default `fs/download`). Inlined into the MCP Apps view (`lib/mcp-ui.ts`) and used by the `/docs/a2ui` playground. |
 
 Where it's used:
 - MCP: `lib/mcp-http.ts`, which adds a result `_meta` field, the embedded resource, and the `a2ui_action` tool

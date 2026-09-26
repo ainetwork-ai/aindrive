@@ -14,8 +14,9 @@
  * Text `mono`, TextField `longText`, and `{$asset}` references, resolved by
  * `opts.resolveAsset(asset)` or — by default — through aindrive's own routes
  * (`{assetBase}/api/drives/{drive_id}/fs/thumbnail|stream?path=…`), which only
- * work where the viewer has aindrive's session. Unknown components draw their
- * children, else nothing.
+ * work where the viewer has aindrive's session. FileView's download link asks
+ * `opts.resolveAsset({...asset, variant: "original"}, { download: true })`
+ * (default: `fs/download`). Unknown components draw their children, else nothing.
  *
  * Plain ES module, browser-only APIs, no imports. Everything user-supplied is
  * written via textContent / escaped HTML; media URLs are limited to data:,
@@ -38,11 +39,20 @@ function humanSize(n) {
   return `${i === 0 ? v : v.toFixed(1)} ${u[i]}`;
 }
 
-/** aindrive's own byte routes for an AINUI asset (works where the viewer has the session cookie). */
-export function aindriveAssetUrl(asset, base = "") {
+/** URLs we let into a download link: the media set, plus data: types a browser saves rather than runs. */
+function safeDownloadUrl(u) {
+  const s = typeof u === "string" ? u : "";
+  return /^data:(text\/plain|application\/(pdf|octet-stream))[;,]/.test(s) ? s : safeMediaUrl(s);
+}
+
+/**
+ * aindrive's own byte routes for an AINUI asset (works where the viewer has the session cookie):
+ * thumb → fs/thumbnail, original → fs/stream (inline), or fs/download (attachment) with `{ download: true }`.
+ */
+export function aindriveAssetUrl(asset, base = "", { download = false } = {}) {
   if (!asset || typeof asset.drive_id !== "string" || typeof asset.path !== "string") return "";
-  const route = asset.variant === "thumb" ? "thumbnail" : "stream";
-  const v = typeof asset.v === "number" ? `&v=${asset.v}` : "";
+  const route = download ? "download" : asset.variant === "thumb" ? "thumbnail" : "stream";
+  const v = typeof asset.v === "number" && !download ? `&v=${asset.v}` : "";
   return `${base}/api/drives/${encodeURIComponent(asset.drive_id)}/fs/${route}?path=${encodeURIComponent(asset.path)}${v}`;
 }
 
@@ -91,9 +101,10 @@ function pointerSet(obj, pointer, value) {
  * @param {HTMLElement} container
  * @param {{
  *   onAction?: (action: any) => unknown,
- *   resolveAsset?: (asset: { drive_id: string, path: string, variant: string, mime: string, v?: number }) => string,
+ *   resolveAsset?: (asset: { drive_id: string, path: string, variant: string, mime: string, v?: number }, opts?: { download?: boolean }) => string,
  *   assetBase?: string,
- * }} [opts]  resolveAsset: AINUI {$asset} → URL (default: aindrive's own fs routes under assetBase)
+ * }} [opts]  resolveAsset: AINUI {$asset} → URL (default: aindrive's own fs routes under assetBase);
+ *   `{ download: true }` asks for a URL that saves the original bytes (FileView's download link).
  */
 export function createA2uiRenderer(container, { onAction, resolveAsset, assetBase = "" } = {}) {
   /** surfaceId → { components: Map, data: object } */
@@ -105,6 +116,15 @@ export function createA2uiRenderer(container, { onAction, resolveAsset, assetBas
       return safeMediaUrl(resolveAsset ? resolveAsset(v.$asset) : aindriveAssetUrl(v.$asset, assetBase));
     }
     return safeMediaUrl(v);
+  }
+
+  /** A `Media` value → a safe URL that saves the original bytes, or "". */
+  function downloadUrl(v) {
+    if (v && typeof v === "object" && v.$asset) {
+      const a = { ...v.$asset, variant: "original" };
+      return safeDownloadUrl(resolveAsset ? resolveAsset(a, { download: true }) : aindriveAssetUrl(a, assetBase, { download: true }));
+    }
+    return safeDownloadUrl(v);
   }
 
   function kindIcon(kind) {
@@ -279,7 +299,8 @@ export function createA2uiRenderer(container, { onAction, resolveAsset, assetBas
         const name = String(resolve(c.name, surf, scope) ?? "");
         const mime = String(resolve(c.mime, surf, scope) ?? "");
         const size = resolve(c.size, surf, scope);
-        const src = mediaUrl(resolve(c.src, surf, scope));
+        const rawSrc = resolve(c.src, surf, scope);
+        const src = mediaUrl(rawSrc);
         const tag = !src ? "" : mime.startsWith("image/") ? "img" : mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "";
         if (tag) {
           const m = document.createElement(tag);
@@ -303,6 +324,20 @@ export function createA2uiRenderer(container, { onAction, resolveAsset, assetBas
         sz.className = "a2ui-text-caption";
         sz.textContent = humanSize(size);
         info.append(n, sz);
+        // Download affordance (AINUI §3) for every kind — the only way to reach a PDF's / archive's bytes.
+        const href = downloadUrl(rawSrc);
+        if (href) {
+          const a = document.createElement("a");
+          a.className = "a2ui-button a2ui-fileview-download";
+          a.href = href;
+          a.download = name;
+          // Sandboxed iframes (MCP Apps) may block downloads; a new tab still reaches the bytes.
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.textContent = "⬇ Download";
+          a.setAttribute("aria-label", name ? `Download ${name}` : "Download");
+          info.appendChild(a);
+        }
         el.appendChild(info);
         break;
       }
@@ -450,6 +485,7 @@ export const A2UI_RENDERER_CSS = `
 .a2ui-fileview-audio{width:100%}
 .a2ui-fileview-icon{display:flex;align-items:center;justify-content:center;height:160px;border-radius:10px;background:#f2f5f9;font-size:56px}
 .a2ui-fileview-info{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}.a2ui-fileview-name{font-weight:600;word-break:break-all}
+.a2ui-fileview-download{display:inline-flex;align-items:center;min-height:36px;box-sizing:border-box;margin-left:auto;color:inherit;text-decoration:none}
 .a2ui-breadcrumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-size:13px}
 .a2ui-crumb{display:inline-flex;align-items:center;font:inherit;color:#0b57d0;border:0;background:none;padding:0 6px;border-radius:8px;cursor:pointer;min-height:36px;box-sizing:border-box}
 .a2ui-crumb:hover{background:#eaeef4}.a2ui-crumb-current{color:inherit;font-weight:600;cursor:default}
