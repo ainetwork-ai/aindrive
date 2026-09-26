@@ -64,7 +64,14 @@ async function authorsCached(store: AnyStore, docPath: string[]) {
 }
 const clientsOf = (update: Uint8Array): number[] => { try { return [...new Set(Y.decodeUpdate(update).structs.map((x) => x.id.client))]; } catch { return []; } };
 
-export function acceptFor(driveId: string, store: AnyStore) {
+/** ainmem transactions ride as one entry each (ainmem docs/willow-ainmem-plan.md Task 3). */
+const AINMEM_MAX = 1n << 20n;
+const writes = (driveId: string, userId: string) => (RANK[roleOf(driveId, userId, "")] ?? 0) >= WRITE;
+
+/** `vouchedBy`: the signed-in caller handing entries in (the ingest route). An ainmem
+ *  teamspace is shared through the account that linked the drive, so its members need
+ *  not be drive members themselves — the linker's write right on the drive covers them. */
+export function acceptFor(driveId: string, store: AnyStore, opts: { vouchedBy?: string } = {}) {
   return async (w: WireEntry): Promise<string | null> => {
     const parts = partsOf(w.entry.path);
     const subspace = toHex(w.entry.subspaceId);
@@ -94,6 +101,15 @@ export function acceptFor(driveId: string, store: AnyStore) {
       if (!v.ok) return v.reason === "unknown-device" && parts[1] === "cert" ? "bad-cert" : v.reason;
       return null;
     }
+    if (parts[0] === "ainmem") {
+      // ["ainmem", teamspaceId, pageId, txId]: one transaction, signed by the device that made it
+      if (parts.length !== 4 || parts.some((p) => !p) || w.entry.payloadLength > AINMEM_MAX) return "outside-grant";
+      const person = await resolvePerson(subspace, certs, revs, trust(), now > w.entry.timestamp ? now : w.entry.timestamp);
+      if (!person) return (await resolvePerson(subspace, certs, [], trust())) ? "revoked" : "unknown-device";
+      if (isRevoked(person.userId, subspace)) return "revoked";
+      if (writes(driveId, person.userId) || (opts.vouchedBy && writes(driveId, opts.vouchedBy))) return null;
+      return "not-a-member";
+    }
     if (parts[0] !== "doc") return "outside-grant";
     const u = parts.indexOf("~u");
     if (u < 2 || parts.length > u + 2) return "outside-grant";
@@ -117,6 +133,7 @@ export function allowFor(driveId: string, userId: string | null) {
   return (e: Pick<Entry<Uint8Array, Uint8Array, Uint8Array>, "path">): boolean => {
     const parts = partsOf(e.path);
     if (parts[0] === "_id") return true;
+    if (parts[0] === "ainmem") return (RANK[roleOf(driveId, userId, "")] ?? 0) >= RANK.viewer;
     if (parts[0] !== "doc") return false;
     const u = parts.indexOf("~u");
     const path = parts.slice(1, u < 0 ? parts.length : u).join("/");
