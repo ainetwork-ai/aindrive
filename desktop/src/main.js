@@ -191,9 +191,10 @@ async function shareFolder(picked) {
   broadcast();
 }
 
-/** Open a shared folder in Finder — never "open" a bundle, which would launch it. */
+/** Open a shared folder in Finder — never "open" anything that has an extension
+ *  (.app, .pkg, .prefPane… are folders that macOS would launch or install). */
 function reveal(folder) {
-  if (/\.(app|command|tool|workflow|terminal)\/?$/i.test(folder)) shell.showItemInFolder(folder);
+  if (/\.[A-Za-z0-9-]+\/?$/.test(basename(folder))) shell.showItemInFolder(folder);
   else void shell.openPath(folder);
 }
 

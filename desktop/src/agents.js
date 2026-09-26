@@ -217,11 +217,13 @@ export class AgentManager extends EventEmitter {
     const c = a.child;
     if (!c) return;
     a.killing = true;
-    c.kill();
+    // a utility process has no pid (and ignores kill) until it has spawned
+    if (c.pid === undefined && typeof (/** @type {any} */ (c)).once === "function") (/** @type {any} */ (c)).once("spawn", () => c.kill());
+    else c.kill();
     // the CLI drains in-flight requests first; past that, it is stuck
     clearTimeout(a.killTimer);
     a.killTimer = setTimeout(() => {
-      if (a.child === c) { try { process.kill(/** @type {number} */ (c.pid), "SIGKILL"); } catch { /* gone */ } }
+      if (a.child === c && c.pid !== undefined) { try { process.kill(c.pid, "SIGKILL"); } catch { /* gone */ } }
     }, STOP_GRACE_MS);
   }
 
