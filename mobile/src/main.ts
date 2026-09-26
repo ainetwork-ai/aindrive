@@ -1501,6 +1501,17 @@ async function openSearch() {
 // ---------------------------------------------------------------- render
 
 /** True while the user is typing somewhere in the app — a full re-render would drop the keyboard. */
+/**
+ * A message just went out: on a phone the keyboard goes away (it covers the answer); on the Mac the
+ * field keeps focus for the next message — emptied now, or the redraw that keeps focus would put the
+ * sent text back.
+ */
+function sent(input: HTMLInputElement) {
+  if (!ON_MAC) { input.blur(); return; }
+  input.value = "";
+  input.focus({ preventScroll: true });
+}
+
 function typing(): boolean {
   const el = document.activeElement;
   return el instanceof HTMLInputElement && (el.type === "text" || el.type === "search" || el.type === "email" || el.type === "password") || el instanceof HTMLTextAreaElement;
@@ -2155,7 +2166,7 @@ function bindSearch() {
   bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
-  bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; i.blur(); } void ask(); });
+  bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; sent(i); } void ask(); });
   document.getElementById("ask-input")?.addEventListener("focus", () => {
     // The keyboard shrinks the view: keep the newest turn visible above the composer.
     setTimeout(() => { const b = document.getElementById("ask-body"); if (b && askScroll.atBottom) b.scrollTop = b.scrollHeight; }, 250);
@@ -2218,7 +2229,7 @@ function bindSearch() {
   }
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
-  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; input.blur(); void ask(); } });
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; sent(input); void ask(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
     const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];
