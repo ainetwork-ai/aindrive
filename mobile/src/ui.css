@@ -385,3 +385,7 @@ input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; dis
 .sheet .menu-wrap > .menu { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
   min-width: 0; z-index: 70; border-radius: 16px; padding: 6px 0; box-shadow: 0 -4px 24px rgb(0 0 0 / .18); }
 .sheet .menu-wrap > .menu button { padding: 14px 18px; font-size: 16px; }
+/* Sale just created, at the top of the Sell card. */
+.sold-banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px; margin: 10px 0; border-radius: 12px; background: #e6f4ea; color: #0d652d; font-size: 14px; }
+.sold-banner .hint { color: #1e4620; }
+.list li.selected { background: #e8f0fe; border-radius: 10px; }
