@@ -104,3 +104,8 @@ verified wallet *payment* may still bootstrap/attribute an account (a trusted
 facilitator attests the payer controls the key), but **payment is not
 authentication** — login (SIWE, origin+nonce bound) and payment (x402) are
 separate proofs.
+
+A wallet the owner **signs in with** (login-enabled) is also their default
+**payout** wallet: linking it or signing in with it sets it as the root payout
+wallet of every drive they own that has none (`adoptOwnerPayoutWallet`), and new
+drives start with it. Drives that already have a payout wallet keep theirs.

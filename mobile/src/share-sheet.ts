@@ -20,7 +20,7 @@ export class ShareSheet implements Sheet {
 
   /** `onNeedPayout`: selling needs a payout wallet first — open the payout wallet screen for this folder. */
   constructor(private ctx: Ctx, private driveId: string, private path: string, private name: string,
-              private onNeedPayout?: (path: string) => void) { void this.load(); }
+              private onNeedPayout?: (path: string) => void, private focusSell = false) { void this.load(); }
 
   private async load() {
     this.loading = true; this.ctx.rerender();
@@ -93,7 +93,7 @@ export class ShareSheet implements Sheet {
       </div>
 
       ${owner ? `
-      <div class="scard">
+      <div class="scard" id="sh-sell-card">
         <div class="scard-h">${I.dollar} Sell</div>
         <div class="scard-s">A paid viewer link. The buyer pays once in the token you choose, then can open it.</div>
         <div class="row2"><input type="number" id="sh-price" min="0.01" max="9999.99" step="0.01" placeholder="Price, e.g. 5" />
@@ -121,6 +121,11 @@ export class ShareSheet implements Sheet {
 
   bind(root: HTMLElement) {
     on(root, "#sh-close", "click", () => this.ctx.close());
+    // Opened from "Sell…": bring the Sell card into view once it has rendered.
+    if (this.focusSell && !this.loading) {
+      this.focusSell = false;
+      setTimeout(() => { root.querySelector("#sh-sell-card")?.scrollIntoView({ block: "start", behavior: "smooth" }); (root.querySelector("#sh-price") as HTMLInputElement | null)?.focus({ preventScroll: true }); }, 50);
+    }
     on(root, "#sh-invite", "click", () => this.act(async () => {
       const email = val(root, "sh-email");
       if (!/.+@.+\..+/.test(email)) throw new Error("Enter an email address");

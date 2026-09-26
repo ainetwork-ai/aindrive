@@ -25,7 +25,7 @@ export function useWalletLink() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const link = useCallback(async (): Promise<boolean> => {
+  const link = useCallback(async (): Promise<false | { payoutDrives: number }> => {
     if (!isConnected || !address) {
       setError("Connect a wallet first");
       return false;
@@ -60,7 +60,8 @@ export function useWalletLink() {
         if (res.status === 401) throw new Error("Sign in first, then add a wallet.");
         throw new Error(body.error || "could not add wallet");
       }
-      return true;
+      const out = await res.json().catch(() => ({}));
+      return { payoutDrives: Number(out.payoutDrives) || 0 };
     } catch (e) {
       setError((e as Error).message || "could not add wallet");
       return false;

@@ -380,3 +380,8 @@ input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; dis
 /* Files handed to an A2A agent as links. */
 .card.handoff { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin: 0 0 8px; font-size: 13px; }
 .card.handoff span { flex: 1; min-width: 0; }
+/* In a folder, a file's "more" menu is a bottom sheet: a dropdown inside a tile is clipped by it and
+   covered by the next row (the Sell/Delete items were unreachable). */
+.sheet .menu-wrap > .menu { position: fixed; left: 8px; right: 8px; top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  min-width: 0; z-index: 70; border-radius: 16px; padding: 6px 0; box-shadow: 0 -4px 24px rgb(0 0 0 / .18); }
+.sheet .menu-wrap > .menu button { padding: 14px 18px; font-size: 16px; }

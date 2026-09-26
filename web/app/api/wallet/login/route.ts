@@ -4,6 +4,7 @@ import { isAddress } from "viem";
 import { consumeNonce, resolveAccountForWallet, walletLoginAccount } from "@/lib/wallet";
 import { parseSiweLoginFields, verifyWalletSignature } from "@/lib/siwe-verify";
 import { setCookie } from "@/lib/session";
+import { adoptOwnerPayoutWallet } from "@/lib/drives";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
 import { activeChainId } from "@/lib/payment-tokens";
@@ -75,5 +76,7 @@ export async function POST(req: Request) {
   const accountId = existing?.accountId ?? resolveAccountForWallet(address);
 
   await setCookie(accountId);
+  // The wallet you sign in with is also where your sales pay out (drives without a payout wallet).
+  adoptOwnerPayoutWallet(accountId, address);
   return NextResponse.json({ ok: true, address: address.toLowerCase() });
 }
