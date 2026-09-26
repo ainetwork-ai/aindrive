@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { safeNextPath } from "@/lib/safe-next";
+import GoogleSignInButton from "@/components/google-signin-button";
 
 // Verify-before-create: (1) enter email → a 6-digit code is emailed; (2) enter
 // the code + name + password to create the account. Every account therefore has
@@ -103,6 +104,17 @@ function SignupForm() {
             Use a different email
           </button>
         </form>
+      )}
+
+      {step === "email" && (
+        <>
+          <div className="mt-6 flex items-center gap-3 text-xs text-drive-muted">
+            <span className="h-px flex-1 bg-drive-border" />
+            or
+            <span className="h-px flex-1 bg-drive-border" />
+          </div>
+          <GoogleSignInButton next={safeNext} text="signup_with" />
+        </>
       )}
 
       <p className="mt-4 text-sm text-drive-muted text-center">

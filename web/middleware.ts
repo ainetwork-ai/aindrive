@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
+  // accounts.google.com: Google Identity Services — the "Continue with Google"
+  // button's script, its stylesheet and its iframe/popup (components/google-signin-button)
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com/gsi/client",
+  "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
   "font-src 'self' data:",
   "img-src 'self' data: blob: https:",
   "connect-src 'self' wss: https:",
@@ -14,7 +16,7 @@ const CSP = [
   // while injected wallets (OKX/MetaMask, no iframe) still work. Domains per
   // Reown's recommended CSP (connect-src already covered by the https:/wss:
   // wildcards above).
-  "frame-src 'self' blob: https://verify.walletconnect.com https://verify.walletconnect.org https://secure.walletconnect.com https://secure.walletconnect.org https://keys.coinbase.com",
+  "frame-src 'self' blob: https://accounts.google.com https://verify.walletconnect.com https://verify.walletconnect.org https://secure.walletconnect.com https://secure.walletconnect.org https://keys.coinbase.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",
