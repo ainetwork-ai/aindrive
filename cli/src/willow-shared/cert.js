@@ -4,7 +4,7 @@ import { sign, verify } from "./keys.js";
 const body = (c) => canonicalJson({ kind: "aindrive-device-cert", ...c });
 const linkBody = (address, userId) => canonicalJson({ kind: "aindrive-wallet-link", address: address.toLowerCase(), userId });
 const revBody = (r) => canonicalJson({ kind: "aindrive-device-revocation", ...r });
-const walletCertMessageLine = (deviceKey) => `aindrive device: ed25519:${toHex(deviceKey)}`;
+const walletCertMessageLine = (deviceKey) => `urn:aindrive:device:ed25519:${toHex(deviceKey)}`;
 async function issueSigned(signer, issuer, deviceKey, userId, label, at) {
   const c = { v: 1, deviceKey: toHex(deviceKey), userId, label, issuedAt: at.toString(), issuer };
   return { ...c, sig: toHex(await sign(signer, body(c))) };
@@ -97,6 +97,7 @@ async function resolvePerson(deviceKeyHex, certs, revocations, trust, at) {
   const walk = async (key, depth, t, seen) => {
     if (depth > 8 || seen.has(key)) return null;
     const next = new Set(seen).add(key);
+    let best = null;
     for (const c of goodCerts) {
       if (c.deviceKey !== key) continue;
       let p = null;
@@ -105,9 +106,11 @@ async function resolvePerson(deviceKeyHex, certs, revocations, trust, at) {
       } catch {
         p = null;
       }
-      if (p && !await revoked(key, p.userId, t)) return p;
+      if (!p || await revoked(key, p.userId, t)) continue;
+      if (p.strength === "wallet") return p;
+      best ??= p;
     }
-    return null;
+    return best;
   };
   const certPerson = async (c, depth, seen) => {
     const { sig, ...rest } = c;
@@ -121,7 +124,8 @@ async function resolvePerson(deviceKeyHex, certs, revocations, trust, at) {
       return parent && parent.userId === c.userId ? parent : null;
     }
     const w = c.issuer;
-    if (!w.message.split(/\r?\n/).includes(`aindrive device: ed25519:${c.deviceKey}`)) return null;
+    const want = `urn:aindrive:device:ed25519:${c.deviceKey}`;
+    if (!w.message.split(/\r?\n/).some((l) => l.trim() === want || l.trim() === `- ${want}`)) return null;
     if ((await trust.verifyWallet(w.message, w.signature))?.toLowerCase() !== w.address) return null;
     if (w.link.address !== w.address || w.link.userId !== c.userId || !await linkOk(w.link, trust)) return null;
     return { userId: c.userId, strength: "wallet" };

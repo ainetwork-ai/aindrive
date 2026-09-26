@@ -22,7 +22,9 @@ const body = (c: Omit<Cert, "sig">) => canonicalJson({ kind: "aindrive-device-ce
 const linkBody = (address: string, userId: string) => canonicalJson({ kind: "aindrive-wallet-link", address: address.toLowerCase(), userId });
 const revBody = (r: Omit<Revocation, "sig">) => canonicalJson({ kind: "aindrive-device-revocation", ...r });
 
-export const walletCertMessageLine = (deviceKey: Uint8Array) => `aindrive device: ed25519:${toHex(deviceKey)}`;
+/** The device key as a SIWE resource (EIP-4361 `Resources:` list): the sign-in
+ *  signature people already make then also certifies this device (plan 4). */
+export const walletCertMessageLine = (deviceKey: Uint8Array) => `urn:aindrive:device:ed25519:${toHex(deviceKey)}`;
 
 async function issueSigned(signer: DeviceKeypair, issuer: Issuer, deviceKey: Uint8Array, userId: string, label: string, at: bigint): Promise<Cert> {
   const c = { v: 1 as const, deviceKey: toHex(deviceKey), userId, label, issuedAt: at.toString(), issuer };
@@ -134,13 +136,17 @@ export async function resolvePerson(deviceKeyHex: string, certs: Cert[], revocat
   const walk = async (key: string, depth: number, t: bigint | undefined, seen: Set<string>): Promise<Person | null> => {
     if (depth > 8 || seen.has(key)) return null;
     const next = new Set(seen).add(key);
+    // the strongest valid certificate wins: wallet over attested (plan 4)
+    let best: Person | null = null;
     for (const c of goodCerts) {
       if (c.deviceKey !== key) continue;
       let p: Person | null = null;
       try { p = await certPerson(c, depth, next); } catch { p = null; }
-      if (p && !(await revoked(key, p.userId, t))) return p;
+      if (!p || (await revoked(key, p.userId, t))) continue;
+      if (p.strength === "wallet") return p;
+      best ??= p;
     }
-    return null;
+    return best;
   };
 
   const certPerson = async (c: Cert, depth: number, seen: Set<string>): Promise<Person | null> => {
@@ -155,7 +161,8 @@ export async function resolvePerson(deviceKeyHex: string, certs: Cert[], revocat
       return parent && parent.userId === c.userId ? parent : null;
     }
     const w = c.issuer;
-    if (!w.message.split(/\r?\n/).includes(`aindrive device: ed25519:${c.deviceKey}`)) return null;
+    const want = `urn:aindrive:device:ed25519:${c.deviceKey}`;
+    if (!w.message.split(/\r?\n/).some((l) => l.trim() === want || l.trim() === `- ${want}`)) return null;
     if ((await trust.verifyWallet(w.message, w.signature))?.toLowerCase() !== w.address) return null;
     if (w.link.address !== w.address || w.link.userId !== c.userId || !(await linkOk(w.link, trust))) return null;
     return { userId: c.userId, strength: "wallet" };

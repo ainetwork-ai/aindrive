@@ -80,4 +80,29 @@ describe("device certificates", () => {
     const r = await revoke(eve, phone.publicKey, "u-mom", T0 + 1n);
     expect(await resolvePerson(toHex(phone.publicKey), [c, ce], [r], trust, T0 + 2n)).not.toBeNull();
   });
+
+  it("plan 4: the SIWE resource line certifies the device; a different key does not", async () => {
+    const { aindrive } = await setup();
+    const d = await generateDeviceKey();
+    const line = walletCertMessageLine(d.publicKey);
+    expect(line).toBe(`urn:aindrive:device:ed25519:${toHex(d.publicKey)}`);
+    const message = `aindrive.example wants you to sign in with your Ethereum account:\n0xabc\n\nsign in\n\nURI: https://x\nVersion: 1\nChain ID: 1\nNonce: n\nIssued At: t\nResources:\n- ${line}`;
+    const link = await signLink(aindrive, "0xabc", "u-mom");
+    const trust: Trust = { attestationKeys: [toHex(aindrive.publicKey)], verifyWallet: async (m) => (m === message ? "0xabc" : null) };
+    const cert = issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "s", link });
+    expect(await resolvePerson(toHex(d.publicKey), [cert], [], trust)).toEqual({ userId: "u-mom", strength: "wallet" });
+    const other = await generateDeviceKey();
+    const forged = issueWalletCert({ deviceKey: other.publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "s", link });
+    expect(await resolvePerson(toHex(other.publicKey), [forged], [], trust)).toBeNull();
+  });
+
+  it("plan 4: a device with an attested and a wallet cert resolves to the stronger, wallet", async () => {
+    const { aindrive } = await setup();
+    const d = await generateDeviceKey();
+    const message = `x\nResources:\n- ${walletCertMessageLine(d.publicKey)}`;
+    const trust: Trust = { attestationKeys: [toHex(aindrive.publicKey)], verifyWallet: async () => "0xabc" };
+    const attested = await issueAttestedCert(aindrive, d.publicKey, "u-mom", "a", T0);
+    const wallet = issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "w", at: T0, address: "0xabc", message, signature: "s", link: await signLink(aindrive, "0xabc", "u-mom") });
+    expect(await resolvePerson(toHex(d.publicKey), [attested, wallet], [], trust)).toEqual({ userId: "u-mom", strength: "wallet" });
+  });
 });
