@@ -7,6 +7,7 @@ import { watchServerSilence } from "../agent.js";
 
 function fakeWs() {
   const ws = new EventEmitter();
+  ws._socket = new EventEmitter(); // the raw TCP socket under the WebSocket
   ws.terminated = 0;
   ws.terminate = () => { ws.terminated++; };
   return ws;
@@ -36,6 +37,14 @@ describe("watchServerSilence", () => {
     const ws = fakeWs();
     watchServerSilence(ws, { limitMs: 70_000, checkMs: 10_000 });
     for (let t = 0; t < 10; t++) { vi.advanceTimersByTime(20_000); ws.emit("message", "{}"); }
+    expect(ws.terminated).toBe(0);
+  });
+
+  it("bytes still arriving count as alive — a big frame on a slow link delays the ping behind it", () => {
+    vi.useFakeTimers();
+    const ws = fakeWs();
+    watchServerSilence(ws, { limitMs: 70_000, checkMs: 10_000 });
+    for (let t = 0; t < 10; t++) { vi.advanceTimersByTime(20_000); ws._socket.emit("data", Buffer.alloc(64 * 1024)); }
     expect(ws.terminated).toBe(0);
   });
 
