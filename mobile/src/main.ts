@@ -22,7 +22,7 @@ import { DEVICE, ON_MAC } from "./device";
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
-import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
+import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type A2aReply, type Handed } from "./a2a";
 import { prepareFolderHandoff } from "./folder-handoff";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
@@ -309,16 +309,36 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
   return agent ? { agent, text: m[2] || m[0] } : null;
 }
 
-/** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
+/**
+ * The answer an agent is writing right now, shown where "Working…" was until the turn lands in the thread.
+ * Painted in place (paintAskLive), not through render(): a re-render per streamed word would rebuild the
+ * composer under the keyboard.
+ */
+let askLive: A2aReply | null = null;
+const askLiveHtml = () => askLive?.text
+  ? `<p class="answer">${esc(askLive.text)}</p>`
+  : `<div class="searching"><span class="spinner"></span> ${esc(askLive?.step ?? "Working…")}</div>`;
+function paintAskLive() {
+  const el = document.getElementById("ask-live");
+  if (!el) return;
+  el.innerHTML = askLiveHtml();
+  const bodyEl = document.getElementById("ask-body");
+  if (bodyEl && askScroll.atBottom) bodyEl.scrollTop = bodyEl.scrollHeight;
+}
+
+/** Ask A2A agents in parallel; one line per agent ("Name: reply"). A single agent's answer streams in (askLive). */
 async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }): Promise<{ answer: string; errors: string[] }> {
+  askLive = null;
+  const onLive = agents.length === 1 ? (live: A2aReply) => { askLive = live; paintAskLive(); } : undefined;
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
-      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed);
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed, onLive);
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
   }));
+  askLive = null;
   return { answer: parts.filter((p) => p.ok).map((p) => p.line).join("\n\n"), errors: parts.filter((p) => !p.ok).map((p) => p.line) };
 }
 let thread: Turn[] = [];
@@ -2174,7 +2194,7 @@ function searchSheet(): string {
   }).join("");
   const body = `
     ${turns}
-    ${askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>` : ""}
+    ${askBusy ? `<div id="ask-live">${askLiveHtml()}</div>` : ""}
     ${!thread.length && !askBusy && chatScope ? `<p class="hint" style="margin:8px 2px">Ask anything about the files in “${esc(chatScope.label)}”.</p>` : ""}
     ${!thread.length && !askBusy && !chatScope ? `
       ${SUGGESTIONS.map((g) => `

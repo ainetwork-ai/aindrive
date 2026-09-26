@@ -3,15 +3,17 @@
 // add any agent by pasting its URL, then chat with it from the agent sheet
 // instead of the on-device agent. The SDK resolves the AgentCard
 // (/.well-known/agent-card.json), picks the transport the card offers
-// (JSON-RPC or REST) and sends `message/send`; the reply is a Message or a Task
-// (status.message / artifacts). The contextId it returns is sent back so the
+// (JSON-RPC or REST) and streams the turn (`message/stream`, folded in a2a-stream.ts;
+// `message/send` when the card has no streaming). The contextId it returns is sent back so the
 // agent keeps the conversation.
 import { handoffParts, type Handed } from "./a2a-parts";
 export type { Handed, LinkedFile, HandoffMcp } from "./a2a-parts";
 export { HANDOFF_MCP_PART } from "./a2a-parts";
 import { Preferences } from "@capacitor/preferences";
 import { ClientFactory, ClientFactoryOptions, DefaultAgentCardResolver, JsonRpcTransportFactory, RestTransportFactory } from "@a2a-js/sdk/client";
-import type { AgentCard, Message, Task } from "@a2a-js/sdk";
+import type { AgentCard, Message } from "@a2a-js/sdk";
+import { a2aReplyStart, a2aReplyText, foldA2aEvent, type A2aReply } from "./a2a-stream";
+export type { A2aReply } from "./a2a-stream";
 
 export interface A2aAgent {
   id: string;
@@ -105,19 +107,12 @@ export async function discover(raw: string, token?: string): Promise<A2aAgent> {
   throw new Error(`No A2A agent card found at that address (${lastErr})`);
 }
 
-/** Text of the parts of a Message / Artifact. */
-function textOf(parts: unknown): string {
-  if (!Array.isArray(parts)) return "";
-  return parts.map((p) => {
-    const o = p as Record<string, unknown>;
-    if ((o.kind === "text" || o.type === "text") && typeof o.text === "string") return o.text;
-    if (o.kind === "data" && o.data) return "```\n" + JSON.stringify(o.data, null, 2) + "\n```";
-    if (o.kind === "file" && o.file) return `📎 ${String((o.file as Record<string, unknown>).name ?? "file")}`;
-    return "";
-  }).filter(Boolean).join("\n");
-}
-
-export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }): Promise<{ text: string; contextId?: string }> {
+/**
+ * One turn with an agent, streamed (`message/stream`): `onLive` sees the answer grow and the step the agent
+ * is on. An agent whose card does not offer streaming gets `message/send` instead (the SDK falls back), so
+ * this is the only way a turn is sent.
+ */
+export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }, onLive?: (live: A2aReply) => void): Promise<{ text: string; contextId?: string }> {
   const f = factory(agent.token || sessionBearer);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
@@ -125,14 +120,11 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
     parts: handoffParts(text, handed),
     ...(contextId ? { contextId } : {}),
   };
-  const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
-  if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? contextId };
-  // A Task: its status message, then any artifacts.
-  const task = r as Task;
-  const said = task.status?.message ? textOf(task.status.message.parts) : "";
-  const arts = (task.artifacts ?? []).map((a) => textOf(a.parts)).filter(Boolean).join("\n\n");
-  const out = [said, arts].filter(Boolean).join("\n\n");
-  const state = task.status?.state ?? "";
-  if (out) return { text: out, contextId: task.contextId ?? contextId };
-  return { text: state === "input-required" ? "The agent needs more input." : state ? `Task ${state}.` : "(empty reply)", contextId: task.contextId ?? contextId };
+  let reply = a2aReplyStart(contextId);
+  for await (const event of client.sendMessageStream({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } })) {
+    reply = foldA2aEvent(reply, event);
+    onLive?.(reply);
+    if (reply.done) break;
+  }
+  return { text: a2aReplyText(reply), contextId: reply.contextId };
 }
