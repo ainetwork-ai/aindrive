@@ -66,6 +66,10 @@ describe("drive page — stats paths only through readDenial", () => {
     expect(src).toMatch(/import \{[^}]*\breadDenial\b[^}]*\} from "@\/lib\/require-access"/);
     expect(src).toMatch(/readDenial\(driveId, p, role, user\.id\)/);
   });
+  it("marks grant-listing rows with the viewer's paywall locks, as fs/list marks a folder's children", () => {
+    expect(src).toMatch(/import \{[^}]*\bpaidLocksForPaths\b[^}]*\} from "@\/lib\/sale-access\.js"/);
+    expect(src).toMatch(/paidLocksForPaths\(driveId, grantRoots, roleAt, user\.id\)/);
+  });
   it("has exactly one agent stat call site — the gated one", () => {
     // a call passes arguments ("statEntry(driveId, …"); the definition declares them ("statEntry(driveId: …")
     expect(src.match(/statEntry\(driveId,/g)).toHaveLength(1);

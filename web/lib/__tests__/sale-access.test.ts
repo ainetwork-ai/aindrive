@@ -7,7 +7,7 @@ import { join } from "node:path";
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-sale-"));
 
 const { db } = await import("../db.js");
-const { paidAccessDenial, paidLocksForListing } = await import("../sale-access.js");
+const { paidAccessDenial, paidLocksForListing, paidLocksForPaths } = await import("../sale-access.js");
 
 // Integration coverage for the paid carve-out read gate (PERMISSIONS_MATRIX.md
 // §1, R-ACC-PAID-* / R-ACC-NEST-001). Drives real SQL over shares +
@@ -17,10 +17,10 @@ const OWNER = "u-owner";
 const BUYER = "u-buyer";
 const OTHER = "u-other";
 
-function addShare(id: string, path: string, price: number | null, opts: { expires_at?: string; currency?: string } = {}) {
+function addShare(id: string, path: string, price: number | null, opts: { expires_at?: string; currency?: string; listed?: boolean } = {}) {
   db.prepare(
     "INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency, listed, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
-  ).run(id, DRIVE, path, "viewer", "tok-" + id, price, opts.currency ?? "USDC", 1, opts.expires_at ?? null);
+  ).run(id, DRIVE, path, "viewer", "tok-" + id, price, opts.currency ?? "USDC", opts.listed === false ? 0 : 1, opts.expires_at ?? null);
 }
 function addReceipt(id: string, path: string, accountId: string) {
   db.prepare(
@@ -37,6 +37,7 @@ beforeAll(() => {
   addShare("s-premium", "premium", 10);              // paid folder
   addShare("s-secret", "premium/secret", 50);         // deeper, separately priced
   addShare("s-expired", "old", 5, { expires_at: "2020-01-01T00:00:00Z" }); // expired sale
+  addShare("s-private", "private", 7, { listed: false });  // sold by private link only
   addReceipt("r-buyer-premium", "premium", BUYER);    // BUYER bought /premium only
 });
 
@@ -83,6 +84,22 @@ describe("paidAccessDenial — paid carve-out read gate (DB)", () => {
 
   it("an expired sale no longer gates — path falls back to free", () => {
     expect(paidAccessDenial(DRIVE, "old/x.pdf", "viewer", OTHER)).toBeNull();
+  });
+
+  it("the denial says whether the gate is listed — the paywall offers Buy only for a listed sale", () => {
+    expect(paidAccessDenial(DRIVE, "premium/a.pdf", "viewer", OTHER)).toMatchObject({ listed: true });
+    expect(paidAccessDenial(DRIVE, "private/a.pdf", "viewer", OTHER)).toMatchObject({ gatePath: "private", listed: false });
+  });
+});
+
+describe("paidLocksForPaths — locks for rows at any paths (the grant listing)", () => {
+  it("keys locks by full path and judges each path by the viewer's role there", () => {
+    const roleAt = (p: string): "viewer" | "editor" => (p === "premium/secret" ? "editor" : "viewer");
+    const locks = paidLocksForPaths(DRIVE, ["premium", "premium/secret", "private", "docs"], roleAt, OTHER);
+    expect(locks.premium).toMatchObject({ price: 10, shareId: "s-premium", listed: true });
+    expect(locks["premium/secret"]).toBeUndefined(); // an editor there manages it
+    expect(locks.private).toMatchObject({ price: 7, listed: false });
+    expect(locks.docs).toBeUndefined(); // free
   });
 });
 
