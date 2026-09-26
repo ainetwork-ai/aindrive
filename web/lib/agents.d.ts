@@ -23,3 +23,8 @@ export function listConnectedDrives(): string[];
 export function disconnectAgent(driveId: string): boolean;
 /** An agent's list/stat result with entry names and paths in NFC (the server's path identity). */
 export function canonicalAgentResult<R>(result: R): R;
+/** Ping every interval; terminate a socket whose previous ping got no pong. */
+export function startHeartbeat(
+  ws: { on(event: "pong", cb: () => void): unknown; ping(): void; terminate(): void; readyState: number; OPEN: number },
+  opts?: { intervalMs?: number; onBeat?: () => void; onDead?: () => void },
+): ReturnType<typeof setInterval>;

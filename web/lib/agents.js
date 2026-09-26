@@ -47,6 +47,25 @@ export function disconnectAgent(driveId) {
 }
 
 /**
+ * Ping `ws` every `intervalMs`; terminate it if the previous ping got no pong.
+ * A socket whose agent vanished (laptop asleep, network gone) never closes on
+ * its own, so without this the drive stays "connected" and every request waits
+ * out the RPC timeout. terminate() fires "close", which drops the agent entry.
+ * Returns the interval handle (clear it on close).
+ */
+export function startHeartbeat(ws, { intervalMs = HEARTBEAT_INTERVAL_MS, onBeat = () => {}, onDead = () => {} } = {}) {
+  let answered = true;
+  ws.on("pong", () => { answered = true; });
+  return setInterval(() => {
+    if (ws.readyState !== ws.OPEN) return;
+    if (!answered) { onDead(); ws.terminate(); return; }
+    answered = false;
+    try { ws.ping(); } catch {}
+    onBeat();
+  }, intervalMs);
+}
+
+/**
  * An agent reports names as its filesystem spells them — NFD for files made by
  * macOS tools. The server's path identity is NFC (lib/path.js normalizePath),
  * and every name here is later compared with stored shares, grants and doc
@@ -149,11 +168,10 @@ export async function onAgentConnect(ws, req, query) {
     }, 2000).unref?.();
   }
 
-  const heartbeat = setInterval(() => {
-    if (ws.readyState !== ws.OPEN) return;
-    try { ws.ping(); } catch {}
-    db.prepare("UPDATE drives SET last_seen_at = datetime('now') WHERE id = ?").run(driveId);
-  }, HEARTBEAT_INTERVAL_MS);
+  const heartbeat = startHeartbeat(ws, {
+    onBeat: () => db.prepare("UPDATE drives SET last_seen_at = datetime('now') WHERE id = ?").run(driveId),
+    onDead: () => log.warn({ drive: driveId }, "agent missed a heartbeat — dropping its socket"),
+  });
 
   ws.on("message", (data) => {
     let msg;

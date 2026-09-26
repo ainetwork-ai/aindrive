@@ -14,6 +14,10 @@ const FS_DEBOUNCE_MS = 500;
 const DRAIN_TIMEOUT_MS = 10_000;
 const DRAIN_POLL_MS = 50;        // poll cadence while waiting for in-flight RPCs to drain
 const CLOSE_HANDSHAKE_MS = 200;  // grace for the WS close handshake to flush before exit
+// The server pings every 20s (web/lib/agents.js). Silence past 3.5 pings means
+// the connection went half-open — no "close" will ever come — so drop it.
+const SERVER_SILENCE_LIMIT_MS = 70_000;
+const SILENCE_CHECK_MS = 10_000;
 
 // Graceful shutdown state — module-level so signal handlers can reach it.
 let shuttingDown = false;
@@ -87,6 +91,27 @@ export async function runAgent({ root, drive, server }) {
   }
 }
 
+/**
+ * Terminate `ws` once the server has been silent (no ping, no message) for
+ * `limitMs`. A half-open connection — network blip, laptop sleep, a proxy
+ * dropping it without a close — never fires "close", so without this the
+ * reconnect loop never runs and the drive stays offline. terminate() fires
+ * "close", which runAgent turns into a reconnect.
+ */
+export function watchServerSilence(ws, { limitMs = SERVER_SILENCE_LIMIT_MS, checkMs = SILENCE_CHECK_MS } = {}) {
+  let lastHeard = Date.now();
+  const heard = () => { lastHeard = Date.now(); };
+  ws.on("ping", heard);
+  ws.on("message", heard);
+  const timer = setInterval(() => {
+    if (Date.now() - lastHeard < limitMs) return;
+    log.warn({ silentSec: Math.round((Date.now() - lastHeard) / 1000) }, "server went silent — dropping the connection to reconnect");
+    clearInterval(timer);
+    ws.terminate();
+  }, checkMs);
+  ws.once("close", () => clearInterval(timer));
+}
+
 // Exported for characterization tests (pure helper, no IO). Used by runAgent.
 export function toWsUrl(server, driveId) {
   const u = new URL(`/api/agent/connect?driveId=${encodeURIComponent(driveId)}`, server);
@@ -113,6 +138,7 @@ function connectOnce({ root, drive, wsUrl }) {
     ws.once("open", () => {
       opened = true;
       activeWs = ws;
+      watchServerSilence(ws);
       log.info({ driveId: drive.driveId }, "connected");
       // Tell the server which machine this agent is running on so it can show
       // the hostname next to the drive in the UI.
