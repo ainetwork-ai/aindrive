@@ -5,10 +5,10 @@
  */
 import { NextResponse } from "next/server";
 import { getDrive } from "@/lib/drives";
-import { callAgent, AgentError } from "@/lib/rpc";
+import { AgentError } from "@/lib/rpc";
 import { DOWNLOAD_CHUNK_BYTES } from "@/lib/agent-stream";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
-import { openHandoff, logFetch } from "@/lib/handoff";
+import { openHandoff, logFetch, readHandoffChunk } from "@/lib/handoff";
 import { servedBytesHeaders } from "@/lib/served-bytes";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -30,7 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   // First chunk before answering: if the device is offline or the file is gone, say so with a status.
   let first: { data: string; eof: boolean; size: number };
   try {
-    first = await callAgent(h.drive_id, drive.drive_secret, { method: "handoff-read", key: h.device_key, offset: 0, length: DOWNLOAD_CHUNK_BYTES });
+    first = await readHandoffChunk(h, drive.drive_secret, 0, DOWNLOAD_CHUNK_BYTES);
   } catch (e) {
     const status = e instanceof AgentError ? e.status : 503;
     logFetch(id, ip, ua, status);
@@ -45,7 +45,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         let r = first;
         if (sentFirst) {
           if (offset >= size) { controller.close(); return; }
-          r = await callAgent(h.drive_id, drive.drive_secret, { method: "handoff-read", key: h.device_key, offset, length: Math.min(DOWNLOAD_CHUNK_BYTES, size - offset) });
+          r = await readHandoffChunk(h, drive.drive_secret, offset, Math.min(DOWNLOAD_CHUNK_BYTES, size - offset));
         }
         sentFirst = true;
         const buf = Buffer.from(r.data, "base64");

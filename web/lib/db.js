@@ -236,6 +236,9 @@ function open() {
     "ALTER TABLE cli_link_requests ADD COLUMN client_name TEXT",
     // the handoff_grants row a link was minted in (null: minted before grants existed)
     "ALTER TABLE file_handoffs ADD COLUMN grant_id TEXT",
+    // a handoff made on the web (Folder Chat → a cloud agent) names the file by its drive path;
+    // its bytes come over download-chunk instead of the device's handoff-read
+    "ALTER TABLE file_handoffs ADD COLUMN drive_path TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;
