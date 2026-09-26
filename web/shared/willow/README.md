@@ -17,3 +17,7 @@ Paths: `["_id","cert"]`, `["_id","revoke",<key>]`, `["_acl",<userId>]`,
 `["doc",...path,"~u",<seq>]`, snapshot `["doc",...path,"~u"]`.
 Gotcha: timestamps are microseconds; compaction must stamp the snapshot newer than
 every update it replaces, or prefix pruning keeps them.
+
+**The CLI has a generated copy** in `cli/src/willow-shared/` (packages stay independent).
+After changing anything here, run `node web/scripts/mirror-willow-to-cli.mjs`;
+`willow-mirror.test.ts` fails until you do.
