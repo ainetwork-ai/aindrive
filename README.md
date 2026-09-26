@@ -12,6 +12,9 @@ aindrive
 # → opens https://aindrive.ainetwork.ai/d/<your-drive-id>
 ```
 
+On a Mac without a terminal: [download aindrive for Mac](https://aindrive.ainetwork.ai/download/mac)
+(Apple silicon; [Intel](https://aindrive.ainetwork.ai/download/mac?arch=x64)) → **Share a folder…** → approve in the browser.
+
 To plug aindrive into Claude Desktop / Claude Code as an MCP server:
 
 ```
@@ -1050,6 +1053,8 @@ aindrive/
 │   ├── components/        # DriveShell, Viewer, ShareDialog, ShareGate
 │   └── scenarios/         # ~150 integration tests (cases + collab + trace + emergent)
 │
+├── desktop/               # aindrive for Mac — runs the cli agent per shared folder
+│
 ├── cli/                   # `npm i -g aindrive`
 │   ├── bin/aindrive.mjs   # CLI entry
 │   └── src/
@@ -1080,7 +1085,8 @@ aindrive/
 [`web/lib`](web/lib/README.md) (server lib, grouped) ·
 [`web/components`](web/components/README.md) (UI surfaces + primitives) ·
 [`web/shared`](web/shared/README.md) (cross-package contracts) ·
-[`cli`](cli/README.md) (the agent). Doc-system rules: `CLAUDE.md`.
+[`cli`](cli/README.md) (the agent) ·
+[`desktop`](desktop/README.md) (the Mac app). Doc-system rules: `CLAUDE.md`.
 
 ---
 

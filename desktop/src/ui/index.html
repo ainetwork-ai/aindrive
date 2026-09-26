@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>aindrive</title>
+  <link rel="stylesheet" href="ui.css" />
+</head>
+<body>
+  <header class="top">
+    <img class="logo" src="../../assets/icon.png" alt="" />
+    <div class="brand">
+      <h1>aindrive</h1>
+      <p id="account" class="muted">Not signed in</p>
+    </div>
+  </header>
+
+  <main id="drop">
+    <button id="share" class="primary">
+      <span class="plus">＋</span> Share a folder…
+    </button>
+    <p class="hint muted">
+      Pick a folder, or drop one here. Its files stay on this Mac — aindrive shows them on the web while this app runs.
+    </p>
+
+    <section id="empty" class="empty">
+      <div class="steps">
+        <div><b>1</b> Choose a folder</div>
+        <div><b>2</b> Approve in your browser</div>
+        <div><b>3</b> Open it anywhere on aindrive</div>
+      </div>
+    </section>
+
+    <ul id="folders" class="folders"></ul>
+  </main>
+
+  <footer>
+    <label class="toggle"><input type="checkbox" id="login" /> Open at login</label>
+    <span class="spacer"></span>
+    <button id="web" class="link">aindrive on the web ↗</button>
+    <button id="signout" class="link" hidden>Sign out</button>
+  </footer>
+
+  <script src="ui.js"></script>
+</body>
+</html>

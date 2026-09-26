@@ -41,6 +41,9 @@ Packages live exclusively under their own directory. Each is independent:
   It is not a WebView wrapper: it plays `cli/`'s role on a phone, so it mirrors
   the RPC methods of `cli/src/rpc.js` and the frame signing of `web/lib/sig.js`
   by hand, in each native language.
+- `desktop/` — the Mac app (Electron, menu bar). Not a second agent: it runs
+  `cli/`'s bundled `aindrive` per shared folder and adds a window, a folder
+  picker and open-at-login (`desktop/README.md`).
 
 **Do not create directories at the repo root that hold code shared between packages** (e.g. no top-level `shared/`, `common/`, `lib/`, etc.). Each package must be self-contained so it can be packaged, dockerized, and deployed without pulling in siblings.
 
