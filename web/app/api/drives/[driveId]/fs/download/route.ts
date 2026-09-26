@@ -4,7 +4,7 @@ import { getDrive, type DriveRow } from "@/lib/drives";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind, basenameForDownload } from "@/lib/mime";
-import { agentByteStream } from "@/lib/agent-stream";
+import { bytesFor } from "@/lib/media/cache"; // verified chunk cache, or straight from the agent
 import { verifyDownloadToken } from "@/lib/download-token";
 
 /**
@@ -53,7 +53,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
 
   try {
     const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as
-      { entry: { size: number; isDir: boolean } | null };
+      { entry: { size: number; mtimeMs: number; isDir: boolean } | null };
     if (!stat.entry || stat.entry.isDir) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
@@ -70,7 +70,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
       "x-content-type-options": "nosniff",
     };
     if (size === 0) return new Response(null, { status: 200, headers });
-    return new Response(agentByteStream(driveId, drive.drive_secret, path, 0, size), { status: 200, headers });
+    return new Response(await bytesFor(driveId, drive.drive_secret, path, { size, mtimeMs: stat.entry.mtimeMs }, 0, size), { status: 200, headers });
   } catch (e) {
     const err = e as AgentError;
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });

@@ -3,7 +3,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind } from "@/lib/mime";
-import { agentByteStream } from "@/lib/agent-stream";
+import { bytesFor, cachedOnly, cachedSize } from "@/lib/media/cache"; // verified chunk cache, or straight from the agent
 import { servedBytesHeaders } from "@/lib/served-bytes";
 
 /**
@@ -36,12 +36,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   const { drive } = gate;
 
   try {
-    const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path }) as
-      { entry: { size: number; isDir: boolean } | null };
-    if (!stat.entry || stat.entry.isDir) {
+    // The device may be asleep: then serve from the verified cache what it already holds.
+    type Stat = { entry: { size: number; mtimeMs: number; isDir: boolean } | null };
+    let stat = null as Stat | null;
+    let offlineSize: number | null = null;
+    try {
+      stat = (await callAgent(driveId, drive.drive_secret, { method: "stat", path })) as unknown as Stat;
+    } catch (e) {
+      offlineSize = (e as AgentError).status === 504 || (e as AgentError).status === 502 ? cachedSize(driveId, path) : null;
+      if (offlineSize === null) throw e;
+    }
+    if (stat && (!stat.entry || stat.entry.isDir)) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
-    const size = stat.entry.size;
+    const size = stat?.entry ? stat.entry.size : offlineSize!;
     const { mime } = classifyKind(path);
 
     // Range grammar (single range only — multipart ranges are not worth the
@@ -82,7 +90,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
 
     // 0-byte file: nothing to pull — an empty body avoids a degenerate stream.
     if (endExclusive - start === 0) return new Response(null, { status, headers });
-    return new Response(agentByteStream(driveId, drive.drive_secret, path, start, endExclusive), { status, headers });
+    if (!stat?.entry) {
+      const cached = cachedOnly(driveId, path, start, endExclusive);
+      if (!cached) return NextResponse.json({ error: "the device is offline and this part is not cached yet" }, { status: 504 });
+      return new Response(cached.stream, { status, headers });
+    }
+    return new Response(await bytesFor(driveId, drive.drive_secret, path, { size, mtimeMs: stat.entry.mtimeMs }, start, endExclusive), { status, headers });
   } catch (e) {
     const err = e as AgentError;
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });

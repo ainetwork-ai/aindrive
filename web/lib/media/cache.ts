@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { join } from "node:path";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { callAgent } from "@/lib/rpc";
+import { agentByteStream } from "@/lib/agent-stream";
 import { dataDir } from "@/lib/env";
 import { CHUNK_BYTES, verifyChunk } from "@/shared/media/chunks";
 import { fromHex, toHex } from "@/shared/willow/bytes";
@@ -20,6 +21,8 @@ const INDEX_TIMEOUT_MS = 10 * 60_000; // hashing a long video on a phone takes a
 const HEX64 = /^[0-9a-f]{64}$/;
 
 const manifests = new Map<string, Manifest | null>();
+// the last manifest seen per file: serves cached ranges while the device is offline
+const lastByPath = new Map<string, Manifest>();
 const inflight = new Map<string, Promise<Uint8Array>>();
 
 const budgetBytes = () => Math.max(1, Number(process.env.AINDRIVE_MEDIA_CACHE_MB ?? 2048)) * 1024 * 1024;
@@ -48,6 +51,7 @@ export async function mediaManifest(driveId: string, secret: string, path: strin
   }
   if (manifests.size > 1000) manifests.clear();
   manifests.set(key, m);
+  if (m) { if (lastByPath.size > 5000) lastByPath.clear(); lastByPath.set(`${driveId}\0${path}`, m); }
   return m;
 }
 
@@ -125,4 +129,36 @@ export function evict(driveId: string) {
     rmSync(f.path, { force: true });
     total -= f.size;
   }
+}
+
+/**
+ * The bytes the fs/stream and fs/download routes serve: through the verifying cache
+ * when the file is at least one chunk and the agent can index it, else streamed from
+ * the agent as before (an old agent, or a small file).
+ */
+export async function bytesFor(driveId: string, secret: string, path: string, stat: { size: number; mtimeMs: number }, start: number, endExclusive: number): Promise<ReadableStream<Uint8Array>> {
+  const m = stat.size >= CHUNK_BYTES ? await mediaManifest(driveId, secret, path, stat) : null;
+  return m ? cachedByteStream(driveId, secret, path, m, start, endExclusive) : agentByteStream(driveId, secret, path, start, endExclusive);
+}
+
+/**
+ * The device is unreachable (asleep, offline): serve [start, endExclusive) from the
+ * cache alone when every chunk it needs is cached and still verifies, with the size
+ * from the last manifest. Null when anything is missing (P2P media spec, goal 3).
+ */
+export function cachedOnly(driveId: string, path: string, start: number, endExclusive: number): { size: number; stream: ReadableStream<Uint8Array> } | null {
+  const m = lastByPath.get(`${driveId}\0${path}`);
+  if (!m) return null;
+  const end = Math.min(endExclusive, m.size);
+  if (start >= end) return null;
+  for (let i = Math.floor(start / CHUNK_BYTES); i <= Math.floor((end - 1) / CHUNK_BYTES); i++) {
+    if (!existsSync(join(driveDir(driveId), m.rootHex, String(i)))) return null;
+  }
+  // every chunk is on disk: chunk() reads (and re-verifies) them without calling the agent
+  return { size: m.size, stream: cachedByteStream(driveId, "", path, m, start, end) };
+}
+
+/** The size of the file as last indexed, for serving it while the device is offline; null if never indexed. */
+export function cachedSize(driveId: string, path: string): number | null {
+  return lastByPath.get(`${driveId}\0${path}`)?.size ?? null;
 }

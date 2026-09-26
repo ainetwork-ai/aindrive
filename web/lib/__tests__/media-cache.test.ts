@@ -12,11 +12,13 @@ const pattern = (n: number, salt = 0) => Buffer.from(Uint8Array.from({ length: n
 let file = pattern(3 * C + 500);
 let mtimeMs = 1000;
 let corrupt = -1;
+let noIndex = false;
 const calls = { index: 0, chunk: 0 };
 vi.mock("@/lib/rpc", () => ({
   callAgent: async (_d: string, _s: string, p: { method: string; offset?: number; length?: number }) => {
     if (p.method === "media-index") {
       calls.index++;
+      if (noIndex) throw new Error("unknown method");
       const leaves: string[] = [];
       for (let i = 0; i < file.length; i += C) leaves.push(createHash("sha256").update(file.subarray(i, i + C)).digest("hex"));
       return { method: "media-index", size: file.length, mtimeMs, chunk: C, leaves };
@@ -28,7 +30,7 @@ vi.mock("@/lib/rpc", () => ({
     return { method: "download-chunk", data: b.toString("base64"), eof: p.offset! + b.length >= file.length };
   },
 }));
-const { mediaManifest, cachedByteStream } = await import("../media/cache");
+const { mediaManifest, cachedByteStream, bytesFor, cachedOnly } = await import("../media/cache");
 
 const read = async (drive: string, start: number, end: number) => {
   const m = (await mediaManifest(drive, "s", "v.mp4", { size: file.length, mtimeMs }))!;
@@ -92,5 +94,33 @@ describe("verifying media cache", () => {
     walk(dir);
     expect(total).toBeLessThanOrEqual(2 * C);
     delete process.env.AINDRIVE_MEDIA_CACHE_MB;
+  });
+
+  it("an agent without media-index is streamed the old way (bytesFor)", async () => {
+    noIndex = true;
+    const got = Buffer.from(await new Response(await bytesFor("d8", "s", "old.mp4", { size: file.length, mtimeMs: 1 }, 10, 2 * C)).arrayBuffer());
+    expect(got.equals(file.subarray(10, 2 * C))).toBe(true);
+    noIndex = false;
+  });
+
+  it("a small file skips the index entirely", async () => {
+    calls.index = 0;
+    const keep = file; file = pattern(1000);
+    const got = Buffer.from(await new Response(await bytesFor("d9", "s", "small.txt", { size: 1000, mtimeMs: 1 }, 0, 1000)).arrayBuffer());
+    expect(got.equals(file)).toBe(true);
+    expect(calls.index).toBe(0);
+    file = keep;
+  });
+
+  it("the device is asleep: a fully cached range still plays, an uncached one does not", async () => {
+    await read("d10", 0, 10); // chunk 0, and its prefetch of chunks 1-2, are now cached; chunk 3 is not
+    await new Promise((r) => setTimeout(r, 50));
+    const hit = cachedOnly("d10", "v.mp4", 5, C + 5);
+    expect(hit).not.toBeNull();
+    const got = Buffer.from(await new Response(hit!.stream).arrayBuffer());
+    expect(got.equals(file.subarray(5, C + 5))).toBe(true);
+    expect(hit!.size).toBe(file.length);
+    expect(cachedOnly("d10", "v.mp4", 0, file.length)).toBeNull(); // the last chunk was never fetched
+    expect(cachedOnly("d10", "never-seen.mp4", 0, 10)).toBeNull();
   });
 });
