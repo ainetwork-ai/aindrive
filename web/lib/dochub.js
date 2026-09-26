@@ -76,8 +76,13 @@ function resolveRole(driveId, userId, path) {
 
 export async function onDocConnect(ws, req, query) {
   const driveId = String(query?.drive || "");
-  const path = String(query?.path || "");
   if (!driveId) { ws.close(4400, "drive required"); return; }
+  // Canonicalize ONCE, as the fs/* routes do: the role, the paywall and the doc
+  // key must all see one spelling ("./paid/a.md", "/paid/a.md" and the NFD form
+  // are "paid/a.md"), or a variant slips past the gate stored under the other.
+  let path;
+  try { path = normalizePath(String(query?.path || "")); }
+  catch { ws.close(4400, "invalid path"); return; }
 
   const cookie = req.headers["cookie"];
   const userId = await readUserFromCookie(cookie);
@@ -129,7 +134,9 @@ export async function onDocConnect(ws, req, query) {
 
 /** Used by the agent's external-edit watcher to invalidate live editors. */
 export function broadcastReload(driveId, path) {
-  const docId = docIdFor(driveId, path);
+  let canonical;
+  try { canonical = normalizePath(path); } catch { return 0; }
+  const docId = docIdFor(driveId, canonical);
   const bucket = hubs.get(docId);
   if (!bucket) return 0;
   const out = JSON.stringify({ t: "reload" });

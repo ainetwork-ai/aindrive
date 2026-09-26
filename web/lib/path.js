@@ -8,6 +8,9 @@
  *
  * Canonical form:
  *   - "" represents drive root
+ *   - Unicode NFC — macOS tools write NFD names ("앨범" as jamo), and APFS
+ *     serves either spelling of the same file, so without one canonical form a
+ *     path could slip past a sale/grant stored in the other spelling
  *   - no leading slash, no trailing slash
  *   - no "./" segments, no consecutive slashes
  *   - rejects ".." segments and null bytes
@@ -43,7 +46,7 @@ function hasNulByte(s) {
 export function normalizePath(input) {
   if (typeof input !== "string") throw new PathError("must be string");
   if (hasNulByte(input)) throw new PathError("contains null byte");
-  const segs = input.split("/").filter((s) => s.length > 0 && s !== ".");
+  const segs = input.normalize("NFC").split("/").filter((s) => s.length > 0 && s !== ".");
   for (const s of segs) {
     if (s === "..") throw new PathError("contains '..' segment");
   }

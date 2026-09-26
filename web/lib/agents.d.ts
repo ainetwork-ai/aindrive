@@ -21,3 +21,5 @@ export function isAgentConnected(driveId: string): boolean;
 export function listConnectedDrives(): string[];
 /** Close the live agent socket for a drive being deleted; false if none was connected. */
 export function disconnectAgent(driveId: string): boolean;
+/** An agent's list/stat result with entry names and paths in NFC (the server's path identity). */
+export function canonicalAgentResult<R>(result: R): R;

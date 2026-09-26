@@ -205,13 +205,14 @@ public final class SafFs {
     }
 
     private String findChildId(String parentDocId, String name) {
+        ChildNameMatch match = new ChildNameMatch(name);
         try (Cursor c = cr.query(childrenUri(parentDocId), COLS, null, null, null)) {
             if (c == null) return null;
             while (c.moveToNext()) {
-                if (name.equals(c.getString(1))) return c.getString(0);
+                if (match.offer(c.getString(0), c.getString(1))) break;
             }
         } catch (Exception ignored) { }
-        return null;
+        return match.result();
     }
 
     /** Drop cached resolutions for a path and everything beneath it. */

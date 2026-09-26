@@ -68,6 +68,17 @@ describe("isSelfWrite", () => {
     }
   });
 
+  it("a write named in NFC is recognised when the watcher reports the NFD spelling", async () => {
+    // the server sends NFC; fs.watch reports the name as the disk spells it
+    const tmp = mkdtempSync(path.join(tmpdir(), "aitest-nfc-"));
+    try {
+      await handleRpc({ method: "write", path: "메모.md".normalize("NFC"), content: "hi" }, tmp);
+      expect(isSelfWrite("메모.md".normalize("NFD"))).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("returns false after the 2000 ms TTL expires", async () => {
     vi.useFakeTimers();
     const tmp = mkdtempSync(path.join(tmpdir(), "aitest-ttl-"));
