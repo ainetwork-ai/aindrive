@@ -61,6 +61,7 @@ const ERRORS: Record<string, string> = {
 
 export default function GoogleSignInButton({ next, text = "continue_with" }: { next: string; text?: "continue_with" | "signup_with" | "signin_with" }) {
   const router = useRouter();
+  const wrap = useRef<HTMLDivElement>(null);
   const slot = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -68,6 +69,7 @@ export default function GoogleSignInButton({ next, text = "continue_with" }: { n
 
   useEffect(() => {
     let alive = true;
+    let ro: ResizeObserver | null = null;
     (async () => {
       const res = await fetch("/api/auth/google").catch(() => null);
       if (!res?.ok) return; // not configured here
@@ -100,19 +102,35 @@ export default function GoogleSignInButton({ next, text = "continue_with" }: { n
           router.refresh();
         },
       });
-      // Google draws its own branded button; width follows the card (max 400)
-      const width = Math.min(400, Math.round(slot.current.getBoundingClientRect().width || 320));
-      gis.accounts.id.renderButton(slot.current, { type: "standard", theme: "outline", size: "large", shape: "rectangular", text, logo_alignment: "center", width });
+      // Google draws its own branded button at the width it is given (its
+      // iframe is that + 20px with -10px margins, so the visible button is
+      // exactly `width`). Measure the wrapper — it stays in layout while
+      // collapsed, so this is the card's content width, the same as the
+      // Sign in / wallet buttons — and redraw when it changes (rotation,
+      // resize). GIS accepts 200–400.
+      let drawn = 0;
+      const draw = () => {
+        const w = Math.round(wrap.current?.getBoundingClientRect().width ?? 0);
+        if (!slot.current || !w || w === drawn) return;
+        drawn = w;
+        gis.accounts.id.renderButton(slot.current, { type: "standard", theme: "outline", size: "large", shape: "rectangular", text, logo_alignment: "center", width: Math.max(200, Math.min(400, w)) });
+      };
+      draw();
+      ro = new ResizeObserver(draw);
+      if (wrap.current) ro.observe(wrap.current);
       setReady(true);
     })();
     return () => {
       alive = false;
+      ro?.disconnect();
     };
   }, [next, router, text]);
 
   return (
-    <div data-testid="google-signin" hidden={!ready} className="mt-4">
-      <div ref={slot} className={`flex w-full justify-center ${busy ? "pointer-events-none opacity-60" : ""}`} />
+    // collapsed (not display:none) until the button is drawn, so its width is
+    // measurable before it shows
+    <div ref={wrap} data-testid="google-signin" data-ready={ready ? "true" : "false"} aria-hidden={!ready} className={ready ? "mt-4" : "h-0 overflow-hidden"}>
+      <div ref={slot} className={`flex h-10 w-full items-center justify-center ${busy ? "pointer-events-none opacity-60" : ""}`} />
       {err && <p className="mt-2 text-center text-sm text-red-600">{err}</p>}
     </div>
   );
