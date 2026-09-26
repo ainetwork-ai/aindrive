@@ -92,6 +92,7 @@ public class AgentService extends Service {
     static @Nullable AgentService get() { return instance; }
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    /** The in-app debug intents (ASK, TRANSCRIBE, SUMMARIZE). Drive RPCs run on each drive's own lanes ({@link Conn#lane}). */
     private final ExecutorService rpcPool = Executors.newFixedThreadPool(4);
     /** One indexing run at a time across all drives — it is I/O bound on the same storage anyway. */
     private final ExecutorService indexPool = Executors.newSingleThreadExecutor();
@@ -221,9 +222,6 @@ public class AgentService extends Service {
 
     // ------------------------------------------------------------ one drive
 
-    /** How long an RPC response may wait for room in the socket's send queue before it is dropped. */
-    private static final long SEND_WAIT_MS = 60_000;
-
     /** "1.0+1": versionName + build number, sent as appVersion in the agent-hello. */
     static String appVersion() { return BuildConfig.VERSION_NAME + "+" + BuildConfig.VERSION_CODE; }
 
@@ -231,8 +229,14 @@ public class AgentService extends Service {
     private final class Conn implements RpcHandler.Changes {
         final String serverUrl, driveId, agentToken, driveSecret, folderLabel;
         final AtomicInteger rpcCount = new AtomicInteger();
-        /** Every frame this drive sends goes through here: OkHttp closes a socket whose queue passes 16 MiB. */
+        /** Every response this drive sends goes through here: OkHttp closes a socket whose queue passes 16 MiB. */
         final SendGate gate = new SendGate();
+        /**
+         * This drive's RPC workers — its own, so a drive answering big reads over a slow uplink
+         * never holds another drive's requests — split into a bulk lane for methods whose reply
+         * can be megabytes and a lane for everything else (see {@link RpcBudget}).
+         */
+        final ExecutorService bulkLane, controlLane;
         /**
          * An agent SOURCE: a folder the agent may read for its tasks (call
          * recordings, the camera roll) that is NOT served to the web. No
@@ -262,6 +266,14 @@ public class AgentService extends Service {
             this.agentToken = agentToken;
             this.driveSecret = driveSecret;
             this.folderLabel = folderLabel;
+            String tag = "rpc-" + (driveId == null ? "?" : driveId.substring(0, Math.min(8, driveId.length())));
+            this.bulkLane = RpcBudget.lane(tag + "-bulk", RpcBudget.BULK_WORKERS);
+            this.controlLane = RpcBudget.lane(tag, RpcBudget.CONTROL_WORKERS);
+        }
+
+        /** The lane a frame runs on, from its method (read cheaply off the text; the worker verifies it). */
+        ExecutorService lane(String frameText) {
+            return RpcBudget.bulkFrame(frameText) ? bulkLane : controlLane;
         }
 
         void connect() {
@@ -275,6 +287,7 @@ public class AgentService extends Service {
                 @Override public void onOpen(WebSocket socket, Response response) {
                     if (closed) { socket.close(1001, "agent shutting down"); return; }   // stopped while dialling
                     ws = socket;   // before any frame of this socket is handled (same OkHttp thread)
+                    gate.reset();  // a fresh socket: empty queue, maybe another network
                     connected = true;
                     attempt = 0;
                     lastError = null;
@@ -290,7 +303,10 @@ public class AgentService extends Service {
                 }
 
                 @Override public void onMessage(WebSocket socket, String text) {
-                    rpcPool.execute(() -> onFrame(socket, text));
+                    // The deadline counts from here: time queued for a worker is time the server is waiting.
+                    long arrived = System.nanoTime();
+                    try { lane(text).execute(() -> onFrame(socket, text, arrived)); }
+                    catch (java.util.concurrent.RejectedExecutionException e) { /* the drive was closed */ }
                 }
 
                 @Override public void onClosed(WebSocket socket, int code, String reason) {
@@ -377,9 +393,12 @@ public class AgentService extends Service {
                 try { ws.close(1001, "agent shutting down"); } catch (Exception ignored) { }
                 ws = null;
             }
+            // Not shutdownNow(): an interrupt could cut a SAF write short. Queued frames see `closed` and return.
+            bulkLane.shutdown();
+            controlLane.shutdown();
         }
 
-        void onFrame(WebSocket socket, String text) {
+        void onFrame(WebSocket socket, String text, long arrivedNanos) {
             if (closed) return;
             JSONObject frame;
             try { frame = new JSONObject(text); }
@@ -402,6 +421,13 @@ public class AgentService extends Service {
             }
 
             String reqId = frame.optString("reqId");
+            String method = p0 == null ? "?" : p0.optString("method", "?");
+            long deadline = RpcBudget.deadlineNanos(method, arrivedNanos);
+            if (RpcBudget.readOnly(method) && System.nanoTime() - deadline >= 0) {
+                // Waited for a worker until the server gave up on it: reading it now would only be dropped.
+                Log.w(TAG, "rpc " + method + " expired before it ran — skipped");
+                return;
+            }
             JSONObject response = new JSONObject();
             try {
                 JSONObject params = frame.optJSONObject("params");
@@ -416,21 +442,20 @@ public class AgentService extends Service {
                 } catch (Exception ignored) { return; }
             }
 
-            String method = p0 == null ? "?" : p0.optString("method", "?");
-            SendGate.Result sent = sendSigned(socket, response);
+            SendGate.Result sent = sendSigned(socket, response, deadline);
             if (sent == SendGate.Result.TOO_LARGE) {
                 // One frame this big would make OkHttp close the socket: answer with an error instead.
                 Log.w(TAG, "rpc " + method + " response too large to send — answering with an error");
                 JSONObject error = new JSONObject();
                 try { error.put("reqId", reqId).put("ok", false).put("error", "response too large"); } catch (Exception ignored) { }
-                sent = sendSigned(socket, error);
+                sent = sendSigned(socket, error, deadline);
             }
             if (sent != SendGate.Result.SENT) Log.w(TAG, "rpc " + method + " response not sent: " + sent);
             notifyStatus();
         }
 
         /** Sign (WITHOUT `type`, then add it — what the desktop agent does and the server strips) and send through the gate. */
-        private SendGate.Result sendSigned(WebSocket socket, JSONObject response) {
+        private SendGate.Result sendSigned(WebSocket socket, JSONObject response, long deadlineNanos) {
             String text;
             try {
                 String responseSig = Sig.sign(driveSecret, response);
@@ -444,7 +469,7 @@ public class AgentService extends Service {
                 return gate.send(new SendGate.Socket() {
                     @Override public long queueSize() { return socket.queueSize(); }
                     @Override public boolean send(String t) { return socket.send(t); }
-                }, text, SEND_WAIT_MS, () -> !closed && connected && ws == socket);
+                }, text, deadlineNanos, () -> !closed && connected && ws == socket);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return SendGate.Result.CLOSED;

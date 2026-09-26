@@ -52,6 +52,12 @@ final class RpcHandler {
             "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
             "agent-ask", "handoff-read", "thumbnail"));
 
+    /**
+     * The largest yjs snapshot kept (≈ 8.95 MiB): its yjs-read reply — base64 (4/3) plus the
+     * response envelope, well under 64 KiB — must fit one frame ({@link SendGate#MAX_MESSAGE_BYTES}).
+     */
+    static final int MAX_YJS_BYTES = (int) ((SendGate.MAX_MESSAGE_BYTES - 64 * 1024) / 4 * 3);
+
     private final SafFs fs;
     private final Context ctx;
     private final File yjsDir;
@@ -181,7 +187,9 @@ final class RpcHandler {
             case "yjs-write": {
                 String docId = requireDocId(params.optString("docId", ""));
                 byte[] data = Base64.decode(params.optString("data", ""), Base64.DEFAULT);
-                if (data.length > 4 * SafFs.MAX_CHUNK_BYTES) throw new IOException("yjs blob too large");
+                // Only what can be read back: a bigger snapshot would be stored, then refused on every
+                // yjs-read ("response too large"). Refused here, the previous snapshot stays readable.
+                if (data.length > MAX_YJS_BYTES) throw new IOException("yjs blob too large");
                 if (!yjsDir.exists() && !yjsDir.mkdirs()) throw new IOException("cannot create yjs dir");
                 File f = new File(yjsDir, docId + ".bin");
                 writeFileBytes(f, data);
