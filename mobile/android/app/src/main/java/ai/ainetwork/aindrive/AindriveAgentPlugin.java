@@ -41,6 +41,51 @@ public class AindriveAgentPlugin extends Plugin {
     @Override
     public void load() {
         AgentService.setStatusListener(status -> notifyListeners("statusChanged", toJs(status)));
+        AgentService.setRtcListener((driveId, frame) -> {
+            JSObject o = new JSObject();
+            o.put("driveId", driveId);
+            o.put("frame", frame);
+            notifyListeners("rtc", o);
+        });
+    }
+
+    // ------------------------------------------------------------ P2P media (mobile/src/p2p.ts)
+
+    @PluginMethod
+    public void rtcSend(PluginCall call) {
+        AgentService svc = AgentService.get();
+        String driveId = call.getString("driveId", "");
+        String frame = call.getString("frame", "");
+        if (svc == null || !svc.sendRtc(driveId, frame)) { call.reject("drive not connected"); return; }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void readChunk(PluginCall call) {
+        AgentService svc = AgentService.get();
+        SafFs fs = svc == null ? null : svc.fsOf(call.getString("driveId", ""));
+        if (fs == null) { call.reject("drive not running"); return; }
+        try {
+            long offset = call.getLong("offset", 0L);
+            int length = Math.min(call.getInt("length", 0), 1 << 20);
+            byte[] data = fs.readChunk(call.getString("path", ""), offset, length);
+            JSObject o = new JSObject();
+            o.put("data", android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP));
+            call.resolve(o);
+        } catch (Exception e) { call.reject(e.getMessage()); }
+    }
+
+    @PluginMethod
+    public void statFile(PluginCall call) {
+        AgentService svc = AgentService.get();
+        SafFs fs = svc == null ? null : svc.fsOf(call.getString("driveId", ""));
+        if (fs == null) { call.reject("drive not running"); return; }
+        try {
+            SafFs.Entry e = fs.stat(call.getString("path", ""));
+            JSObject o = new JSObject();
+            if (e != null && !e.isDir) { o.put("size", e.size); o.put("mtimeMs", e.mtimeMs); }
+            call.resolve(o);
+        } catch (Exception e) { call.reject(e.getMessage()); }
     }
 
     // ------------------------------------------------------------ folder

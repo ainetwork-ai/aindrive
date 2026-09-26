@@ -16,6 +16,7 @@ import { Capacitor } from "@capacitor/core";
 import { Preferences } from "@capacitor/preferences";
 import { Browser } from "@capacitor/browser";
 import { App } from "@capacitor/app";
+import { createPhoneRtc } from "./p2p";
 import { AindriveAgent, IDLE_STATUS, type FileEntry, type AgentStatus, type AskResult, type DriveStatus, type PickedFolder } from "./plugin";
 import { normalizeServer, startCliLogin, pollCliLogin, pairDrive, deleteDrive, createShare, listDrives, remoteList, remoteRead, ensureRemoteAgent, askRemote, type RemoteDrive } from "./api";
 import "./ui.css";
@@ -2542,6 +2543,7 @@ async function boot() {
     for (const share of state.shares) if (share.on && state.sessionCookie && !p2pOn(share)) await startShare(share);
     await startSources();
   })();
+  startPhoneP2P();
   await AindriveAgent.addListener("statusChanged", (s) => {
     const before = new Map(status.drives.map((d) => [d.driveId, d]));
     status = s;
@@ -2575,3 +2577,30 @@ async function boot() {
 }
 
 void boot();
+
+/**
+ * P2P media: while this app is open, a browser playing a video from one of this
+ * phone's drives takes the chunks straight from here over WebRTC (mobile/src/p2p.ts).
+ * The native agent hands us the signalling; we answer with the WebView's WebRTC.
+ */
+function startPhoneP2P() {
+  if (typeof RTCPeerConnection === "undefined") return;
+  const fromB64 = (b: string) => Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+  const rtc = createPhoneRtc({
+    RTCPeerConnection: RTCPeerConnection as never,
+    readChunk: async (driveId, path, offset, length) => fromB64((await AindriveAgent.readChunk({ driveId, path, offset, length })).data),
+    statFile: async (driveId, path) => {
+      const r = await AindriveAgent.statFile({ driveId, path });
+      return typeof r.size === "number" && typeof r.mtimeMs === "number" ? { size: r.size, mtimeMs: r.mtimeMs } : null;
+    },
+    send: (driveId, frame) => { void AindriveAgent.rtcSend({ driveId, frame: JSON.stringify(frame) }).catch(() => {}); },
+    secretOf: (driveId) => state.shares.find((sh) => sh.drive?.driveId === driveId)?.drive?.driveSecret || null,
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    log,
+  });
+  void AindriveAgent.addListener("rtc", ({ driveId, frame }) => {
+    let f: unknown;
+    try { f = JSON.parse(frame); } catch { return; }
+    void rtc.handle(driveId, f as never).catch(() => {});
+  });
+}

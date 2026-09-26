@@ -70,6 +70,23 @@ final class AgentCore: NSObject {
     static let shared = AgentCore()
 
     var onStatusChange: ((Status) -> Void)?
+    /// P2P media signalling from the server, for the WebView (mobile/src/p2p.ts), which has WebRTC.
+    var onRtc: ((String, String) -> Void)?
+
+    func forwardRtc(driveId: String, frame: String) {
+        DispatchQueue.main.async { [weak self] in self?.onRtc?(driveId, frame) }
+    }
+
+    /// A frame from the WebView's P2P answerer, out over this drive's socket.
+    func sendRtc(driveId: String, frame: String) -> Bool {
+        guard let c = conns.first(where: { $0.config.driveId == driveId }) else { return false }
+        return c.sendText(frame)
+    }
+
+    /// The folder of a running drive (the WebView reads P2P chunks through it).
+    func fsOf(driveId: String) -> DriveFs? {
+        conns.first(where: { $0.config.driveId == driveId })?.driveFs
+    }
 
     /// driveId → live connection, in the order the user started them.
     private var conns: [DriveConn] = []
@@ -172,6 +189,7 @@ private final class DriveConn {
     private(set) var status: AgentCore.DriveStatus
     private unowned let core: AgentCore
     private let fs: DriveFs
+    var driveFs: DriveFs { fs }
     private let rpc: RpcHandler
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -184,6 +202,13 @@ private final class DriveConn {
         self.fs = DriveFs(root: folder)
         self.rpc = RpcHandler(fs: fs, driveId: config.driveId)
         self.status = AgentCore.DriveStatus(driveId: config.driveId, folderLabel: config.folderLabel)
+    }
+
+    /// Sends a text frame on this drive's socket (P2P signalling); false when not connected.
+    func sendText(_ text: String) -> Bool {
+        guard !closed, let task else { return false }
+        task.send(.string(text)) { _ in }
+        return true
     }
 
     func close() {
@@ -263,6 +288,10 @@ private final class DriveConn {
 
         let type = frame["type"] as? String ?? ""
         if type == "hello" { return }
+        if type == "rtc" { // P2P media: the WebView answers (only while the app is open)
+            AgentCore.shared.forwardRtc(driveId: config.driveId, frame: text)
+            return
+        }
         if type.hasPrefix("sync-") { return } // multi-device gossip: desktop-only for now
         guard type == "request",
               let reqId = frame["reqId"] as? String, !reqId.isEmpty,

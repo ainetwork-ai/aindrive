@@ -87,6 +87,24 @@ public class AgentService extends Service {
     private static volatile StatusListener statusListener;
     static void setStatusListener(@Nullable StatusListener l) { statusListener = l; }
 
+    /** P2P media signalling from the server, handed to the WebView (mobile/src/p2p.ts), which has WebRTC. */
+    interface RtcListener { void onRtc(String driveId, String frameJson); }
+    private static volatile RtcListener rtcListener;
+    static void setRtcListener(@Nullable RtcListener l) { rtcListener = l; }
+
+    /** A frame from the WebView's P2P answerer, out over this drive's socket. */
+    boolean sendRtc(String driveId, String frameJson) {
+        Conn c;
+        synchronized (conns) { c = conns.get(driveId); }
+        if (c == null || c.ws == null || c.closed) return false;
+        return c.ws.send(frameJson);
+    }
+
+    /** The folder of a running drive (the WebView reads P2P chunks through it). */
+    @Nullable SafFs fsOf(String driveId) {
+        synchronized (conns) { Conn c = conns.get(driveId); return c == null ? null : c.fs; }
+    }
+
     private static volatile AgentService instance;
     static @Nullable AgentService get() { return instance; }
 
@@ -371,6 +389,11 @@ public class AgentService extends Service {
             Log.d(TAG, "[" + driveId + "] frame type=" + type + " method=" + (p0 == null ? "-" : p0.optString("method", "?"))
                     + " chars=" + text.length());
             if ("hello".equals(type)) return;
+            if ("rtc".equals(type)) { // P2P media: the WebView answers (only while the app is open)
+                RtcListener l = rtcListener;
+                if (l != null) l.onRtc(driveId, text);
+                return;
+            }
             if (type.startsWith("sync-")) return; // multi-device gossip: desktop-only for now
             if (!"request".equals(type) || frame.optString("reqId", "").isEmpty()) { Log.w(TAG, "dropped non-request frame"); return; }
             if (frame.optInt("v", -1) != PROTOCOL_VERSION) { Log.w(TAG, "dropped frame: protocol v=" + frame.optInt("v", -1)); return; }

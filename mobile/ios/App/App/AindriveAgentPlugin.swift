@@ -18,6 +18,9 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "AindriveAgent"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pickFolder", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "rtcSend", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "readChunk", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "statFile", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "addFiles", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "listFolder", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openFile", returnType: CAPPluginReturnPromise),
@@ -42,6 +45,34 @@ public class AindriveAgentPlugin: CAPPlugin, CAPBridgedPlugin {
         AgentCore.shared.onStatusChange = { [weak self] status in
             self?.notifyListeners("statusChanged", data: status.dictionary)
         }
+        AgentCore.shared.onRtc = { [weak self] driveId, frame in
+            self?.notifyListeners("rtc", data: ["driveId": driveId, "frame": frame])
+        }
+    }
+
+    // MARK: - P2P media (mobile/src/p2p.ts)
+
+    @objc func rtcSend(_ call: CAPPluginCall) {
+        guard AgentCore.shared.sendRtc(driveId: call.getString("driveId") ?? "", frame: call.getString("frame") ?? "") else {
+            call.reject("drive not connected"); return
+        }
+        call.resolve()
+    }
+
+    @objc func readChunk(_ call: CAPPluginCall) {
+        guard let fs = AgentCore.shared.fsOf(driveId: call.getString("driveId") ?? "") else { call.reject("drive not running"); return }
+        do {
+            let offset = UInt64(call.getDouble("offset") ?? 0)
+            let length = min(call.getInt("length") ?? 0, 1 << 20)
+            let data = try fs.readChunk(call.getString("path") ?? "", offset: offset, length: length)
+            call.resolve(["data": data.base64EncodedString()])
+        } catch { call.reject(error.localizedDescription) }
+    }
+
+    @objc func statFile(_ call: CAPPluginCall) {
+        guard let fs = AgentCore.shared.fsOf(driveId: call.getString("driveId") ?? "") else { call.reject("drive not running"); return }
+        if let e = fs.stat(call.getString("path") ?? ""), !e.isDir { call.resolve(["size": e.size, "mtimeMs": e.mtimeMs]) }
+        else { call.resolve([:]) }
     }
 
     // MARK: - folder

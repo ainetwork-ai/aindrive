@@ -108,5 +108,9 @@ first-class browser path. Revisit if Phase 2's direct transport ends up on iroh 
 3. Direct WebRTC path (M5). **Shipped for CLI/Mac agents** (`werift` in the agent,
    `web/lib/media/p2p-client.ts` + the service worker in the browser, signalling
    `/api/media/rtc` with a drive-secret token scoped to drive, path, content root and
-   expiry). Pieces are 16 KiB. Phones need the WebView peer (the phone shell plan).
+   expiry). Pieces are 16 KiB. **Phones too, while the app is open**: the native
+   agent hands the signalling to the WebView (`mobile/src/p2p.ts`), which answers
+   with its own WebRTC and reads chunks through the plugin; a backgrounded app
+   falls back to the server cache. (Android glue compiled with javac; iOS not
+   compiled here.)
    No TURN: without a direct path the server cache serves.

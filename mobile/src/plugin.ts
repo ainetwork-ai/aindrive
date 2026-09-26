@@ -197,6 +197,17 @@ export interface AindriveAgentPlugin {
     event: "statusChanged",
     cb: (s: AgentStatus) => void,
   ): Promise<{ remove: () => Promise<void> }>;
+  /** P2P media signalling the server relays to this drive's agent (mobile/src/p2p.ts answers it). */
+  addListener(
+    event: "rtc",
+    cb: (e: { driveId: string; frame: string }) => void,
+  ): Promise<{ remove: () => Promise<void> }>;
+  /** A P2P signalling frame out over the drive's socket. */
+  rtcSend(opts: { driveId: string; frame: string }): Promise<void>;
+  /** Bytes [offset, offset+length) of a file in a running drive's folder, base64 (≤ 1 MiB). */
+  readChunk(opts: { driveId: string; path: string; offset: number; length: number }): Promise<{ data: string }>;
+  /** Size and mtime of a file in a running drive's folder ({} when it is missing or a folder). */
+  statFile(opts: { driveId: string; path: string }): Promise<{ size?: number; mtimeMs?: number }>;
 }
 
 export const AindriveAgent = registerPlugin<AindriveAgentPlugin>("AindriveAgent");
