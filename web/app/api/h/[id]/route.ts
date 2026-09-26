@@ -58,8 +58,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   });
   return new Response(stream, {
     headers: {
-      // The link's creator chose h.mime; it must not run on our origin.
-      ...servedBytesHeaders(h.mime, h.name),
+      // The link's creator chose h.mime; it must not run on our origin. Plain text/markdown/JSON stays
+      // text (an agent reads it; nosniff below), anything a browser would run downloads as bytes.
+      ...servedBytesHeaders(h.mime, h.name, { text: true }),
       "content-length": String(size),
       "cache-control": "private, no-store",
       "x-content-type-options": "nosniff",

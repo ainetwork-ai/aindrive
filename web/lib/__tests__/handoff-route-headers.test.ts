@@ -44,6 +44,16 @@ describe("GET /api/h/:id — the creator's mime never runs on our origin", () =>
     expect(res.headers.get("content-disposition")).toMatch(/^inline;/);
   });
 
+  it("markdown and plain text stay text for the agent reading them", async () => {
+    const md = await fetchAs("text/markdown", "001 notes.md");
+    expect(md.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(md.headers.get("x-content-type-options")).toBe("nosniff");
+    expect((await fetchAs("text/plain", "a.txt")).headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    // …but a type a browser runs never does, however it is spelled.
+    expect((await fetchAs("text/html; charset=utf-8", "p.html")).headers.get("content-type")).toBe("application/octet-stream");
+    expect((await fetchAs("application/xhtml+xml", "p.xhtml")).headers.get("content-type")).toBe("application/octet-stream");
+  });
+
   it("SVG shows inline only inside a CSP sandbox", async () => {
     const res = await fetchAs("image/svg+xml", "logo.svg");
     expect(res.headers.get("content-type")).toBe("image/svg+xml");

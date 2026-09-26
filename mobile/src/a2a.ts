@@ -27,6 +27,12 @@ export interface A2aAgent {
   card?: AgentCard;
   /** The signed-in aindrive server's own agent: always in the chat, can't be removed. */
   builtin?: boolean;
+  /**
+   * On = the owner's standing approval: this agent gets the turns the on-device agent can't do and
+   * the files they refer to (handoff links + MCP view) with no per-send confirm. Off (the default for
+   * an added agent) = never used. The built-in server agent is always on.
+   */
+  enabled?: boolean;
   addedAt: number;
 }
 
