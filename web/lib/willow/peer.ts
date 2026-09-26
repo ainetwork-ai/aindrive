@@ -96,7 +96,7 @@ export function acceptFor(driveId: string, store: AnyStore) {
     const u = parts.indexOf("~u");
     if (u < 2 || parts.length > u + 2) return "outside-grant";
     const person = await resolvePerson(subspace, certs, revs, trust(), now > w.entry.timestamp ? now : w.entry.timestamp);
-    if (!person) return "unknown-device";
+    if (!person) return (await resolvePerson(subspace, certs, [], trust())) ? "revoked" : "unknown-device";
     const docPath = parts.slice(1, u);
     if ((RANK[roleOf(driveId, person.userId, docPath.join("/"))] ?? 0) < WRITE) return "not-a-member";
     if (w.payload) {

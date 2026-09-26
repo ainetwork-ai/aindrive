@@ -67,6 +67,9 @@ aindrive              # this folder is now in aindrive`}
         <h1 className="text-2xl font-semibold">My drives</h1>
         <div className="flex items-center gap-4">
           {drives.length > 0 && <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} compact />}
+          <Link href="/account/devices" className="text-sm text-drive-muted hover:text-drive-accent hover:underline">
+            Devices
+          </Link>
           {!isWalletOnlyEmail(user.email) && (
             <Link href="/account/wallet" className="text-sm text-drive-muted hover:text-drive-accent hover:underline">
               Add wallet sign-in

@@ -62,7 +62,7 @@ issued without a new step:
 
 | How the person is signed in | Who signs the certificate | Strength |
 |---|---|---|
-| Wallet sign-in (SIWE, `web/app/api/wallet/login`) | the wallet itself: the SIWE message gains a line `aindrive device: ed25519:<key>` | self-sovereign |
+| Wallet sign-in (SIWE, `web/app/api/wallet/login`) | the wallet itself: the SIWE message's `Resources` gain `urn:aindrive:device:ed25519:<key>` (the Base passkey path, whose message Base builds, keeps attested certs) | self-sovereign |
 | Pairing a CLI/Mac/phone (`web/app/api/auth/cli/*`) | the approving browser's device key (a chain to that browser's certificate) | same as the approver's |
 | Email/password, Google | aindrive's attestation key, a server key used for nothing else | "vouched by aindrive", shown as such |
 
