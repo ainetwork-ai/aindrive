@@ -6,7 +6,8 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 make g++ ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY package.json package-lock.json ./
+# .npmrc maps the @jsr scope to npm.jsr.io (@earthstar/meadowcap and its deps)
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 # ---- builder ----
