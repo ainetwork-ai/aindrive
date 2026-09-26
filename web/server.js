@@ -44,6 +44,9 @@ server.requestTimeout = 2 * 60 * 60 * 1000;
 // fs-write cap (≈133 MB base64) within one frame. Large-file streaming is the
 // real fix (follow-up); this just makes the existing limits consistent.
 const wss = new WebSocketServer({ noServer: true, maxPayload: 160 * 1024 * 1024 });
+// Willow sync frames are small (items are chunked, 256 entries per frame); a
+// separate server keeps its own, much lower, cap.
+const willowWss = new WebSocketServer({ noServer: true, maxPayload: 8 * 1024 * 1024 });
 
 server.on("upgrade", (req, socket, head) => {
   const { pathname, query } = parseUrl(req.url, true);
@@ -66,7 +69,7 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
   if (pathname === "/api/willow/sync") {
-    wss.handleUpgrade(req, socket, head, async (ws) => {
+    willowWss.handleUpgrade(req, socket, head, async (ws) => {
       try {
         const userId = await readUserFromCookie(req.headers["cookie"]);
         await onWillowSync(ws, req, query, userId);

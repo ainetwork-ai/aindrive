@@ -12,7 +12,7 @@ export type WireEntry = { entry: Entry<B, B, B>; token: B; payload?: B };
 export type Frame =
   | { t: "fp"; range: unknown; fp: string; size: number; re?: string }
   | { t: "eq"; re: string }
-  | { t: "items"; range: unknown; entries: unknown[]; reply: boolean; re?: string }
+  | { t: "items"; range: unknown; entries: unknown[]; reply: boolean; re?: string; more?: boolean }
   | { t: "live"; entry: unknown }
   | { t: "refused"; path: string[]; subspace: string; reason: string }
   | { t: "synced" };

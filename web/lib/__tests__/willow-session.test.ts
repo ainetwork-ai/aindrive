@@ -104,4 +104,46 @@ describe("SyncSession", () => {
     await synced;
     expect(countAtSynced).toBe(61);
   });
+
+  it("sends only what `allow` permits, on connect and live", async () => {
+    const mom = await generateDeviceKey();
+    const s1 = newStore("d"), s2 = newStore("d");
+    await appendUpdate(s1, mom, ["open.md"], text("o", 11), 1);
+    await appendUpdate(s1, mom, ["secret.md"], text("s", 12), 1);
+    const [c1, c2] = pipe();
+    const allow = (e: { path: Uint8Array[] }) => new TextDecoder().decode(e.path[1]) !== "secret.md";
+    await Promise.all([new SyncSession({ store: s1, channel: c1, ranges: [fullRange()], allow }).start(), new SyncSession({ store: s2, channel: c2, ranges: [fullRange()] }).start()]);
+    await appendUpdate(s1, mom, ["secret.md"], text("s2", 13), 2);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await loadDoc(s2, ["open.md"])).getText("content").toString()).toBe("o");
+    expect((await loadDoc(s2, ["secret.md"])).getText("content").toString()).toBe("");
+  });
+
+  it("does not dump its store when a peer lies that it has nothing", async () => {
+    const mom = await generateDeviceKey();
+    const s1 = newStore("d");
+    for (let i = 1; i <= 40; i++) await appendUpdate(s1, mom, ["a.md"], text(`m${i}`, 5000 + i), i);
+    const [c1, c2] = pipe();
+    const sent: Frame[] = [];
+    c2.onFrame((f) => sent.push(f));
+    await new SyncSession({ store: s1, channel: c1, ranges: [] }).start();
+    const { encodeRange } = await import("@/shared/willow/wire");
+    c2.send({ t: "fp", range: encodeRange(fullRange()), fp: "00", size: 0 });
+    await new Promise((r) => setTimeout(r, 300));
+    const biggest = Math.max(0, ...sent.filter((f) => f.t === "items").map((f) => (f as { entries: unknown[] }).entries.length));
+    expect(biggest).toBeLessThanOrEqual(8);
+  });
+
+  it("splits a large reply into frames of at most 256 entries", async () => {
+    const mom = await generateDeviceKey();
+    const s1 = newStore("d"), s2 = newStore("d");
+    for (let i = 1; i <= 300; i++) await appendUpdate(s1, mom, ["a.md"], text(`x${i}`, 9000 + i), i);
+    const [c1, c2] = pipe();
+    const sizes: number[] = [];
+    const orig = c1.send;
+    c1.send = (f) => { if (f.t === "items") sizes.push((f as { entries: unknown[] }).entries.length); orig(f); };
+    await Promise.all([new SyncSession({ store: s1, channel: c1, ranges: [fullRange()] }).start(), new SyncSession({ store: s2, channel: c2, ranges: [fullRange()] }).start()]);
+    await converged(s1, s2);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(256);
+  });
 });

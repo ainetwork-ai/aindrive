@@ -61,7 +61,7 @@ export function RichTextEditor({
   // dep recreates the editor when a fresh provider is made.
   const providerRef = useRef<AindriveProvider | null>(null);
   if (!providerRef.current || providerRef.current.isDestroyed) {
-    providerRef.current = new AindriveProvider(driveId, entry.path);
+    providerRef.current = new AindriveProvider(driveId, entry.path, canEdit);
   }
   const provider = providerRef.current;
   const docIdRef = useRef<string>("");
@@ -143,7 +143,9 @@ export function RichTextEditor({
       // CRDT already carries content (loaded from Yjs store), getText() is
       // non-empty → don't re-seed (CRDT is authoritative).
       const effectivelyEmpty = editor.isEmpty || editor.getText().trim() === "";
-      if (!seededRef.current && effectivelyEmpty) {
+      // seed only when it cannot race signed entries (review C2/I1)
+      const maySeed = !provider.willowBound || !canEdit || provider.syncComplete;
+      if (!seededRef.current && effectivelyEmpty && maySeed) {
         seededRef.current = true;
         try {
           const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
@@ -201,6 +203,12 @@ export function RichTextEditor({
     };
   }, [editor, provider, driveId, entry.path, debouncedAutosave]);
 
+  // A change the server did not accept (not a member, revoked, …): say so (spec §8).
+  const [refused, setRefused] = useState<string | null>(null);
+  useEffect(() => provider.on((ev, payload) => {
+    if (ev === "refused") setRefused(String((payload as { reason?: string } | undefined)?.reason ?? "refused"));
+  }), [provider]);
+
   // "Who wrote this": the signed author of the text at the cursor / selection start.
   const [author, setAuthor] = useState<string | null>(null);
   useEffect(() => {
@@ -218,9 +226,13 @@ export function RichTextEditor({
       const label = await (await willowClient(driveId)).authorLabel(entry.path.split("/"), client).catch(() => null);
       if (mine === seq) setAuthor(label);
     };
+    // entries (and the author's certificate) can land after the cursor moved: look again when the document changes
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onChange = () => { clearTimeout(timer); timer = setTimeout(() => { void onSelection(); }, 300); };
     editor.on("selectionUpdate", onSelection);
     editor.on("focus", onSelection);
-    return () => { editor.off("selectionUpdate", onSelection); editor.off("focus", onSelection); };
+    editor.on("update", onChange);
+    return () => { clearTimeout(timer); editor.off("selectionUpdate", onSelection); editor.off("focus", onSelection); editor.off("update", onChange); };
   }, [editor, driveId, entry.path]);
 
   // Destroy the provider when this file's editor unmounts.
@@ -235,6 +247,11 @@ export function RichTextEditor({
         )}
         <EditorContent editor={editor} className="h-full" />
       </div>
+      {refused && (
+        <div data-testid="willow-refused" className="shrink-0 border-t border-red-200 bg-red-50 px-5 py-1.5 text-caption text-red-700">
+          A change was not accepted ({refused}). It stays in this browser only.
+        </div>
+      )}
       {author && (
         <div data-testid="authorship" className="shrink-0 border-t border-drive-border px-5 py-1.5 text-caption text-drive-muted">
           Written by {author}

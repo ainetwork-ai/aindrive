@@ -68,4 +68,21 @@ describe("Y.Doc bound to a Willow store", () => {
     await bindDoc({ store: s, key: k, docPath: ["a.md"], doc: d2, nextSeq: racySeq });
     expect(d2.getText("content").toString()).toBe("abcdefghijklmnopqrst");
   });
+
+  it("coalesces updates typed while an append is in flight into one entry", async () => {
+    const k = await generateDeviceKey();
+    const s = newStore("d");
+    let n = 0;
+    const slowSeq = async () => { await new Promise((r) => setTimeout(r, 20)); return ++n; };
+    const d = new Y.Doc();
+    await bindDoc({ store: s, key: k, docPath: ["a.md"], doc: d, nextSeq: slowSeq });
+    for (const ch of "abcdefghijklmnopqrst") d.getText("content").insert(d.getText("content").length, ch);
+    await new Promise((r) => setTimeout(r, 300));
+    const { readUpdates } = await import("@/shared/willow/doc");
+    const entries = await readUpdates(s, ["a.md"]);
+    expect(entries.length).toBeLessThanOrEqual(3);
+    const d2 = new Y.Doc();
+    for (const u of entries) Y.applyUpdate(d2, u.update);
+    expect(d2.getText("content").toString()).toBe("abcdefghijklmnopqrst");
+  });
 });

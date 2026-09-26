@@ -11,39 +11,59 @@ import { aindriveSchemes, namespaceOf } from "@/shared/willow/schemes";
 import { generateDeviceKey, type DeviceKeypair } from "@/shared/willow/keys";
 import { equalBytes, fromHex, pathOf, toHex, utf8 } from "@/shared/willow/bytes";
 import { SyncSession, fullRange } from "@/shared/willow/session";
-import { bindDoc, clientIdFor } from "@/shared/willow/y-binding";
+import { bindDoc } from "@/shared/willow/y-binding";
 import { authorsByClient, certsIn, type AnyStore } from "@/shared/willow/doc";
 import { labelFor } from "@/components/editors/authorship";
 import type { Frame } from "@/shared/willow/wire";
 
-const KEY_DB = "aindrive-device";
 
-async function idb<T>(fn: (os: IDBObjectStore) => IDBRequest<T>, mode: IDBTransactionMode = "readonly"): Promise<T> {
-  const db = await new Promise<IDBDatabase>((res, rej) => { const r = indexedDB.open(KEY_DB, 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function idb<T>(dbName: string, fn: (os: IDBObjectStore) => IDBRequest<T>, mode: IDBTransactionMode = "readonly"): Promise<T> {
+  const db = await new Promise<IDBDatabase>((res, rej) => { const r = indexedDB.open(dbName, 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   return new Promise((res, rej) => { const req = fn(db.transaction("kv", mode).objectStore("kv")); req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
 }
 
-export async function deviceKey(): Promise<DeviceKeypair> {
-  const hit = await idb<{ s: string; p: string } | undefined>((os) => os.get("key"));
+/** The signed-in user's id. Online, the server says (and signed-out clears the
+ *  memory); offline, the last user seen here, so their store still opens. */
+async function whoAmI(): Promise<string | null> {
+  const LAST = "aindrive-willow-last-user";
+  let r: Response;
+  try { r = await fetch("/api/whoami"); } catch {
+    try { return localStorage.getItem(LAST); } catch { return null; }
+  }
+  const id = ((await r.json().catch(() => ({}))) as { id?: string | null }).id ?? null;
+  try { if (id) localStorage.setItem(LAST, id); else localStorage.removeItem(LAST); } catch {}
+  return id;
+}
+
+/** The device key of this browser FOR THIS USER (review C4): a second person
+ *  signing in on the same browser gets their own key, stores and certificate. */
+export async function deviceKey(userId: string): Promise<DeviceKeypair> {
+  const dbName = `aindrive-device-${userId}`;
+  const hit = await idb<{ s: string; p: string } | undefined>(dbName, (os) => os.get("key"));
   if (hit) return { secretKey: fromHex(hit.s), publicKey: fromHex(hit.p) };
   const kp = await generateDeviceKey();
-  await idb((os) => os.put({ s: toHex(kp.secretKey), p: toHex(kp.publicKey) }, "key"), "readwrite");
+  await idb(dbName, (os) => os.put({ s: toHex(kp.secretKey), p: toHex(kp.publicKey) }, "key"), "readwrite");
   return kp;
 }
 
-let tabCounter = 0;
 const clients = new Map<string, ReturnType<typeof connect>>();
 
 export function willowClient(driveId: string) {
   let c = clients.get(driveId);
-  if (!c) { c = connect(driveId); clients.set(driveId, c); }
+  if (!c) {
+    c = connect(driveId);
+    clients.set(driveId, c);
+    c.catch(() => clients.delete(driveId)); // a failed start is retried next time, not cached
+  }
   return c;
 }
 
 async function connect(driveId: string) {
-  const key = await deviceKey();
-  const kv = new KvDriverIndexedDB(`aindrive-willow-${driveId}`);
-  const payloadDriver = new PayloadDriverIndexedDb<Uint8Array>(`aindrive-willow-payloads-${driveId}`, aindriveSchemes.payload as never);
+  const me = { id: await whoAmI() };
+  if (!me.id) throw new Error("signed out: no Willow store");
+  const key = await deviceKey(me.id);
+  const kv = new KvDriverIndexedDB(`aindrive-willow-${me.id}-${driveId}`);
+  const payloadDriver = new PayloadDriverIndexedDb<Uint8Array>(`aindrive-willow-payloads-${me.id}-${driveId}`, aindriveSchemes.payload as never);
   const store = new Store({
     namespace: namespaceOf(driveId), schemes: aindriveSchemes, payloadDriver,
     entryDriver: new EntryDriverKvStore({ kvDriver: kv, namespaceScheme: aindriveSchemes.namespace, subspaceScheme: aindriveSchemes.subspace, payloadScheme: aindriveSchemes.payload, pathScheme: aindriveSchemes.path, fingerprintScheme: aindriveSchemes.fingerprint, getPayloadLength: (d) => payloadDriver.length(d) }),
@@ -53,8 +73,9 @@ async function connect(driveId: string) {
   // my certificate, once per device; stored as an entry so it syncs with my edits
   const certPath = pathOf(["_id", "cert"]);
   let hasCert = false;
-  for await (const [entry] of store.query({ area: { includedSubspaceId: key.publicKey, pathPrefix: certPath, timeRange: { start: 0n, end: OPEN_END } }, maxCount: 1, maxSize: 0n }, "timestamp")) {
-    if (equalBytes(entry.subspaceId, key.publicKey)) hasCert = true;
+  for await (const [entry, payload] of store.query({ area: { includedSubspaceId: key.publicKey, pathPrefix: certPath, timeRange: { start: 0n, end: OPEN_END } }, maxCount: 1, maxSize: 0n }, "timestamp")) {
+    if (!equalBytes(entry.subspaceId, key.publicKey) || !payload) continue;
+    try { hasCert = JSON.parse(new TextDecoder().decode(await payload.bytes())).userId === me.id; } catch {}
   }
   if (!hasCert) {
     const r = await fetch("/api/willow/cert", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deviceKey: toHex(key.publicKey), label: navigator.userAgent.slice(0, 60) }) }).catch(() => null);
@@ -62,19 +83,16 @@ async function connect(driveId: string) {
   }
 
   // Sequence numbers name update paths, so two appends must never share one (the
-  // newer entry would prune the older). In-memory and strictly increasing per tab,
-  // microseconds × 100 + a per-tab suffix so two tabs of this device never collide.
-  const tabSuffix = Math.floor(Math.random() * 100);
-  let lastSeq = 0;
-  const nextSeq = async () => {
-    lastSeq = Math.max(lastSeq + 100, Date.now() * 1000 * 100 + tabSuffix);
-    return lastSeq;
-  };
+  // newer entry would prune the older): µs time, a random 32-bit tab id, a counter.
+  const tabId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
+  let counter = 0;
+  const nextSeq = async () => `${Date.now() * 1000}-${tabId}-${++counter}`;
 
-  // the first sync with the server, or giving up on it (offline / no access / 3 s)
-  let firstSync!: () => void;
-  const initialSync = new Promise<void>((r) => { firstSync = r; });
-  setTimeout(() => firstSync(), 3000);
+  // the first sync with the server: true once it really completed, false when we
+  // gave up (offline, no access, 8 s). Only a true one may seed a document from disk.
+  let firstSync!: (complete: boolean) => void;
+  const initialSync = new Promise<boolean>((r) => { firstSync = r; });
+  setTimeout(() => firstSync(false), 8000);
 
   let backoff = 500;
   const open = () => {
@@ -88,12 +106,12 @@ async function connect(driveId: string) {
         store, ranges: [fullRange()],
         channel: { send: (f) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(f)), onFrame: (cb) => frames.push(cb), onClose: (cb) => closes.push(cb) },
         onRefused: (f) => status.dispatchEvent(new CustomEvent("refused", { detail: f })),
-        onSynced: () => firstSync(),
+        onSynced: () => firstSync(true),
       }).start();
     };
     ws.onclose = (ev) => {
       closes.forEach((c) => c());
-      firstSync();
+      firstSync(false);
       status.dispatchEvent(new Event("offline"));
       if (ev.code === 4401 || ev.code === 4402) return; // no access: do not hammer
       setTimeout(open, backoff);
@@ -115,6 +133,7 @@ async function connect(driveId: string) {
 
   return {
     store, key, status, initialSync, authorLabel,
-    openDoc: (docPath: string[], doc: Y.Doc) => { doc.clientID = clientIdFor(key, ++tabCounter + Math.floor(Math.random() * 1e6)); return bindDoc({ store, key, docPath, doc, nextSeq }); },
+    // the doc keeps its own random clientID: Awareness captured it at construction
+    openDoc: (docPath: string[], doc: Y.Doc, readOnly = false) => bindDoc({ store, key, docPath, doc, nextSeq, readOnly }),
   };
 }

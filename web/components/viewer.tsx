@@ -67,6 +67,8 @@ export function Viewer({
   const bindingRef = useRef<MonacoBinding | null>(null);
   const docIdRef = useRef<string>("");
   const [presence, setPresence] = useState<Array<{ id: number; name: string; color: string }>>([]);
+  // a change the server did not accept (spec §8)
+  const [refused, setRefused] = useState<string | null>(null);
 
   // Debounced autosave: trailing edge after 5s of no typing, max 15s between saves.
   const debouncedAutosave = useDebouncedCallback(
@@ -90,7 +92,7 @@ export function Viewer({
   // Set up Y.js provider for text files
   useEffect(() => {
     if (!isText) return;
-    const provider = new AindriveProvider(driveId, entry.path);
+    const provider = new AindriveProvider(driveId, entry.path, canEdit);
     providerRef.current = provider;
     setLoading(true);
     let cancelled = false;
@@ -98,6 +100,7 @@ export function Viewer({
     const off = provider.on(async (ev, payload) => {
       if (cancelled) return;
       if (ev === "status") setStatus(provider.status);
+      if (ev === "refused") setRefused(String((payload as { reason?: string } | undefined)?.reason ?? "refused"));
       if (ev === "role") {
         // sub-ok payload includes role; not needed beyond status
         void payload;
@@ -153,7 +156,10 @@ export function Viewer({
         if (ytext.length > 0) {
           tracer?.("disk-seed-skip");
         } else {
-          if (provider.doc.getText("content").length === 0) {
+          // seed only when it cannot race signed entries: not bound (signed out),
+          // read-only (stays local), or bound after a complete first sync (review C2/I1)
+          const maySeed = !provider.willowBound || !canEdit || provider.syncComplete;
+          if (maySeed && provider.doc.getText("content").length === 0) {
             const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
             if (fileRes.ok) {
               const fdata = await fileRes.json();
@@ -317,6 +323,13 @@ export function Viewer({
         ) : isPdf ? (
           <iframe src={streamUrl} title={entry.name} className="w-full h-full" />
         ) : isText ? (
+          <div className="flex h-full flex-col">
+          {refused && (
+            <div data-testid="willow-refused" className="shrink-0 border-b border-red-200 bg-red-50 px-3 py-1 text-caption text-red-700">
+              A change was not accepted ({refused}). It stays in this browser only.
+            </div>
+          )}
+          <div className="min-h-0 flex-1">
           <MonacoEditor
             height="100%"
             defaultLanguage={languageFor(entry)}
@@ -329,6 +342,8 @@ export function Viewer({
               wordWrap: "on",
             }}
           />
+          </div>
+          </div>
         ) : (
           <UnsupportedPreview entry={entry} canDownload={true} />
         )}

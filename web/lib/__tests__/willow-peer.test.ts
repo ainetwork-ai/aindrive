@@ -7,12 +7,19 @@ import * as Y from "yjs";
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-peer-"));
 const roles: Record<string, string> = { "u-ed": "editor", "u-view": "viewer" };
 let paywalled = false;
-vi.mock("@/lib/willow/roles", () => ({ roleOf: (_d: string, u: string | null) => (u ? roles[u] ?? "none" : "none"), blockedByPaywall: () => paywalled }));
-const { acceptFor, onWillowSync } = await import("../willow/peer");
+// u-sub is a member only of notes/; paid/ is priced
+const roleAt = (u: string | null, path: string) => (u === "u-sub" ? (path === "notes" || path.startsWith("notes/") ? "editor" : "none") : u ? roles[u] ?? "none" : "none");
+vi.mock("@/lib/willow/roles", () => ({
+  roleOf: (_d: string, u: string | null, path: string) => roleAt(u, path),
+  isMember: (_d: string, u: string | null) => !!u && (u === "u-sub" || !!roles[u]),
+  paywalled: (_d: string, _u: string | null, path: string) => paywalled || path.startsWith("paid/"),
+}));
+const { acceptFor, allowFor, onWillowSync } = await import("../willow/peer");
 const { certify } = await import("../willow/attestation");
 const { openDriveStore } = await import("../willow/store-node");
 const { generateDeviceKey } = await import("@/shared/willow/keys");
 const { toHex, pathOf, utf8 } = await import("@/shared/willow/bytes");
+const { revoke } = await import("@/shared/willow/cert");
 const { newStore } = await import("@/shared/willow/schemes");
 
 async function signedDoc(kp: Awaited<ReturnType<typeof generateDeviceKey>>) {
@@ -57,12 +64,38 @@ describe("server peer ingest check", () => {
     expect(await acceptFor("d", store)({ entry: r.entry, token: r.authToken, payload: utf8(JSON.stringify(cert)) })).toBe("bad-cert");
   });
 
-  it("closes the socket with 4402 when a priced path is closed to the user", async () => {
-    paywalled = true;
-    let code = 0;
-    const ws = { close: (c: number) => { code = c; }, on: () => {}, readyState: 1, OPEN: 1, send: () => {} };
-    await onWillowSync(ws as never, {} as never, { drive: "d" }, "u-view");
-    expect(code).toBe(4402);
-    paywalled = false;
+  it("lets a path-scoped member connect (no 4401) and closes a non-member", async () => {
+    const codes: number[] = [];
+    const ws = () => ({ close: (c: number) => codes.push(c), on: () => {}, readyState: 1, OPEN: 1, send: () => {} });
+    await onWillowSync(ws() as never, {} as never, { drive: "d" }, "u-sub");
+    await onWillowSync(ws() as never, {} as never, { drive: "d" }, "u-stranger");
+    expect(codes).toEqual([4401]);
+  });
+
+  it("allowFor sends a member only docs under their paths, never paid ones, always certificates", async () => {
+    const e = (parts: string[]) => ({ path: pathOf(parts) }) as never;
+    const allowSub = allowFor("d", "u-sub");
+    expect(allowSub(e(["doc", "notes", "a.md", "~u", "1"]))).toBe(true);
+    expect(allowSub(e(["doc", "other.md", "~u", "1"]))).toBe(false);
+    expect(allowSub(e(["_id", "cert"]))).toBe(true);
+    const allowEd = allowFor("d", "u-ed");
+    expect(allowEd(e(["doc", "paid", "x.md", "~u", "1"]))).toBe(false);
+    expect(allowEd(e(["doc", "free.md", "~u", "1"]))).toBe(true);
+  });
+
+  it("accepts a device's own revocation and refuses one for another device", async () => {
+    const store = openDriveStore("d", process.env.AINDRIVE_DATA_DIR!);
+    const kp = await withCert(store, "u-ed");
+    const other = await generateDeviceKey();
+    const s = newStore("d");
+    const put = async (target: Uint8Array) => {
+      const r = await revoke(kp, target, "u-ed", 5n);
+      const payload = utf8(JSON.stringify(r));
+      const x = await s.set({ path: pathOf(["_id", "revoke", toHex(target)]), subspace: kp.publicKey, payload }, kp);
+      if (x.kind !== "success") throw new Error("setup");
+      return acceptFor("d", store)({ entry: x.entry, token: x.authToken, payload });
+    };
+    expect(await put(kp.publicKey)).toBeNull();
+    expect(await put(other.publicKey)).not.toBeNull();
   });
 });

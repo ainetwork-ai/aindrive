@@ -18,9 +18,13 @@ export type SessionOpts = {
   accept?(e: WireEntry): Promise<string | null>;
   onRefused?(f: Extract<Frame, { t: "refused" }>): void;
   onSynced?(): void;
+  /** What this side may send to the peer (the server's per-entry read check: role, path, paywall). Default: everything. */
+  allow?(e: Entry<B, B, B>): boolean;
 };
 
-const LEAF = 8; // at or below this many entries, send them instead of splitting
+const LEAF = 8; // at or below this many entries (on my side), send them instead of splitting
+const CHUNK = 256; // entries per items frame, both ways
+const MAX_FP = 50_000; // fingerprint frames a peer may send in one session
 
 export const fullRange = (): Range3d<B> => ({
   subspaceRange: { start: new Uint8Array(32), end: OPEN_END },
@@ -37,7 +41,9 @@ export class SyncSession {
   // not answered yet; whether the peer's last word was "synced". Frames are
   // handled one at a time, in arrival order, so "synced" is only seen after
   // everything the peer sent before it.
-  private readonly open = new Set<string>();
+  private readonly open = new Map<string, number>(); // range key → answers still owed
+  private readonly partial = new Map<string, Set<string>>(); // chunked items: keys seen so far per range
+  private fps = 0;
   private peerSynced = false;
   private queue: Promise<void> = Promise.resolve();
   private readonly off: (() => void)[] = [];
@@ -53,7 +59,7 @@ export class SyncSession {
     this.o.channel.onClose(() => this.close());
     const push = (ev: Event) => {
       const d = (ev as CustomEvent<{ entry: Entry<B, B, B>; authToken: B; externalSourceId?: string }>).detail;
-      if (this.closed || this.fromPeer.has(SyncSession.key(d.entry)) || !this.inRanges(d.entry)) return;
+      if (this.closed || this.fromPeer.has(SyncSession.key(d.entry)) || !this.inRanges(d.entry) || !this.allowed(d.entry)) return;
       void this.sendLive(d.entry, d.authToken);
     };
     for (const name of ["entrypayloadset", "payloadingest"]) {
@@ -69,6 +75,19 @@ export class SyncSession {
     for (const f of this.off.splice(0)) f();
   }
 
+  private allowed(e: Entry<B, B, B>) {
+    try { return this.o.allow ? this.o.allow(e) : true; } catch { return false; }
+  }
+
+  /** Items in frames of at most CHUNK entries; only the last one replies/answers. */
+  private sendItems(range: unknown, entries: unknown[], reply: boolean, re?: string) {
+    for (let i = 0; i < entries.length || i === 0; i += CHUNK) {
+      const last = i + CHUNK >= entries.length;
+      this.o.channel.send({ t: "items", range, entries: entries.slice(i, i + CHUNK), reply: reply && last, re: last ? re : undefined, more: !last || undefined });
+      if (entries.length === 0) break;
+    }
+  }
+
   private inRanges(e: Entry<B, B, B>) {
     return this.o.ranges.some((r) => isIncluded3d(orderSubspace, r, { subspace: e.subspaceId, path: e.path, time: e.timestamp }));
   }
@@ -76,7 +95,8 @@ export class SyncSession {
   private async sendFp(range: Range3d<B>, re?: string) {
     const { fingerprint, size } = await this.o.store.summarise(range);
     const enc = encodeRange(range);
-    this.open.add(JSON.stringify(enc));
+    const k = JSON.stringify(enc);
+    this.open.set(k, (this.open.get(k) ?? 0) + 1);
     this.o.channel.send({ t: "fp", range: enc, fp: toHex(fingerprint as B), size, re });
   }
 
@@ -90,6 +110,7 @@ export class SyncSession {
   private async entriesIn(range: Range3d<B>): Promise<unknown[]> {
     const out: unknown[] = [];
     for await (const [entry, payload, token] of this.o.store.queryRange(range, "oldest")) {
+      if (!this.allowed(entry)) continue;
       out.push(encodeEntry({ entry, token, payload: payload ? await payload.bytes() : undefined }));
     }
     return out;
@@ -118,14 +139,19 @@ export class SyncSession {
   private async onFrame(f: Frame) {
     if (this.closed) return;
     const wasOpen = this.open.size;
-    if ("re" in f && f.re) this.open.delete(f.re);
+    if ("re" in f && f.re) {
+      const n = (this.open.get(f.re) ?? 0) - 1;
+      if (n > 0) this.open.set(f.re, n); else this.open.delete(f.re);
+    }
     if (f.t === "fp") {
+      if (++this.fps > MAX_FP) return this.close();
       this.peerSynced = false;
       const range = decodeRange(f.range);
       const key = JSON.stringify(f.range);
       const mine = await this.o.store.summarise(range);
       if (toHex(mine.fingerprint as B) === f.fp) this.o.channel.send({ t: "eq", re: key });
-      else if (mine.size <= LEAF || f.size <= LEAF) this.o.channel.send({ t: "items", range: f.range, entries: await this.entriesIn(range), reply: true, re: key });
+      // leaf by MY count only: a peer claiming "size 0" must not make me dump everything
+      else if (mine.size <= LEAF) this.sendItems(f.range, await this.entriesIn(range), true, key);
       else {
         const [a, b] = await this.o.store.splitRange(range, mine.size);
         // the halves answer the peer's range: it closes it; I now wait on the halves
@@ -133,20 +159,26 @@ export class SyncSession {
         await this.sendFp(b);
       }
     } else if (f.t === "items") {
+      if (!Array.isArray(f.entries) || f.entries.length > CHUNK) return this.close();
       if (f.reply) this.peerSynced = false;
       const range = decodeRange(f.range);
-      const had = new Set<string>();
+      const key = JSON.stringify(f.range);
+      const had = this.partial.get(key) ?? new Set<string>();
       for (const j of f.entries) {
         const e = j as { s: string; p: string[]; ts: string };
         had.add(`${e.s}/${e.p.join("/")}/${e.ts}`);
         await this.ingest(j);
       }
-      if (f.reply) {
-        const mine = (await this.entriesIn(range)).filter((j) => {
-          const e = j as { s: string; p: string[]; ts: string };
-          return !had.has(`${e.s}/${e.p.join("/")}/${e.ts}`);
-        });
-        this.o.channel.send({ t: "items", range: f.range, entries: mine, reply: false });
+      if (f.more) this.partial.set(key, had);
+      else {
+        this.partial.delete(key);
+        if (f.reply) {
+          const mine = (await this.entriesIn(range)).filter((j) => {
+            const e = j as { s: string; p: string[]; ts: string };
+            return !had.has(`${e.s}/${e.p.join("/")}/${e.ts}`);
+          });
+          this.sendItems(f.range, mine, false);
+        }
       }
     } else if (f.t === "synced") {
       this.peerSynced = true;

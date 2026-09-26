@@ -30,12 +30,16 @@ export class AindriveProvider {
   private tracer: TraceEmitter | null = null;
 
   private unbindWillow: (() => void) | null = null;
+  /** The content is bound to the drive's Willow store (signed in, IndexedDB available). */
+  willowBound = false;
+  /** The first sync with the server completed: only then may an empty doc be seeded from disk. */
+  syncComplete = false;
   /** Resolves once the local Willow store is loaded and the first sync with the server is done (or offline). */
   whenReady: Promise<void>;
   private resolveReady!: () => void;
   private idbReady: Promise<void> = Promise.resolve();
 
-  constructor(driveId: string, path: string) {
+  constructor(driveId: string, path: string, canEdit = true) {
     const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = typeof window !== "undefined" ? window.location.host : "localhost:3737";
     this.url = `${proto}//${host}/api/agent/doc?drive=${encodeURIComponent(driveId)}&path=${encodeURIComponent(path)}`;
@@ -44,10 +48,12 @@ export class AindriveProvider {
       this.idbReady = (async () => {
         try {
           const client = await willowClient(driveId);
-          const unbind = await client.openDoc(path.split("/"), this.doc);
+          const unbind = await client.openDoc(path.split("/"), this.doc, !canEdit);
           if (this.destroyed) { unbind(); return; }
           this.unbindWillow = unbind;
-          await client.initialSync;
+          this.willowBound = true;
+          client.status.addEventListener("refused", (ev) => this.emit("refused", (ev as CustomEvent).detail));
+          this.syncComplete = await client.initialSync;
         } catch (e) { console.warn("willow store unavailable:", e); }
       })();
       void this.idbReady.then(() => {
@@ -104,7 +110,10 @@ export class AindriveProvider {
         this.tracer?.("provider-sub-ok", { extra: { role: frame.role, peers: frame.peers } });
         return;
       }
-      if (frame.t === "reload") { this.emit("reload"); this.tracer?.("reload-event"); return; }
+      // A Willow-bound doc's content comes only from signed entries: rewriting it
+      // from disk here would sign and broadcast the disk text (review C1). Disk
+      // edits reach it through the agent (Plan 3).
+      if (frame.t === "reload") { if (!this.willowBound) this.emit("reload"); this.tracer?.("reload-event"); return; }
       if (frame.t === "aware") {
         applyAwarenessUpdate(this.awareness, b64ToBytes(frame.msg), this);
         return;

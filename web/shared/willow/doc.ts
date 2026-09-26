@@ -6,16 +6,17 @@
 import * as Y from "yjs";
 import { ANY_SUBSPACE, OPEN_END, type Area } from "@jsr/earthstar__willow-utils";
 import { pathOf, partsOf, toHex, utf8 } from "./bytes";
-import { certsFrom, type Cert } from "./cert";
+import { certsFrom, type Cert, type Revocation } from "./cert";
 import { nowMicros, type newStore } from "./schemes";
 import type { DeviceKeypair } from "./keys";
 
 export type AnyStore = ReturnType<typeof newStore>;
 
 export const snapshotPath = (docPath: string[]) => pathOf(["doc", ...docPath, "~u"]);
-export const updatePath = (docPath: string[], seq: number) => pathOf(["doc", ...docPath, "~u", String(seq).padStart(12, "0")]);
+/** `seq` names the update path: a number (padded) or a caller-made unique string. */
+export const updatePath = (docPath: string[], seq: number | string) => pathOf(["doc", ...docPath, "~u", typeof seq === "number" ? String(seq).padStart(12, "0") : seq]);
 
-export async function appendUpdate(store: AnyStore, kp: DeviceKeypair, docPath: string[], update: Uint8Array, seq: number, timestamp = nowMicros()): Promise<void> {
+export async function appendUpdate(store: AnyStore, kp: DeviceKeypair, docPath: string[], update: Uint8Array, seq: number | string, timestamp = nowMicros()): Promise<void> {
   const r = await store.set({ path: updatePath(docPath, seq), subspace: kp.publicKey, payload: update, timestamp }, kp);
   if (r.kind !== "success") throw new Error(`update not stored: ${r.kind}`);
 }
@@ -82,4 +83,16 @@ export async function certsIn(store: AnyStore): Promise<Cert[]> {
     raw.push({ subspaceHex: toHex(entry.subspaceId), payload: await payload.bytes() });
   }
   return certsFrom(raw);
+}
+
+/** Every revocation in the store (`_id/revoke/<key>` entries). resolvePerson
+ *  shape-checks and verifies them; unparseable ones are skipped here. */
+export async function revocationsIn(store: AnyStore): Promise<Revocation[]> {
+  const out: Revocation[] = [];
+  const area = { includedSubspaceId: ANY_SUBSPACE, pathPrefix: [utf8("_id"), utf8("revoke")], timeRange: { start: 0n, end: OPEN_END } } as Area<Uint8Array>;
+  for await (const [entry, payload] of store.query({ area, maxCount: 0, maxSize: 0n }, "timestamp")) {
+    if (partsOf(entry.path).length !== 3 || !payload) continue;
+    try { out.push(JSON.parse(new TextDecoder().decode(await payload.bytes())) as Revocation); } catch {}
+  }
+  return out;
 }

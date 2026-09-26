@@ -82,6 +82,10 @@ test("edit offline, reload offline, reconnect: the text stays and reaches a seco
   await pb.goto(url);
   await expect(pb.locator(".ProseMirror")).toContainText("offline-edit-1", { timeout: 60_000 });
 
+  // exactly once on both sides: no re-seed from disk and no disk reload re-broadcast (review C1/C2)
+  await pa.waitForTimeout(7000); // past the 5 s autosave → fs.watch → reload cycle
+  for (const p of [pa, pb]) expect(((await p.locator(".ProseMirror").innerText()).match(/offline-edit-1/g) ?? []).length).toBe(1);
+
   // who wrote it: the signed device resolves to the owner, vouched by aindrive
   await pb.locator(".ProseMirror").getByText("offline-edit-1").click();
   await pb.keyboard.press("End"); // a selection change, wherever the click landed

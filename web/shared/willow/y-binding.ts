@@ -12,15 +12,33 @@ export function clientIdFor(key: DeviceKeypair, tab: number): number {
   return (((k[0] << 24) | (k[1] << 16) | (k[2] << 8) | k[3]) ^ Math.imul(tab, 0x9e3779b1)) >>> 0;
 }
 
-export async function bindDoc(o: { store: AnyStore; key: DeviceKeypair; docPath: string[]; doc: Y.Doc; nextSeq(): Promise<number> }): Promise<() => void> {
+/** `readOnly`: never append (a viewer): local changes, such as a seed from disk, stay local and unsigned. */
+export async function bindDoc(o: { store: AnyStore; key: DeviceKeypair; docPath: string[]; doc: Y.Doc; nextSeq(): Promise<number | string>; readOnly?: boolean }): Promise<() => void> {
   const origin = Symbol("willow");
   for (const u of await readUpdates(o.store, o.docPath)) Y.applyUpdate(o.doc, u.update, origin);
 
-  // appends run one at a time, in the order Yjs produced the updates
-  let chain: Promise<void> = Promise.resolve();
+  // Appends run one at a time; whatever is typed while one is in flight is merged
+  // into the next entry, so a burst of keystrokes becomes one signed entry and the
+  // queue drains fast (a tab closed right after typing loses as little as possible).
+  let pending: Uint8Array[] = [];
+  let running = false;
+  const drain = async () => {
+    if (running) return;
+    running = true;
+    try {
+      while (pending.length) {
+        const batch = pending;
+        pending = [];
+        const update = batch.length === 1 ? batch[0] : Y.mergeUpdates(batch);
+        try { await appendUpdate(o.store, o.key, o.docPath, update, await o.nextSeq()); }
+        catch (e) { console.warn("willow append failed:", e); }
+      }
+    } finally { running = false; }
+  };
   const onLocal = (update: Uint8Array, from: unknown) => {
-    if (from === origin) return;
-    chain = chain.then(async () => appendUpdate(o.store, o.key, o.docPath, update, await o.nextSeq())).catch((e) => console.warn("willow append failed:", e));
+    if (from === origin || o.readOnly) return;
+    pending.push(update);
+    void drain();
   };
   o.doc.on("update", onLocal);
 
