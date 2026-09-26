@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMacAgent, inside, listEntries, mimeOf, searchFolders, writeDriveConfig } from "../mac-agent.js";
@@ -109,7 +109,7 @@ test("a v0.1 store migrates once, survives a reopen, and hands its folders to th
   mac.migrate();
   const again = createStore(file).get(); // the next launch
   assert.deepEqual(again.picked, [folder]);
-  assert.deepEqual(again.adopt, [folder]);
+  assert.deepEqual(again.adopt, [{ path: folder, paused: false }]);
   const a = await mac.adoptable();
   assert.equal(a.folders[0].drive.driveId, "D7");
   assert.equal(a.folders[0].serverUrl, "https://x.test");
@@ -125,4 +125,37 @@ test("stopping a drive takes its credentials out of the folder", async () => {
   assert.ok(existsSync(join(d, ".aindrive", "config.json")));
   await mac.stop({ driveId: "D9" });
   assert.ok(!existsSync(join(d, ".aindrive", "config.json")));
+});
+
+test("a dangling symlink is refused, not followed", () => {
+  const d = tree();
+  const outside = mkdtempSync(join(tmpdir(), "aindrive-out-"));
+  symlinkSync(join(outside, "planted.txt"), join(d, "dangling"));
+  assert.throws(() => inside(d, "dangling"), /outside/);
+  assert.ok(!existsSync(join(outside, "planted.txt")));
+});
+
+test("a missing folder reads as deleted only when it was not a disk's root", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "aindrive-par-"));
+  const folder = join(parent, "Shared");
+  mkdirSync(folder);
+  const store = createStore(join(mkdtempSync(join(tmpdir(), "aindrive-store-")), "s.json"));
+  const mac = createMacAgent({ agents: fakeAgents(), store, electron: fakeElectron([[folder]]), thumbsDir: tmpdir(), emit() {} });
+  await mac.pickFolder();
+  rmSync(folder, { recursive: true });
+  await assert.rejects(mac.listFolder({ folderUri: folder }), /No such file/);
+  // a folder picked without a device record (a disk root, or unknown) is never "deleted"
+  store.update((s) => ({ ...s, pickedDev: {} }));
+  await assert.rejects(mac.listFolder({ folderUri: folder }), /disk connected/);
+});
+
+test("a folder paused in v0.1 is carried over switched off", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "aindrive-store-")), "folders.json");
+  const on = tree(), off = tree();
+  for (const [f, id] of [[on, "A"], [off, "B"]]) writeFileSync(join(f, ".aindrive", "config.json"), JSON.stringify({ driveId: id, agentToken: "t", driveSecret: "s", serverUrl: "https://x.test" }));
+  writeFileSync(file, JSON.stringify({ folders: [{ path: on, paused: false }, { path: off, paused: true }] }));
+  const mac = createMacAgent({ agents: fakeAgents(), store: createStore(file), electron: fakeElectron([]), thumbsDir: tmpdir(), emit() {} });
+  mac.migrate();
+  const a = await mac.adoptable();
+  assert.deepEqual(a.folders.map((x) => [x.drive.driveId, x.on]), [["A", true], ["B", false]]);
 });

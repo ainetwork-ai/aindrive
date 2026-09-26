@@ -194,7 +194,7 @@ export interface AindriveAgentPlugin {
   /** `driveId`: answer from that one folder only (the folder chat). */
   ask(opts: { query: string; context?: Record<string, unknown>; driveId?: string }): Promise<AskResult>;
   /** Mac only (desktop/): folders the Mac app shared before it ran this shell, with their drives — handed over once. */
-  adoptable?(): Promise<{ folders: { folder: PickedFolder; drive: { driveId: string; agentToken: string; driveSecret: string; url?: string }; serverUrl: string }[] }>;
+  adoptable?(): Promise<{ folders: { folder: PickedFolder; drive: { driveId: string; agentToken: string; driveSecret: string; url?: string }; serverUrl: string; on: boolean }[] }>;
   addListener(
     event: "statusChanged",
     cb: (s: AgentStatus) => void,

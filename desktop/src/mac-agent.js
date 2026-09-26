@@ -19,7 +19,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants, copyFileSync, existsSync, mkdirSync, promises as fsp, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { driveUrlOf, isFolder } from "./agents.js";
 
@@ -36,17 +36,25 @@ const MIME = {
 export const mimeOf = (name) => MIME[extname(name).toLowerCase()] ?? "application/octet-stream";
 const MAX_READ_BYTES = 40 * 1024 * 1024;
 
-/** The real path of `p`, or of its nearest existing ancestor plus the rest. */
+const present = (p) => { try { lstatSync(p); return true; } catch { return false; } };
+
+/**
+ * The real path of `p`, or of its nearest existing ancestor plus the rest. A
+ * dangling symlink counts as existing — and cannot be resolved, so it is refused
+ * rather than followed wherever it points.
+ */
 function realish(p) {
   let head = p;
   const tail = [];
-  while (!existsSync(head)) {
+  while (!present(head)) {
     const up = dirname(head);
     if (up === head) break;
     tail.unshift(basename(head));
     head = up;
   }
-  return join(realpathSync(head), ...tail);
+  let real;
+  try { real = realpathSync.native(head); } catch { throw new Error("path is outside the folder"); }
+  return join(real, ...tail);
 }
 
 /**
@@ -54,11 +62,12 @@ function realish(p) {
  * symlink — and any `.aindrive` (a drive's credentials) at any depth.
  */
 export function inside(root, rel = "") {
-  const segs = String(rel ?? "").split(/[\\/]+/).filter((x) => x && x !== ".");
+  // "/" only: on macOS a backslash is an ordinary character in a file name
+  const segs = String(rel ?? "").split("/").filter((x) => x && x !== ".");
   if (segs.some((x) => x === "..")) throw new Error("path is outside the folder");
   if (segs.some((x) => x.toLowerCase() === ".aindrive")) throw new Error("that path is reserved");
   const abs = join(root, ...segs);
-  const realRoot = realpathSync(root);
+  const realRoot = realpathSync.native(root);
   const real = realish(abs);
   if (real !== realRoot && !real.startsWith(realRoot + sep)) throw new Error("path is outside the folder");
   return abs;
@@ -66,10 +75,10 @@ export function inside(root, rel = "") {
 
 /** `name`, or "name (2).ext", "name (3).ext"… — the first that `dir` does not have. */
 function freeName(dir, name) {
-  if (!existsSync(join(dir, name))) return name;
+  if (!present(join(dir, name))) return name;
   const ext = extname(name);
   const stem = name.slice(0, name.length - ext.length);
-  for (let i = 2; ; i++) if (!existsSync(join(dir, `${stem} (${i})${ext}`))) return `${stem} (${i})${ext}`;
+  for (let i = 2; ; i++) if (!present(join(dir, `${stem} (${i})${ext}`))) return `${stem} (${i})${ext}`;
 }
 
 /** What a phone agent returns for a listing, for one directory. */
@@ -79,6 +88,8 @@ export async function listEntries(root, rel = "") {
   for (const d of await fsp.readdir(dir, { withFileTypes: true })) {
     if (d.name.toLowerCase() === ".aindrive" || d.name === ".DS_Store") continue;
     const abs = join(dir, d.name);
+    // a link that leads out of the folder is not part of it (and could not be opened)
+    if (d.isSymbolicLink()) { try { inside(root, relative(root, abs).split(sep).join("/")); } catch { continue; } }
     let st;
     try { st = await fsp.stat(abs); } catch { continue; }
     const path = relative(root, abs).split(sep).join("/");
@@ -157,11 +168,20 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
   /** Only folders the user picked on this Mac, and never a path outside them. */
   function folderOf(uri) {
     if (typeof uri !== "string" || !picked().has(uri)) throw new Error("That folder was not picked on this Mac");
-    if (!isFolder(uri)) {
-      // gone from a disk that is still here → deleted (the shell offers to remove it); else the disk is away
-      throw new Error(existsSync(dirname(uri)) ? "No such file: the folder does not exist any more" : "That folder is not available — is its disk connected?");
-    }
+    if (!isFolder(uri)) throw new Error(deleted(uri) ? "No such file: the folder does not exist any more" : "That folder is not available — is its disk connected?");
     return uri;
+  }
+
+  /**
+   * Missing because it was deleted — not because its disk is away. Only when the
+   * folder sat on the same device as its parent (so it was not a disk's root)
+   * and that parent is still here on that device. The shell deletes the drive on
+   * the server for a deleted folder, so "not sure" must never read as deleted.
+   */
+  function deleted(uri) {
+    const dev = (store.get().pickedDev ?? {})[uri];
+    if (dev === undefined) return false;
+    try { return statSync(dirname(uri)).dev === dev; } catch { return false; }
   }
 
   function status() {
@@ -214,7 +234,10 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
       });
       if (r.canceled || !r.filePaths[0]) throw new Error("cancelled");
       const uri = r.filePaths[0];
-      store.update((s) => ({ ...s, picked: [...new Set([...(s.picked ?? []), uri])] }));
+      // the folder's device, if it is its parent's (a disk's root is not): see deleted()
+      let dev;
+      try { const own = statSync(uri).dev; if (statSync(dirname(uri)).dev === own) dev = own; } catch { /* unknown */ }
+      store.update((s) => ({ ...s, picked: [...new Set([...(s.picked ?? []), uri])], pickedDev: { ...(s.pickedDev ?? {}), ...(dev === undefined ? {} : { [uri]: dev }) } }));
       return { uri, label: basename(uri) };
     },
 
@@ -238,8 +261,11 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
     async rename({ folderUri, from, to }) {
       const root = folderOf(folderUri);
       const src = inside(root, from), dst = inside(root, to);
-      // a rename or move never replaces another file (only a change of letter case of itself)
-      if (existsSync(dst) && realpathSync(dst) !== realpathSync(src)) throw new Error(`"${basename(dst)}" already exists there`);
+      // a rename or move never replaces another file — renaming to a different letter case of itself is fine
+      if (present(dst)) {
+        const a = lstatSync(src), b = lstatSync(dst);
+        if (a.dev !== b.dev || a.ino !== b.ino) throw new Error(`"${basename(dst)}" already exists there`);
+      }
       await fsp.rename(src, dst);
     },
     async writeText({ folderUri, path, text }) { await fsp.writeFile(inside(folderOf(folderUri), path), String(text ?? ""), "utf8"); },
@@ -366,18 +392,20 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
         ...s,
         folders: [],
         picked: [...new Set([...(s.picked ?? []), ...old.map((f) => f.path)])],
-        adopt: [...new Set([...(s.adopt ?? []), ...old.filter((f) => driveUrlOf(f.path)).map((f) => f.path)])],
+        adopt: [...(s.adopt ?? []), ...old.filter((f) => driveUrlOf(f.path)).map((f) => ({ path: f.path, paused: !!f.paused }))],
       }));
     },
 
     /** Folders paired before this shell existed, with their drive — once; the shell saves them. */
     async adoptable() {
       const out = [];
-      for (const folder of store.get().adopt ?? []) {
+      for (const entry of store.get().adopt ?? []) {
+        const folder = typeof entry === "string" ? entry : entry.path;
         try {
           const c = JSON.parse(readFileSync(join(folder, ".aindrive", "config.json"), "utf8"));
           if (c.driveId && c.agentToken && c.driveSecret && c.serverUrl) {
-            out.push({ folder: { uri: folder, label: basename(folder) }, drive: { driveId: c.driveId, agentToken: c.agentToken, driveSecret: c.driveSecret, url: c.url }, serverUrl: c.serverUrl });
+            // a folder paused in the old app stays off
+            out.push({ folder: { uri: folder, label: basename(folder) }, drive: { driveId: c.driveId, agentToken: c.agentToken, driveSecret: c.driveSecret, url: c.url }, serverUrl: c.serverUrl, on: !(typeof entry === "object" && entry.paused) });
           }
         } catch { /* gone or unpaired */ }
       }
