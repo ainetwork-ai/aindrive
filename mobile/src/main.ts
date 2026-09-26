@@ -1562,7 +1562,9 @@ async function ask(q = askQuery) {
         if (sh) {
           try {
             const listed = await AindriveAgent.listFolder({ folderUri: sh.folder.uri, path: "" });
-            const picked = (listed.entries ?? []).filter((e) => !e.isDir).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, HANDOFF_MAX).map((e) => ({ folderUri: sh.folder.uri, path: e.path }));
+            // Half the usual handoff: this is context for a question the device could not answer, and
+            // aindrive-cloud's input limit was hit with ten files' worth of listing.
+            const picked = (listed.entries ?? []).filter((e) => !e.isDir).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, Math.ceil(HANDOFF_MAX / 2)).map((e) => ({ folderUri: sh.folder.uri, path: e.path }));
             if (picked.length) handed = await handoffPicked(cloud[0], picked);
           } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
         }
@@ -2165,7 +2167,9 @@ function searchSheet(): string {
   };
   const actionFolderShare = (x: NonNullable<AskResult["action"]>) => (x.folderUri ? findShare(x.folderUri) : undefined) ?? shareByDrive(x.driveId);
   const collected = (r?: AskResult) => !!r?.action && r.action.folder !== undefined && !r.action.skipped;
-  const a = askResult?.action;
+  // The folder card is for collect/move (a folder was, or would have been, made) — a count or a pending
+  // delete is answered in the text, and the Mac's count once drew "undefined files copied".
+  const a = askResult?.action && (askResult.action.type === "collect" || askResult.action.type === "move") ? askResult.action : undefined;
   const actionCard = !a ? "" : a.skipped
     ? `<div class="card action"><b>Nothing to collect</b><p class="note" style="margin:4px 0 0">${esc(a.reason === "nothing matched" ? "No files matched, so no folder was made." : a.reason === "only loose matches" ? "Only loose matches were found — say it more precisely and I'll make the folder." : "Turn a shared folder on so I have somewhere to save the result.")}</p>${a.needsCallLog ? `<p class="hint" style="margin-top:8px"><button class="link" id="action-calllog">Allow call log</button></p>` : ""}</div>`
     : `<div class="card action">
