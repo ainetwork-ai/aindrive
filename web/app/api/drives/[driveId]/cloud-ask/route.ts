@@ -9,10 +9,14 @@ import { askCloud, CLOUD_AGENT } from "@/lib/cloud-agent";
 
 /**
  * GET  → { agent } — aindrive-cloud as Folder Chat shows it.
- * POST { q, path, contextId? } → { answer, contextId, handed } — one turn to aindrive-cloud about
- * the open folder (lib/cloud-agent.ts). Owner only: it hands the folder's files out as links.
+ * POST { q, path, contextId?, folders? } → { answer, contextId, handed } — one turn to aindrive-cloud about
+ * the open folder (lib/cloud-agent.ts), or about the @-mentioned folders instead (`folders`: other
+ * drives of the caller's — lib/mention.ts). Owner only: it hands the folders' files out as links.
  */
-const Body = z.object({ q: z.string().min(1).max(2000), path: zPath.default(""), contextId: z.string().max(200).optional() });
+const Body = z.object({
+  q: z.string().min(1).max(2000), path: zPath.default(""), contextId: z.string().max(200).optional(),
+  folders: z.array(z.object({ driveId: z.string().min(1).max(64), path: zPath.default("") })).max(5).optional(),
+});
 
 export async function GET() {
   return NextResponse.json({ agent: { name: CLOUD_AGENT.name, by: CLOUD_AGENT.by, model: CLOUD_AGENT.model } });
@@ -29,9 +33,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (!rl.ok) return NextResponse.json({ error: "rate_limited", retryAfterMs: rl.retryAfterMs }, { status: 429 });
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  if (!isOnline(driveId)) return NextResponse.json({ error: "This drive's device is offline, so aindrive-cloud can't see its files" }, { status: 503 });
+  const wanted = body.data.folders?.length ? body.data.folders : [{ driveId, path: body.data.path }];
+  const folders: { driveId: string; driveSecret: string; folder: string }[] = [];
+  for (const w of wanted) {
+    const d = w.driveId === driveId ? drive : getDrive(w.driveId);
+    if (!d || d.owner_id !== user.id)
+      return NextResponse.json({ error: "Only the drive's owner can hand its files to aindrive-cloud" }, { status: 403 });
+    if (!isOnline(d.id))
+      return NextResponse.json({ error: `${d.name}'s device is offline, so aindrive-cloud can't see its files` }, { status: 503 });
+    folders.push({ driveId: d.id, driveSecret: d.drive_secret, folder: w.path });
+  }
   try {
-    const r = await askCloud({ ownerId: user.id, driveId, driveSecret: drive.drive_secret, folder: body.data.path, q: body.data.q, contextId: body.data.contextId });
+    const r = await askCloud({ ownerId: user.id, folders, q: body.data.q, contextId: body.data.contextId });
     return NextResponse.json({ answer: r.text, contextId: r.contextId ?? null, handed: r.handed });
   } catch (e) {
     const status = e instanceof AgentError ? e.status : 502;

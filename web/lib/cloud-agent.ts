@@ -95,9 +95,13 @@ export function describeEntries(entries: DriveEntry[]): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ") + (span ? ` (${span})` : "");
 }
 
-export async function askCloud(opts: {
-  ownerId: string; driveId: string; driveSecret: string; folder: string; q: string; contextId?: string;
-}): Promise<{ text: string; contextId?: string; handed: number }> {
+/**
+ * A drive folder handed to an agent: its listing (recursive, capped), what the device's own agent says
+ * about it, and its newest files as handoff links + the grant's MCP view. `audience` is who the grant is
+ * for (the agent's card or name). Shared by aindrive-cloud turns (askCloud) and the phone's
+ * "@agent @folder" turns about a folder on another device (/api/drives/[driveId]/folder-handoff).
+ */
+export async function handFolder(opts: { ownerId: string; driveId: string; driveSecret: string; folder: string; audience: string }) {
   const { entries, folders, truncated } = await listRecursive(
     async (path) => ((await callAgent(opts.driveId, opts.driveSecret, { method: "list", path })) as { entries: DriveEntry[] }).entries ?? [], opts.folder);
   // What the device's own agent knows about these files (dates, places, kinds from its index): the
@@ -110,7 +114,7 @@ export async function askCloud(opts: {
   const handed = files.length
     ? createHandoffGrant(opts.ownerId, opts.driveId,
         files.map((f) => ({ deviceKey: "web", drivePath: f.path, name: f.name, mime: f.mime || "application/octet-stream", size: f.size })),
-        CLOUD_AGENT.card, DEFAULT_TTL_SECONDS)
+        opts.audience, DEFAULT_TTL_SECONDS)
     : null;
   const base = env.publicUrl.replace(/\/+$/, "");
   const listing = entries
@@ -119,14 +123,30 @@ export async function askCloud(opts: {
     `${truncated ? `; only the first ${entries.length} entries are listed` : ""}` +
     `${handed ? `; the ${files.length} newest files are attached as links` : ""}]` +
     `${deviceSays ? `\n[the device's agent about these files: ${deviceSays}]` : ""}\n${listing || "(empty)"}`;
+  const mimeOf = (name: string) => files.find((f) => f.name === name)?.mime || "application/octet-stream";
+  return {
+    entries, truncated, context, deviceSays,
+    links: (handed?.links ?? []).map((l) => ({ id: l.id, url: `${base}/api/h/${l.id}?k=${l.secret}`, name: l.name, mime: mimeOf(l.name), expiresAt: l.expiresAt })),
+    mcp: handed ? { url: `${base}/mcp/h/${handed.grant.id}`, token: handed.grant.token, expiresAt: handed.grant.expiresAt } : null,
+  };
+}
+
+/** One aindrive-cloud turn about one folder, or several ("@aindrive-cloud @Photos-in-S21 @Docs-in-Mac …"). */
+export async function askCloud(opts: {
+  ownerId: string; folders: { driveId: string; driveSecret: string; folder: string }[]; q: string; contextId?: string;
+}): Promise<{ text: string; contextId?: string; handed: number }> {
+  const handed = await Promise.all(opts.folders.map((f) => handFolder({ ...f, ownerId: opts.ownerId, audience: CLOUD_AGENT.card })));
+  const context = handed.map((h) => h.context).join("\n\n");
+  const links = handed.flatMap((h) => h.links);
+  const mcps = handed.flatMap((h) => (h.mcp ? [h.mcp] : []));
   const message: Message = {
     kind: "message", role: "user", messageId: randomUUID(),
     parts: [
       { kind: "text", text: `${opts.q}\n\n${context}` },
-      ...(handed ? handed.links.map((l) => ({ kind: "file" as const, file: { uri: `${base}/api/h/${l.id}?k=${l.secret}`, name: l.name, mimeType: files.find((f) => f.name === l.name)?.mime } })) : []),
-      ...(handed ? [{
+      ...links.map((l) => ({ kind: "file" as const, file: { uri: l.url, name: l.name, mimeType: l.mime } })),
+      ...(mcps.length ? [{
         kind: "data" as const,
-        data: { mcpServers: [{ name: "aindrive-handoff", transport: "streamable-http", url: `${base}/mcp/h/${handed.grant.id}`, headers: { Authorization: `Bearer ${handed.grant.token}` }, expiresAt: handed.grant.expiresAt, tools: ["list_files", "read_file"] }] },
+        data: { mcpServers: mcps.map((mcp, i) => ({ name: i ? `aindrive-handoff-${i + 1}` : "aindrive-handoff", transport: "streamable-http", url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` }, expiresAt: mcp.expiresAt, tools: ["list_files", "read_file"] })) },
         metadata: { type: HANDOFF_MCP_PART },
       }] : []),
     ],
@@ -134,10 +154,10 @@ export async function askCloud(opts: {
   };
   const client = await factory().createFromAgentCard(await agentCard());
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
-  if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? opts.contextId, handed: files.length };
+  if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? opts.contextId, handed: links.length };
   const task = r as Task;
   const said = task.status?.message ? textOf(task.status.message.parts) : "";
   const arts = (task.artifacts ?? []).map((a) => textOf(a.parts)).filter(Boolean).join("\n\n");
   const out = [said, arts].filter(Boolean).join("\n\n");
-  return { text: out || `(the agent's task is ${task.status?.state ?? "empty"})`, contextId: task.contextId ?? opts.contextId, handed: files.length };
+  return { text: out || `(the agent's task is ${task.status?.state ?? "empty"})`, contextId: task.contextId ?? opts.contextId, handed: links.length };
 }

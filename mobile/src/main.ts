@@ -24,7 +24,7 @@ import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
 import { loadAgents, saveAgents, discover, askDevice, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
-import { prepareFolderHandoff } from "./folder-handoff";
+import { prepareFolderHandoff, type FolderContext } from "./folder-handoff";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
 import { ManageSheet } from "./manage-sheet";
@@ -243,7 +243,68 @@ async function revokeHandoff(turn: number, id?: string) {
   await saveThread(); render();
 }
 
-/** "@Weather what's up tomorrow" → that agent and the rest of the message. */
+// ---------------------------------------------------------------- @-mentioned folders
+// Every shared folder can be @-mentioned next to an agent: "@aindrive-cloud @Photos-in-Galaxy-S21 what is
+// inside this folder?" hands that folder (not the open one) to the agent. A folder on this device is
+// "@<label>"; one on another device is "@<name>-in-<device>", so the same name on two devices stays two.
+
+/** A folder that can be @-mentioned: one shared from this device, or one of this account's drives on another. */
+interface FolderMention { handle: string; label: string; local?: SharedFolder; remote?: RemoteDrive }
+
+const dashed = (s: string) => s.trim().replace(/\s+/g, "-");
+
+function mentionFolders(): FolderMention[] {
+  const out: FolderMention[] = state.shares.map((sh) => ({ handle: dashed(sh.folder.label), label: sh.folder.label, local: sh }));
+  // Only the account's own drives: handing files to an agent is the owner's call (folder-handoff checks).
+  for (const d of remotes.filter((r) => r.owned !== false))
+    out.push({ handle: `${dashed(d.name)}-in-${dashed(deviceName(d))}`, label: `${d.name} · ${deviceName(d)}`, remote: d });
+  // a handle names one folder: a second one with the same name gets a number
+  const seen = new Map<string, number>();
+  for (const f of out) {
+    const k = f.handle.toLowerCase(), n = (seen.get(k) ?? 0) + 1;
+    seen.set(k, n);
+    if (n > 1) f.handle += `-${n}`;
+  }
+  return out;
+}
+
+/**
+ * The @-mentioned folders handed to `agent`: one on this device is listed here and its files registered
+ * (prepareFolderHandoff), one on another device is listed and linked by the server (Web.folderHandoff).
+ */
+async function handoffFolders(agent: A2aAgent, folders: FolderMention[]): Promise<(Handed & { links: HandoffLink[] }) | null> {
+  if (!agentOn(agent)) return null;
+  const web = new Web(state.server, state.sessionCookie!);
+  const out: Handed & { links: HandoffLink[] } = { files: [], links: [], more: [] };
+  for (const f of folders) {
+    let one: { files: Handed["files"]; links: HandoffLink[]; mcp?: Handed["mcp"]; folder: FolderContext } | null;
+    if (f.local) {
+      const sh = f.local;
+      one = await prepareFolderHandoff({ uri: sh.folder.uri, label: sh.folder.label }, (opts) => AindriveAgent.listFolder(opts), (files) => handoffPicked(agent, files));
+    } else {
+      const d = liveRemote(f.remote!);
+      if (!d.online) throw new Error(`${d.name} on ${deviceName(d)} is offline.`);
+      const r = await web.folderHandoff(d.id, { path: "", audience: agent.name });
+      one = {
+        files: r.links.map((l) => ({ uri: l.url, name: l.name, mimeType: l.mime })),
+        links: r.links.map((l) => ({ id: l.id, name: l.name, expiresAt: l.expiresAt })),
+        ...(r.mcp ? { mcp: r.mcp } : {}),
+        folder: {
+          name: d.name, path: "", recursive: true, depth: 4, device: deviceName(d), totalEntries: r.entries.length, truncated: r.truncated,
+          entries: r.entries.map(({ name, path, isDir, size, mime }) => ({ name, path, isDir, size, mime })),
+          ...(r.deviceSays ? { note: r.deviceSays } : {}),
+        },
+      };
+    }
+    if (!one) return null;   // declined, or no connected drive to carry the links
+    out.files.push(...one.files);
+    out.links.push(...one.links);
+    if (!out.folder) { out.folder = one.folder; if (one.mcp) out.mcp = one.mcp; }
+    else out.more!.push({ folder: one.folder, ...(one.mcp ? { mcp: one.mcp } : {}) });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- @-mention autocomplete
 // Typing "@" in the composer lists the agents in this chat by handle; Tab/Enter or a tap completes it.
 // Managed on the DOM directly (not through render()): the composer must not be rebuilt under the keyboard.
@@ -256,9 +317,15 @@ function mentionToken(input: HTMLInputElement): { start: number; text: string } 
   return m ? { start: at - m[1].length - 1, text: m[1] } : null;
 }
 
-function mentionCandidates(text: string): A2aAgent[] {
+type MentionItem = { agent: A2aAgent } | { folder: FolderMention };
+const itemHandle = (m: MentionItem) => ("agent" in m ? handleOf(m.agent) : m.folder.handle);
+
+/** Agents by handle prefix, then folders by handle or name (a folder's name may be anywhere in its handle). */
+function mentionCandidates(text: string): MentionItem[] {
   const key = text.toLowerCase();
-  return a2aAgents.filter((a) => agentOn(a) && handleOf(a).toLowerCase().startsWith(key));
+  const agents = a2aAgents.filter((a) => agentOn(a) && handleOf(a).toLowerCase().startsWith(key)).map((agent) => ({ agent }));
+  const folders = mentionFolders().filter((f) => f.handle.toLowerCase().includes(key) || f.label.toLowerCase().includes(key)).slice(0, 8).map((folder) => ({ folder }));
+  return [...agents, ...folders];
 }
 
 function mentionMenu(input: HTMLInputElement | null) {
@@ -270,17 +337,17 @@ function mentionMenu(input: HTMLInputElement | null) {
   mentionPick = Math.min(mentionPick, list.length - 1);
   const menu = document.createElement("div");
   menu.id = "mention-menu"; menu.className = "mention-menu"; menu.setAttribute("role", "listbox");
-  menu.innerHTML = list.map((a, i) => `<button type="button" role="option" data-i="${i}" class="${i === mentionPick ? "sel" : ""}" aria-selected="${i === mentionPick}">${a.builtin ? icon("cpu", 14) : icon("cloud", 14)}<b>@${esc(handleOf(a))}</b><span>${esc(a.name)}</span></button>`).join("");
+  menu.innerHTML = list.map((m, i) => `<button type="button" role="option" data-i="${i}" class="${i === mentionPick ? "sel" : ""}" aria-selected="${i === mentionPick}">${"agent" in m ? (m.agent.builtin ? icon("cpu", 14) : icon("cloud", 14)) : icon("folder", 14)}<b>@${esc(itemHandle(m))}</b><span>${esc("agent" in m ? m.agent.name : m.folder.label)}</span></button>`).join("");
   menu.addEventListener("mousedown", (e) => e.preventDefault());   // keep the input focused
   menu.addEventListener("click", (e) => { const b = (e.target as HTMLElement).closest<HTMLElement>("[data-i]"); if (b) mentionAccept(input, list[Number(b.dataset.i)]); });
   input.closest(".composer")?.appendChild(menu);
 }
 
-function mentionAccept(input: HTMLInputElement, a: A2aAgent) {
+function mentionAccept(input: HTMLInputElement, m: MentionItem) {
   const tok = mentionToken(input);
   if (!tok) return;
   const after = input.value.slice(input.selectionStart ?? input.value.length);
-  const head = `${input.value.slice(0, tok.start)}@${handleOf(a)} `;
+  const head = `${input.value.slice(0, tok.start)}@${itemHandle(m)} `;
   input.value = head + after.replace(/^\s+/, "");
   input.setSelectionRange(head.length, head.length);
   askQuery = input.value;
@@ -302,12 +369,26 @@ function mentionKey(input: HTMLInputElement, e: KeyboardEvent): boolean {
   return false;
 }
 
-function mentioned(q: string): { agent: A2aAgent; text: string } | null {
-  const m = /^@(\S+)\s*(.*)$/s.exec(q.trim());
-  if (!m) return null;
-  const key = m[1].toLowerCase();
-  const agent = a2aAgents.find((a) => handleOf(a).toLowerCase() === key) ?? a2aAgents.find((a) => handleOf(a).toLowerCase().startsWith(key));
-  return agent ? { agent, text: m[2] || m[0] } : null;
+/**
+ * "@Weather what's up tomorrow" → that agent and the rest of the message; "@aindrive-cloud @Photos what
+ * is in here?" → the agent, the folders, and the question. Reads the leading run of @-words, each an
+ * agent (exact handle, else a prefix) or a folder (exact handle); the first other word starts the text.
+ */
+function mentioned(q: string): { agent?: A2aAgent; folders: FolderMention[]; text: string } | null {
+  let rest = q.trim(), agent: A2aAgent | undefined;
+  const folders: FolderMention[] = [];
+  const all = mentionFolders();
+  for (let m = /^@(\S+)\s*/.exec(rest); m; m = /^@(\S+)\s*/.exec(rest)) {
+    const key = m[1].replace(/[,.:;!?]+$/, "").toLowerCase();
+    const folder = all.find((f) => f.handle.toLowerCase() === key);
+    const a = folder ? undefined : a2aAgents.find((x) => handleOf(x).toLowerCase() === key) ?? a2aAgents.find((x) => handleOf(x).toLowerCase().startsWith(key));
+    if (folder) { if (!folders.includes(folder)) folders.push(folder); }
+    else if (a && !agent) agent = a;
+    else break;
+    rest = rest.slice(m[0].length);
+  }
+  if (!agent && !folders.length) return null;
+  return { agent, folders, text: rest || q.trim() };
 }
 
 /** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
@@ -1473,11 +1554,14 @@ async function ask(q = askQuery) {
   q = q.trim();
   if (!q) return;
   askQuery = q;
-  const direct = mentioned(q);
+  const said = mentioned(q);
+  const direct = said?.agent ? { ...said, agent: said.agent } : null;
+  // "@Photos what's in here?" with no agent: the folder is the scope, asked as a folder chat would be
+  const onlyFolders = said && !said.agent ? said.folders : null;
   if (direct && !agentOn(direct.agent)) { notify(`${direct.agent.name} is off — turn it on in Model & agents first.`, true); return; }
   if (direct) {
     let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
-    try { handed = await handoffFiles(direct.agent); }
+    try { handed = direct.folders.length ? await handoffFolders(direct.agent, direct.folders) : await handoffFiles(direct.agent); }
     catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
     if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
@@ -1499,19 +1583,24 @@ async function ask(q = askQuery) {
   try {
     const prevResult = askResult;   // what "these" refers to, if the turn goes to aindrive-cloud
     // A folder chat asks that folder only (opened for the agent even with P2P off), never other devices.
-    const scope = chatScope;
+    // "@Photos …" alone: a folder on this device scopes the on-device agent like a folder chat; folders on
+    // other devices are asked there (their device's agent), and nothing else is searched.
+    const named = onlyFolders?.find((f) => f.local)?.local;
+    const namedRemotes = named ? [] : onlyFolders?.flatMap((f) => (f.remote ? [liveRemote(f.remote)] : [])) ?? [];
+    const scope: ChatScope | null = named ? { driveId: localIdOf(named), label: named.folder.label, uri: named.folder.uri } : onlyFolders ? null : chatScope;
+    const query = onlyFolders ? said!.text : q;
     if (scope) { const sh = findShare(scope.uri); if (sh) { await ensureLocal(sh); scope.driveId = localIdOf(sh); } }
-    const localRunning = status.drives.some((d) => d.running);
-    const local = localRunning ? await AindriveAgent.ask({ query: q, context: askContext ?? undefined, driveId: scope?.driveId }) : null;
+    const localRunning = !namedRemotes.length && status.drives.some((d) => d.running);
+    const local = localRunning ? await AindriveAgent.ask({ query, context: askContext ?? undefined, driveId: scope?.driveId }) : null;
     // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
     const offTopic = local?.query === "chat" || local?.query === "out";
     // The account's own drives on other devices, each asked through its A2A agent (/a2a/d/<id>).
-    const targets = offTopic || scope ? [] : remotes.filter((d) => d.online && d.owned !== false);
+    const targets = namedRemotes.length ? namedRemotes : offTopic || scope ? [] : remotes.filter((d) => d.online && d.owned !== false);
     const askId = "q_" + (crypto.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/[^A-Za-z0-9]/g, "");
     const remoteResults = await Promise.all([
       ...targets.map(async (d) => {
         try {
-          const r = await askDevice(state.server, state.sessionCookie!, d, q, askId);
+          const r = await askDevice(state.server, state.sessionCookie!, d, query, askId);
           return { drive: d, r, error: null as string | null, skipped: false };
         } catch (e) {
           return { drive: d, r: null, error: msgOf(e) };

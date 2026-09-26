@@ -3,11 +3,12 @@
 // rate_limited handling), effects, and the CreateAgentModal render stay in the
 // shell (folder-chat.tsx); these are pure render functions that receive data
 // and handlers as props. Extracting markup only — behavior is unchanged.
-import { useMemo, useState } from "react";
-import { Bot, Send, MessageSquare, Pencil, Trash2, ChevronDown, ChevronRight, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Bot, Cloud, Folder, Send, MessageSquare, Pencil, Trash2, ChevronDown, ChevronRight, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Select, IconButton } from "@/components/ui";
+import { mentionTokenAt } from "@/lib/mention";
 
 export type AgentSummary = {
   id: string;
@@ -159,8 +160,11 @@ export function MessageList({
   );
 }
 
+/** One row of the composer's "@" menu: an agent in this chat, or a folder (one of the account's drives). */
+export type MentionItem = { kind: "agent" | "folder"; handle: string; label: string };
+
 export function ChatInput({
-  ask, input, setInput, agentId, selectedAgent, busy,
+  ask, input, setInput, agentId, selectedAgent, busy, mentionItems,
 }: {
   ask: () => void;
   input: string;
@@ -168,24 +172,80 @@ export function ChatInput({
   agentId: string | null;
   selectedAgent: AgentSummary | null;
   busy: boolean;
+  /** Candidates for the "@word" being typed. */
+  mentionItems: (text: string) => MentionItem[];
 }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  // the "@word" at the caret, and which menu row is picked; null = menu closed
+  const [token, setToken] = useState<{ start: number; text: string } | null>(null);
+  const [pick, setPick] = useState(0);
+  const items = token ? mentionItems(token.text) : [];
+  const open = items.length > 0;
+
+  function track(value: string, caret: number) {
+    setToken(mentionTokenAt(value, caret));
+    setPick(0);
+  }
+
+  function accept(item: MentionItem) {
+    if (!token) return;
+    const caret = ref.current?.selectionStart ?? input.length;
+    const head = `${input.slice(0, token.start)}@${item.handle} `;
+    const next = head + input.slice(caret).replace(/^\s+/, "");
+    setInput(next);
+    setToken(null);
+    requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(head.length, head.length); });
+  }
+
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); ask(); }}
-      className="border-t border-drive-border p-2 flex items-end gap-2"
+      className="relative border-t border-drive-border p-2 flex items-end gap-2"
     >
+      {open && (
+        <div role="listbox" data-testid="chat-mention-menu"
+             className="absolute bottom-full left-2 right-2 mb-1 max-h-60 overflow-y-auto rounded-md border border-drive-border bg-white py-1 shadow-lg z-10">
+          {items.map((it, i) => (
+            <button
+              key={`${it.kind}:${it.handle}`}
+              type="button"
+              role="option"
+              aria-selected={i === pick}
+              onMouseEnter={() => setPick(i)}
+              onMouseDown={(e) => { e.preventDefault(); accept(it); }}
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-body ${i === pick ? "bg-drive-panel" : ""}`}
+            >
+              {it.kind === "folder" ? <Folder className="w-3.5 h-3.5 shrink-0 text-drive-muted" /> : <Cloud className="w-3.5 h-3.5 shrink-0 text-drive-muted" />}
+              <span className="font-medium text-drive-text truncate">@{it.handle}</span>
+              <span className="text-caption text-drive-muted truncate">{it.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
+        ref={ref}
         className="flex-1 rounded-md border border-drive-border bg-drive-panel px-3 py-2 text-body text-drive-text
                    placeholder:text-drive-muted resize-none outline-none transition-colors duration-150
                    focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent
                    disabled:opacity-50"
         rows={2}
         aria-label={selectedAgent ? `Message ${selectedAgent.name}` : "Message agent"}
-        placeholder={agentId && selectedAgent ? `Message ${selectedAgent.name}…` : "No agent selected"}
+        placeholder={agentId && selectedAgent ? `Message ${selectedAgent.name}… (@ for agents and folders)` : "No agent selected"}
         value={input}
-        onChange={(e) => setInput(e.target.value)}
+        onChange={(e) => { setInput(e.target.value); track(e.target.value, e.target.selectionStart ?? e.target.value.length); }}
+        onBlur={() => setToken(null)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // the "@" menu owns the arrows / Enter / Tab / Esc while it is open
+          if (open && !e.nativeEvent.isComposing) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              setPick((p) => (p + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length);
+              return;
+            }
+            if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(items[Math.min(pick, items.length - 1)]); return; }
+            if (e.key === "Escape") { e.preventDefault(); setToken(null); return; }
+          }
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             ask();
           }
