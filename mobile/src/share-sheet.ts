@@ -21,23 +21,36 @@ export class ShareSheet implements Sheet {
 
   /** `onNeedPayout`: selling needs a payout wallet first — open the payout wallet screen for this folder. */
   constructor(private ctx: Ctx, private driveId: string, private path: string, private name: string,
-              private onNeedPayout?: (path: string) => void, private focusSell = false) { void this.load(); }
+              private onNeedPayout?: (path: string) => void, private focusSell = false) {
+    this.apps = ShareSheet.appCache.get(`${driveId}|${path}`) ?? []; void this.load(); }
 
   /** The sale just created: shown at the top of the Sell card, highlighted in the list. */
   private justSold: { id?: string; url: string; price: number; currency: string; listed: boolean } | null = null;
+
+  /** Last spaces per drive+path, so "Our family" is on top the moment the sheet opens again. */
+  private static appCache = new Map<string, AppSpaces[]>();
+
+  private async loadApps() {
+    const key = `${this.driveId}|${this.path}`;
+    try {
+      this.apps = await this.ctx.web.appSpaces(this.driveId, this.path);
+      ShareSheet.appCache.set(key, this.apps);
+    } catch { /* keep what we showed */ }
+    this.ctx.rerender();
+  }
 
   private async load() {
     // Only the first load shows "Loading…": a reload after an action keeps the sheet (and its scroll) in place.
     const first = !this.members.length && !this.shares.length && this.loading;
     if (first) this.ctx.rerender();
     try {
-      const [m, s, st, apps] = await Promise.all([
+      void this.loadApps();   // separately: an app's round-trip must not hold up the sheet
+      const [m, s, st] = await Promise.all([
         this.ctx.web.members(this.driveId),
         this.ctx.web.shares(this.driveId),
         this.ctx.web.settings(this.driveId).catch(() => ({ allowed_tokens: null })),
-        this.ctx.web.appSpaces(this.driveId, this.path).catch(() => []),
       ]);
-      this.members = m.members; this.pending = m.pending; this.myRole = m.myRole; this.shares = s; this.apps = apps;
+      this.members = m.members; this.pending = m.pending; this.myRole = m.myRole; this.shares = s;
       this.tokens = tokenSymbols(st.allowed_tokens);
       this.error = null;
     } catch (e) { this.error = msgOf(e); }
@@ -58,9 +71,28 @@ export class ShareSheet implements Sheet {
     const invites = this.here(this.pending);
     const links = this.here(this.shares).filter((s) => !s.price_usdc);
     const sales = this.here(this.shares).filter((s) => !!s.price_usdc);
+    // Workspaces in connected apps ("Our family") come first — shown from the last load right away,
+    // even while the rest of the sheet is loading (owners only; the list is cached per folder).
+    const appsCard = this.apps.length && (owner || this.loading) ? `
+      <div class="scard" id="sh-apps-card">
+        <div class="scard-h">${I.users} Shared in apps</div>
+        <div class="scard-s">Workspaces in apps you connected. Turn this folder on or off in each.</div>
+        ${this.apps.map(({ app, spaces, error }) => `
+          <p class="note group" style="margin:10px 0 4px">${esc(app.name)} · ${esc(app.origin.replace(/^https?:\/\//, ""))}</p>
+          ${error ? `<p class="hint" style="color:var(--err)">${esc(error)}</p>` : !spaces.length ? `<p class="hint">No workspaces there yet.</p>` : `
+          <ul class="list">
+            ${spaces.map((sp) => `
+              <li data-app="${esc(app.id)}" data-space="${esc(sp.id)}">
+                <div class="avatar">${esc(sp.icon || "👥")}</div>
+                <div class="grow"><div class="t">${esc(sp.name)}</div><div class="s">${esc([sp.group, sp.members ? `${sp.members} people` : ""].filter(Boolean).join(" · "))}</div></div>
+                <button class="switch" role="switch" aria-checked="${sp.shared}" aria-label="Share into ${esc(sp.name)}" data-app-toggle ${this.busy ? "disabled" : ""}></button>
+              </li>`).join("")}
+          </ul>`}`).join("")}
+      </div>` : "";
     const body = this.loading ? `<div class="searching"><span class="spinner"></span> Loading…</div>`
       : this.error ? `<p class="hint" style="color:var(--err)">${esc(this.error)}</p>`
       : `
+
       <div class="scard">
         <div class="scard-h">${I.users} People with access</div>
         <div class="scard-s">Invite by email. They sign in with that address.</div>
@@ -104,22 +136,6 @@ export class ShareSheet implements Sheet {
         </ul>
       </div>
 
-      ${owner && this.apps.length ? `
-      <div class="scard" id="sh-apps-card">
-        <div class="scard-h">${I.users} Shared in apps</div>
-        <div class="scard-s">Workspaces in apps you connected. Turn this folder on or off in each.</div>
-        ${this.apps.map(({ app, spaces, error }) => `
-          <p class="note group" style="margin:10px 0 4px">${esc(app.name)} · ${esc(app.origin.replace(/^https?:\/\//, ""))}</p>
-          ${error ? `<p class="hint" style="color:var(--err)">${esc(error)}</p>` : !spaces.length ? `<p class="hint">No workspaces there yet.</p>` : `
-          <ul class="list">
-            ${spaces.map((sp) => `
-              <li data-app="${esc(app.id)}" data-space="${esc(sp.id)}">
-                <div class="avatar">${esc(sp.icon || "👥")}</div>
-                <div class="grow"><div class="t">${esc(sp.name)}</div><div class="s">${esc([sp.group, sp.members ? `${sp.members} people` : ""].filter(Boolean).join(" · "))}</div></div>
-                <button class="switch" role="switch" aria-checked="${sp.shared}" aria-label="Share into ${esc(sp.name)}" data-app-toggle ${this.busy ? "disabled" : ""}></button>
-              </li>`).join("")}
-          </ul>`}`).join("")}
-      </div>` : ""}
 
       ${owner ? `
       <div class="scard" id="sh-sell-card">
@@ -146,6 +162,7 @@ export class ShareSheet implements Sheet {
         <div class="grab"></div>
         <div class="head"><h3>Share “${esc(title)}”</h3><button class="iconbtn ghost" id="sh-close" aria-label="Close">${I.close}</button></div>
         <p class="sub">${esc(this.path || "/")}</p>
+        ${appsCard}
         ${body}
       </div>`;
   }
