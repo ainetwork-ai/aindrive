@@ -299,6 +299,7 @@ app.on("before-quit", async (e) => {
   if (quitting) return;
   quitting = true;
   e.preventDefault();
+  await mac.shutdown?.();
   await agents.stopAll();
   app.quit();
 });

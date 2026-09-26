@@ -10,7 +10,8 @@
  *   ask                 aindrive-on-device: the phone's agent over this Mac's folders (agent/)
  *   ensureModels        the local model that reads unclear questions (agent/llm.js), downloaded on request
  *
- * What only the phone has — call log, photo/speech recognition models, Google's
+ * Photos are recognised like on the phone (MobileCLIP2-S2, agent/clip.js; Apple silicon —
+ * onnxruntime-node ships no Intel-Mac build). What only the phone has — call log, speech models, Google's
  * account picker, handoff links (served by the phone agent's `handoff-read`) —
  * answers with a clear "not on the Mac" instead of pretending.
  *
@@ -28,6 +29,7 @@ import { driveUrlOf, isFolder } from "./agents.js";
 import { createDeviceAgent } from "./agent/device-agent.js";
 import { GeoLookup } from "./agent/geo-lookup.js";
 import { createLlm, createModelStore } from "./agent/llm.js";
+import { createClip } from "./agent/clip.js";
 
 /**
  * The local model that reads unclear questions (agent/llm.js); its manifest is assets/llm/<id>.json, the phone's
@@ -186,9 +188,57 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
     try { return statSync(dirname(uri)).dev === dev; } catch { return false; }
   }
 
+  // ── the photo model (the phone's MobileCLIP2-S2): downloaded on request next to the LLM, by the same store ──
+  const clipAssets = fileURLToPath(new URL("../assets/clip/", import.meta.url));
+  const clipManifest = JSON.parse(readFileSync(join(clipAssets, "mobileclip2-s2.json"), "utf8"));
+  // The phone's manifest names "mobileclip2-s2/visual.onnx"; the store keeps flat names in its own folder.
+  const clipDir = join(modelsDir, "mobileclip2-s2");
+  const clipFlat = { ...clipManifest, engine: "ONNX Runtime", files: clipManifest.files.map((f) => ({ ...f, name: basename(f.name) })) };
+  const photosSupported = process.platform === "darwin" && process.arch === "arm64";
+  let clipLoad = null, clipError = null;
+  const clipModels = createModelStore({ dir: clipDir, manifest: clipFlat, onChange: () => { emit(status()); if (clipModels.ready()) device.modelReady(); } });
+  const clipFile = (id) => join(clipDir, clipFlat.files.find((f) => f.id === id).name);
+  /** The model once it is here (loaded once); null before the download, or on an Intel Mac. */
+  const loadClip = () => {
+    if (!photosSupported || !clipModels.ready()) return Promise.resolve(null);
+    return (clipLoad ??= createClip({ files: { vision: clipFile("vision"), text: clipFile("text") }, assetsDir: clipAssets, manifest: clipManifest })
+      .catch((e) => { clipError = `Couldn't load the photo model: ${e.message}`; clipLoad = null; return null; }));
+  };
+  /**
+   * A photo decoded by macOS (QuickLook: HEIC, RAW, JPEG…) at about 512–1024 px — all CLIP needs. The
+   * thumbnail's 1× bitmap is the photo squeezed into the requested square; its PNG is the real aspect,
+   * so the pixels come from that (CLIP crops the centre, as on the phone — a squeezed photo reads worse).
+   */
+  const loadImage = async (abs) => {
+    let img = null;
+    try {
+      const t = await nativeImage.createThumbnailFromPath(abs, { width: 512, height: 512 });
+      if (!t.isEmpty()) img = nativeImage.createFromBuffer(t.toPNG());
+    } catch { /* no preview */ }
+    if (!img || img.isEmpty()) img = nativeImage.createFromPath(abs);
+    if (!img || img.isEmpty()) return null;
+    const { width, height } = img.getSize();
+    return { width, height, data: img.toBitmap(), order: "bgra" };
+  };
+  /** The phone's ModelsStatus over both downloads: the photo model (Apple silicon) and the LLM. */
+  function modelsStatus() {
+    const p = photosSupported ? clipModels.status() : null, l = models?.status() ?? null;
+    const parts = [p, l].filter(Boolean);
+    return {
+      list: [
+        { id: "image", role: "finds photos by what they show", name: "MobileCLIP2-S2", license: clipManifest.license, engine: "ONNX Runtime", bytes: clipFlat.files.reduce((n, f) => n + f.bytes, 0), ready: !!p?.ready },
+        ...(l?.list ?? []),
+      ],
+      photos: !!p?.ready, llm: !!l?.ready, speech: false,
+      ready: parts.every((x) => x.ready), downloading: parts.some((x) => x.downloading),
+      done: parts.reduce((n, x) => n + x.done, 0), total: parts.reduce((n, x) => n + x.total, 0),
+      error: p?.error ?? clipError ?? l?.error ?? (photosSupported ? null : "Recognising photos needs a Mac with Apple silicon."),
+    };
+  }
+
   /** aindrive-on-device: the phone's agent over the folders this Mac holds (agent/device-agent.js). */
   const device = createDeviceAgent({
-    indexDir, inside, mimeOf, llm,
+    indexDir, inside, mimeOf, llm, clip: loadClip, loadImage,
     folders: () => drives().filter((d) => isFolder(d.folder)).map((d) => ({ driveId: d.driveId, folder: d.folder, label: d.label ?? basename(d.folder) })),
     onChange: () => emit(status()),
   });
@@ -214,12 +264,8 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
         index: device.indexStatus(d.driveId),
       };
     });
-    // `models` is the phone's ModelsStatus (mobile/src/plugin.ts): the Mac has one model, the LLM — no photo or speech model.
-    const m = models?.status();
-    return {
-      running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out,
-      ...(m ? { models: { list: m.list, llm: m.ready, photos: false, speech: false, ready: m.ready, downloading: m.downloading, done: m.done, total: m.total, error: m.error } } : {}),
-    };
+    // `models` is the phone's ModelsStatus (mobile/src/plugin.ts): the photo model and the LLM, each downloaded on request.
+    return { running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out, models: modelsStatus() };
   }
   agents.on("change", () => emit(status()));
 
@@ -406,8 +452,15 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
       for (const d of drives()) if (!opts?.driveId || d.driveId === opts.driveId) indexSoon(d);
       return status();
     },
-    /** Start (or resume) the model download; progress arrives through statusChanged, like the phone's. */
-    async ensureModels() { models?.ensure(); return status(); },
+    /** Before quitting: stop recognition and release the photo model (live ONNX sessions abort the process on exit). */
+    async shutdown() {
+      device.stopAll();
+      const c = clipLoad && (await clipLoad.catch(() => null));
+      await c?.close().catch(() => {});
+    },
+
+    /** Start (or resume) the downloads — the photo model and the LLM; progress arrives through statusChanged, like the phone's. */
+    async ensureModels() { if (photosSupported) clipModels.ensure(); models?.ensure(); return status(); },
 
     /** The phone's on-device agent, on this Mac's folders: small talk, dates, places (EXIF GPS), kinds, names, tasks. */
     async ask({ query, context, driveId }) {

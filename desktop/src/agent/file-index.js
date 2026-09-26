@@ -39,7 +39,7 @@ export function kindOf(mime, name) {
 /**
  * @typedef {{ path: string, name: string, kind: string, mime?: string|null, mtimeMs: number, size: number,
  *   whenMs: number|null, lat: number|null, lon: number|null, country: string|null, city: string|null,
- *   transcript?: string|null }} Row  `path` is folder-relative with "/" separators and doubles as the row id.
+ *   transcript?: string|null, vec?: string|null }} Row  `vec`: the photo's CLIP vector (clip.js packVec), when recognised.  `path` is folder-relative with "/" separators and doubles as the row id.
  * @typedef {{ kind?: string|null, country?: string|null, city?: string|null, dateFrom?: number|null, dateTo?: number|null,
  *   minSize?: number|null, keywords?: string[], keywordsInTranscript?: boolean }} Filter
  */
@@ -50,10 +50,13 @@ export class FileIndex {
     this.file = file;
     /** @type {Map<string, Row>} */
     this.rows = new Map();
+    /** Which image model made the stored vectors (adoptImageModel). */
+    this.imageModel = null;
     if (file && existsSync(file)) {
       try {
         const o = JSON.parse(readFileSync(file, "utf8"));
         if (o?.v === 1 && Array.isArray(o.rows)) for (const r of o.rows) this.rows.set(r.path, r);
+        this.imageModel = typeof o?.imageModel === "string" ? o.imageModel : null;
       } catch { /* unreadable: rebuilt by the next index run */ }
     }
   }
@@ -66,8 +69,15 @@ export class FileIndex {
     return !r || r.mtimeMs !== mtimeMs || r.size !== size;
   }
 
-  /** @param {Row} r */
+  /** @param {Row} r  A changed file is recognised again: its old vector is not carried over. */
   upsert(r) { this.rows.set(r.path, r); }
+
+  /** Vectors from another model are not comparable: drop them when the model changes (FileIndex.adoptImageModel). */
+  adoptImageModel(name) {
+    if (this.imageModel === name) return;
+    for (const r of this.rows.values()) delete r.vec;
+    this.imageModel = name;
+  }
 
   /** Drop rows whose file is gone. */
   deleteMissing(live) {
@@ -80,7 +90,7 @@ export class FileIndex {
     if (!this.file) return;
     mkdirSync(dirname(this.file), { recursive: true });
     const tmp = this.file + ".tmp";
-    writeFileSync(tmp, JSON.stringify({ v: 1, rows: [...this.rows.values()] }));
+    writeFileSync(tmp, JSON.stringify({ v: 1, imageModel: this.imageModel, rows: [...this.rows.values()] }));
     renameSync(tmp, this.file);
   }
 

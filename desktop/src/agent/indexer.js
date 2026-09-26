@@ -1,9 +1,10 @@
-// Mirrors mobile/android/app/src/main/java/ai/ainetwork/aindrive/index/{Indexer,ExifMeta}.java (the file pass;
-// recognition — CLIP vectors, transcripts — is not on the Mac yet).
+// Mirrors mobile/android/app/src/main/java/ai/ainetwork/aindrive/index/{Indexer,ExifMeta}.java: the file pass, then
+// recognition — CLIP vectors for photos (transcripts are not on the Mac yet).
 import { promises as fsp } from "node:fs";
 import { join } from "node:path";
 import exifr from "exifr";
 import { kindOf, PHOTO, SCREENSHOT } from "./file-index.js";
+import { packVec } from "./clip.js";
 
 /** Folders a person never means when they ask about their files. */
 const SKIP_DIR = /^(\.|node_modules$|\$RECYCLE\.BIN$|System Volume Information$)/;
@@ -70,6 +71,7 @@ function degrees(dms, ref, negative) {
  * vanished ones are dropped. Incremental by mtime + size, like the phone.
  * @param {{ root: string, index: import("./file-index.js").FileIndex, geo: { nearest(lat: number, lon: number): { name: string, country: string } | null } | null,
  *   mimeOf?: (name: string) => string, onProgress?: (p: { done: number, total: number, phase: string }) => void, cancelled?: () => boolean }} o
+ *   Recognition (`recognise`) is a separate pass: answers wait for this one only.
  */
 export async function indexFolder({ root, index, geo, mimeOf = () => "", onProgress = () => {}, cancelled = () => false }) {
   onProgress({ done: 0, total: 0, phase: "scanning" });
@@ -107,4 +109,35 @@ export async function indexFolder({ root, index, geo, mimeOf = () => "", onProgr
   index.save();
   onProgress({ done, total: files.length, phase: "done" });
   return { done, total: files.length, failed, removed };
+}
+
+/** Photos without a vector yet, in the index's order (newest first): what `recognise` still has to do. */
+export function toRecognise(index) {
+  return index.query({}, 0).filter((r) => (r.kind === PHOTO || r.kind === SCREENSHOT) && !r.vec);
+}
+
+/**
+ * The recognition pass: a CLIP vector for every photo that has none (a changed file lost its vector
+ * on upsert). One photo at a time — the model uses every core — saved every 50 so a quit keeps them.
+ */
+/**
+ * @param {{ root: string, index: import("./file-index.js").FileIndex, clip: { name: string, embedImage(img: any): Promise<Float32Array> },
+ *   loadImage: (abs: string) => Promise<any>, onProgress?: (p: { done: number, total: number, phase: string }) => void, cancelled?: () => boolean }} o
+ *   loadImage: the file decoded to roughly 512 px ({ width, height, data, order }), or null when it is not an image
+ */
+export async function recognise({ root, index, clip, loadImage, onProgress = () => {}, cancelled = () => false }) {
+  index.adoptImageModel(clip.name);
+  const todo = toRecognise(index);
+  let n = 0;
+  for (const r of todo) {
+    if (cancelled()) break;
+    try {
+      const img = await loadImage(join(root, r.path));
+      if (img) r.vec = packVec(await clip.embedImage(img));
+    } catch { /* unreadable image: stays without a vector, tried again next run */ }
+    if (++n % 10 === 0) onProgress({ done: n, total: todo.length, phase: "recognising" });
+    if (n % 50 === 0) index.save();
+  }
+  index.save();
+  return n;
 }
