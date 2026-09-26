@@ -1902,11 +1902,16 @@ async function loadAskThumbs() {
   let redraw = 0;
   const one = async (k: string) => {
     const [driveId, ...rest] = k.split("|");
-    const folder = localFolderFor(driveId || undefined);
-    if (!folder) return;   // other devices: keep the icon (a full read per thumbnail is too heavy)
+    const folder = localFolderFor(driveId || undefined), path = rest.join("|");
+    // Another device's photo: the server's thumbnail route (the device sends its own small JPEG, the
+    // server caches it) — the same way a remote folder's grid gets them. On the Mac, where the agent
+    // searches file names only, most photo answers come from the phone.
+    const remote = !folder && driveId ? remotes.find((d) => d.id === driveId) : undefined;
+    if (!folder && !remote) return;
     try {
-      const r = await AindriveAgent.thumbnail({ folderUri: folder.folder.uri, path: rest.join("|"), px: 256 });
-      askThumbs.set(k, Capacitor.convertFileSrc(r.path));
+      askThumbs.set(k, folder
+        ? Capacitor.convertFileSrc((await AindriveAgent.thumbnail({ folderUri: folder.folder.uri, path, px: 256 })).path)
+        : await web().thumbnail(remote!.id, path));
       // Patch the tile in place: no full re-render, so scrolling and typing are left alone.
       // The same photo can sit in several answers: fill every tile that shows it, once.
       const els = [...document.querySelectorAll<HTMLElement>(`[data-thumb="${CSS.escape(k)}"]`)];
