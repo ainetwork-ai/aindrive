@@ -103,12 +103,16 @@ function textOf(parts: unknown): string {
 }
 
 /** One chat turn to an A2A agent. Returns the reply text and the contextId to send next time. */
-export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string): Promise<{ text: string; contextId?: string }> {
+/** A file handed to the agent as a link (web/lib/handoff.ts): the agent fetches `uri` if it needs the bytes. */
+export interface LinkedFile { uri: string; name: string; mimeType: string }
+
+export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, files: LinkedFile[] = []): Promise<{ text: string; contextId?: string }> {
   const f = factory(agent.token || sessionBearer);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
     kind: "message", role: "user", messageId: crypto.randomUUID?.() ?? `m-${Date.now()}`,
-    parts: [{ kind: "text", text }], ...(contextId ? { contextId } : {}),
+    parts: [{ kind: "text", text }, ...files.map((f) => ({ kind: "file" as const, file: { uri: f.uri, name: f.name, mimeType: f.mimeType } }))],
+    ...(contextId ? { contextId } : {}),
   };
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
   if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? contextId };

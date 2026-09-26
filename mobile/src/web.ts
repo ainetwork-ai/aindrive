@@ -84,4 +84,11 @@ export class Web {
   // account
   startAddEmail(email: string) { return this.call<unknown>("POST", "/api/account/email/start", { email }); }
   verifyAddEmail(email: string, code: string, password: string) { return this.call<unknown>("POST", "/api/account/email/verify", { email, code, password }); }
+
+  // ---- file handoff links (web/app/api/handoffs, web/lib/handoff.ts)
+  handoffs(body: { driveId: string; audience: string; ttlSeconds: number; files: { deviceKey: string; name: string; mime: string; size: number }[] }) {
+    return this.call<{ links: { id: string; url: string; name: string; deviceKey: string; expiresAt: string }[] }>("POST", "/api/handoffs", body);
+  }
+  listHandoffs() { return this.call<{ handoffs: unknown[] }>("GET", "/api/handoffs"); }
+  revokeHandoff(id: string) { return this.call<{ revoked: number }>("DELETE", `/api/handoffs/${encodeURIComponent(id)}`); }
 }

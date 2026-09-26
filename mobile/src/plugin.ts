@@ -174,6 +174,8 @@ export interface AindriveAgentPlugin {
   /** A cached JPEG thumbnail (the phone's own, like the gallery's) as a file path: show it via Capacitor.convertFileSrc. */
   /** Sign in with Google (account picker) → an ID token for the server's OAuth client. */
   googleSignIn(opts: { serverClientId: string }): Promise<{ idToken: string; email?: string; name?: string }>;
+  /** Register picked files for handoff links (served only via `handoff-read`); returns a key per file. */
+  registerHandoffs(opts: { files: { folderUri: string; path: string }[]; ttlSeconds: number }): Promise<{ files: { key: string; path: string; name: string; mime: string; size: number }[] }>;
   thumbnail(opts: { folderUri: string; path: string; px?: number }): Promise<{ path: string }>;
   /**
    * Adds a drive to the running agent (starting the foreground service on

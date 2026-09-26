@@ -42,15 +42,17 @@ final class RpcHandler {
     private static final Set<String> METHODS = new HashSet<>(Arrays.asList(
             "list", "stat", "read", "write", "mkdir", "rename", "delete",
             "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
-            "agent-ask"));
+            "agent-ask", "handoff-read"));
 
     private final SafFs fs;
+    private final Context ctx;
     private final File yjsDir;
     private final java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask;
 
     RpcHandler(Context ctx, SafFs fs, String driveId,
                java.util.function.Supplier<ai.ainetwork.aindrive.agent.AskRunner> ask) {
         this.fs = fs;
+        this.ctx = ctx.getApplicationContext();
         this.yjsDir = new File(ctx.getFilesDir(), "yjs/" + sanitizeId(driveId));
         this.ask = ask;
     }
@@ -120,6 +122,11 @@ final class RpcHandler {
                 return result(method)
                         .put("data", Base64.encodeToString(data, Base64.NO_WRAP))
                         .put("eof", offset + data.length >= size);
+            }
+            case "handoff-read": {
+                // A file the owner registered for a handoff link (Handoffs) — never a path the server names.
+                JSONObject r = Handoffs.read(ctx, params.optString("key", ""), params.optLong("offset", 0), params.optInt("length", SafFs.MAX_CHUNK_BYTES));
+                return result(method).put("data", r.getString("data")).put("eof", r.getBoolean("eof")).put("size", r.getLong("size"));
             }
             case "yjs-write": {
                 String docId = requireDocId(params.optString("docId", ""));
