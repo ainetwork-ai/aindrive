@@ -126,3 +126,7 @@ Ops / dev:
   sharing modes → repo root `README.md` (sharing + x402 section). Not re-explained here.
 - Product/UX rules (create-in-context, audit-in-settings; tokens as a pricing
   menu) → repo `CLAUDE.md`.
+
+## Folder chat transport
+
+`GET/POST /api/drives/:driveId/folder-chat` accepts the connected owner's session or bearer token. GET exposes public remote-agent descriptors; POST accepts `{q,path,agentId,contextId?}` and streams AG-UI events with AIN-UI FolderChat activity snapshots. `RUN_FINISHED` completes a response, `RUN_ERROR` fails it; clients must not replay partial failed turns. The default remote is aindrive-cloud. `AINDRIVE_FOLDER_AGENTS` adds server-configured `{id,label,card}` entries; arbitrary caller URLs are rejected. The route shares cloud-ask's 10/minute limit. Disconnects cancel remote fetches.

@@ -15,7 +15,8 @@ const mcp = { url: 'https://drive.test/mcp/h/grant', token: 'test-grant-token', 
 for (const uri of ['content://test/tree/folder', 'file:///test/folder']) {
   test(`first folder turn carries snapshot and MCP (${uri.split(':')[0]})`, async () => {
     const handed = await prepareFolderHandoff({ uri, label: 'Notes' }, async opts => {
-      assert.deepEqual(opts, { folderUri: uri, path: '' });
+      assert.equal(opts.folderUri, uri);
+      if (opts.path) return { entries: [] };
       return { entries: [entry('note.txt'), entry('photos', true)] };
     }, async files => {
       assert.deepEqual(files, [{ folderUri: uri, path: 'note.txt' }]);
@@ -58,7 +59,7 @@ test('listing bounds and read grants are explicit and never include directories'
   assert.equal(handed.folder.totalEntries, 251);
   assert.equal(handed.folder.entries.length, 200);
   assert.equal(handed.folder.truncated, true);
-  assert.equal(handed.folder.recursive, false);
+  assert.equal(handed.folder.recursive, true);
 });
 
 test('a failed native listing or refused handoff never becomes a context-free send', async () => {
@@ -117,4 +118,28 @@ test('official A2A SDK sends all parts and keeps MCP credentials out of the agen
     assert.deepEqual(outgoing.params.message.parts.filter(p => p.kind === 'file').map(p => p.file), binaryFiles);
     assert.equal(reply.text, 'Listed the folder');
   } finally { globalThis.fetch = original; }
+});
+
+test('a root folder question includes nested files as attachment candidates', async () => {
+  const handed = await prepareFolderHandoff({ uri: 'root', label: 'Root' }, async ({path}) => ({ entries: path ? [{...entry('photo.jpg'), path: 'trip/photo.jpg'}] : [entry('trip', true)] }), async picked => {
+    assert.deepEqual(picked, [{folderUri: 'root', path: 'trip/photo.jpg'}]); return {files: []};
+  });
+  assert.equal(handed.folder.recursive, true);
+  assert.equal(handed.folder.truncated, false);
+  assert.deepEqual(handed.folder.entries.map(e=>e.path), ['trip', 'trip/photo.jpg']);
+});
+
+test('partial stream failure is surfaced without a second message/send', async () => {
+  const built = await build({ stdin: { contents: 'export { send } from "./src/a2a";', resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const { send } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
+  const original=globalThis.fetch;let calls=0;const partial=[];
+  globalThis.fetch=async (_url,init)=>{
+    calls++;const body=JSON.parse(init.body);assert.equal(body.method,'message/stream');let step=0;
+    return new Response(new ReadableStream({pull(c){if(step++===0)c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({jsonrpc:'2.0',id:body.id,result:{kind:'status-update',taskId:'t',contextId:'c',final:false,status:{state:'working',message:{kind:'message',role:'agent',messageId:'m',parts:[{kind:'text',text:'Partial'}]}}}})}\n\n`));else c.error(new Error('connection lost'));}}),{headers:{'content-type':'text/event-stream'}});
+  };
+  try {
+    const card={name:'Cloud',url:'https://cloud.test/a2a',description:'test',version:'1',protocolVersion:'0.3.0',capabilities:{streaming:true},defaultInputModes:['text/plain'],defaultOutputModes:['text/plain'],skills:[]};
+    await assert.rejects(send({id:'test',source:card.url,url:card.url,name:card.name,skills:[],card,addedAt:1},'question',undefined,undefined,{files:[]},text=>partial.push(text)));
+    assert.equal(calls,1);assert.ok(partial.includes('Partial'));
+  } finally {globalThis.fetch=original;}
 });

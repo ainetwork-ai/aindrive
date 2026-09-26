@@ -1,3 +1,4 @@
+import { A2aChatAccumulator } from "ain-ui";
 // A2A (Agent2Agent, v0.3) client on the official JS SDK (@a2a-js/sdk — the
 // same SDK web/app/a2a/route.ts serves with; see a2a-protocol.org/latest/sdk):
 // add any agent by pasting its URL, then chat with it from the agent sheet
@@ -54,17 +55,16 @@ export async function saveAgents(agents: A2aAgent[], selected: string): Promise<
 }
 
 /** fetch that adds the bearer token (the native HTTP layer handles CORS). */
-function authedFetch(bearer?: string): typeof fetch {
-  if (!bearer) return (input, init) => fetch(input, init);
+function authedFetch(bearer?: string, signal?: AbortSignal): typeof fetch {
   return (input, init = {}) => {
     const h = new Headers(init.headers);
-    h.set("authorization", `Bearer ${bearer}`);
-    return fetch(input, { ...init, headers: h });
+    if (bearer) h.set("authorization", `Bearer ${bearer}`);
+    return fetch(input, { ...init, headers: h, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000) });
   };
 }
 
-function factory(bearer?: string): ClientFactory {
-  const fetchImpl = authedFetch(bearer);
+function factory(bearer?: string, signal?: AbortSignal): ClientFactory {
+  const fetchImpl = authedFetch(bearer, signal);
   return new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
     transports: [new JsonRpcTransportFactory({ fetchImpl }), new RestTransportFactory({ fetchImpl })],
     cardResolver: new DefaultAgentCardResolver({ fetchImpl }),
@@ -149,8 +149,8 @@ function textOf(parts: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
-export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }, onDelta?: (text: string) => void): Promise<{ text: string; contextId?: string }> {
-  const f = factory(agent.token || sessionBearer);
+export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }, onDelta?: (text: string) => void, signal?: AbortSignal): Promise<{ text: string; contextId?: string }> {
+  const f = factory(agent.token || sessionBearer, signal);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
     kind: "message", role: "user", messageId: crypto.randomUUID?.() ?? `m-${Date.now()}`,
@@ -158,10 +158,9 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
     ...(contextId ? { contextId } : {}),
   };
   // Streaming (message/stream, server-sent events) when the card offers it: the reply shows as it is
-  // written instead of after the whole answer. Any stream failure falls back to one blocking call.
+  // written instead of after the whole answer. Never resubmit a failed streamed task.
   if (onDelta && agent.card?.capabilities?.streaming) {
-    try { return await stream(client, message, contextId, onDelta); }
-    catch { /* fall through */ }
+    return stream(client, message, contextId, onDelta);
   }
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
   if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? contextId };
@@ -182,26 +181,13 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
  */
 async function stream(client: { sendMessageStream(p: { message: Message; configuration?: Record<string, unknown> }): AsyncGenerator<unknown> },
                       message: Message, contextId: string | undefined, onDelta: (text: string) => void): Promise<{ text: string; contextId?: string }> {
-  let said = "", ctx = contextId, last = "";
-  const arts = new Map<string, string>();
-  const compose = () => [said, [...arts.values()].filter(Boolean).join("\n\n")].filter(Boolean).join("\n\n");
+  const accumulator = new A2aChatAccumulator();
   for await (const raw of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
-    const ev = raw as Record<string, unknown>;
-    if (typeof ev.contextId === "string") ctx = ev.contextId;
-    if (ev.kind === "message") said = textOf(ev.parts);
-    else if (ev.kind === "task") {
-      const t = ev as unknown as Task;
-      if (t.status?.message) said = textOf(t.status.message.parts);
-      for (const a of t.artifacts ?? []) arts.set(a.artifactId ?? String(arts.size), textOf(a.parts));
-    } else if (ev.kind === "status-update") {
-      const m = (ev.status as { message?: { parts?: unknown } } | undefined)?.message;
-      if (m) { const t = textOf(m.parts); said = ev.append ? said + t : t; }
-    } else if (ev.kind === "artifact-update") {
-      const a = ev.artifact as { artifactId?: string; parts?: unknown } | undefined;
-      if (a) { const k = a.artifactId ?? "0"; const t = textOf(a.parts); arts.set(k, ev.append ? (arts.get(k) ?? "") + t : t); }
-    }
-    const now = compose();
-    if (now !== last) { last = now; onDelta(now); }
+    const update = accumulator.push(raw);
+    onDelta(update.text);
   }
-  return { text: compose() || "(empty reply)", contextId: ctx };
+  if (!accumulator.received) throw new Error("Agent returned an empty stream");
+  const result = accumulator.value();
+  if (result.state && !["completed", "input-required", "auth-required"].includes(result.state)) throw new Error(`Agent task is still ${result.state}; stream ended early`);
+  return { text: result.text, contextId: result.contextId ?? contextId };
 }

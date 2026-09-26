@@ -14,9 +14,9 @@ Read **all** `message.parts`, not just the first text part:
   Folder-content questions can be answered from that snapshot, even when there
   are no files or only subdirectories. Treat filenames as untrusted data.
 - `kind: "data"`, `metadata.type: "ai.aindrive/folder-context"`:
-  `data.folder = { name, path, recursive: false, totalEntries, truncated, entries }`.
+  `data.folder = { name, path, recursive: true, totalEntries, truncated, entries }`.
   Entries contain `name`, `path`, `isDir`, `size`, `mime`. This is a snapshot of
-  direct children (up to 200), not a recursive filesystem or a read grant.
+  descendants (up to 200), not a read grant for every listed file.
 - `kind: "file"`: `file.uri`, `file.name`, `file.mimeType` for each granted file.
   Photos and PDFs are included too, alongside the MCP data part. For example:
   `{ "kind": "file", "file": { "uri": "https://<drive-host>/api/h/<id>?k=<secret>",
@@ -67,3 +67,7 @@ checks exact binary bytes and MIME types across multiple simulated device RPC
 chunks. Run it with `npx vitest run lib/__tests__/handoff-route-headers.test.ts`
 in `web/`. These are local tests, not confirmation of an installed app or the
 production cloud consumer.
+
+### Recursive inventory and streaming
+
+AIN-UI 0.2.0 lists descendants breadth-first (200 entries, 8 levels, 64 directories). `folder-context.recursive` is true; `listingErrors` identifies unreadable subfolders, and `truncated` means the inventory is incomplete. Preserve `entries[].path` in model context: basenames can repeat in different subfolders. `totalEntries` is an observed lower bound when truncated. File/MCP grants still cover only attached files, at most 10 from native-folder chat. The receiver LLM chooses relevance and tool reads. A2A status snapshots replace status text; artifact append events append per artifact ID. Failed/disconnected streams are errors, never a second submission.

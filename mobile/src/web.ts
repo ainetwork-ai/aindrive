@@ -5,6 +5,7 @@
  * Nothing here talks to the phone's own agent; these are server-side records
  * (members, links, sales, agents, tokens) plus fs/* for drives on OTHER devices.
  */
+import { readChatStream, type ChatUpdate, type FolderChatAgent } from "ain-ui";
 import { request, requestBlobUrl } from "./api";
 
 export type Role = "viewer" | "editor" | "owner";
@@ -68,6 +69,13 @@ export class Web {
 
   // agents
   agents(driveId: string) { return this.call<{ agents: Agent[] }>("GET", this.d(driveId, "/agents")).then((r) => r.agents); }
+  folderChatAgents(driveId: string) { return this.call<{ agents: FolderChatAgent[] }>("GET", this.d(driveId, "/folder-chat")).then(r => r.agents); }
+  async folderChat(driveId: string, body: { q: string; path: string; agentId: string; contextId?: string }, signal: AbortSignal, onUpdate: (update: ChatUpdate) => void) {
+    const response = await fetch(this.server + this.d(driveId, "/folder-chat"), {
+      method: "POST", signal, headers: { "content-type": "application/json", accept: "text/event-stream", authorization: `Bearer ${this.cookie}` }, body: JSON.stringify(body),
+    });
+    return readChatStream(response, onUpdate, signal);
+  }
   createAgent(driveId: string, body: { folder: string; name: string; description: string; persona: string; llm: { provider: string; model: string; apiKey?: string } }) {
     return this.call<{ agent: Agent; askUrl?: string; cardUrl?: string }>("POST", this.d(driveId, "/agents"), body);
   }

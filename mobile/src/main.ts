@@ -341,12 +341,14 @@ function liveTurn(q: string, via: string, handoffs?: HandoffLink[]) {
 
 async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }, onDelta?: (answer: string) => void): Promise<{ answer: string; errors: string[] }> {
   // Partial replies per agent, composed like the final answer, so the live turn reads like the finished one.
+  remoteAbort = new AbortController();
+  const remoteSignal = remoteAbort.signal;
   const partial = new Map<string, string>();
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
       const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed,
-        onDelta && ((t) => { partial.set(agent.id, agents.length > 1 ? `${agent.name}: ${t}` : t); onDelta(agents.map((a) => partial.get(a.id)).filter(Boolean).join("\n\n")); }));
+        onDelta && ((t) => { partial.set(agent.id, agents.length > 1 ? `${agent.name}: ${t}` : t); onDelta(agents.map((a) => partial.get(a.id)).filter(Boolean).join("\n\n")); }), remoteSignal);
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
@@ -359,6 +361,7 @@ let askContext: Record<string, unknown> | null = null;
 const THREAD_KEY = "aindrive.mobile.thread.v1";
 const THREAD_MAX = 40;
 let askBusy = false;
+let remoteAbort: AbortController | null = null;
 let searchOpen = false;
 /**
  * A wide window (the Mac, a tablet in landscape) shows home, the open folder and the agent side by
@@ -472,6 +475,7 @@ async function saveHistory() {
 }
 
 async function openPastChat(i: number) {
+  if (askBusy) { notify("Stop the current reply before switching chats.", true); return; }
   const c = pastChats[i]; if (!c) return;
   if (thread.length) pastChats.unshift({ at: Date.now(), title: thread[0].q, thread, scope: chatScope });
   pastChats = pastChats.filter((x) => x !== c);
@@ -482,6 +486,8 @@ async function openPastChat(i: number) {
 }
 
 async function newChat() {
+  if (askBusy) { notify("Stop the current reply before switching chats.", true); return; }
+  remoteAbort?.abort();
   if (thread.length) { pastChats.unshift({ at: Date.now(), title: thread[0].q, thread, scope: chatScope }); await saveHistory(); }
   expandedPhotos.clear(); expandedFiles.clear();
   chatScope = null;
@@ -656,6 +662,7 @@ async function toggleP2p(share: SharedFolder | undefined) {
 
 /** The chat button in a folder on this phone: the on-device agent, answering from that folder; kept in Past chats. */
 async function openFolderChat(share: SharedFolder) {
+  if (askBusy) { notify("Stop the current reply before switching chats.", true); return; }
   try { await ensureLocal(share); } catch (e) { fail(e); return; }
   const scope: ChatScope = { driveId: localIdOf(share), label: share.folder.label, uri: share.folder.uri };
   if (chatScope?.uri !== scope.uri) {
@@ -1469,15 +1476,16 @@ const SHARE_AGAIN = /^(share (it|that|this|them|the folder)|make a (share )?link
 
 async function ask(q = askQuery) {
   q = q.trim();
-  if (!q) return;
+  if (!q || askBusy) return;
   askQuery = q;
   const direct = mentioned(q);
   if (direct && !agentOn(direct.agent)) { notify(`${direct.agent.name} is off — turn it on in Model & agents first.`, true); return; }
   if (direct) {
+    askBusy = true;
     let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
     try { handed = await handoffFiles(direct.agent); }
-    catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
-    if (!handed) return;   // declined, or no connected drive
+    catch (e) { askBusy = false; notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
+    if (!handed) { askBusy = false; return; }   // declined, or no connected drive
     askBusy = true; render();
     try {
       const live = liveTurn(q, direct.agent.name, handed.links);
@@ -1556,16 +1564,11 @@ async function ask(q = askQuery) {
     const cloud = fallbackAgents();
     if (cloud.length && local && !merged.sources.length && !merged.action && merged.query !== "chat" && merged.query !== "out") {
       thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
-      let handed: Awaited<ReturnType<typeof handoffPicked>> = null;
-      if (scope && cloud.length === 1) {
-        const sh = findShare(scope.uri);
-        if (sh) {
-          try {
-            const listed = await AindriveAgent.listFolder({ folderUri: sh.folder.uri, path: "" });
-            const picked = (listed.entries ?? []).filter((e) => !e.isDir).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, HANDOFF_MAX).map((e) => ({ folderUri: sh.folder.uri, path: e.path }));
-            if (picked.length) handed = await handoffPicked(cloud[0], picked);
-          } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
-        }
+      let handed: Awaited<ReturnType<typeof handoffFiles>> = null;
+      if (cloud.length === 1) {
+        try { handed = await handoffFiles(cloud[0], prevResult); }
+        catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
+        if (!handed) return;
       }
       const live = liveTurn(q, cloud.map((x) => x.name).join(", "), handed?.links);
       live.update(`Calling @${handleOf(cloud[0])}…`);
@@ -2227,7 +2230,7 @@ function searchSheet(): string {
   }).join("");
   const body = `
     ${turns}
-    ${askBusy ? `<div class="searching"><span class="spinner"></span> Working…</div>` : ""}
+    ${askBusy ? `<div class="searching"><span class="spinner"></span> Working… <button id="ask-stop" class="btn small secondary">Stop</button></div>` : ""}
     ${!thread.length && !askBusy && chatScope ? `<p class="hint" style="margin:8px 2px">Ask anything about the files in “${esc(chatScope.label)}”.</p>` : ""}
     ${!thread.length && !askBusy && !chatScope ? `
       ${SUGGESTIONS.map((g) => `
@@ -2313,6 +2316,7 @@ function bindSearch() {
   bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
+  bind("ask-stop", () => remoteAbort?.abort());
   bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; sent(i); } void ask(); });
   document.getElementById("ask-input")?.addEventListener("focus", () => {
     // The keyboard shrinks the view: keep the newest turn visible above the composer.

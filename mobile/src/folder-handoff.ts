@@ -1,10 +1,12 @@
+import { listFolderTree } from "ain-ui";
 import type { FileEntry } from "./plugin";
 
 /** Folder metadata is a snapshot; the MCP grant can read only its attached files. */
 export interface FolderContext {
   name: string;
   path: string;
-  recursive: false;
+  recursive: true;
+  listingErrors: string[];
   totalEntries: number;
   truncated: boolean;
   entries: Pick<FileEntry, "name" | "path" | "isDir" | "size" | "mime">[];
@@ -20,8 +22,8 @@ export async function prepareFolderHandoff<T extends { files: unknown[] }>(
   handoff: (files: { folderUri: string; path: string }[]) => Promise<T | null>,
   selectedPaths?: string[],
 ): Promise<(T & { folder: FolderContext }) | null> {
-  const { entries } = await list({ folderUri: scope.uri, path: "" });
-  const visible = entries.slice(0, FOLDER_ENTRY_LIMIT);
+  const tree = await listFolderTree(path => list({ folderUri: scope.uri, path }).then(r => r.entries), "", { maxEntries: FOLDER_ENTRY_LIMIT });
+  const visible = tree.entries;
   const paths = selectedPaths?.length ? selectedPaths : visible.filter((e) => !e.isDir).map((e) => e.path);
   const picked = [...new Set(paths)].slice(0, FOLDER_FILE_LIMIT)
     .map((path) => ({ folderUri: scope.uri, path }));
@@ -30,8 +32,8 @@ export async function prepareFolderHandoff<T extends { files: unknown[] }>(
   return {
     ...handed,
     folder: {
-      name: scope.label, path: "", recursive: false, totalEntries: entries.length,
-      truncated: entries.length > visible.length,
+      name: scope.label, path: "", recursive: true, totalEntries: tree.observedEntries, listingErrors: tree.errors,
+      truncated: tree.truncated,
       entries: visible.map(({ name, path, isDir, size, mime }) => ({ name, path, isDir, size, mime })),
     },
   };

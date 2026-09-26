@@ -3,6 +3,9 @@
 // (create-agent-modal.tsx), and MCP access tokens (mcp-modal.tsx). These are
 // server-side agents with a cloud LLM — distinct from the phone's own offline
 // agent (the 🤖 sheet), which answers about files on this phone.
+import { ainuiFolderChat, type FolderChatAgent } from "ain-ui";
+import { createA2uiRenderer } from "ain-ui/renderer";
+import "ain-ui/styles.css";
 import { I, icon, fileGlyph } from "./icons";
 import { esc, msgOf, on, val, when, type Ctx, type Sheet } from "./kit";
 import type { Agent, McpToken } from "./web";
@@ -24,13 +27,20 @@ export class ChatSheet implements Sheet {
   private creating = false;
   private error: string | null = null;
   private draft = "";
+  private remote: FolderChatAgent[] = [];
+  private contexts = new Map<string, string>();
+  private abort: AbortController | null = null;
+  private approved = new Set<string>();
 
   constructor(private ctx: Ctx, private driveId: string, private driveName: string, private folder: string, private isOwner: boolean, private onOpenPath: (path: string) => void) { void this.load(); }
 
   private async load() {
     this.loading = true; this.ctx.rerender();
     try {
-      this.agents = await this.ctx.web.agents(this.driveId);
+      const [local, remote] = await Promise.all([this.ctx.web.agents(this.driveId), this.isOwner ? this.ctx.web.folderChatAgents(this.driveId) : Promise.resolve([])]);
+      this.agents = local.filter(a => (a.folder || "") === this.folder);
+      this.remote = remote;
+      this.agents.push(...remote.map(a => ({ id: `remote:${a.id}`, name: a.label, folder: this.folder })));
       // An agent for this folder first, like the web's folder chat.
       this.agents.sort((a, b) => Number((b.folder ?? "") === this.folder) - Number((a.folder ?? "") === this.folder));
       if (!this.current || !this.agents.some((a) => a.id === this.current)) this.current = this.agents[0]?.id ?? null;
@@ -47,18 +57,7 @@ export class ChatSheet implements Sheet {
       : this.error ? `<div class="empty"><h3>Couldn’t load agents</h3><p>${esc(this.error)}</p></div>`
       : !this.agents.length ? `<div class="empty"><div class="art">${I.agent}</div><h3>No agents in this drive</h3><p>An agent answers questions about a folder, for you and for people you share with.</p>
           ${this.isOwner ? `<button class="btn" id="ch-new" style="max-width:260px">${I.plus} Create agent</button>` : ""}</div>`
-      : `
-        <div class="inline" style="margin-bottom:12px">
-          <select id="ch-agent" style="flex:1">${this.agents.map((x) => `<option value="${esc(x.id)}" ${x.id === this.current ? "selected" : ""}>${esc(x.name)}${x.folder ? ` · /${esc(x.folder)}` : ""}</option>`).join("")}</select>
-          ${this.isOwner ? `<button class="iconbtn" id="ch-new" aria-label="New agent">${I.plus}</button><button class="iconbtn" id="ch-del" aria-label="Delete agent">${icon("trash", 18)}</button>` : ""}
-        </div>
-        ${a?.description ? `<p class="hint" style="margin:0 0 10px">${esc(a.description)}</p>` : ""}
-        ${thread.map((m) => m.who === "me"
-          ? `<div class="turn"><div class="bubble">${esc(m.text)}</div></div>`
-          : `<div class="turn"><p class="answer" ${m.error ? `style="color:var(--err)"` : ""}>${esc(m.text)}</p>
-              ${m.sources?.length ? `<ul class="hits">${m.sources.map((s) => `<li data-open="${esc(s.path)}"><span class="kind ${fileGlyph(s.path, false).cls}">${fileGlyph(s.path, false).svg}</span><div style="min-width:0"><div class="name">${esc(s.path.split("/").pop())}</div><div class="meta">${esc(s.path)}</div></div></li>`).join("")}</ul>` : ""}</div>`).join("")}
-        ${this.asking ? `<div class="searching"><span class="spinner"></span> Thinking…</div>` : ""}
-        ${!thread.length && !this.asking ? `<p class="hint">Ask ${esc(a?.name ?? "the agent")} about the files in ${esc(a?.folder ? "/" + a.folder : this.driveName)}.</p>` : ""}`;
+      : `<div id="ch-ainui"></div>${this.isOwner ? `<button class="btn secondary" id="ch-new">Create agent</button>${this.current?.startsWith("remote:") ? "" : `<button class="btn secondary" id="ch-del">Delete agent</button>`}` : ""}`;
     return `
       <div class="sheet">
         <div class="bar">
@@ -66,9 +65,6 @@ export class ChatSheet implements Sheet {
           <div class="crumbs"><div class="sub">Chat · ${esc(this.driveName)}</div><div class="title">${esc(this.creating ? "New agent" : a?.name ?? "Agents")}</div></div>
         </div>
         <div class="body" id="ch-body">${body}</div>
-        ${!this.creating && this.agents.length ? `<div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
-          <div class="field">${I.chat}<input id="ch-input" type="text" enterkeyhint="send" placeholder="Ask about these files" value="${esc(this.draft)}" autocomplete="off" /></div>
-          <button class="iconbtn primary" id="ch-send" aria-label="Send" ${this.asking ? "disabled" : ""}>${icon("up", 20)}</button></div>` : ""}
       </div>`;
   }
 
@@ -87,7 +83,7 @@ export class ChatSheet implements Sheet {
   }
 
   bind(root: HTMLElement) {
-    on(root, "#ch-close", "click", () => this.ctx.close());
+    on(root, "#ch-close", "click", () => { this.abort?.abort(); this.ctx.close(); });
     on(root, "#ch-new", "click", () => { this.creating = true; this.ctx.rerender(); });
     on(root, "#ca-cancel", "click", () => { this.creating = false; this.ctx.rerender(); });
     on(root, "#ca-provider", "change", (el) => { const p = PROVIDERS.find((x) => x.id === (el as HTMLSelectElement).value); (root.querySelector("#ca-model") as HTMLInputElement).value = p?.defaultModel ?? ""; });
@@ -110,14 +106,17 @@ export class ChatSheet implements Sheet {
       if (!a || !(await this.ctx.confirm(`Delete ${a.name}?`, "Its ask URL stops working for everyone.", "Delete", true))) return;
       try { await this.ctx.web.deleteAgent(this.driveId, a.id); this.current = null; await this.load(); } catch (e) { this.ctx.notify(msgOf(e), true); }
     })());
-    const input = root.querySelector("#ch-input") as HTMLInputElement | null;
-    input?.addEventListener("input", () => { this.draft = input.value; });
-    // Android keyboards report Enter as key "Enter" or only keyCode 13 (the IME's send action).
-    input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); void this.send(root); } });
-    on(root, "#ch-send", "click", () => void this.send(root));
-    on(root, "[data-open]", "click", (el) => this.onOpenPath(el.dataset.open!));
-    const body = root.querySelector("#ch-body") as HTMLElement | null;
-    if (body) body.scrollTop = body.scrollHeight;
+    const container = root.querySelector<HTMLElement>("#ch-ainui");
+    if (container) {
+      const renderer = createA2uiRenderer(container, { onAction: action => {
+        const c = action.context || {};
+        if (c.operation === "cancel") this.abort?.abort();
+        else if (c.operation === "select" && !this.asking) { this.current = c.agentId; this.ctx.rerender(); }
+        else if (c.operation === "send") { this.draft = c.q; void this.send(); }
+      } });
+      renderer.process(ainuiFolderChat({ driveId: this.driveId, path: this.folder, agents: this.agents.map(a => ({ id: a.id, label: a.name })), agentId: this.current || "", busy: this.asking,
+        messages: ((this.current && this.msgs.get(this.current)) || []).map(m => ({ role: m.error ? "error" : m.who === "me" ? "user" : "agent", text: m.text })) }));
+    }
   }
 
   private async send(root?: HTMLElement) {
@@ -131,10 +130,25 @@ export class ChatSheet implements Sheet {
     const field = root?.querySelector("#ch-input") as HTMLInputElement | null;
     if (field) field.value = "";   // render() keeps a focused field's value; clear it first
     this.draft = ""; this.ctx.forget("ch-input"); this.asking = true; this.ctx.rerender();
+    this.abort = new AbortController();
+    const signal = this.abort.signal;
     try {
-      const r = await this.ctx.web.askAgent(this.driveId, id, q);
-      thread.push({ who: "agent", text: r.answer, sources: r.sources });
-    } catch (e) { thread.push({ who: "agent", text: msgOf(e), error: true }); }
+      if (id.startsWith("remote:")) {
+        if (!this.approved.has(id)) {
+          const ok = await this.ctx.confirm("Send folder context?", "The selected agent receives the recursive file list and temporary file links.", "Send");
+          if (!ok) throw new Error("Remote agent access was not approved");
+          this.approved.add(id);
+        }
+        signal.throwIfAborted();
+        const reply: Msg = { who: "agent", text: "" }; thread.push(reply);
+        const r = await this.ctx.web.folderChat(this.driveId, { q, path: this.folder, agentId: id.slice(7), contextId: this.contexts.get(id) }, signal, update => { reply.text = update.text; this.ctx.rerender(); });
+        reply.text = r.text;
+        if (r.contextId) this.contexts.set(id, r.contextId);
+      } else {
+        const r = await this.ctx.web.askAgent(this.driveId, id, q);
+        thread.push({ who: "agent", text: r.answer, sources: r.sources });
+      }
+    } catch (e) { thread.push({ who: "agent", text: signal.aborted ? "Stopped" : msgOf(e), error: true }); }
     this.asking = false; this.ctx.rerender();
   }
 }
