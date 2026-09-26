@@ -192,3 +192,13 @@ test("the context round-trips (also through JSON text)", () => {
   assert.equal(back.city, q.city); assert.equal(back.kind, q.kind); assert.equal(back.dateFrom, q.dateFrom); assert.deepEqual(back.keywords, q.keywords);
   assert.equal(SearchQuery.fromJson(fparser.parse("share it", FNOW).toJson()), null);   // nothing to carry
 });
+
+test("\"what's in this folder?\" is where to look, not a task; only \"into a folder\" makes one", () => {
+  for (const q of ["what's in this folder?", "list this folder", "이 폴더에 뭐 있어?", "현재 폴더 보여줘"]) {
+    const x = parse(q);
+    assert.equal(x.collect, false, q);
+    assert.deepEqual(x.keywords, [], q);
+  }
+  assert.equal(parse("photos in this folder").kind, "photo");
+  for (const q of ["collect them into a folder", "put the Tokyo photos in a folder", "make an album of the Paris photos", "폴더로 모아줘"]) assert.equal(parse(q).collect, true, q);
+});

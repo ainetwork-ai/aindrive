@@ -86,6 +86,10 @@ export function contentWords(keywords) {
 /** Verbs that turn a question into a task. Matched as prefixes of a Korean token ("모아서", "만들어줘"). */
 const COLLECT_WORDS = ["모아", "모아서", "모아줘", "모으", "묶어", "정리", "폴더", "앨범", "collect", "gather", "folder", "album", "organize", "organise", "copy", "복사", "save", "group", "bundle", "throw"];
 const MOVE_WORDS = ["옮겨", "옮기", "이동", "move"];
+/** Collect words that are nouns: a destination ("into a folder") — or the folder being asked about ("what's in this folder"). */
+const PLACE_NOUNS = ["폴더", "앨범", "folder", "album"];
+/** Right before a place noun, these point at the folder that is already there: "this folder", "이 폴더", "현재 폴더". */
+const POINTING = new Set(["this", "that", "the", "my", "our", "current", "these", "those", "이", "그", "저", "현재", "지금", "여기", "이번"]);
 const SHARE_WORDS = ["공유", "링크", "share", "link"];
 const DELETE_WORDS = ["삭제", "지워", "지우", "없애", "delete", "remove", "trash", "rid", "wipe", "erase"];
 const COUNT_WORDS = ["몇", "개수", "갯수", "count", "number", "how many"];
@@ -331,6 +335,13 @@ const hasCount = (tokens) => tokens.some((t) => EN_COUNT.test(t) || KO_COUNT.tes
 const anyUsed = (used, from, n) => used.slice(from, from + n).some(Boolean);
 const next = (tokens, i) => (i + 1 < tokens.length ? tokens[i + 1].toLowerCase() : "");
 
+/** "this folder", "이 폴더에", "the album": the folder already there, which a question is about — not "make a folder". */
+function pointedAt(tokens, i) {
+  if (i === 0) return false;
+  const t = stripParticles(tokens[i]).toLowerCase();
+  return PLACE_NOUNS.some((n) => t === n || t === n + "s") && POINTING.has(tokens[i - 1].toLowerCase());
+}
+
 function isSeason(t) {
   switch (t) {
     case "봄": case "spring": return "spring";
@@ -519,6 +530,7 @@ export class QueryParser {
     for (let i = 0; i < tokens.length; i++) {
       if (used[i]) continue;
       const lower = stripParticles(tokens[i]).toLowerCase(), raw = tokens[i].toLowerCase();
+      if (pointedAt(tokens, i)) continue;
       for (const set of [MOVE_WORDS, DELETE_WORDS, COLLECT_WORDS, SHARE_WORDS, COUNT_WORDS]) if (startsWithAny(raw, set) || startsWithAny(lower, set)) task = true;
       if (KO_COUNT.test(raw) || EN_COUNT.test(raw) || (raw === "how" && next(tokens, i) === "many")) task = true;
     }
@@ -527,6 +539,7 @@ export class QueryParser {
       const lower = stripParticles(tokens[i]).toLowerCase();
       const raw = tokens[i].toLowerCase();
       let cm;
+      if (pointedAt(tokens, i)) { used[i] = true; used[i - 1] = true; continue; }   // "this folder": where to look, not a task
       if (startsWithAny(raw, MOVE_WORDS) || startsWithAny(lower, MOVE_WORDS)) { q.move = true; used[i] = true; }
       else if (startsWithAny(raw, DELETE_WORDS) || startsWithAny(lower, DELETE_WORDS)) { q.delete = true; used[i] = true; }
       else if (startsWithAny(raw, COLLECT_WORDS) || startsWithAny(lower, COLLECT_WORDS)) { q.collect = true; used[i] = true; }
