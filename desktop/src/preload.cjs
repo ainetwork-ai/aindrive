@@ -1,17 +1,12 @@
-// The window's only bridge to the app: a handful of named calls, no Node.
-const { contextBridge, ipcRenderer, webUtils } = require("electron");
+// The shell window's only bridge to the app. shell/mac-bridge.js turns it
+// into Capacitor's native bridge; nothing else of Electron or Node reaches the page.
+const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("aindrive", {
-  state: () => ipcRenderer.invoke("state"),
-  onState: (fn) => ipcRenderer.on("state", (_e, s) => fn(s)),
-  share: (folder) => ipcRenderer.invoke("share", folder),
-  pause: (folder) => ipcRenderer.invoke("pause", folder),
-  resume: (folder) => ipcRenderer.invoke("resume", folder),
-  remove: (folder) => ipcRenderer.invoke("remove", folder),
-  open: (what, folder) => ipcRenderer.invoke("open", what, folder),
-  web: () => ipcRenderer.invoke("web"),
-  setOpenAtLogin: (on) => ipcRenderer.invoke("openAtLogin", on),
-  signOut: () => ipcRenderer.invoke("signOut"),
-  /** the path of a folder dropped on the window */
-  pathOf: (file) => webUtils.getPathForFile(file),
+contextBridge.exposeInMainWorld("__aindriveNative", {
+  /** A plugin method (AindriveAgent.*, CapacitorCookies.*) → its result. */
+  call: (plugin, method, options) => ipcRenderer.invoke("native:call", plugin, method, options),
+  /** Plugin events (AindriveAgent "statusChanged"). */
+  onEvent: (fn) => ipcRenderer.on("native:event", (_e, plugin, event, data) => fn(plugin, event, data)),
+  /** An http(s) request made by the main process, with the session's cookies. */
+  fetch: (req) => ipcRenderer.invoke("native:fetch", req),
 });
