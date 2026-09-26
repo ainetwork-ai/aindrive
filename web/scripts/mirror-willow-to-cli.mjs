@@ -12,6 +12,7 @@ const repo = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const SOURCES = [
   ...["bytes", "keys", "schemes", "cert", "policy", "doc", "wire", "session", "y-binding", "materialize"].map((n) => [`web/shared/willow/${n}.ts`, `${n}.js`]),
   ["web/shared/media/chunks.ts", "chunks.js"],
+  ["web/shared/media/p2p.ts", "p2p.js"],
 ];
 
 export async function mirror({ write = true } = {}) {
