@@ -420,7 +420,7 @@ public final class CallReport {
             }
         }
         topics(top);
-        summarise(top, ko);
+        int unsummarised = summarise(top, ko);
 
         // Answer + sources (one per person: the newest recording, snippet = topics).
         StringBuilder a = new StringBuilder();
@@ -445,13 +445,15 @@ public final class CallReport {
         for (Person p : top) if (p.summary != null || !p.topics.isEmpty()) summarised++;
         a.append(ko ? "\n총 " + ranked.size() + "명 중 " + summarised + "명의 통화 내용을 요약했고 (녹음 " + transcribed + "/" + recordings + "개 분석), 사람별 파일을 폴더에 넣었어요."
                     : "\nSummarised calls with " + summarised + " of " + ranked.size() + " people (" + transcribed + "/" + recordings + " recordings analysed); one file per person is in the folder.");
+        if (unsummarised > 0) a.append(ko ? "\n" + unsummarised + "명은 폰 모델로 요약할 시간이 모자라 주제어만 적었어요."
+                                          : "\n" + unsummarised + " people only got topic words — the phone's model ran out of time.");
         JSONObject out = new JSONObject().put("answer", a.toString().trim()).put("sources", sources);
 
         // The markdown report, in a folder the shell can turn into a shareable drive.
         String day = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date(nowMs));
         String folder = (ko ? "통화 요약 " : "Call summary ") + day;
         JSONObject action = new JSONObject().put("type", "collect").put("report", "calls").put("share", q.share).put("needsCallLog", !haveLog)
-                .put("people", peopleJson(top));
+                .put("people", peopleJson(top)).put("unsummarised", unsummarised);
         if (ops == null || !ops.canWrite()) {
             action.put("skipped", true).put("reason", "no file access");
         } else {
@@ -479,20 +481,33 @@ public final class CallReport {
     }
 
     /** Real summaries when the on-device LLM is present; cached per person + transcript set so re-runs are quick. */
-    private void summarise(List<Person> people, boolean ko) {
+    /**
+     * How long one report may spend writing new summaries on the phone. The model takes tens of
+     * seconds per person, so a first report over twenty people would hold the chat for ten minutes;
+     * past the budget a person keeps topic words, each run adds to the cache, and the shell offers
+     * the report's notes to a cloud agent (with the owner's consent) for the rest.
+     */
+    static final long SUMMARY_BUDGET_MS = 30_000;
+
+    /** @return people with transcripts left without a summary (budget spent, or no model on the phone) */
+    private int summarise(List<Person> people, boolean ko) {
         ai.ainetwork.aindrive.llm.Summarizer llm = null;
         Map<String, String> cache = loadSummaryCache();
-        boolean dirty = false;
+        boolean dirty = false, noModel = false;
+        long deadline = System.currentTimeMillis() + SUMMARY_BUDGET_MS;
+        int left = 0;
         for (Person p : people) {
             if (p.transcripts.isEmpty()) continue;
             String key = (ko ? "ko|" : "en|") + p.name + "|" + Integer.toHexString(String.join("\u0001", p.transcripts).hashCode());
             String cached = cache.get(key);
             if (cached != null) { p.summary = cached; continue; }
-            if (llm == null) { llm = summarizer.get(); if (llm == null) return; }
+            if (noModel || System.currentTimeMillis() > deadline) { left++; continue; }
+            if (llm == null) { llm = summarizer.get(); if (llm == null) { noModel = true; left++; continue; } }
             String s = llm.callsWith(p.name, p.transcripts, ko);
-            if (s != null) { p.summary = s; cache.put(key, s); dirty = true; }
+            if (s != null) { p.summary = s; cache.put(key, s); dirty = true; } else left++;
         }
         if (dirty) saveSummaryCache(cache);
+        return left;
     }
 
     private Map<String, String> loadSummaryCache() {
