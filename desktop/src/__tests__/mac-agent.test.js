@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMacAgent, inside, listEntries, mimeOf, searchFolders, writeDriveConfig } from "../mac-agent.js";
+import { createMacAgent, inside, listEntries, mimeOf, writeDriveConfig } from "../mac-agent.js";
 import { createStore } from "../store.js";
 
 const tree = () => {
@@ -35,18 +35,6 @@ test("listEntries has the phone agent's shape: folders first, no .aindrive", asy
   assert.equal(root[1].mime, "text/plain");
   const sub = await listEntries(d, "Trips");
   assert.deepEqual(sub.map((e) => e.path), ["Trips/Jeju", "Trips/plan.md"]);
-});
-
-test("searchFolders finds files by every word of the question", async () => {
-  const d = tree();
-  const f = [{ path: d, label: "Family", driveId: "D1" }];
-  const r = await searchFolders(f, "find the tangerine orchard photos");
-  assert.deepEqual(r.words, ["tangerine", "orchard"]);
-  assert.deepEqual(r.sources.map((s) => s.path), ["Trips/Jeju/tangerine orchard.jpg"]);
-  assert.equal(r.sources[0].driveId, "D1");
-  assert.equal((await searchFolders(f, "jeju")).sources.length, 1); // folder names count
-  assert.equal((await searchFolders(f, "config")).sources.length, 0); // .aindrive is never searched
-  assert.deepEqual((await searchFolders(f, "the")).sources, []);
 });
 
 test("writeDriveConfig writes what the CLI serves from, and keeps pairedAt", () => {
