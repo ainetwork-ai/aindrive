@@ -47,7 +47,8 @@ export function disconnectAgent(driveId) {
 }
 
 /**
- * Ping `ws` every `intervalMs`; terminate it if the previous ping got no pong.
+ * Ping `ws` every `intervalMs`; terminate it if nothing came back since the
+ * previous ping — no pong and no bytes of any frame.
  * A socket whose agent vanished (laptop asleep, network gone) never closes on
  * its own, so without this the drive stays "connected" and every request waits
  * out the RPC timeout. terminate() fires "close", which drops the agent entry.
@@ -55,7 +56,12 @@ export function disconnectAgent(driveId) {
  */
 export function startHeartbeat(ws, { intervalMs = HEARTBEAT_INTERVAL_MS, onBeat = () => {}, onDead = () => {} } = {}) {
   let answered = true;
-  ws.on("pong", () => { answered = true; });
+  const alive = () => { answered = true; };
+  ws.on("pong", alive);
+  // Bytes still arriving count as an answer. A pong queues behind the frame the
+  // agent is sending, and a phone uploading a multi-MB download chunk over a
+  // slow link takes longer than a beat — dropping it then killed every download.
+  ws._socket?.on("data", alive);
   return setInterval(() => {
     if (ws.readyState !== ws.OPEN) return;
     if (!answered) { onDead(); ws.terminate(); return; }

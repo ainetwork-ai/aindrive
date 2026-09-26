@@ -1,55 +1,50 @@
 # desktop/ — aindrive for Mac
 
-A menu-bar app that shares folders with aindrive without a terminal: **Share a
-folder…** → pick one → approve in the browser → it is online. It is the
-`aindrive` CLI with a window around it: each shared folder runs the bundled CLI
-agent (`cli/` → `desktop/cli/aindrive.mjs`) in an Electron utility process, so
-pairing, sign-in and serving behave exactly like `npm i -g aindrive`.
+The phone app, on the Mac. The window is the **mobile shell** (`mobile/src`,
+built into `shell/`): same screens and features — folders with their P2P
+switch, the file browser and viewer, Share / Manage / Agents / Account, chat
+with agents. What the phone does natively, the Mac does here: each shared
+folder is served by the bundled CLI agent (`cli/` → `cli/aindrive.mjs`) in an
+Electron utility process, kept running from the menu bar and restored at login.
 
 | File | Role |
 |------|------|
-| `src/main.js` | Electron main: window, menu-bar icon, folder picker, `aindrive://share` links, open at login, IPC |
-| `src/agents.js` | one CLI process per folder (spawner injected); state from its output (`parseLine`); restarts a paired folder that dies, waits on a missing one. No Electron imports — unit-tested |
-| `src/store.js` | the app's settings (`~/Library/Application Support/aindrive/folders.json`): folders, paused, server |
-| `src/preload.cjs`, `src/ui/` | the window (sandboxed; talks to main only through `window.aindrive`) |
-| `scripts/prepare-cli.mjs` | builds `../cli` and copies its bundle into `cli/` |
-| `scripts/build-mac.mjs` | `.app` + `.dmg` per arch, from Linux or macOS (see below); every download pinned by version + sha256 |
-| `scripts/after-pack.cjs` | turns off Electron's RunAsNode / NODE_OPTIONS / inspect fuses before signing |
-| `scripts/icons.py` | draws `assets/` (app icon, menu-bar template icons) |
+| `src/main.js` | Electron main: the shell window (`app://shell/`), native calls + fetch bridge (IPC), menu-bar icon, login item, `aindrive://` |
+| `src/mac-agent.js` | the Mac's **`AindriveAgent`** (the plugin `mobile/src/plugin.ts` declares): start/stop/status via agents.js, folder picker, local file ops, Quick Look, thumbnails, name search for `ask`; phone-only calls reject with a clear message |
+| `src/agents.js` | one CLI process per folder (spawner injected); state from its output; restarts, backoff, clean stop. No Electron imports — unit-tested |
+| `src/shell/mac-bridge.js` | loaded first in the shell: Capacitor plugin headers + `nativePromise`/`nativeCallback` (so `AindriveAgent`, `CapacitorCookies` are "native"), and `fetch` → main process with the session cookie (CapacitorHttp's job) |
+| `src/preload.cjs` | the window's only bridge: `native:call`, `native:event`, `native:fetch` |
+| `src/store.js` | `folders.json` in the app's data dir: drives served here, folders picked here |
+| `scripts/prepare-shell.mjs`, `prepare-cli.mjs` | build `../mobile` into `shell/` (+ bridge, CSP) and `../cli` into `cli/` |
+| `scripts/build-mac.mjs`, `after-pack.cjs`, `dmg/` | `.app` + `.dmg` per arch from Linux or macOS; fuses off; pinned downloads |
 
-State lives where the CLI keeps it: `~/.aindrive/credentials.json` (sign-in)
-and `<folder>/.aindrive/config.json` (the drive). A folder shared from the app
-and from a terminal is the same drive.
+State is the CLI's: `<folder>/.aindrive/config.json` holds the drive the shell
+paired, so a folder served here and by `aindrive` in a terminal is one drive.
+The shell's own state (sign-in, folder list) is its localStorage (Preferences).
 
 ## Build
 
 ```bash
 npm ci && npm test
-npm run dist:mac            # dist/aindrive-<version>-mac-{arm64,x64}.dmg
-node scripts/build-mac.mjs arm64
+npm start                 # dev: builds cli + shell, runs Electron
+npm run dist:mac          # dist/aindrive-<version>-mac-{arm64,x64}.dmg
 ```
 
-On Linux it needs Docker (the DMG toolchain in `scripts/dmg/`: xorrisofs +
-libdmg-hfsplus) and downloads `rcodesign` for the ad-hoc signature Apple silicon
-requires. On macOS it uses `hdiutil` and `codesign`. Releases: `docs/RELEASING.md`
-(desktop track) — `.github/workflows/desktop.yml` builds and attaches the DMGs
-on a `desktop-v*` tag; `web/shared/desktop.ts` is where the website's download
-link points.
+Releases: `docs/RELEASING.md` (desktop track; tag `desktop-vX.Y.Z` → `.github/workflows/desktop.yml`).
+`web/shared/desktop.ts` is where the website's download link points.
 
 ## Gotchas
 
-- **Electron ↔ better-sqlite3 ABI.** The CLI needs better-sqlite3 inside
-  Electron's Node, so the prebuilt binary must match Electron's ABI *and*
-  darwin/arch — build-mac.mjs fetches it from the better-sqlite3 release. Bump
-  Electron only to a major that release ships `electron-v<ABI>-darwin-*` for,
-  and add its ABI and hashes to the pins in build-mac.mjs.
-- **No RunAsNode.** Agents are utility processes, never `ELECTRON_RUN_AS_NODE`:
-  with that fuse on, any local program could run code as this app and inherit
-  the folder access the user granted it. Keep the fuses off (after-pack.cjs).
-- **Not notarized.** There is no Developer ID yet, so the app is ad-hoc signed:
-  the first open needs System Settings → Privacy & Security → **Open Anyway**
-  (or `xattr -dr com.apple.quarantine /Applications/aindrive.app`). Notarizing
-  needs an Apple Developer ID certificate in the release workflow.
-- **`aindrive://` links** come from any web page, so a link may switch the
-  server only to the default one or localhost (`handleUrl`).
-- Closing the window keeps sharing (menu-bar icon); **Quit** stops every agent.
+- **Same shell, two devices.** Copy and phone-only features in `mobile/src` go
+  through `mobile/src/device.ts` (`ON_MAC`, `DEVICE`). A new `AindriveAgent`
+  method needs a Mac version in `mac-agent.js` and a header in `mac-bridge.js`
+  (without one it fails as "not implemented on electron", not silently).
+- **Not on the Mac (yet):** call-log / camera-roll agent sources, recognition
+  models and the on-device model agent (`ask` is a file-name search here),
+  Google's account picker (sign-in goes through the browser), handoff links.
+- **Electron ↔ better-sqlite3 ABI.** The CLI's native module must match
+  Electron's ABI and darwin/arch; bump Electron only with the pins in build-mac.mjs.
+- **No RunAsNode.** Agents are utility processes; the fuses stay off (after-pack.cjs).
+- **Not notarized.** Ad-hoc signed: first open needs System Settings → Privacy
+  & Security → **Open Anyway**. Notarizing needs a Developer ID in the workflow.
+- `aindrive://` links only open the window; the server is chosen in the shell.

@@ -1,18 +1,19 @@
 {
   "name": "aindrive-desktop",
   "productName": "aindrive",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "private": true,
-  "description": "aindrive for Mac \u2014 share folders with aindrive from the menu bar, no terminal needed.",
+  "description": "aindrive for Mac \u2014 the phone app's screens on the Mac, with its folders served from the menu bar.",
   "license": "MIT",
   "author": "AI Network",
   "type": "module",
   "main": "src/main.js",
   "scripts": {
     "prepare-cli": "node scripts/prepare-cli.mjs",
-    "start": "node scripts/prepare-cli.mjs && electron .",
+    "start": "node scripts/prepare-cli.mjs && node scripts/prepare-shell.mjs && electron .",
     "dist:mac": "node scripts/build-mac.mjs",
-    "test": "node --test \"src/__tests__/*.test.js\""
+    "test": "node --test \"src/__tests__/*.test.js\"",
+    "prepare-shell": "node scripts/prepare-shell.mjs"
   },
   "dependencies": {
     "better-sqlite3": "12.11.1"
@@ -34,8 +35,10 @@
       "src/**",
       "assets/**",
       "cli/**",
+      "shell/**",
       "package.json",
       "!src/__tests__/**",
+      "!src/shell/**",
       "!node_modules/better-sqlite3/{src,deps,docs}/**"
     ],
     "asar": false,
