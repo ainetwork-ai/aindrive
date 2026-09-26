@@ -262,6 +262,12 @@ const THREAD_KEY = "aindrive.mobile.thread.v1";
 const THREAD_MAX = 40;
 let askBusy = false;
 let searchOpen = false;
+/**
+ * A wide window (the Mac, a tablet in landscape) shows home, the open folder and the agent side by
+ * side, like the web — the same screens as the phone, laid out in three panes (renderScreens).
+ */
+const wideQuery = window.matchMedia("(min-width: 1024px)");
+const isWide = () => wideQuery.matches;
 let menuFor: string | null = null;
 /** In-app file browser: which share, where in it, what we saw there. */
 let browse: {
@@ -1479,6 +1485,7 @@ async function ask(q = askQuery) {
 }
 
 async function openSearch() {
+  if (isWide() && !chatScope) { (document.getElementById("ask-input") as HTMLInputElement | null)?.focus(); return; }
   if (!status.drives.some((d) => d.running) && !remotes.some((d) => d.online)) {
     notify(state.shares.length ? "Turn a folder on to search it." : "Add a folder first — the agent works across your shared folders.", true);
     return;
@@ -1543,8 +1550,18 @@ function render() {
 }
 
 function renderScreens(app: HTMLElement) {
+  const wide = isWide() && !!state.sessionCookie;
+  app.classList.toggle("wide", wide);
   if (!state.sessionCookie) { app.innerHTML = loginScreen(); bindLogin(); bindOverlays(); return; }
-  if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); }
+  if (wide) {
+    // Three panes, every screen live at once: home | the open folder | the agent.
+    const folder = browse ? browseSheet() : "";
+    app.innerHTML = `<aside class="pane side">${homeScreen()}</aside>`
+      + `<main class="pane center">${folder || widePlaceholder()}</main>`
+      + `<section class="pane chat">${searchSheet()}</section>` + overlays();
+    bindHome(); if (folder) bindBrowse(); bindSearch();
+  }
+  else if (searchOpen) { app.innerHTML = searchSheet() + overlays(); bindSearch(); }
   else if (browse) { app.innerHTML = browseSheet() + overlays(); bindBrowse(); }
   else { app.innerHTML = homeScreen() + overlays(); bindHome(); }
   // Viewer, toast and confirm sit on every screen: bind them once, here.
@@ -1565,6 +1582,12 @@ function renderScreens(app: HTMLElement) {
     });
     bindSheet();
   }
+}
+
+/** The middle pane before a folder is open. */
+function widePlaceholder(): string {
+  return `<div class="sheet"><div class="body"><div class="empty"><div class="art">${I.folder}</div><h3>Open a folder</h3>
+    <p>Pick one on the left — its files show here, and the agent on the right searches all of them.</p></div></div></div>`;
 }
 
 // ---- login
@@ -1765,7 +1788,7 @@ function folderCard(share: SharedFolder): string {
       <button class="danger" data-act="remove" ${on ? "disabled" : ""}>${icon("trash", 18)} Remove folder${on ? " · turn off first" : ""}</button>
     </div>` : "";
   return `
-    <div class="card" data-share="${esc(key)}">
+    <div class="card${isWide() && !browse?.remote && browse?.key === key ? " current" : ""}" data-share="${esc(key)}">
       <div class="folder">
         <div class="glyph" data-act="browse">${I.folder}</div>
         <div style="min-width:0" data-act="browse" role="button" aria-label="Open ${esc(share.folder.label)}">
@@ -2705,7 +2728,9 @@ async function boot() {
   // comes back (the Mac window never fires "resume") and every 20 s while it is on screen.
   window.addEventListener("focus", () => void refreshRemotes(true));
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshRemotes(true); });
-  setInterval(() => { if (!document.hidden && !searchOpen) void refreshRemotes(true); }, 20_000);
+  // The agent open full-screen pauses this; in a wide window it is always open, so it never does.
+  setInterval(() => { if (!document.hidden && (!searchOpen || isWide())) void refreshRemotes(true); }, 20_000);
+  wideQuery.addEventListener("change", () => render());
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
     else if (sheet) closeSheet();
