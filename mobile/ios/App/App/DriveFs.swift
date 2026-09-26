@@ -70,8 +70,11 @@ final class DriveFs {
             url.appendPathComponent(String(seg))
         }
         // .aindrive/ is off-limits over RPC except agents/ + uploads/, which the
-        // web server drives itself. Mirrors cli/src/rpc.js isReservedRpcPath.
-        if segs.first == ".aindrive" && !(segs.count >= 2 && (segs[1] == "agents" || segs[1] == "uploads")) {
+        // web server drives itself. Compared in lower case: a folder on a
+        // case-insensitive volume opens ".AINDRIVE/config.json" as the same file.
+        // Mirrors cli/src/rpc.js isReservedRpcPath.
+        let lower = segs.map { $0.lowercased() }
+        if lower.first == ".aindrive" && !(lower.count >= 2 && (lower[1] == "agents" || lower[1] == "uploads")) {
             throw FsError.reserved
         }
         let resolved = url.standardizedFileURL

@@ -81,6 +81,7 @@ Gate: `min = viewer` at the target path. Rule (TARGET) =
 | `R-ACC-PAID-004` | Write ops are **never** paywalled — they already require `editor+`, which bypasses (§3). The carve-out applies to *read* only. | CURRENT |
 | `R-ACC-ANON-001` | No logged-out access to any non-public path (`resolveAccess` null→none). | CURRENT (`access.ts:71`) |
 | `R-ACC-NEST-001` | Nested sales: the gate is the **nearest-ancestor** priced share; entitlement must cover **that** path. Buying a parent does not unlock a more-specific (separately priced) child. | CURRENT (`sale-access.js`; e2e #190) |
+| `R-ACC-PATH-001` | Every gate judges the **canonical path it serves** (`normalizePath`: slashes, `.` segments, Unicode NFC). The WS hub canonicalizes its URL path; a Yjs doc is named by the authorized path (`docIdFor`), never a client-sent id; agent-reported names enter the server in NFC. `./paid/a`, `/paid/a` and the NFD spelling are all `paid/a`. Letter case is not canonicalized (Linux agents tell `a` from `A`), so the checks a case-insensitive agent (macOS) could slip past **ignore case**: a sale covers every case of its path (`sale-access.js` `foldCase`; at one depth a sale spelled exactly as the path wins, so case-twin sales on a case-sensitive agent each judge their own folder), and `.aindrive/` is reserved in any case on the web and every agent. Grants stay exact (a case variant only loses access). A Yjs doc whose file is gone (moved/deleted) is not served. **Not covered:** Windows agents' own aliases (`\`, 8.3 short names, trailing dots, `:stream`). | CURRENT (`path.js`, `dochub.js`, `yjs/route.ts`, `agents.js`, `sale-access.js`, `system-paths.ts`, agents' reserved checks; `dochub-path`, `yjs-route-doc`, `read-denial`, `sale-access`, `system-path-guard` tests) |
 
 > **Implementation note:** the pure rule is `canReadContent` (access-core.js);
 > the DB-backed gate is `sale-access.js` (`paidAccessDenial` = nearest-ancestor
@@ -108,6 +109,7 @@ dropped — except `private`:
 | ID | Requirement | Status |
 |----|-------------|--------|
 | `R-VIS-PAID-001` | **Listed** paid children → shown **locked** + price + ticker to non-entitled viewers (🔒 badge; click → `LockedPreview` with Buy). **Unlisted** paid children → **hidden** entirely (private, link-only sale). `fs/list` annotates + filters per requester (`paidLocksForListing`); editor+ see everything. Owner-side listing dims unlisted sales (eye-off badge) so their private state is legible. | CURRENT (`sale-access.js` + fs/list; e2e #190) |
+| `R-VIS-PAID-002` | A member's **grant-listing rows** carry the same locks (`paidLocksForPaths`, judged by the role at each grant). An unlisted sale's grant row stays visible, locked — the grant is the member's own. A folder or `?path` the viewer hasn't paid for shows the **paywall** (the 402 body carries `gatePath`, `shareId`, price, currency, `listed`), not a load error; Buy only when `listed`. | CURRENT (`page.tsx`, `drive-shell.tsx`, `paid-lock.ts`; `sale-access`, `paid-lock`, `read-denial` tests) |
 | `R-VIS-PRIV-001` | Private children are **hidden** from listings for non-allowlisted users. | DEFERRED (§10) |
 
 ---

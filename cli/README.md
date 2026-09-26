@@ -79,7 +79,8 @@ agents that paid via x402 and want to reuse the cap from another box.
 calls (`list`, `read`, `write`, `mkdir`, …). Each request carries an HMAC built
 from a per-drive secret negotiated at pairing time; the server cannot read or
 write files without a valid signature. The server is a relay — it never touches
-your disk.
+your disk. Paths arrive in Unicode NFC; a file whose name is stored in NFD (made
+on a Mac, copied to Linux) is still found.
 
 State lives in two places:
 

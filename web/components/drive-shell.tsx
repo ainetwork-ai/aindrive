@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { apiFetch } from "@/lib/api-client";
+import { paidLockFrom, type PaidLock } from "@/lib/paid-lock";
 import { sortEntries, type SortKey, type SortState } from "@/lib/sort-entries";
 import { locationPath, viewerHistory } from "@/lib/drive-location";
 import {
@@ -102,6 +103,7 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   const [role, setRole] = useState<string>(initialRole ?? "viewer");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [paywall, setPaywall] = useState<PaidLock | null>(null);
   const [shareOpen, setShareOpen] = useState<{ path: string; focus?: "sell" } | null>(null);
   const [shares, setShares] = useState<ShareSummary[]>([]);
   const [showcase, setShowcase] = useState<ShowcaseItem[]>([]);
@@ -149,7 +151,7 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
 
   const isSyntheticRoot = !!entryItems && path === "";
   const load = useCallback(async () => {
-    setLoading(true); setErr(null);
+    setLoading(true); setErr(null); setPaywall(null);
     // Synthetic root (multi-grant member at ""): server-side root fs/list would
     // 403 — render the member's own grant entries instead. Role resets to
     // viewer: a grant-level role picked up inside a path must not leak edit
@@ -162,7 +164,16 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
       return;
     }
     const res = await apiFetch<{ entries: DriveEntry[]; role: string }>(`/api/drives/${driveId}/fs/list?path=${encodeURIComponent(path)}`);
-    if (!res.ok) { setErr(res.error || "failed to list"); setLoading(false); return; }
+    if (!res.ok) {
+      // A folder (or a ?path) the viewer hasn't paid for answers 402 with its
+      // gate: that's the paywall, not a load failure.
+      const lock = paidLockFrom(res.status, res.body);
+      // Only a viewer gets a 402 (editor+ bypass), so drop any edit affordances
+      // the previous folder's role left behind.
+      if (lock) { setEntries([]); setPaywall(lock); setRole("viewer"); } else setErr(res.error || "failed to list");
+      setLoading(false);
+      return;
+    }
     setEntries(res.data.entries); setRole(res.data.role); setLoading(false);
   }, [driveId, path, entryItems, isSyntheticRoot]);
 
@@ -393,6 +404,7 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
             <FileTable
               loading={loading}
               err={err}
+              paywall={paywall}
               driveId={driveId}
               entries={visibleEntries}
               sort={sort}

@@ -1629,9 +1629,9 @@ add(98, "missing content-type — server returns some response (200/400/415)", a
   assert(r.status >= 200 && r.status < 600, "got status " + r.status);
 });
 
-add(99, "docId regex rejects path traversal", async () => {
+add(99, "yjs: the doc is named by the path (a client docId is ignored); a traversal path is refused", async () => {
   const cookie = await reEnsureOwner();
-  const r = await jget(`/api/drives/${state.driveId}/yjs?docId=../etc/passwd&path=`, { headers: { cookie } });
+  const r = await jget(`/api/drives/${state.driveId}/yjs?docId=../etc/passwd&path=../etc/passwd`, { headers: { cookie } });
   eq(r.status, 400);
 });
 

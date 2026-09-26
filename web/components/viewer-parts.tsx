@@ -3,6 +3,7 @@
 // presence avatars, save/download/close actions. Pure props — no effects,
 // no Yjs. The Viewer shell owns all state and the collab lifecycle.
 import { X, Save, Download, Wifi, WifiOff } from "lucide-react";
+import { IconButton } from "@/components/ui";
 
 type Presence = { id: number; name: string; color: string };
 
@@ -70,9 +71,9 @@ export function ViewerHeader({
             <Download className="w-4 h-4" /> Download
           </button>
         )}
-        <button onClick={onClose} className="rounded p-1.5 hover:bg-drive-hover">
+        <IconButton aria-label="Close" size="sm" onClick={onClose}>
           <X className="w-4 h-4" />
-        </button>
+        </IconButton>
       </div>
     </header>
   );

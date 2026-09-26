@@ -63,6 +63,14 @@ describe("normalizePath", () => {
     expect(normalizePath(".env")).toBe(".env");
     expect(normalizePath("docs/.config")).toBe("docs/.config");
   });
+
+  it("canonicalizes Unicode to NFC — a macOS-made (NFD) name and its NFC twin are one path", () => {
+    const nfc = "가족/제주 앨범".normalize("NFC");
+    const nfd = nfc.normalize("NFD");
+    expect(nfd).not.toBe(nfc); // precondition: the two spellings differ byte-wise
+    expect(normalizePath(nfd)).toBe(nfc);
+    expect(normalizePath(nfc)).toBe(nfc);
+  });
 });
 
 describe("isAncestorOrSelf", () => {

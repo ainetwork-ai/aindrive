@@ -83,7 +83,7 @@ export function Viewer({
           }),
           fetch(`/api/drives/${driveId}/yjs`, {
             method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ docId: docIdRef.current, path: entry.path, data: bytesToBase64(update) }),
+            body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
           }),
         ]);
       } catch (e) { console.warn("autosave failed:", e); }
@@ -130,7 +130,8 @@ export function Viewer({
         } catch (e) { console.warn("external reload failed:", e); }
       }
       if (ev === "synced") {
-        // Compute docId for autosave + yjs persistence
+        // docId keys the client trace (the server names the stored doc from the
+        // path itself); setting it also marks the doc synced for autosave.
         const docId = await sha1Base64(`${driveId}:${entry.path}`);
         docIdRef.current = docId;
 
@@ -157,7 +158,7 @@ export function Viewer({
         if (ytext.length > 0) {
           tracer?.("disk-seed-skip");
         } else {
-          const yjsRes = await fetch(`/api/drives/${driveId}/yjs?docId=${docId}&path=${encodeURIComponent(entry.path)}`);
+          const yjsRes = await fetch(`/api/drives/${driveId}/yjs?path=${encodeURIComponent(entry.path)}`);
           if (yjsRes.ok) {
             const { data } = await yjsRes.json();
             if (data) {

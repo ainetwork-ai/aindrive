@@ -6,9 +6,10 @@ export type SaleGate = {
   price_usdc: number;
   currency: string | null;
   expires_at: string | null;
+  listed: number;
 };
 
-export type PaidDenial = { gatePath: string; shareId: string; price: number; currency: string | null };
+export type PaidDenial = { gatePath: string; shareId: string; price: number; currency: string | null; listed: boolean };
 
 export declare function classifyPath(
   driveId: string,
@@ -25,6 +26,13 @@ export declare function paidAccessDenial(
 ): PaidDenial | null;
 
 export type EntryLock = { price: number; currency: string | null; shareId: string; listed: boolean };
+
+export declare function paidLocksForPaths(
+  driveId: string,
+  paths: string[],
+  roleAt: (path: string) => RoleOrNone,
+  accountId: string | null,
+): Record<string, EntryLock>;
 
 export declare function paidLocksForListing(
   driveId: string,

@@ -2,3 +2,5 @@
 # sample folder). Un-ignore the committed fixture directory here.
 !sample/
 !sample/**
+# …but not the agent state an e2e run writes into it
+sample/.aindrive/

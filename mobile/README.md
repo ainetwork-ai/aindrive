@@ -56,8 +56,13 @@ drive and a laptop drive are the same thing to the server.
   generated from `web/lib/sig.js`; regenerate them from Node rather than
   editing them to match new output.
 - **Reserved paths match `cli/src/rpc.js`.** `.aindrive/**` is refused over RPC
-  except `agents/` and `uploads/` (`SafFs.isReservedPath`, `DriveFs.resolve`).
+  except `agents/` and `uploads/` (`ReservedPath`, `DriveFs.resolve`; any letter case).
   This is a second layer behind the web's own gate.
+- **Paths arrive in NFC.** The server names paths in Unicode NFC; a file a Mac
+  wrote keeps its NFD name on the phone's byte-exact storage, so Android picks a
+  child by exact name, else by NFC-equal name (`ChildNameMatch`, mirrors
+  `cli/src/rpc.js matchSpelling`). iOS on APFS needs nothing: its lookups are
+  normalization-insensitive (a folder on a non-APFS volume would miss NFD names).
 - **RPC results must match `cli/src/rpc.js`.** The server cannot tell which
   kind of agent it is talking to, so a shape difference surfaces as a broken
   file browser, not an error.

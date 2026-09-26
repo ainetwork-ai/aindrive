@@ -68,6 +68,17 @@ describe("isSelfWrite", () => {
     }
   });
 
+  it("a write named in NFC is recognised when the watcher reports the NFD spelling", async () => {
+    // the server sends NFC; fs.watch reports the name as the disk spells it
+    const tmp = mkdtempSync(path.join(tmpdir(), "aitest-nfc-"));
+    try {
+      await handleRpc({ method: "write", path: "메모.md".normalize("NFC"), content: "hi" }, tmp);
+      expect(isSelfWrite("메모.md".normalize("NFD"))).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("returns false after the 2000 ms TTL expires", async () => {
     vi.useFakeTimers();
     const tmp = mkdtempSync(path.join(tmpdir(), "aitest-ttl-"));
@@ -88,7 +99,8 @@ describe("isSelfWrite", () => {
 // ── reserved .aindrive paths ─────────────────────────────────────────────
 describe("reserved .aindrive paths over RPC", () => {
   it("classifies system paths, allowing only agents/ and uploads/", () => {
-    for (const p of [".aindrive", ".aindrive/config.json", ".aindrive/agent.pid", ".aindrive/willow.db", ".aindrive/yjs/x.bin"]) {
+    // any letter case: on a case-insensitive filesystem (macOS) ".AINDRIVE" is the same folder
+    for (const p of [".aindrive", ".aindrive/config.json", ".aindrive/agent.pid", ".aindrive/willow.db", ".aindrive/yjs/x.bin", ".AINDRIVE/config.json", ".Aindrive/Yjs/x.bin"]) {
       expect(isReservedRpcPath(p), p).toBe(true);
     }
     for (const p of ["", "docs/.aindrive/config.json", ".aindrive-notes", ".aindrive/agents", ".aindrive/agents/a.json", ".aindrive/uploads/x.part"]) {
@@ -101,7 +113,7 @@ describe("reserved .aindrive paths over RPC", () => {
     mkdirSync(path.join(root, ".aindrive", "agents"), { recursive: true });
     writeFileSync(path.join(root, ".aindrive", "config.json"), '{"agentToken":"secret"}');
     writeFileSync(path.join(root, "a.txt"), "x");
-    for (const spelled of [".aindrive/config.json", "./.aindrive//config.json", "x/../.aindrive/config.json"]) {
+    for (const spelled of [".aindrive/config.json", "./.aindrive//config.json", "x/../.aindrive/config.json", ".AINDRIVE/config.json", ".aindrive/CONFIG.json"]) {
       await expect(handleRpc({ method: "read", path: spelled }, root), spelled).rejects.toThrow(/reserved path/);
       await expect(handleRpc({ method: "download-chunk", path: spelled, offset: 0 }, root)).rejects.toThrow(/reserved path/);
       await expect(handleRpc({ method: "write", path: spelled, content: "{}" }, root)).rejects.toThrow(/reserved path/);

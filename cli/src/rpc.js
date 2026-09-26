@@ -1,4 +1,4 @@
-import { promises as fsp } from "node:fs";
+import { promises as fsp, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as Y from "yjs";
@@ -48,14 +48,17 @@ export { cliTrace, docIdFor };
 
 // Self-write suppression for fs.watch: agent.js consults this set to ignore
 // changes that came from our own write RPC.
-const _suppressedPaths = new Map(); // path → expireMs
+// Keyed by NFC: the write names the path as the server does (NFC), the watcher
+// as the disk spells it (NFD for macOS-made names).
+const _suppressedPaths = new Map(); // NFC path → expireMs
 function _suppressFsChange(path, ttlMs = 2000) {
-  _suppressedPaths.set(path, Date.now() + ttlMs);
+  _suppressedPaths.set(path.normalize("NFC"), Date.now() + ttlMs);
 }
 export function isSelfWrite(path) {
-  const exp = _suppressedPaths.get(path);
+  const key = path.normalize("NFC");
+  const exp = _suppressedPaths.get(key);
   if (!exp) return false;
-  if (Date.now() > exp) { _suppressedPaths.delete(path); return false; }
+  if (Date.now() > exp) { _suppressedPaths.delete(key); return false; }
   return true;
 }
 
@@ -79,9 +82,12 @@ const LIMITS = {
 // reserved-path gate. Mirrors web/shared/domain/policy/system-paths.ts.
 const RPC_ALLOWED_SYSTEM_DIRS = [".aindrive/agents", ".aindrive/uploads"];
 
+// Compared in lower case: on a case-insensitive filesystem (macOS)
+// ".AINDRIVE/config.json" opens the same file.
 export function isReservedRpcPath(rel) {
-  if (rel !== ".aindrive" && !rel.startsWith(".aindrive/")) return false;
-  return !RPC_ALLOWED_SYSTEM_DIRS.some((d) => rel === d || rel.startsWith(d + "/"));
+  const r = rel.toLowerCase();
+  if (r !== ".aindrive" && !r.startsWith(".aindrive/")) return false;
+  return !RPC_ALLOWED_SYSTEM_DIRS.some((d) => r === d || r.startsWith(d + "/"));
 }
 
 export function safeResolve(root, rel) {
@@ -91,9 +97,37 @@ export function safeResolve(root, rel) {
   if (joined !== root && !joined.startsWith(root + path.sep)) {
     throw new Error("path escapes drive root");
   }
+  const onDisk = matchSpelling(root, joined);
   // Check the RESOLVED path so "./.aindrive//config.json" can't slip by.
-  if (isReservedRpcPath(toRel(root, joined))) throw new Error("reserved path");
-  return joined;
+  if (isReservedRpcPath(toRel(root, onDisk))) throw new Error("reserved path");
+  return onDisk;
+}
+
+/**
+ * The server names paths in NFC (web/lib/path.js). A file made by macOS tools
+ * keeps its NFD bytes on a byte-exact filesystem (Linux ext4), where the NFC
+ * name misses it — so each component that doesn't exist as spelled is matched
+ * against its directory by NFC form. An exact match always wins; a component
+ * with no match (a file about to be created) keeps the requested spelling.
+ * APFS is normalization-insensitive, so on macOS the first lookup already hits.
+ */
+export function matchSpelling(root, abs, fsx = { existsSync, readdirSync }) {
+  if (abs === root || fsx.existsSync(abs)) return abs;
+  const rel = path.relative(root, abs);
+  if (!/[^\x00-\x7f]/.test(rel)) return abs; // ASCII has one spelling — don't list folders for a missing name
+  const parts = rel.split(path.sep);
+  let cur = root;
+  for (let i = 0; i < parts.length; i++) {
+    const exact = path.join(cur, parts[i]);
+    if (fsx.existsSync(exact)) { cur = exact; continue; }
+    let names;
+    try { names = fsx.readdirSync(cur); } catch { return path.join(cur, ...parts.slice(i)); }
+    const want = parts[i].normalize("NFC");
+    const hit = names.find((n) => n.normalize("NFC") === want);
+    if (hit === undefined) return path.join(cur, ...parts.slice(i));
+    cur = path.join(cur, hit);
+  }
+  return cur;
 }
 
 export function toRel(root, abs) {

@@ -12,6 +12,7 @@ import {
   Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut, EyeOff, Plug,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
+import type { PaidLock } from "@/lib/paid-lock";
 import type { SortKey, SortState } from "@/lib/sort-entries";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu, rowMenuItems, type Action } from "./row-menu";
@@ -469,11 +470,13 @@ function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode
 }
 
 export function FileTable({
-  loading, err, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, onMove, isOwner, onUpload, viewMode,
+  loading, err, paywall, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, onMove, isOwner, onUpload, viewMode,
   onNewFolder, ctxMenu, setCtxMenu,
 }: {
   loading: boolean;
   err: string | null;
+  /** the listed location itself is paid and not bought — show its paywall */
+  paywall: PaidLock | null;
   driveId: string;
   entries: DriveEntry[];
   sort: SortState;
@@ -566,6 +569,8 @@ export function FileTable({
   let body: React.ReactNode;
   if (loading) {
     body = viewMode === "grid" ? <GridSkeleton /> : <ListSkeleton />;
+  } else if (paywall) {
+    body = <LockedNotice driveId={driveId} what="location" lock={paywall} />;
   } else if (err) {
     // "agent offline" is the common case and a dead-end if shown raw — a drive
     // is served by a local CLI agent, so an offline agent means nothing loads.
@@ -973,9 +978,6 @@ export function LockedPreview({ driveId, entry, onClose }: {
   entry: DriveEntry;
   onClose: () => void;
 }) {
-  const ticker = entry.currency ?? "USDC";
-  const price = (entry.price ?? 0).toFixed(2);
-  const canBuy = !!(entry.listed && entry.shareId);
   return (
     <aside className="fixed inset-0 z-30 w-full sm:static sm:inset-auto sm:z-auto sm:w-[520px] lg:w-[640px] border-l border-drive-border bg-white flex flex-col min-w-0">
       <div className="flex h-12 items-center gap-2 border-b border-drive-border px-3">
@@ -984,27 +986,51 @@ export function LockedPreview({ driveId, entry, onClose }: {
         <IconButton aria-label="Close" className="ml-auto" onClick={onClose}><X className="w-4 h-4" /></IconButton>
       </div>
       <div className="flex-1 min-h-0 overflow-auto">
-        <EmptyState
-          icon={<Lock />}
-          title="구매해야 볼 수 있어요"
-          description={`이 ${entry.isDir ? "폴더" : "파일"}는 판매 중이라 잠겨 있어요. 아래 금액을 결제하면 잠금이 해제됩니다.`}
-          action={
-            <div className="flex flex-col items-center gap-3">
-              <Badge tone="sale" icon={<Lock />} className="text-body">{price} {ticker}</Badge>
-              {canBuy ? (
-                <Button onClick={() => { window.location.href = `/api/drives/${driveId}/showcase/${entry.shareId}`; }}>
-                  {price} {ticker} 결제하고 잠금 해제
-                </Button>
-              ) : (
-                <p className="max-w-xs text-caption text-drive-muted">
-                  소유자가 공유한 구매 링크로만 결제할 수 있어요.
-                </p>
-              )}
-            </div>
-          }
+        <LockedNotice
+          driveId={driveId}
+          what={entry.isDir ? "folder" : "file"}
+          lock={{ shareId: entry.shareId ?? "", price: entry.price ?? 0, currency: entry.currency ?? null, listed: !!entry.listed }}
         />
       </div>
     </aside>
+  );
+}
+
+/**
+ * The paywall body: price, and a Buy button for a showcase-listed sale (an
+ * unlisted one is bought through the owner's private link). Shown for a locked
+ * row (LockedPreview) and in place of a listing the viewer hasn't paid for.
+ */
+export function LockedNotice({ driveId, what, lock }: {
+  driveId: string;
+  /** "location": a listing's own path, whose kind the server doesn't reveal before payment */
+  what: "folder" | "file" | "location";
+  lock: Pick<PaidLock, "shareId" | "price" | "currency" | "listed">;
+}) {
+  const ticker = lock.currency ?? "USDC";
+  const price = lock.price.toFixed(2);
+  const canBuy = lock.listed && !!lock.shareId;
+  const subject = { folder: "이 폴더는", file: "이 파일은", location: "이 위치는" }[what];
+  return (
+    <EmptyState
+      icon={<Lock />}
+      title="구매해야 볼 수 있어요"
+      description={`${subject} 판매 중이라 잠겨 있어요. 아래 금액을 결제하면 잠금이 해제됩니다.`}
+      action={
+        <div className="flex flex-col items-center gap-3">
+          <Badge tone="sale" icon={<Lock />} className="text-body">{price} {ticker}</Badge>
+          {canBuy ? (
+            <Button onClick={() => { window.location.href = `/api/drives/${driveId}/showcase/${lock.shareId}`; }}>
+              {price} {ticker} 결제하고 잠금 해제
+            </Button>
+          ) : (
+            <p className="max-w-xs text-caption text-drive-muted">
+              소유자가 공유한 구매 링크로만 결제할 수 있어요.
+            </p>
+          )}
+        </div>
+      }
+    />
   );
 }
 

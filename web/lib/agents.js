@@ -47,6 +47,20 @@ export function disconnectAgent(driveId) {
 }
 
 /**
+ * An agent reports names as its filesystem spells them — NFD for files made by
+ * macOS tools. The server's path identity is NFC (lib/path.js normalizePath),
+ * and every name here is later compared with stored shares, grants and doc
+ * keys, so names enter the server in that one spelling. Agents resolve either
+ * spelling back to the file (cli/src/rpc.js safeResolve).
+ */
+export function canonicalAgentResult(result) {
+  const nfc = (e) => (e ? { ...e, name: String(e.name).normalize("NFC"), path: String(e.path).normalize("NFC") } : e);
+  if (result?.method === "list" && Array.isArray(result.entries)) return { ...result, entries: result.entries.map(nfc) };
+  if (result?.method === "stat") return { ...result, entry: nfc(result.entry) };
+  return result;
+}
+
+/**
  * Send a single RPC call to the agent for `driveId` and await its response.
  * `params` is { method, ...args } per shared protocol.
  */
@@ -183,7 +197,7 @@ export async function onAgentConnect(ws, req, query) {
     entry.pending.delete(msg.reqId);
     clearTimeout(pending.timer);
     try { trace("server", "rpc-in-resp", { docId: "agent-" + driveId, byteLen: data.length, extra: { reqId: msg.reqId, ok: msg.ok } }); } catch {}
-    if (msg.ok) pending.resolve(msg.result);
+    if (msg.ok) pending.resolve(canonicalAgentResult(msg.result));
     else {
       const e = new Error(msg.error || "agent error");
       e.status = 502;

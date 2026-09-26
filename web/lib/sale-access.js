@@ -12,6 +12,13 @@ import { db } from "./db.js";
 import { atLeast, canReadContent, isAncestorOrSelf } from "./access-core.js";
 
 const depth = (p) => (p === "" ? 0 : p.split("/").length);
+// A sale covers every letter case of its path: a macOS agent's filesystem
+// ignores case, so "premium/a.pdf" there IS the file under a sale at
+// "Premium". On a case-sensitive agent this also locks a sibling differing only
+// in case — the safe direction. Grants (bestMatchingRole) stay exact.
+// lower→upper→lower, then NFC: letters whose case maps change length (ẞ↔ß↔SS,
+// ΐ→Ϊ́) land on one form, matching every pair APFS treats as one name.
+const foldCase = (p) => p.toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
 
 /**
  * The nearest gate covering `targetPath`: the deepest ancestor-or-self priced
@@ -22,10 +29,17 @@ const depth = (p) => (p === "" ? 0 : p.split("/").length);
  * @param {string} targetPath
  */
 function nearestSale(rows, targetPath) {
+  const target = foldCase(targetPath);
   let best = null;
   for (const r of rows) {
-    if (!isAncestorOrSelf(r.path, targetPath)) continue;
-    if (!best || depth(r.path) > depth(best.path)) best = r;
+    if (!isAncestorOrSelf(foldCase(r.path), target)) continue;
+    // Deeper wins; at one depth, a sale spelled exactly as the path beats one
+    // matching only by case, so two sales differing in case (distinct folders
+    // on a case-sensitive agent) each judge their own folder.
+    const deeper = !best || depth(r.path) > depth(best.path);
+    const exactTie = best && depth(r.path) === depth(best.path)
+      && isAncestorOrSelf(r.path, targetPath) && !isAncestorOrSelf(best.path, targetPath);
+    if (deeper || exactTie) best = r;
   }
   return best;
 }
@@ -38,7 +52,7 @@ function nearestSale(rows, targetPath) {
  */
 export function classifyPath(driveId, targetPath) {
   const rows = db
-    .prepare("SELECT id, path, price_usdc, currency, expires_at FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
+    .prepare("SELECT id, path, price_usdc, currency, expires_at, listed FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
     .all(driveId);
   // Expiry filtered in JS: expires_at is ISO text, so a SQL string compare vs
   // datetime('now') is unsafe at boundaries (same reasoning as showcase.ts). An
@@ -77,7 +91,7 @@ export function hasPaidEntitlement(driveId, accountId, gatePath) {
  * @param {string} targetPath
  * @param {"none"|"viewer"|"editor"|"owner"} role
  * @param {string|null} accountId
- * @returns {{ gatePath:string, shareId:string, price:number, currency:string|null }|null}
+ * @returns {{ gatePath:string, shareId:string, price:number, currency:string|null, listed:boolean }|null}
  */
 export function paidAccessDenial(driveId, targetPath, role, accountId) {
   if (atLeast(role, "editor")) return null; // managers bypass — no DB work
@@ -85,26 +99,28 @@ export function paidAccessDenial(driveId, targetPath, role, accountId) {
   if (classification === "free" || !gate) return null;
   const hasEnt = accountId ? hasPaidEntitlement(driveId, accountId, gate.path) : false;
   if (canReadContent(role, "paid", hasEnt)) return null;
-  return { gatePath: gate.path, shareId: gate.id, price: gate.price_usdc, currency: gate.currency };
+  // listed: only a showcase-listed sale resolves through the in-app buy route;
+  // an unlisted one is bought through the owner's private link.
+  return { gatePath: gate.path, shareId: gate.id, price: gate.price_usdc, currency: gate.currency, listed: !!gate.listed };
 }
 
 /**
- * Per-entry lock map for a folder LISTING (R-VIS-PAID-001): which immediate
- * children of `parentPath` are paid AND not entitled FOR THIS viewer, so the UI
- * can show them as 🔒 + price + ticker (visible, not hidden). editor+ see no
- * locks. Batched — one `shares` query + one `payment_receipts` query regardless
- * of entry count (vs paidAccessDenial per child).
+ * Lock map for rows at arbitrary paths (R-VIS-PAID-001): which of `paths` are
+ * paid AND not entitled for this viewer, so the UI shows them as 🔒 + price +
+ * ticker (visible, not hidden) and a click opens the paywall. A path where the
+ * viewer is editor+ gets no lock (managers see everything). Batched — one
+ * `shares` query + one `payment_receipts` query regardless of path count.
  * @param {string} driveId
- * @param {string} parentPath  normalized path of the folder being listed
- * @param {string[]} childNames  immediate child names (entry.name)
- * @param {"none"|"viewer"|"editor"|"owner"} role
+ * @param {string[]} paths  normalized paths
+ * @param {(path: string) => "none"|"viewer"|"editor"|"owner"} roleAt  the viewer's role at a path
  * @param {string|null} accountId
- * @returns {Record<string, { price:number, currency:string|null }>}  keyed by child name
+ * @returns {Record<string, { price:number, currency:string|null, shareId:string, listed:boolean }>}  keyed by path
  */
-export function paidLocksForListing(driveId, parentPath, childNames, role, accountId) {
-  /** @type {Record<string, { price:number, currency:string|null }>} */
+export function paidLocksForPaths(driveId, paths, roleAt, accountId) {
+  /** @type {Record<string, { price:number, currency:string|null, shareId:string, listed:boolean }>} */
   const locks = {};
-  if (atLeast(role, "editor")) return locks; // managers see everything
+  const judged = paths.filter((p) => !atLeast(roleAt(p), "editor"));
+  if (judged.length === 0) return locks;
   const rows = db
     .prepare("SELECT id, path, price_usdc, currency, expires_at, listed FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
     .all(driveId);
@@ -115,15 +131,33 @@ export function paidLocksForListing(driveId, parentPath, childNames, role, accou
       ? db.prepare("SELECT DISTINCT path FROM payment_receipts WHERE drive_id = ? AND account_id = ?").all(driveId, accountId).map((r) => r.path)
       : [],
   );
-  for (const name of childNames) {
-    const childPath = parentPath ? `${parentPath}/${name}` : name;
-    const gate = nearestSale(active, childPath);
+  for (const p of judged) {
+    const gate = nearestSale(active, p);
     // shareId + listed let the UI offer a Buy button (only listed shares resolve
     // through the showcase purchase route); unlisted sales show the lock+price
     // but no in-app buy (owner sells those by private link).
     if (gate && !owned.has(gate.path)) {
-      locks[name] = { price: gate.price_usdc, currency: gate.currency, shareId: gate.id, listed: !!gate.listed };
+      locks[p] = { price: gate.price_usdc, currency: gate.currency, shareId: gate.id, listed: !!gate.listed };
     }
   }
+  return locks;
+}
+
+/**
+ * paidLocksForPaths for the immediate children of one folder, keyed by child
+ * name — what a folder LISTING annotates. Every child is judged by the role at
+ * the folder being listed.
+ * @param {string} driveId
+ * @param {string} parentPath  normalized path of the folder being listed
+ * @param {string[]} childNames  immediate child names (entry.name)
+ * @param {"none"|"viewer"|"editor"|"owner"} role
+ * @param {string|null} accountId
+ */
+export function paidLocksForListing(driveId, parentPath, childNames, role, accountId) {
+  const pathOf = (name) => (parentPath ? `${parentPath}/${name}` : name);
+  const byPath = paidLocksForPaths(driveId, childNames.map(pathOf), () => role, accountId);
+  /** @type {Record<string, { price:number, currency:string|null, shareId:string, listed:boolean }>} */
+  const locks = {};
+  for (const name of childNames) if (byPath[pathOf(name)]) locks[name] = byPath[pathOf(name)];
   return locks;
 }

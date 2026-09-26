@@ -105,7 +105,7 @@ export function RichTextEditor({
         }),
         fetch(`/api/drives/${driveId}/yjs`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ docId: docIdRef.current, path: entry.path, data: bytesToBase64(update) }),
+          body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
         }),
       ]);
     } catch (e) { console.warn("richtext autosave failed:", e); }

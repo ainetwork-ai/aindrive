@@ -3,6 +3,7 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast, entryView } from "@/lib/access";
 import { readDenial } from "@/lib/require-access";
+import { paidLocksForPaths } from "@/lib/sale-access.js";
 import { normalizePath } from "@/lib/path";
 import { resolveDriveLocation, type PathKind } from "@/lib/drive-location";
 import { callAgent } from "@/lib/rpc";
@@ -80,7 +81,15 @@ export default async function DrivePage({ params, searchParams }: {
   }
 
   const grantRoots = entry.allPaths ?? (entry.path ? [entry.path] : []);
-  const entryItems = loc.grantListing ? await loadEntryItems(statReadable, grantRoots) : undefined;
+  // A grant row the viewer hasn't paid for shows 🔒 + price and opens the
+  // paywall, as fs/list marks a folder's children (R-VIS-PAID-001). A grant is
+  // the member's own, so an unlisted sale's row stays visible, just locked.
+  const entryItems = loc.grantListing
+    ? await loadEntryItems(statReadable, grantRoots).then((rows) => {
+        const locks = paidLocksForPaths(driveId, grantRoots, roleAt, user.id);
+        return rows.map((e) => (locks[e.path] ? { ...e, locked: true, ...locks[e.path] } : e));
+      })
+    : undefined;
   const initialOpen = loc.open === null ? null
     : loc.open === requested ? requestedEntry
     : singleEntry;

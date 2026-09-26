@@ -137,19 +137,8 @@ public final class SafFs {
             if (seg.equals("..")) throw new IOException("path escapes drive root");
             out.add(seg);
         }
-        if (isReservedPath(out)) throw new IOException("reserved path");
+        if (ReservedPath.isReserved(out)) throw new IOException("reserved path");
         return out;
-    }
-
-    /**
-     * The drive's .aindrive/ subtree is off-limits over RPC except the two
-     * parts the web server drives itself: agents/ (agent JSON) and uploads/
-     * (upload temp parts). Mirrors cli/src/rpc.js isReservedRpcPath, as a
-     * second layer behind the web's own reserved-path gate.
-     */
-    static boolean isReservedPath(List<String> segs) {
-        if (segs.isEmpty() || !segs.get(0).equals(".aindrive")) return false;
-        return segs.size() < 2 || !(segs.get(1).equals("agents") || segs.get(1).equals("uploads"));
     }
 
     static String joinPath(String parent, String name) {
@@ -205,13 +194,14 @@ public final class SafFs {
     }
 
     private String findChildId(String parentDocId, String name) {
+        ChildNameMatch match = new ChildNameMatch(name);
         try (Cursor c = cr.query(childrenUri(parentDocId), COLS, null, null, null)) {
             if (c == null) return null;
             while (c.moveToNext()) {
-                if (name.equals(c.getString(1))) return c.getString(0);
+                if (match.offer(c.getString(0), c.getString(1))) break;
             }
         } catch (Exception ignored) { }
-        return null;
+        return match.result();
     }
 
     /** Drop cached resolutions for a path and everything beneath it. */

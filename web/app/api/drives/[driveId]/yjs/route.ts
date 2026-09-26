@@ -1,24 +1,34 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { normalizePath } from "@/lib/path";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
+import { docIdFor } from "@/lib/dochub.js";
 
+// The Yjs doc is named by the path the gate authorized (docIdFor, as the live
+// doc hub keys it) — never by a client-sent id, which would let a grant on one
+// path read or write the doc of any other, paid ones included.
 const Body = z.object({
-  docId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
   path: z.string(),
   data: z.string(),
 });
+
+function canonicalOrNull(raw: string): string | null {
+  try { return normalizePath(raw); } catch { return null; }
+}
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  const gate = await requireDriveRole(driveId, body.data.path, { min: "editor" });
+  const path = canonicalOrNull(body.data.path);
+  if (path === null) return NextResponse.json({ error: "invalid path" }, { status: 400 });
+  const gate = await requireDriveRole(driveId, path, { min: "editor" });
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
   try {
     const result = await callAgent(driveId, drive.drive_secret, {
-      method: "yjs-write", docId: body.data.docId, data: body.data.data,
+      method: "yjs-write", docId: docIdFor(driveId, path), data: body.data.data,
     });
     return NextResponse.json(result);
   } catch (e) {
@@ -29,15 +39,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
 
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
-  const url = new URL(req.url);
-  const docId = url.searchParams.get("docId") || "";
-  const path = url.searchParams.get("path") || "";
-  if (!/^[A-Za-z0-9_-]{8,64}$/.test(docId)) return NextResponse.json({ error: "invalid docId" }, { status: 400 });
+  const path = canonicalOrNull(new URL(req.url).searchParams.get("path") || "");
+  if (path === null) return NextResponse.json({ error: "invalid path" }, { status: 400 });
   const gate = await requireDriveRole(driveId, path, { min: "viewer" });
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
   try {
-    const result = await callAgent(driveId, drive.drive_secret, { method: "yjs-read", docId });
+    // A doc outlives its file: rename/delete leave it on the agent under the old
+    // path's id. With no file there, serve nothing — the content may have moved
+    // behind a paywall, or been deleted on purpose.
+    const stat = await callAgent(driveId, drive.drive_secret, { method: "stat", path });
+    if (!stat.entry || stat.entry.isDir) return NextResponse.json({ method: "yjs-read", data: "", bytes: 0 });
+    const result = await callAgent(driveId, drive.drive_secret, { method: "yjs-read", docId: docIdFor(driveId, path) });
     return NextResponse.json(result);
   } catch (e) {
     const err = e as AgentError;
