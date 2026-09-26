@@ -76,7 +76,10 @@ export async function discover(raw: string, token?: string): Promise<A2aAgent> {
   const path = u.pathname.replace(/\/+$/, "");
   const tries: [string, string?][] = /\.json$/i.test(u.pathname)
     ? [[u.toString(), ""]]
-    : [...(path ? [[`${u.origin}${path}/`] as [string]] : []), [`${u.origin}${path}`], [u.origin], [u.origin, "/.well-known/agent.json"]];
+    : [...(path ? [[`${u.origin}${path}/`] as [string]] : []),
+       // A site's human page is often /agent/<name> while the A2A endpoint is /agents/<name> (ainize.ai).
+       ...(/\/agent\//.test(path) ? [[`${u.origin}${path.replace("/agent/", "/agents/")}/`] as [string]] : []),
+       [`${u.origin}${path}`], [`${u.origin}/`], [`${u.origin}/`, "/.well-known/agent.json"]];
   let lastErr = "";
   for (const [base, path] of tries) {
     try {

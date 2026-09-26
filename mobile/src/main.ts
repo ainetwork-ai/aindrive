@@ -102,16 +102,29 @@ const a2aDraft = { url: "", token: "" };
  */
 async function ensureDefaultAgent() {
   if (!state.server || !state.sessionCookie) return;
-  const origin = new URL(state.server).origin;
-  const have = a2aAgents.find((a) => new URL(a.url).origin === origin);
-  if (have?.builtin) return;
-  if (have) { have.builtin = true; await saveAgents(a2aAgents, "local"); render(); return; }
-  try {
-    const agent = { ...(await discover(state.server)), builtin: true };
-    a2aAgents = [agent, ...a2aAgents];
-    await saveAgents(a2aAgents, "local");
-    render();
-  } catch { /* offline: try again next launch */ }
+  let changed = false;
+  for (const url of [state.server]) {
+    const origin = new URL(url).origin, path = new URL(url).pathname.replace(/\/+$/, "");
+    const have = a2aAgents.find((a) => new URL(a.url).origin === origin && (path === "" || new URL(a.url).pathname.replace(/\/+$/, "") === path));
+    if (have?.builtin) continue;
+    if (have) { have.builtin = true; changed = true; continue; }
+    try { a2aAgents = [...a2aAgents, { ...(await discover(url)), builtin: true }]; changed = true; }
+    catch { /* offline: try again next launch */ }
+  }
+  if (changed) { await saveAgents(a2aAgents, "local"); render(); }
+}
+
+/** An agent's @name: its card name without a trailing "agent", spaces as dashes ("aindrive-cloud agent" → aindrive-cloud). */
+function handleOf(a: A2aAgent): string {
+  return a.name.trim().replace(/\s+agent$/i, "").replace(/\s+/g, "-");
+}
+
+/**
+ * Where "what aindrive-on-device can't do" goes: the agents the user added by URL (e.g. aindrive-cloud).
+ * The built-in server agent only speaks drive commands, so it isn't asked general questions.
+ */
+function fallbackAgents(): A2aAgent[] {
+  return a2aAgents.filter((a) => !a.builtin);
 }
 
 /**
@@ -140,6 +153,8 @@ async function ensureCloudAgent() {
 
 /** "these / them / those photos / this file": the message is about the files in the last answer. */
 const REFERS_TO_FILES = /\b(these|those|them|this (photo|picture|file|recording|document)|the (photos?|pictures?|files?|recordings?|documents?|pdfs?|images?))\b|이것|이거|그것|그거|이 사진|그 사진|사진들|파일들/i;
+/** Work ON files that aindrive-on-device doesn't do (it finds and organises): goes to an added agent with the files. */
+const FILE_WORK = /\b(summari[sz]e|summary|translate|explain|analy[sz]e|review|proofread|rewrite|compare|extract|what does (it|this|that) say|what('s| is) (it|this|that) about|tl;?dr|key points)\b|요약|번역|설명해|분석|검토|비교|정리해줘/i;
 const HANDOFF_TTL_SECONDS = 15 * 60;
 const HANDOFF_MAX = 10;
 
@@ -148,8 +163,8 @@ const HANDOFF_MAX = 10;
  * asks first, registers exactly those files on the phone, mints one link per file, and returns them
  * for the A2A message. Bytes go phone → server → agent only when the agent fetches the link.
  */
-async function handoffFiles(agent: A2aAgent, text: string): Promise<{ files: LinkedFile[]; links: HandoffLink[] } | null> {
-  const src = askResult?.sources ?? [];
+async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<{ files: LinkedFile[]; links: HandoffLink[] } | null> {
+  const src = from?.sources ?? [];
   if (!src.length || !REFERS_TO_FILES.test(text)) return { files: [], links: [] };
   const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ s, folder: localFolderFor(s.driveId) })).filter((x) => x.folder);
   if (!picked.length) return { files: [], links: [] };
@@ -186,7 +201,7 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
   const m = /^@(\S+)\s*(.*)$/s.exec(q.trim());
   if (!m) return null;
   const key = m[1].toLowerCase();
-  const agent = a2aAgents.find((a) => a.name.replace(/\s+/g, "").toLowerCase() === key) ?? a2aAgents.find((a) => a.name.replace(/\s+/g, "").toLowerCase().startsWith(key));
+  const agent = a2aAgents.find((a) => handleOf(a).toLowerCase() === key) ?? a2aAgents.find((a) => handleOf(a).toLowerCase().startsWith(key));
   return agent ? { agent, text: m[2] || m[0] } : null;
 }
 
@@ -1292,6 +1307,21 @@ async function ask(q = askQuery) {
   }
   askBusy = true; actionShare = null; render();
   try {
+    const prevResult = askResult;   // what "these" refers to, if the turn goes to aindrive-cloud
+    // "Summarize this document": work on the files just found — hand them to the added agent (aindrive-cloud).
+    if (FILE_WORK.test(q) && fallbackAgents().length === 1 && prevResult?.sources.length && REFERS_TO_FILES.test(q)) {
+      const to = fallbackAgents()[0];
+      let handed: Awaited<ReturnType<typeof handoffFiles>> = null;
+      try { handed = await handoffFiles(to, q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
+      if (handed?.files.length) {
+        const r = await askA2a([to], q, handed.files);
+        askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
+        thread.push({ q, r: askResult, at: Date.now(), via: to.name, handoffs: handed.links, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
+        askQuery = ""; await saveThread();
+        return;
+      }
+      if (handed === null) return;   // the owner said no
+    }
     // A folder chat asks that folder only (opened for the agent even with P2P off), never other devices.
     const scope = chatScope;
     if (scope) { const sh = findShare(scope.uri); if (sh) { await ensureLocal(sh); scope.driveId = localIdOf(sh); } }
@@ -1330,12 +1360,16 @@ async function ask(q = askQuery) {
     merged.answer = parts.join("\n");
     askResult = merged;
     if (local?.context && typeof local.context === "object") askContext = local.context as Record<string, unknown>;
-    // The on-device agent can't do it ("book a table…"): ask the A2A agents added to this chat.
-    if (merged.query === "out" && a2aAgents.length) {
-      const r = await askA2a(a2aAgents, q);
+    // aindrive-on-device can't do it ("summarize these", "book a table…"): hand it to aindrive-cloud,
+    // with the files it refers to as handoff links (after the owner confirms).
+    if (merged.query === "out" && fallbackAgents().length) {
+      const to = fallbackAgents();
+      let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
+      if (to.length === 1) { try { handed = await handoffFiles(to[0], q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); } }
+      const r = await askA2a(to, q, handed?.files ?? []);
       if (r.answer) {
         askResult = { answer: r.answer, sources: [], query: "a2a" };
-        thread.push({ q, r: askResult, at: Date.now(), via: a2aAgents.map((x) => x.name).join(", ") });
+        thread.push({ q, r: askResult, at: Date.now(), via: to.map((x) => x.name).join(", "), ...(handed?.links.length ? { handoffs: handed.links } : {}) });
         askQuery = ""; await saveThread();
         return;
       }
@@ -1933,7 +1967,7 @@ function searchSheet(): string {
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
         <div class="crumbs">${chatScope
           ? `<div class="title scoped">${icon("folder", 18)}<span>${esc(chatScope.label)}</span></div><div class="sub">Folder chat · on this phone`
-          : `<div class="title">Agent</div><div class="sub">Runs on this phone`}${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
+          : `<div class="title">Agent</div><div class="sub">aindrive-on-device`}${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
         <button class="iconbtn" id="model-switch" aria-label="Model and agents" title="Model and agents">${icon("cpu", 20)}${a2aAgents.length ? `<span class="count-badge">${a2aAgents.length}</span>` : ""}</button>
         <!-- Always shown (with a label) so past conversations are findable even before the first "New chat". -->
         <button class="iconbtn" id="chat-history" aria-label="Past chats" title="Past chats">${icon("history", 20)}</button>
@@ -1965,7 +1999,7 @@ function modelDrawer(): string {
   const what: Record<string, string> = { image: "Finds photos by what they show", speech: "Transcribes recordings and calls", llm: "Writes summaries and chats" };
   const size = (b: number) => (b / 1e6) >= 1000 ? (b / 1e9).toFixed(1) + " GB" : Math.round(b / 1e6) + " MB";
   const local = `<div class="card" style="padding:6px 16px;margin-bottom:12px">
-        <div class="row model"><span class="k">${icon("cpu", 16)}</span><span class="v" style="text-align:left;flex:1;margin-left:12px"><b>aindrive on-device agent</b><br><span class="hint">Your files, on this phone — nothing is sent to a cloud model</span></span></div>
+        <div class="row model"><span class="k">${icon("cpu", 16)}</span><span class="v" style="text-align:left;flex:1;margin-left:12px"><b>aindrive-on-device</b><br><span class="hint">Your files, on this phone — nothing is sent to a cloud model</span></span></div>
         ${(m?.list ?? []).map((x) => `
           <div class="row model"><span class="k">${esc(x.role)}</span>
             <span class="v" style="text-align:left;flex:1;margin-left:12px;min-width:0"><b>${esc(x.name)}</b><br>
@@ -1979,7 +2013,7 @@ function modelDrawer(): string {
       <div style="display:flex;align-items:center;gap:10px">
         <span class="ft-doc" style="display:inline-flex">${icon("globe", 20)}</span>
         <div style="flex:1;min-width:0"><div style="font-weight:600">${esc(a.name)}${a.version ? ` <span class="hint">v${esc(a.version)}</span>` : ""}</div>
-          <div class="hint mono" style="word-break:break-all">${esc(new URL(a.url).host)} · @${esc(a.name.replace(/\s+/g, ""))}</div></div>
+          <div class="hint mono" style="word-break:break-all">${esc(new URL(a.url).host)} · @${esc(handleOf(a))}</div></div>
         ${a.builtin ? `<span class="badge">Default</span>` : `<button class="iconbtn ghost" data-agent-remove="${esc(a.id)}" aria-label="Remove ${esc(a.name)}">${icon("trash", 16)}</button>`}
       </div>
       ${a.description ? `<p class="note" style="margin:6px 0 0">${esc(a.description.length > 180 ? a.description.slice(0, 177) + "…" : a.description)}</p>` : ""}
@@ -2035,7 +2069,7 @@ function bindSearch() {
       a2aAgents = [...a2aAgents.filter((a) => a.url !== agent.url), agent];
       await saveAgents(a2aAgents, "local");
       a2aAdd = { busy: false }; a2aDraft.url = ""; a2aDraft.token = "";
-      notify(`Added ${agent.name} — ask it with @${agent.name.replace(/\s+/g, "")}`);
+      notify(`Added ${agent.name} — ask it with @${handleOf(agent)}`);
     } catch (e) {
       a2aAdd = { busy: false, error: msgOf(e) };
     }
