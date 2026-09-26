@@ -22,8 +22,13 @@ export class ShareSheet implements Sheet {
   constructor(private ctx: Ctx, private driveId: string, private path: string, private name: string,
               private onNeedPayout?: (path: string) => void, private focusSell = false) { void this.load(); }
 
+  /** The sale just created: shown at the top of the Sell card, highlighted in the list. */
+  private justSold: { id?: string; url: string; price: number; currency: string; listed: boolean } | null = null;
+
   private async load() {
-    this.loading = true; this.ctx.rerender();
+    // Only the first load shows "Loading…": a reload after an action keeps the sheet (and its scroll) in place.
+    const first = !this.members.length && !this.shares.length && this.loading;
+    if (first) this.ctx.rerender();
     try {
       const [m, s, st] = await Promise.all([
         this.ctx.web.members(this.driveId),
@@ -37,7 +42,12 @@ export class ShareSheet implements Sheet {
     this.loading = false; this.ctx.rerender();
   }
 
-  private here<T extends { path: string }>(rows: T[]): T[] { return rows.filter((r) => r.path === this.path); }
+  private here<T extends { path: string }>(rows: T[]): T[] {
+    // Paths compare canonically (NFC, no leading/trailing slash), like the server stores them.
+    const norm = (p: string) => p.normalize("NFC").replace(/^\/+|\/+$/g, "");
+    const me = norm(this.path);
+    return rows.filter((r) => norm(r.path) === me);
+  }
 
   render(): string {
     const owner = this.myRole === "owner";
@@ -99,10 +109,12 @@ export class ShareSheet implements Sheet {
         <div class="row2"><input type="number" id="sh-price" min="0.01" max="9999.99" step="0.01" placeholder="Price, e.g. 5" />
           <select id="sh-cur" style="width:auto">${this.tokens.map((t) => `<option>${esc(t)}</option>`).join("")}</select></div>
         <label class="check"><input type="checkbox" id="sh-listed" checked /> List on the drive's storefront</label>
-        <button class="btn" id="sh-sell" ${this.busy ? "disabled" : ""}>${I.dollar} Create sale link</button>
+        ${this.justSold ? `<div class="sold-banner">${icon("check", 18)}<div class="grow"><b>On sale for ${esc(this.justSold.price)} ${esc(this.justSold.currency)}</b><br><span class="hint">Sale link copied — send it to buyers${this.justSold.listed ? " · listed on the storefront" : ""}.</span></div></div>` : ""}
+        <button class="btn" id="sh-sell" ${this.busy ? "disabled" : ""}>${this.busy ? `<span class="spinner"></span> Creating…` : `${I.dollar} ${sales.length ? "Create another sale link" : "Create sale link"}`}</button>
+        ${sales.length ? `<p class="note group" style="margin:14px 0 4px">On sale (${sales.length})</p>` : ""}
         <ul class="list">
           ${sales.map((s) => `
-            <li data-sid="${esc(s.id)}" data-url="${esc(shareUrl(this.ctx.server, s))}">
+            <li data-sid="${esc(s.id)}" data-url="${esc(shareUrl(this.ctx.server, s))}" class="${this.justSold && (s.id === this.justSold.id || shareUrl(this.ctx.server, s) === this.justSold.url) ? "selected" : ""}">
               <div class="grow"><div class="t">${esc(s.price_usdc)} ${esc(s.currency || "USDC")}</div><div class="s">${s.listed ? "Listed on storefront" : "Unlisted"} · ${esc(when(s.created_at))}</div></div>
               <button class="iconbtn ghost" data-toggle-list aria-label="${s.listed ? "Unlist" : "List"}">${icon(s.listed ? "lock" : "external", 18)}</button>
               <button class="iconbtn ghost" data-copy aria-label="Copy link">${icon("copy", 18)}</button>
@@ -111,7 +123,7 @@ export class ShareSheet implements Sheet {
         </ul>
       </div>` : ""}`;
     return `
-      <div class="drawer">
+      <div class="drawer" id="share-drawer">
         <div class="grab"></div>
         <div class="head"><h3>Share “${esc(title)}”</h3><button class="iconbtn ghost" id="sh-close" aria-label="Close">${I.close}</button></div>
         <p class="sub">${esc(this.path || "/")}</p>
@@ -124,7 +136,7 @@ export class ShareSheet implements Sheet {
     // Opened from "Sell…": bring the Sell card into view once it has rendered.
     if (this.focusSell && !this.loading) {
       this.focusSell = false;
-      setTimeout(() => { root.querySelector("#sh-sell-card")?.scrollIntoView({ block: "start", behavior: "smooth" }); (root.querySelector("#sh-price") as HTMLInputElement | null)?.focus({ preventScroll: true }); }, 50);
+      setTimeout(() => { root.querySelector("#sh-sell-card")?.scrollIntoView({ block: "start", behavior: "smooth" }); if (!this.justSold) (root.querySelector("#sh-price") as HTMLInputElement | null)?.focus({ preventScroll: true }); }, 50);
     }
     on(root, "#sh-invite", "click", () => this.act(async () => {
       const email = val(root, "sh-email");
@@ -185,6 +197,9 @@ export class ShareSheet implements Sheet {
         if (!r) throw e;
       }
       await this.ctx.copy(r.url, "Sale link"); this.ctx.forget("sh-price");
+      const made = r as { url: string; id?: string; share?: { id?: string } };
+      this.justSold = { id: made.id ?? made.share?.id, url: made.url, price, currency: val(root, "sh-cur") || "USDC", listed };
+      this.focusSell = true;   // after the reload, keep the Sell card (and the new sale) in view
     }));
   }
 

@@ -46,7 +46,9 @@ export function val(root: HTMLElement, id: string): string {
 
 export function when(iso?: string | number | null): string {
   if (!iso) return "";
-  const d = typeof iso === "number" ? new Date(iso) : new Date(/^\d+$/.test(iso) ? Number(iso) : iso);
+  // SQLite's datetime('now') is UTC with no zone ("2026-09-26 06:48:00"): read it as UTC, not local time.
+  const s = typeof iso === "string" && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/.test(iso) ? iso.replace(" ", "T") + "Z" : iso;
+  const d = typeof s === "number" ? new Date(s) : new Date(/^\d+$/.test(s) ? Number(s) : s);
   return isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
 }
 
