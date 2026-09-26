@@ -19,7 +19,8 @@ import { callAgent } from "./rpc";
 
 export const MAX_TTL_SECONDS = 60 * 60;
 export const DEFAULT_TTL_SECONDS = 15 * 60;
-export const MAX_FILES = 20;
+/** Files in one handoff: a folder handed to an agent, subfolders included (mobile/src/folder-handoff.ts). */
+export const MAX_FILES = 50;
 
 export interface HandoffFile { deviceKey: string; name: string; mime: string; size: number; drivePath?: string }
 export interface HandoffRow {

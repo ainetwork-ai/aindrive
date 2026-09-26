@@ -64,10 +64,25 @@ describe("/mcp/h/:grant — an agent reads only the files it was handed", () => 
     expect(refused.result.isError).toBe(true);
   });
 
-  it("refuses non-text files", async () => {
-    const { grant, links } = createHandoffGrant("u1", "d1", [note("audio", "RIFF", "audio/mp4", "m4a")], "Cloud", 600);
+  it("returns a picture as an image and any other file (audio, PDF) as its bytes — whole, never cut", async () => {
+    const { grant, links } = createHandoffGrant("u1", "d1", [
+      note("photo", "PNGBYTES", "image/png", "png"),
+      note("audio", "RIFF", "audio/mp4", "m4a"),
+    ], "Cloud", 600);
+    const byName = (n: string) => links.find((l: { name: string }) => l.name === n)!.id;
+    const img = await result(await call(grant.id, grant.token, tool("read_file", { id: byName("photo.png") })));
+    expect(img.result.content[0]).toEqual({ type: "image", data: Buffer.from("PNGBYTES").toString("base64"), mimeType: "image/png" });
+    const aud = await result(await call(grant.id, grant.token, tool("read_file", { id: byName("audio.m4a") })));
+    expect(aud.result.content[0].type).toBe("resource");
+    expect(aud.result.content[0].resource).toMatchObject({ mimeType: "audio/mp4", blob: Buffer.from("RIFF").toString("base64") });
+  });
+
+  it("refuses a picture too big to send whole, by name", async () => {
+    const big = { ...note("huge", "x", "image/jpeg", "jpg"), size: 21 * 1024 * 1024 };
+    const { grant, links } = createHandoffGrant("u1", "d1", [big], "Cloud", 600);
     const r = await result(await call(grant.id, grant.token, tool("read_file", { id: links[0].id })));
     expect(r.result.isError).toBe(true);
+    expect(r.result.content[0].text).toMatch(/huge\.jpg is 22020096 bytes, more than the 20 MB/);
   });
 
   it("a revoked link leaves the view; revoking the audience closes the grant", async () => {

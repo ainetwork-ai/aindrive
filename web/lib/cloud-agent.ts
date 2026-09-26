@@ -86,18 +86,26 @@ export function describeEntries(entries: DriveEntry[]): string {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ") + (span ? ` (${span})` : "");
 }
 
-export async function askCloud(opts: {
-  ownerId: string; driveId: string; driveSecret: string; folder: string; q: string; contextId?: string; cardUrl?: string; signal?: AbortSignal; onUpdate?: (update: ChatUpdate) => void;
-}): Promise<{ text: string; contextId?: string; handed: number }> {
+/**
+ * A drive folder handed to an agent: its listing (recursive, capped), what the device's own agent says
+ * about it, and its newest files as handoff links + the grant's MCP view. `audience` is who the grant is
+ * for (the agent's card or name). Shared by aindrive-cloud turns (askCloud) and the phone's
+ * "@agent @folder" turns about a folder on another device (/api/drives/[driveId]/folder-handoff).
+ */
+export async function handFolder(opts: { ownerId: string; driveId: string; driveSecret: string; folder: string; audience: string }) {
   const { entries, folders, truncated } = await listRecursive(
     async (path) => ((await callAgent(opts.driveId, opts.driveSecret, { method: "list", path })) as { entries: DriveEntry[] }).entries ?? [], opts.folder);
-  opts.signal?.throwIfAborted();
+  // What the device's own agent knows about these files (dates, places, kinds from its index): the
+  // cloud model is text-only and cannot look at a photo, so this is how "what is in here" gets answered
+  // about pictures. Best effort — a plain CLI drive has no such agent.
+  const deviceSays = opts.folder ? "" : await callAgent(opts.driveId, opts.driveSecret, { method: "agent-ask", agentId: "folder-chat", query: `what's in ${opts.folder ? `the folder "${opts.folder}"` : "this folder"}?` })
+    .then((r) => String((r as { answer?: string }).answer ?? "").trim()).catch(() => "");
   // the folder's files, newest first, as links; the listing itself goes as text
   const files = entries.filter((e) => !e.isDir).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_FILES);
   const handed = files.length
     ? createHandoffGrant(opts.ownerId, opts.driveId,
         files.map((f) => ({ deviceKey: "web", drivePath: f.path, name: f.name, mime: f.mime || "application/octet-stream", size: f.size })),
-        opts.cardUrl ?? CLOUD_AGENT.card, DEFAULT_TTL_SECONDS)
+        opts.audience, DEFAULT_TTL_SECONDS)
     : null;
   const base = env.publicUrl.replace(/\/+$/, "");
   const listing = entries
@@ -105,15 +113,31 @@ export async function askCloud(opts: {
   const context = `[aindrive folder "${opts.folder || "/"}", including its ${folders} subfolder${folders === 1 ? "" : "s"}: ${describeEntries(entries) || "empty"}` +
     `${truncated ? `; only the first ${entries.length} entries are listed` : ""}` +
     `${handed ? `; the ${files.length} newest files are attached as links` : ""}]` +
-    `\n${listing || "(empty)"}`;
+    `${deviceSays ? `\n[the device's agent about these files: ${deviceSays}]` : ""}\n${listing || "(empty)"}`;
+
+  return {
+    entries, truncated, context, deviceSays,
+    links: (handed?.links ?? []).map((l, i) => ({ id: l.id, url: `${base}/api/h/${l.id}?k=${l.secret}`, name: l.name, mime: files[i]?.mime || "application/octet-stream", expiresAt: l.expiresAt })),
+    mcp: handed ? { url: `${base}/mcp/h/${handed.grant.id}`, token: handed.grant.token, expiresAt: handed.grant.expiresAt } : null,
+  };
+}
+
+/** One aindrive-cloud turn about one folder, or several ("@aindrive-cloud @Photos-in-S21 @Docs-in-Mac …"). */
+export async function askCloud(opts: {
+  ownerId: string; folders: { driveId: string; driveSecret: string; folder: string }[]; q: string; contextId?: string; cardUrl?: string; signal?: AbortSignal; onUpdate?: (update: ChatUpdate) => void;
+}): Promise<{ text: string; contextId?: string; handed: number }> {
+  const handed = await Promise.all(opts.folders.map((f) => handFolder({ ...f, ownerId: opts.ownerId, audience: opts.cardUrl ?? CLOUD_AGENT.card })));
+  const context = handed.map((h) => h.context).join("\n\n");
+  const links = handed.flatMap((h) => h.links);
+  const mcps = handed.flatMap((h) => (h.mcp ? [h.mcp] : []));
   const message: Message = {
     kind: "message", role: "user", messageId: randomUUID(),
     parts: [
       { kind: "text", text: `${opts.q}\n\n${context}` },
-      ...(handed ? handed.links.map((l, i) => ({ kind: "file" as const, file: { uri: `${base}/api/h/${l.id}?k=${l.secret}`, name: l.name, mimeType: files[i]?.mime } })) : []),
-      ...(handed ? [{
+      ...links.map((l) => ({ kind: "file" as const, file: { uri: l.url, name: l.name, mimeType: l.mime } })),
+      ...(mcps.length ? [{
         kind: "data" as const,
-        data: { mcpServers: [{ name: "aindrive-handoff", transport: "streamable-http", url: `${base}/mcp/h/${handed.grant.id}`, headers: { Authorization: `Bearer ${handed.grant.token}` }, expiresAt: handed.grant.expiresAt, tools: ["list_files", "read_file"] }] },
+        data: { mcpServers: mcps.map((mcp, i) => ({ name: i ? `aindrive-handoff-${i + 1}` : "aindrive-handoff", transport: "streamable-http", url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` }, expiresAt: mcp.expiresAt, tools: ["list_files", "read_file"] })) },
         metadata: { type: HANDOFF_MCP_PART },
       }] : []),
     ],
@@ -127,7 +151,9 @@ export async function askCloud(opts: {
     // Once submitted, never silently resubmit after a network or task failure.
     for await (const event of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
       opts.signal?.throwIfAborted();
-      opts.onUpdate(accumulator.push(event));
+      const update = accumulator.push(event);
+      opts.onUpdate(update);
+      if (update.state && ["completed", "input-required", "auth-required"].includes(update.state)) break;
     }
     if (!accumulator.received) throw new Error("Agent returned an empty stream");
   } else {
@@ -136,5 +162,5 @@ export async function askCloud(opts: {
   const result = accumulator.value();
   if (result.state && !["completed", "input-required", "auth-required"].includes(result.state)) throw new Error(`Agent task is still ${result.state}; stream ended early`);
   opts.onUpdate?.(result);
-  return { text: result.text, contextId: result.contextId ?? opts.contextId, handed: files.length };
+  return { text: result.text, contextId: result.contextId ?? opts.contextId, handed: links.length };
 }

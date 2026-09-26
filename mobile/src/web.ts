@@ -108,6 +108,15 @@ export class Web {
   handoffs(body: { driveId: string; audience: string; ttlSeconds: number; files: { deviceKey: string; name: string; mime: string; size: number }[] }) {
     return this.call<{ links: { id: string; url: string; name: string; deviceKey: string; expiresAt: string }[]; mcp?: { url: string; token: string; expiresAt: string } }>("POST", "/api/handoffs", body);
   }
+  /** A folder of a drive on another device, handed to `audience` by the server (web/app/api/drives/[driveId]/folder-handoff). */
+  folderHandoff(driveId: string, body: { path: string; audience: string }) {
+    return this.call<{
+      deviceSays: string; truncated: boolean;
+      entries: { name: string; path: string; isDir: boolean; size: number; mime: string }[];
+      links: { id: string; url: string; name: string; mime: string; expiresAt: string }[];
+      mcp: { url: string; token: string; expiresAt: string } | null;
+    }>("POST", this.d(driveId, "/folder-handoff"), body);
+  }
   listHandoffs() { return this.call<{ handoffs: unknown[] }>("GET", "/api/handoffs"); }
   revokeHandoff(id: string) { return this.call<{ revoked: number }>("DELETE", `/api/handoffs/${encodeURIComponent(id)}`); }
 }

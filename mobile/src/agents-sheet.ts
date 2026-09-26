@@ -6,7 +6,7 @@
 import { ainuiFolderChat, type FolderChatAgent } from "ain-ui";
 import { createA2uiRenderer } from "ain-ui/renderer";
 import "ain-ui/styles.css";
-import { I, icon, fileGlyph } from "./icons";
+import { I, icon } from "./icons";
 import { esc, msgOf, on, val, when, type Ctx, type Sheet } from "./kit";
 import type { Agent, McpToken } from "./web";
 
@@ -116,6 +116,8 @@ export class ChatSheet implements Sheet {
       } });
       renderer.process(ainuiFolderChat({ driveId: this.driveId, path: this.folder, agents: this.agents.map(a => ({ id: a.id, label: a.name })), agentId: this.current || "", busy: this.asking,
         messages: ((this.current && this.msgs.get(this.current)) || []).map(m => ({ role: m.error ? "error" : m.who === "me" ? "user" : "agent", text: m.text })) }));
+      const input = container.querySelector("textarea");
+      if (input) { input.value = this.draft; input.addEventListener("input", () => { this.draft = input.value; }); }
     }
   }
 

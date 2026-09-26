@@ -231,6 +231,7 @@ export function createLlm({ modelPath, geo, loadGenerator = loadRealGenerator, b
 
   function touch() {
     if (idle) clearTimeout(idle);
+    if (!Number.isFinite(idleMs)) return;   // resident for the app's lifetime (Infinity would fire at once)
     idle = setTimeout(() => { void unload(); }, idleMs);
     idle.unref?.();
   }
@@ -258,21 +259,33 @@ export function createLlm({ modelPath, geo, loadGenerator = loadRealGenerator, b
   }
 
   /** Load ahead of the first question (called when the model is present); a no-op without one. */
-  function warm() { if (ready() && !gen && !loading) load().catch((e) => log(`llm: load failed: ${e.message}`)); }
+  /**
+   * Load, then prime: the first generation pays the few-shot prompt prefix (~8 s on an M1 Pro) even
+   * with the weights loaded, so one throwaway call with no budget takes that hit instead of the
+   * person's first question.
+   */
+  function warm() {
+    if (!ready() || gen || loading) return;
+    load()
+      .then(() => understand({ text: "photos from last summer", context: null, nowMs: Date.now(), budget: 180_000 }))
+      .then(() => log("llm: primed"))
+      .catch((e) => log(`llm: load failed: ${e.message}`));
+  }
 
   /**
    * The model's reading of a turn, as a router Turn — or null when the rules' answer should stand.
    * @param {{ text: string, context: object | null, nowMs: number }} o
    * @returns {Promise<import("./router.js").Turn | null>}
    */
-  async function understand({ text, context, nowMs }) {
+  /** `budget` overrides the configured budget for one call (priming passes no limit). */
+  async function understand({ text, context, nowMs, budget = budgetMs }) {
     if (!ready()) return null;
     let raw;
     const t0 = Date.now();
     try {
       const g = await load();
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(new Error("budget")), budgetMs);
+      const timer = setTimeout(() => ac.abort(new Error("budget")), budget);
       busy = true;
       try { raw = await g.generate(userPrompt(text, context), { signal: ac.signal }); }
       finally { busy = false; clearTimeout(timer); touch(); }

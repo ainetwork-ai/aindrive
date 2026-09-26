@@ -1,8 +1,8 @@
 {
- "model": "Qwen3-4B (Alibaba, 2025-04) — GGUF Q4_K_M, thinking off",
+ "model": "Qwen3-4B (Alibaba, 2025-04) \u2014 GGUF Q4_K_M, thinking off",
  "license": "Apache-2.0",
  "engine": "llama.cpp",
- "budgetMs": 3000,
+ "budgetMs": 4000,
  "files": [
   {
    "id": "model",

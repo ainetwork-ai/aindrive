@@ -16,7 +16,7 @@ Read **all** `message.parts`, not just the first text part:
 - `kind: "data"`, `metadata.type: "ai.aindrive/folder-context"`:
   `data.folder = { name, path, recursive: true, totalEntries, truncated, entries }`.
   Entries contain `name`, `path`, `isDir`, `size`, `mime`. This is a snapshot of
-  descendants (up to 200), not a read grant for every listed file.
+  descendants (up to 500), not a read grant for every listed file.
 - `kind: "file"`: `file.uri`, `file.name`, `file.mimeType` for each granted file.
   Photos and PDFs are included too, alongside the MCP data part. For example:
   `{ "kind": "file", "file": { "uri": "https://<drive-host>/api/h/<id>?k=<secret>",
@@ -70,4 +70,4 @@ production cloud consumer.
 
 ### Recursive inventory and streaming
 
-AIN-UI 0.2.0 lists descendants breadth-first (200 entries, 8 levels, 64 directories). `folder-context.recursive` is true; `listingErrors` identifies unreadable subfolders, and `truncated` means the inventory is incomplete. Preserve `entries[].path` in model context: basenames can repeat in different subfolders. `totalEntries` is an observed lower bound when truncated. File/MCP grants still cover only attached files, at most 10 from native-folder chat. The receiver LLM chooses relevance and tool reads. A2A status snapshots replace status text; artifact append events append per artifact ID. Failed/disconnected streams are errors, never a second submission.
+AIN-UI 0.2.0 lists descendants breadth-first (native: 500 entries, 3 levels, 64 directories). `folder-context.recursive` is true; `listingErrors` identifies unreadable subfolders, and `truncated` means the inventory is incomplete. Preserve `entries[].path` in model context: basenames can repeat in different subfolders. `totalEntries` is an observed lower bound when truncated. File/MCP grants still cover only attached files, at most 50 from native-folder chat (10 direct FileParts; automatic could-not-answer fallback grants 5). The receiver LLM chooses relevance and tool reads. A2A status snapshots replace status text; artifact append events append per artifact ID. Failed/disconnected streams are errors, never a second submission.

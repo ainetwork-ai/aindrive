@@ -105,4 +105,4 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 ## Remote folder chat
 
-`cloud-agent.ts` uses `ain-ui`'s bounded recursive walker and A2A accumulator. It lists only the requested subtree (200 entries, 8 levels, 64 directories), reports incomplete inventories, and grants temporary read links for at most 20 files. The receiving model decides which granted files to read. `folder-chat-stream.ts` wraps updates as AG-UI SSE and AIN-UI activity snapshots. Never retry a submitted streaming turn as a new blocking request. Tests: `folder-chat-route.test.ts`, `cloud-agent-listing.test.ts`.
+`cloud-agent.ts` uses `ain-ui`'s bounded recursive walker and A2A accumulator. It lists only the requested subtree (200 entries, 8 levels, 64 directories), reports incomplete inventories, and grants temporary read links for at most 50 files. The receiving model decides which granted files to read. `folder-chat-stream.ts` wraps updates as AG-UI SSE and AIN-UI activity snapshots. Never retry a submitted streaming turn as a new blocking request. Tests: `folder-chat-route.test.ts`, `cloud-agent-listing.test.ts`.

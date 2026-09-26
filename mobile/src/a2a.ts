@@ -98,7 +98,7 @@ export async function askDevice(server: string, sessionBearer: string, drive: { 
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
   const parts = (r.kind === "message" ? r.parts : (r as Task).status?.message?.parts) ?? [];
   const data = parts.find((p) => p.kind === "data" && (p.metadata as Record<string, unknown> | undefined)?.type === "ai.aindrive/ask-result") as { data: Record<string, unknown> } | undefined;
-  const text = textOf(parts);
+  const text = textOf(parts.filter((p) => p.kind === "text"));   // the answer; the data part is not prose
   if (!data || data.data.error) throw new Error(text.replace(/^\[\w+\]\s*/, "") || "no answer");
   return { answer: String(data.data.answer ?? text), sources: (data.data.sources as DeviceAnswer["sources"]) ?? [], ...(data.data.action ? { action: data.data.action as DeviceAnswer["action"] } : {}) };
 }
@@ -167,17 +167,17 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
   // A Task: its status message, then any artifacts.
   const task = r as Task;
   const said = task.status?.message ? textOf(task.status.message.parts) : "";
-  const arts = (task.artifacts ?? []).map((a) => textOf(a.parts)).filter(Boolean).join("\n\n");
-  const out = [said, arts].filter(Boolean).join("\n\n");
+  // Some agents put the same text in the status message and in an artifact: show it once.
+  const out = uniqueTexts([said, ...(task.artifacts ?? []).map((a) => textOf(a.parts))]).join("\n\n");
   const state = task.status?.state ?? "";
   if (out) return { text: out, contextId: task.contextId ?? contextId };
   return { text: state === "input-required" ? "The agent needs more input." : state ? `Task ${state}.` : "(empty reply)", contextId: task.contextId ?? contextId };
 }
 
 /**
- * One streamed turn: status messages carry the text most agents write (a fuller draft each time or,
- * with `append`, a chunk), artifacts carry deliverables; the composed text goes to `onDelta` after
- * every event and is returned at the end.
+ * One streamed turn, folded by a2a-stream.ts: a working step shows until answer text arrives, appended
+ * chunks grow the answer, and the final status (the whole answer) replaces the chunks rather than adding
+ * to them. The composed text goes to `onDelta` whenever it changes and is returned at the end.
  */
 async function stream(client: { sendMessageStream(p: { message: Message; configuration?: Record<string, unknown> }): AsyncGenerator<unknown> },
                       message: Message, contextId: string | undefined, onDelta: (text: string) => void): Promise<{ text: string; contextId?: string }> {
@@ -185,9 +185,23 @@ async function stream(client: { sendMessageStream(p: { message: Message; configu
   for await (const raw of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
     const update = accumulator.push(raw);
     onDelta(update.text);
+    if (update.state && ["completed", "input-required", "auth-required"].includes(update.state)) break;
   }
   if (!accumulator.received) throw new Error("Agent returned an empty stream");
   const result = accumulator.value();
   if (result.state && !["completed", "input-required", "auth-required"].includes(result.state)) throw new Error(`Agent task is still ${result.state}; stream ended early`);
   return { text: result.text, contextId: result.contextId ?? contextId };
+}
+
+/** Non-empty texts, each once — a text contained in an earlier one is a repeat, not an addition. */
+function uniqueTexts(texts: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of texts) {
+    const t = (raw ?? "").trim();
+    if (!t) continue;
+    if (out.some((o) => o === t || o.includes(t))) continue;
+    const i = out.findIndex((o) => t.includes(o));
+    if (i >= 0) out[i] = t; else out.push(t);
+  }
+  return out;
 }

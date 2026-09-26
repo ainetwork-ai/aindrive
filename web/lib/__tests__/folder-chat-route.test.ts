@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readChatStream } from 'ain-ui';
 const state = vi.hoisted(() => ({ user: 'owner', calls: 0 }));
 vi.mock('@/lib/session', () => ({ getRequestUser: async () => state.user === 'invalid' ? 'invalid' : { id: state.user } }));
-vi.mock('@/lib/drives', () => ({ getDrive: () => ({ owner_id: 'owner', drive_secret: 'never-in-stream' }) }));
+vi.mock('@/lib/drives', () => ({ getDrive: (id: string) => ({ owner_id: id === 'foreign' ? 'other' : 'owner', drive_secret: 'never-in-stream' }) }));
 vi.mock('@/lib/rpc', () => ({ isOnline: () => true }));
 vi.mock('@/lib/rate-limit', () => ({ tryConsume: () => ({ok:true}), clientKey: () => 'test' }));
 vi.mock('@/lib/cloud-agent', () => ({ CLOUD_AGENT: {name:'Cloud',card:'https://cloud.test/card'}, askCloud: async (opts: any) => {
@@ -27,6 +27,7 @@ describe('authenticated folder chat stream',()=>{
   it('rejects other users, invalid bearers and unknown remote targets before sending',async()=>{
     for(const user of ['other','invalid']) {state.user=user;expect((await POST(request({q:'question'}),params)).status).toBe(403);}
     state.user='owner';expect((await POST(request({q:'question',agentId:'https://private'}),params)).status).toBe(400);
+    expect((await POST(request({q:'question',folders:[{driveId:'foreign',path:''}]}),params)).status).toBe(403);
     expect(state.calls).toBe(0);
   });
   it('only returns public agent descriptors',async()=>{

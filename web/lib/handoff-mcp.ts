@@ -15,6 +15,13 @@ import { withCors } from "./mcp-http";
 
 /** Text an agent reads in one call; longer files come back cut, and say so. */
 export const READ_MAX_BYTES = 1024 * 1024;
+/**
+ * A picture or another file (a PDF) an agent reads in one call, whole — base64 in the MCP answer. A picture is
+ * what "what is in this folder?" needs to answer about photos; a cut picture is no picture, so bigger ones are
+ * refused by name rather than sent broken.
+ */
+export const READ_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+export const READ_BINARY_MAX_BYTES = 32 * 1024 * 1024;
 
 const TEXT_MIME = /^text\/|^application\/(json|xml|x-ndjson|javascript|x-yaml|yaml)\b|\+(json|xml)\b/i;
 const TEXT_NAME = /\.(md|markdown|txt|csv|tsv|json|ya?ml|xml|html?|log|srt|vtt)$/i;
@@ -22,26 +29,27 @@ const TEXT_NAME = /\.(md|markdown|txt|csv|tsv|json|ya?ml|xml|html?|log|srt|vtt)$
 const TOOLS = [
   {
     name: "list_files",
-    description: "List the files the owner handed you: id, name, type and size. Only these files can be read.",
+    description: "List the files the owner handed you: id, name (a path when it is in a subfolder), type and size. Only these files can be read.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
     name: "read_file",
-    description: "Read one handed-off text file by its id (from list_files). Text only, up to 1 MiB.",
+    description: "Read one handed-off file by its id (from list_files): text as text (up to 1 MiB), a picture as an image, a PDF or other file as its bytes.",
     inputSchema: { type: "object" as const, properties: { id: { type: "string", description: "The file's id from list_files" } }, required: ["id"] },
   },
 ];
 
 type Meta = { ip: string | null; userAgent: string | null };
 
-async function readText(f: HandoffRow, meta: Meta): Promise<{ text: string; truncated: boolean } | { error: string }> {
+/** Up to `max` bytes of a handed-off file, from the device through its carrier drive. */
+async function readBytes(f: HandoffRow, meta: Meta, max: number): Promise<{ bytes: Buffer; truncated: boolean } | { error: string }> {
   const drive = getDrive(f.drive_id);
   if (!drive) { logFetch(f.id, meta.ip, meta.userAgent, 404); return { error: "the device's drive is gone" }; }
   const chunks: Buffer[] = [];
   let offset = 0, size = Infinity;
   try {
-    while (offset < Math.min(size, READ_MAX_BYTES)) {
-      const r = await readHandoffChunk(f, drive.drive_secret, offset, Math.min(DOWNLOAD_CHUNK_BYTES, READ_MAX_BYTES - offset));
+    while (offset < Math.min(size, max)) {
+      const r = await readHandoffChunk(f, drive.drive_secret, offset, Math.min(DOWNLOAD_CHUNK_BYTES, max - offset));
       size = r.size;
       const buf = Buffer.from(r.data, "base64");
       if (!buf.length) break;
@@ -54,7 +62,7 @@ async function readText(f: HandoffRow, meta: Meta): Promise<{ text: string; trun
     return { error: status === 503 || status === 504 ? "the owner's device is offline" : (e as Error).message };
   }
   logFetch(f.id, meta.ip, meta.userAgent, 200);
-  return { text: Buffer.concat(chunks).toString("utf8"), truncated: size > offset };
+  return { bytes: Buffer.concat(chunks), truncated: size > offset };
 }
 
 export async function serveGrantMcp(req: Request, grantId: string): Promise<Response> {
@@ -78,10 +86,24 @@ export async function serveGrantMcp(req: Request, grantId: string): Promise<Resp
       const id = String((call.params.arguments ?? {}).id ?? "");
       const f = files.find((x) => x.id === id);
       if (!f) return err("not one of the files handed to you (or its link was revoked or expired)");
-      if (!TEXT_MIME.test(f.mime) && !TEXT_NAME.test(f.name)) return err(`${f.name} is ${f.mime}, not text`);
-      const r = await readText(f, meta);
+      if (TEXT_MIME.test(f.mime) || TEXT_NAME.test(f.name)) {
+        const r = await readBytes(f, meta, READ_MAX_BYTES);
+        if ("error" in r) return err(r.error);
+        const text = r.bytes.toString("utf8");
+        return { content: [{ type: "text" as const, text: r.truncated ? `${text}\n\n[cut at ${READ_MAX_BYTES} bytes]` : text }] };
+      }
+      // Not text: the file whole, as MCP content the agent can use — a picture as an image, anything else (a PDF)
+      // as an embedded resource. Too big to send whole is said by name; a cut picture or PDF would be unreadable.
+      const image = /^image\//i.test(f.mime);
+      const max = image ? READ_IMAGE_MAX_BYTES : READ_BINARY_MAX_BYTES;
+      if (f.size > max) return err(`${f.name} is ${f.size} bytes, more than the ${Math.round(max / 1024 / 1024)} MB an agent can read in one call`);
+      const r = await readBytes(f, meta, max);
       if ("error" in r) return err(r.error);
-      return { content: [{ type: "text" as const, text: r.truncated ? `${r.text}\n\n[cut at ${READ_MAX_BYTES} bytes]` : r.text }] };
+      if (r.truncated) return err(`${f.name} is larger than ${Math.round(max / 1024 / 1024)} MB`);
+      const data = r.bytes.toString("base64");
+      return image
+        ? { content: [{ type: "image" as const, data, mimeType: f.mime }] }
+        : { content: [{ type: "resource" as const, resource: { uri: `aindrive://handoff/${f.id}/${encodeURIComponent(f.name)}`, mimeType: f.mime, blob: data } }] };
     }
     return err(`unknown tool: ${call.params.name}`);
   });
