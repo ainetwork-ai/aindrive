@@ -158,6 +158,8 @@ export interface RemoteAsk {
   action?: { type: string; folder?: string; copied?: number; failed?: number; share?: boolean; skipped?: boolean; reason?: string };
 }
 
-export function askRemote(server: string, sessionCookie: string, driveId: string, agentId: string, q: string): Promise<RemoteAsk> {
-  return post<RemoteAsk>(server, `/api/drives/${encodeURIComponent(driveId)}/agents/${encodeURIComponent(agentId)}/ask`, { q }, sessionCookie);
+/** `askId`: one id for every drive asked the same question — the server charges it as one ask (web/lib/ask-fanout.ts). */
+export function askRemote(server: string, sessionCookie: string, driveId: string, agentId: string, q: string, askId?: string): Promise<RemoteAsk> {
+  return request<RemoteAsk>(server, "POST", `/api/drives/${encodeURIComponent(driveId)}/agents/${encodeURIComponent(agentId)}/ask`, { q }, sessionCookie,
+    askId ? { "x-aindrive-ask": askId } : undefined);
 }

@@ -1414,12 +1414,13 @@ async function ask(q = askQuery) {
     // Small talk / out of scope ("book a table for 4") is answered here: no other device is searched for it.
     const offTopic = local?.query === "chat" || local?.query === "out";
     const targets = offTopic || scope ? [] : remotes.filter((d) => d.online);
+    const askId = "q_" + (crypto.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/[^A-Za-z0-9]/g, "");
     const remoteResults = await Promise.all([
       ...targets.map(async (d) => {
         try {
           const agentId = remoteAgents.get(d.id) ?? await ensureRemoteAgent(state.server, state.sessionCookie!, d.id);
           remoteAgents.set(d.id, agentId);
-          const r = await askRemote(state.server, state.sessionCookie!, d.id, agentId, q);
+          const r = await askRemote(state.server, state.sessionCookie!, d.id, agentId, q, askId);
           return { drive: d, r, error: null as string | null, skipped: false };
         } catch (e) {
           // A drive shared TO this account (not owned) has no agent we may create: leave it out quietly.
@@ -1501,6 +1502,17 @@ async function openSearch() {
 // ---------------------------------------------------------------- render
 
 /** True while the user is typing somewhere in the app — a full re-render would drop the keyboard. */
+/**
+ * A message just went out: on a phone the keyboard goes away (it covers the answer); on the Mac the
+ * field keeps focus for the next message — emptied now, or the redraw that keeps focus would put the
+ * sent text back.
+ */
+function sent(input: HTMLInputElement) {
+  if (!ON_MAC) { input.blur(); return; }
+  input.value = "";
+  input.focus({ preventScroll: true });
+}
+
 function typing(): boolean {
   const el = document.activeElement;
   return el instanceof HTMLInputElement && (el.type === "text" || el.type === "search" || el.type === "email" || el.type === "password") || el instanceof HTMLTextAreaElement;
@@ -1879,6 +1891,15 @@ function followUps(r: AskResult | null, ctx: Record<string, unknown> | null): st
 /** Turns whose photo grid / file list the user expanded ("+N", "Show all"). */
 const expandedPhotos = new Set<number>();
 const expandedFiles = new Set<number>();
+/**
+ * Who answered, at the head of every answer: aindrive-on-device (this device's own agent — a chip) or an
+ * agent it handed the turn to over A2A (aindrive-cloud — a cloud), so what left the device is plain to see.
+ */
+function speaker(t: Turn): string {
+  if (t.via) return `<div class="speaker cloud">${icon("cloud", 14)}<span>${esc(t.via.replace(/ agent$/, ""))}</span></div>`;
+  return `<div class="speaker device">${icon("cpu", 14)}<span>aindrive-on-device${t.in ? ` · ${esc(t.in)}` : ""}</span></div>`;
+}
+
 /** Agent-result thumbnails (small JPEGs read on the phone), by drive + path. */
 const askThumbs = new Map<string, string | null>();
 /** Where the reader is in the agent chat, kept across re-renders. */
@@ -2062,7 +2083,7 @@ function searchSheet(): string {
             const until = new Date(Math.max(...t.handoffs!.map((h) => Date.parse(h.expiresAt)))).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
             return `<div class="card handoff">${icon("link", 16)}<span>${t.handoffs!.length} file${t.handoffs!.length === 1 ? "" : "s"} sent to <b>${esc(t.via ?? "")}</b> as links · ${live.length ? `open until ${esc(until)}` : "links closed"}</span>${live.length ? `<button class="btn small secondary" data-revoke-turn="${i}">Revoke</button>` : ""}</div>`;
           })() : ""}
-          ${t.via ? `<p class="hint via">${icon("globe", 12)} ${esc(t.via)}</p>` : t.in ? `<p class="hint via">${icon("folder", 12)} In ${esc(t.in)}</p>` : ""}
+          ${speaker(t)}
           <p class="answer">${esc(t.r.answer)}</p>
           ${hitsList(t.r, i, last)}` : ""}
       </div>`;
@@ -2155,7 +2176,7 @@ function bindSearch() {
   bind("models-download", ensureModels);
   bind("reindex", reindex);
   bind("ensure-models", ensureModels);
-  bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; i.blur(); } void ask(); });
+  bind("ask-send", () => { const i = document.getElementById("ask-input") as HTMLInputElement | null; if (i) { askQuery = i.value; sent(i); } void ask(); });
   document.getElementById("ask-input")?.addEventListener("focus", () => {
     // The keyboard shrinks the view: keep the newest turn visible above the composer.
     setTimeout(() => { const b = document.getElementById("ask-body"); if (b && askScroll.atBottom) b.scrollTop = b.scrollHeight; }, 250);
@@ -2218,7 +2239,7 @@ function bindSearch() {
   }
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
-  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; input.blur(); void ask(); } });
+  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; sent(input); void ask(); } });
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
     const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];

@@ -17,6 +17,7 @@ import { z } from "zod";
 import { compose } from "@/src/composition";
 import { askAgent } from "@/src/use-cases/agent/ask-agent";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { ridesAlong } from "@/lib/ask-fanout";
 import { getUserTier, tierBudget, TIER_PRICE_AIN } from "@/lib/tier";
 
 const Body = z.object({
@@ -37,9 +38,11 @@ export async function POST(
   // upgrading on one device follows the wallet to another; otherwise IP.
   const { tier, expiresAt } = await getUserTier(req);
   const budget = tierBudget(tier, ASK_BASE);
-  const rl = tryConsume({
+  const who = clientKey(req, "ask");
+  // The same question asked of the account's other drives is one ask (lib/ask-fanout.ts).
+  const rl = ridesAlong(who, req.headers.get("x-aindrive-ask")) ? { ok: true as const } : tryConsume({
     name: `ask:${tier}`,
-    key: clientKey(req, "ask"),
+    key: who,
     limit: budget.limit,
     windowMs: budget.windowMs,
   });
