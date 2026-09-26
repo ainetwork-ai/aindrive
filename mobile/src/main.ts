@@ -241,6 +241,64 @@ async function revokeHandoff(turn: number, id?: string) {
 }
 
 /** "@Weather what's up tomorrow" → that agent and the rest of the message. */
+// ---------------------------------------------------------------- @-mention autocomplete
+// Typing "@" in the composer lists the agents in this chat by handle; Tab/Enter or a tap completes it.
+// Managed on the DOM directly (not through render()): the composer must not be rebuilt under the keyboard.
+let mentionPick = 0;
+
+/** The "@han" being typed at the caret, or null. */
+function mentionToken(input: HTMLInputElement): { start: number; text: string } | null {
+  const at = input.selectionStart ?? input.value.length;
+  const m = /(?:^|\s)@([^\s@]*)$/.exec(input.value.slice(0, at));
+  return m ? { start: at - m[1].length - 1, text: m[1] } : null;
+}
+
+function mentionCandidates(text: string): A2aAgent[] {
+  const key = text.toLowerCase();
+  return a2aAgents.filter((a) => agentOn(a) && handleOf(a).toLowerCase().startsWith(key));
+}
+
+function mentionMenu(input: HTMLInputElement | null) {
+  document.getElementById("mention-menu")?.remove();
+  if (!input) return;
+  const tok = mentionToken(input);
+  const list = tok ? mentionCandidates(tok.text) : [];
+  if (!tok || !list.length) return;
+  mentionPick = Math.min(mentionPick, list.length - 1);
+  const menu = document.createElement("div");
+  menu.id = "mention-menu"; menu.className = "mention-menu"; menu.setAttribute("role", "listbox");
+  menu.innerHTML = list.map((a, i) => `<button type="button" role="option" data-i="${i}" class="${i === mentionPick ? "sel" : ""}" aria-selected="${i === mentionPick}">${a.builtin ? icon("cpu", 14) : icon("cloud", 14)}<b>@${esc(handleOf(a))}</b><span>${esc(a.name)}</span></button>`).join("");
+  menu.addEventListener("mousedown", (e) => e.preventDefault());   // keep the input focused
+  menu.addEventListener("click", (e) => { const b = (e.target as HTMLElement).closest<HTMLElement>("[data-i]"); if (b) mentionAccept(input, list[Number(b.dataset.i)]); });
+  input.closest(".composer")?.appendChild(menu);
+}
+
+function mentionAccept(input: HTMLInputElement, a: A2aAgent) {
+  const tok = mentionToken(input);
+  if (!tok) return;
+  const after = input.value.slice(input.selectionStart ?? input.value.length);
+  const head = `${input.value.slice(0, tok.start)}@${handleOf(a)} `;
+  input.value = head + after.replace(/^\s+/, "");
+  input.setSelectionRange(head.length, head.length);
+  askQuery = input.value;
+  mentionPick = 0;
+  mentionMenu(null);
+  input.focus({ preventScroll: true });
+}
+
+/** Keys the open @-menu owns; true when it handled one. */
+function mentionKey(input: HTMLInputElement, e: KeyboardEvent): boolean {
+  const menu = document.getElementById("mention-menu");
+  if (!menu) return false;
+  const tok = mentionToken(input);
+  const list = tok ? mentionCandidates(tok.text) : [];
+  if (!list.length) { mentionMenu(null); return false; }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { mentionPick = (mentionPick + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length; mentionMenu(input); e.preventDefault(); return true; }
+  if (e.key === "Tab" || e.key === "Enter") { mentionAccept(input, list[mentionPick]); e.preventDefault(); return true; }
+  if (e.key === "Escape") { mentionMenu(null); e.preventDefault(); return true; }
+  return false;
+}
+
 function mentioned(q: string): { agent: A2aAgent; text: string } | null {
   const m = /^@(\S+)\s*(.*)$/s.exec(q.trim());
   if (!m) return null;
@@ -2260,7 +2318,12 @@ function bindSearch() {
   }
   const input = document.getElementById("ask-input") as HTMLInputElement | null;
   input?.addEventListener("input", () => { askQuery = input.value; });
-  input?.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; sent(input); void ask(); } });
+  input?.addEventListener("keydown", (e) => {
+    if (mentionKey(input, e)) return;   // the @-menu took the key
+    if (e.key === "Enter" || e.keyCode === 13) { e.preventDefault(); askQuery = input.value; sent(input); void ask(); }
+  });
+  input?.addEventListener("input", () => mentionMenu(input));
+  input?.addEventListener("blur", () => setTimeout(() => mentionMenu(null), 150));   // after a tap on an item
   document.querySelectorAll<HTMLButtonElement>("[data-suggest]").forEach((b) => b.addEventListener("click", () => void ask(b.dataset.suggest!)));
   document.querySelectorAll<HTMLElement>("[data-hit]").forEach((li) => li.addEventListener("click", () => {
     const hit = thread[Number(li.dataset.turn)]?.r?.sources[Number(li.dataset.hit)];
