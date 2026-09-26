@@ -105,6 +105,21 @@ export function paidAccessDenial(driveId, targetPath, role, accountId) {
 }
 
 /**
+ * Does the account already hold what a paid share sells? Its role at the
+ * share's path must reach the share's role AND it must pass the paid read gate.
+ * Role alone is not enough: a bare viewer of a parent folder holds "viewer" at
+ * the share's path but can't read the paid subtree, so they still have to pay.
+ * @param {string} driveId
+ * @param {{ path: string, role: "viewer"|"editor" }} share
+ * @param {"none"|"viewer"|"editor"|"owner"} role  the account's role at share.path
+ * @param {string|null} accountId
+ * @returns {boolean}
+ */
+export function holdsPaidShare(driveId, share, role, accountId) {
+  return atLeast(role, share.role) && paidAccessDenial(driveId, share.path, role, accountId) === null;
+}
+
+/**
  * Lock map for rows at arbitrary paths (R-VIS-PAID-001): which of `paths` are
  * paid AND not entitled for this viewer, so the UI shows them as 🔒 + price +
  * ticker (visible, not hidden) and a click opens the paywall. A path where the

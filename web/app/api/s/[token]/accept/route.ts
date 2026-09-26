@@ -3,7 +3,8 @@ import { nanoid } from "nanoid";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { resolveRoleByUser, type Role } from "@/lib/access";
-import { mergeRoleUpgradeOnly, atLeast } from "@/lib/access-core.js";
+import { holdsPaidShare } from "@/lib/sale-access.js";
+import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 
 type ShareRow = {
   id: string;
@@ -38,15 +39,13 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
     return NextResponse.json({ driveId: share.drive_id, path: share.path });
   }
 
-  // Paid share: CONSUME does not settle payment. The caller must already
-  // hold a grant covering THIS share's role (written by the paid GET flow,
-  // or owner-granted). Compare against share.role, NOT a hard-coded "viewer"
-  // floor: otherwise a cheaper/free share at the same path (e.g. a free
-  // viewer link) would let a member upgrade to a paid higher tier (editor)
-  // for free. Without a covering grant, bounce them to pay via GET.
+  // Paid share: CONSUME does not settle payment. The caller must already hold
+  // what the link sells (holdsPaidShare: share.role — not a viewer floor, so a
+  // free link at the same path can't upgrade to a paid tier — and past the
+  // paid read gate, so a parent folder's viewer still pays). Else pay via GET.
   if (share.price_usdc) {
     const role = resolveRoleByUser(share.drive_id, user.id, share.path);
-    if (!atLeast(role, share.role)) {
+    if (!holdsPaidShare(share.drive_id, share, role, user.id)) {
       return NextResponse.json({ error: "payment required" }, { status: 402 });
     }
   }

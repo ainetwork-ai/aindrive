@@ -25,6 +25,13 @@ export declare function paidAccessDenial(
   accountId: string | null,
 ): PaidDenial | null;
 
+export declare function holdsPaidShare(
+  driveId: string,
+  share: { path: string; role: "viewer" | "editor" | string },
+  role: RoleOrNone,
+  accountId: string | null,
+): boolean;
+
 export type EntryLock = { price: number; currency: string | null; shareId: string; listed: boolean };
 
 export declare function paidLocksForPaths(
