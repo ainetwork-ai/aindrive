@@ -37,6 +37,10 @@ struct RpcHandler {
         "agent-ask",
     ]
 
+    /// Every RPC method this host answers, sorted — the agent-hello's `methods`. `agent-ask` is
+    /// left out: it is only ever refused here, and the hello's `caps` stays empty.
+    static var answeredMethods: [String] { methods.subtracting(["agent-ask"]).sorted() }
+
     let fs: DriveFs
     let yjsDir: URL
 

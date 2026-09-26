@@ -64,6 +64,18 @@ final class AgentCore: NSObject {
     }
 
     fileprivate static let protocolVersion = 1
+    /// URLSessionWebSocketTask refuses an incoming message over 1 MiB by default, and an
+    /// upload-chunk frame is 4 MiB of base64 (≈5.6 MB): the socket failed on the first chunk.
+    fileprivate static let maxMessageBytes = 16 * 1024 * 1024
+
+    /// "1.0+1": CFBundleShortVersionString + build number, sent as appVersion in the agent-hello.
+    static var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "0"
+        let build = info?["CFBundleVersion"] as? String ?? "0"
+        return "\(short)+\(build)"
+    }
+
     /// Backoff schedule copied from cli/src/agent.js so reconnects feel the same.
     fileprivate static let backoff: [TimeInterval] = [1, 2, 4, 8, 15]
 
@@ -210,6 +222,7 @@ private final class DriveConn {
         let session = URLSession(configuration: .default)
         self.session = session
         let task = session.webSocketTask(with: request)
+        task.maximumMessageSize = AgentCore.maxMessageBytes
         self.task = task
         task.resume()
 
@@ -221,8 +234,18 @@ private final class DriveConn {
         receive()
     }
 
+    /// Phone protocol v2 hello: platform, appVersion, the methods this host answers, and caps.
+    /// iOS advertises no caps — it refuses agent-ask — so the server's ask skill turns a question
+    /// away up front ("can't answer questions") instead of waiting for the refusal.
     private func sendHello() {
-        let hello: [String: Any] = ["type": "agent-hello", "hostname": UIDevice.current.name]
+        let hello: [String: Any] = [
+            "type": "agent-hello",
+            "hostname": UIDevice.current.name,
+            "platform": "ios",
+            "appVersion": AgentCore.appVersion,
+            "methods": RpcHandler.answeredMethods,
+            "caps": [String](),
+        ]
         if let data = try? JSONSerialization.data(withJSONObject: hello),
            let text = String(data: data, encoding: .utf8) {
             task?.send(.string(text)) { _ in }
