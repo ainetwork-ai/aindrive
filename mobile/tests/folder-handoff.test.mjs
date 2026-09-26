@@ -73,3 +73,40 @@ test('existing search-result handoffs retain their wire format', () => {
   assert.equal(parts[2].metadata.type, HANDOFF_MCP_PART);
   assert.deepEqual(handoffParts('hello', { files: [] }), [{ kind: 'text', text: 'hello' }]);
 });
+
+test('context does not depend on question keywords or language; the model chooses what to read', async () => {
+  const handed = await prepareFolderHandoff({ uri: 'selected', label: 'Folder' }, async () => ({ entries: [entry('a.txt')] }), async () => ({ files: [], mcp }));
+  const questions = ["what's in this folder?", 'bonjour', 'hello', 'compare the notes', '이 폴더에 뭐가 있어?'];
+  const expected = handoffParts(questions[0], handed).slice(1);
+  for (const q of questions) assert.deepEqual(handoffParts(q, handed).slice(1), expected);
+});
+
+test('previous selected files remain candidates and are deduplicated', async () => {
+  await prepareFolderHandoff({ uri: 'selected', label: 'Folder' }, async () => ({ entries: [entry('other.txt')] }), async picked => {
+    assert.deepEqual(picked, [{ folderUri: 'selected', path: 'nested/result.txt' }]);
+    return { files: [] };
+  }, ['nested/result.txt', 'nested/result.txt']);
+});
+
+test('official A2A SDK sends all parts and keeps MCP credentials out of the agent auth header', async () => {
+  const built = await build({ stdin: { contents: 'export { send } from "./src/a2a";', resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' });
+  const { send } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
+  const original = globalThis.fetch;
+  let outgoing;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), 'https://cloud.test/a2a');
+    assert.notEqual(new Headers(init.headers).get('authorization'), `Bearer ${mcp.token}`);
+    outgoing = JSON.parse(init.body);
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: outgoing.id, result: { kind: 'message', role: 'agent', messageId: 'reply', contextId: 'conversation', parts: [{ kind: 'text', text: 'Listed the folder' }] } }), { headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const card = { name: 'Mock cloud', description: 'Test', url: 'https://cloud.test/a2a', version: '1', protocolVersion: '0.3.0', capabilities: {}, defaultInputModes: ['text/plain'], defaultOutputModes: ['text/plain'], skills: [] };
+    const handed = await prepareFolderHandoff({ uri: 'local-folder', label: 'Folder' }, async () => ({ entries: [entry('a.txt')] }), async () => ({ files: [], mcp }));
+    const reply = await send({ id: 'test', source: card.url, url: card.url, name: card.name, skills: [], card, enabled: true, addedAt: 1 }, "what's in this folder?", 'conversation', undefined, handed);
+    assert.equal(outgoing.method, 'message/send');
+    assert.equal(outgoing.params.message.contextId, 'conversation');
+    assert.ok(outgoing.params.message.parts.some(p => p.metadata?.type === HANDOFF_MCP_PART));
+    assert.ok(outgoing.params.message.parts.some(p => p.metadata?.type === 'ai.aindrive/folder-context'));
+    assert.equal(reply.text, 'Listed the folder');
+  } finally { globalThis.fetch = original; }
+});

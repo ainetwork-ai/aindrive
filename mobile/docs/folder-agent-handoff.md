@@ -2,8 +2,9 @@
 
 The mobile shell and the desktop shell use the same producer (`src/a2a-parts.ts`).
 An enabled external agent addressed in a folder chat receives the current folder
-on the first turn. A global chat still uses previous search results for file
-follow-ups. No device URI, account session cookie or drive secret is included.
+on the first turn. A global chat supplies available previous search results on external-agent
+turns as well. Context preparation never matches keywords or pronouns in the
+question; the receiver LLM decides relevance and which tools/files to use. No device URI, account session cookie or drive secret is included.
 
 ## Receiver contract (including aindrive-cloud)
 
@@ -22,6 +23,8 @@ Read **all** `message.parts`, not just the first text part:
   `headers.Authorization`, `expiresAt`, and the tool names. Register this server
   for the turn, keeping its bearer token out of model text and logs. Use
   `list_files` (no arguments), then `read_file({ id })` with an id from that list.
+  Let the LLM decide whether to call these tools; do not add a client-side
+  phrase classifier or read every attachment automatically.
   `read_file` reads text up to 1 MiB; FileParts also support non-text downloads.
 
 The MCP server is `/mcp/h/<grant>`, a **file-set** capability. It is not a public
@@ -36,8 +39,8 @@ A2A `contextId`. Never reuse credentials from another conversation.
 ## Producer behavior and verification
 
 The native `listFolder` reads the selected chat folder on Android and Mac. Its
-listing is independent of the on-device agent's previous answer. For a file
-follow-up, only previous sources from this same folder may be handed off.
+listing is independent of the on-device agent's previous answer. Previous sources may be offered as candidate files only when they belong to
+this same folder. A global chat may offer its previous search candidates.
 The agent must be enabled; file links additionally need a connected P2P carrier.
 Listing or handoff failure stops dispatch rather than sending an empty context.
 The existing Revoke control and server TTL still apply to every file grant.

@@ -156,32 +156,26 @@ async function ensureCloudAgent() {
   } catch { /* offline: offered again next launch */ }
 }
 
-/** "these / them / those photos / this file": the message is about the files in the last answer. */
-const REFERS_TO_FILES = /\b(these|those|them|this (photo|picture|file|recording|document)|the (photos?|pictures?|files?|recordings?|documents?|pdfs?|images?))\b|이것|이거|그것|그거|이 사진|그 사진|사진들|파일들/i;
-/** Work ON files that aindrive-on-device doesn't do (it finds and organises): goes to an added agent with the files. */
-const FILE_WORK = /\b(summari[sz]e|summary|translate|explain|analy[sz]e|review|proofread|rewrite|compare|extract|what does (it|this|that) say|what('s| is) (it|this|that) about|tl;?dr|key points)\b|요약|번역|설명해|분석|검토|비교|정리해줘/i;
 const HANDOFF_TTL_SECONDS = 15 * 60;
 const HANDOFF_MAX = 10;
 
 /**
- * Files from the last answer to hand to an A2A agent, as short-lived links (web/lib/handoff.ts):
+ * Available folder/search context for an A2A agent, as short-lived links (web/lib/handoff.ts):
  * uses the enabled agent's standing approval, registers those files, mints links, and returns them
  * for the A2A message. Bytes go phone → server → agent only when the agent fetches the link.
  */
-async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<(Handed & { links: HandoffLink[] }) | null> {
+async function handoffFiles(agent: A2aAgent, from: AskResult | null = askResult): Promise<(Handed & { links: HandoffLink[] }) | null> {
   if (!agentOn(agent)) return null;
-  // Explicit folder chats must work on the first turn, without a search result
-  // or an English pronoun match. Native listFolder exists on Android and Mac.
+  // Supply allowed context independently of the question's wording. The receiver
+  // LLM decides relevance and whether to read bytes. Both native shells implement listFolder.
   if (chatScope) {
     const scope = chatScope;
     if (!findShare(scope.uri)) throw new Error("This folder is no longer available. Open it again before asking the agent.");
-    const selectedPaths = REFERS_TO_FILES.test(text)
-      ? from?.sources.filter((s) => localFolderFor(s.driveId)?.folder.uri === scope.uri).map((s) => s.path)
-      : undefined;
+    const selectedPaths = from?.sources.filter((s) => localFolderFor(s.driveId)?.folder.uri === scope.uri).map((s) => s.path);
     return prepareFolderHandoff(scope, (opts) => AindriveAgent.listFolder(opts), (files) => handoffPicked(agent, files), selectedPaths);
   }
   const src = from?.sources ?? [];
-  if (!src.length || !REFERS_TO_FILES.test(text)) return { files: [], links: [] };
+  if (!src.length) return { files: [], links: [] };
   const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ path: s.path, folderUri: localFolderFor(s.driveId)?.folder.uri })).filter((x) => x.folderUri);
   return handoffPicked(agent, picked as { folderUri: string; path: string }[]);
 }
@@ -1390,7 +1384,7 @@ async function ask(q = askQuery) {
   if (direct && !agentOn(direct.agent)) { notify(`${direct.agent.name} is off — turn it on in Model & agents first.`, true); return; }
   if (direct) {
     let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
-    try { handed = await handoffFiles(direct.agent, direct.text); }
+    try { handed = await handoffFiles(direct.agent); }
     catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
     if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
@@ -1410,20 +1404,6 @@ async function ask(q = askQuery) {
   askBusy = true; actionShare = null; render();
   try {
     const prevResult = askResult;   // what "these" refers to, if the turn goes to aindrive-cloud
-    // "Summarize this document": work on the files just found — hand them to the added agent (aindrive-cloud).
-    if (FILE_WORK.test(q) && fallbackAgents().length === 1 && prevResult?.sources.length && REFERS_TO_FILES.test(q)) {
-      const to = fallbackAgents()[0];
-      let handed: Awaited<ReturnType<typeof handoffFiles>> = null;
-      try { handed = await handoffFiles(to, q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
-      if (handed?.files.length) {
-        const r = await askA2a([to], q, handed);
-        askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
-        thread.push({ q, r: askResult, at: Date.now(), via: to.name, handoffs: handed.links, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
-        askQuery = ""; await saveThread();
-        return;
-      }
-      if (handed === null) return;   // the owner said no
-    }
     // A folder chat asks that folder only (opened for the agent even with P2P off), never other devices.
     const scope = chatScope;
     if (scope) { const sh = findShare(scope.uri); if (sh) { await ensureLocal(sh); scope.driveId = localIdOf(sh); } }
@@ -1469,7 +1449,7 @@ async function ask(q = askQuery) {
       const to = fallbackAgents();
       let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
       if (to.length === 1) {
-        try { handed = await handoffFiles(to[0], q, prevResult); }
+        try { handed = await handoffFiles(to[0], prevResult); }
         catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); return; }
         if (!handed) return;
       }
