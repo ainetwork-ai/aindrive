@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getUser } from "@/lib/session";
-import { createDrive, listUserDrives } from "@/lib/drives";
+import { createDrive, listUserDrives, adoptSignInPayoutWallet } from "@/lib/drives";
 import { isOnline } from "@/lib/rpc";
 import { getUserDriveLimit } from "@/lib/limits";
 import { db } from "@/lib/db";
@@ -11,6 +11,7 @@ const Body = z.object({ name: z.string().min(1).max(120) });
 export async function GET() {
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  adoptSignInPayoutWallet(user.id);   // the sign-in wallet pays out on drives without one
   const drives = listUserDrives(user.id);
   return NextResponse.json({
     drives: drives.map((d) => ({
