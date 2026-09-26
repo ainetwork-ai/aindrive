@@ -212,23 +212,8 @@ public class AindriveAgentPlugin extends Plugin {
         if (folderUri == null || path == null) { call.reject("missing folderUri/path"); return; }
         THUMBS.execute(() -> {
             try {
-                java.io.File dir = new java.io.File(getContext().getCacheDir(), "thumbs");
-                java.io.File f = new java.io.File(dir, sha1(folderUri + "|" + path + "|" + px) + ".jpg");
-                if (!(f.isFile() && f.length() > 0)) {
-                    SafFs fs = thumbFs.computeIfAbsent(folderUri, u -> new SafFs(getContext(), Uri.parse(u)));
-                    String docId = fs.resolve(path);
-                    if (docId == null) throw new java.io.FileNotFoundException("no such file");
-                    android.graphics.Bitmap bmp = null;
-                    try { bmp = android.provider.DocumentsContract.getDocumentThumbnail(getContext().getContentResolver(), fs.uriOf(docId), new android.graphics.Point(px, px), null); }
-                    catch (Exception ignored) { }
-                    if (bmp == null) bmp = decodeSmall(fs, docId, px);
-                    if (bmp == null) throw new java.io.IOException("no preview");
-                    dir.mkdirs();
-                    java.io.File tmp = new java.io.File(dir, f.getName() + ".tmp");
-                    try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out); }
-                    bmp.recycle();
-                    if (!tmp.renameTo(f)) throw new java.io.IOException("cache write failed");
-                }
+                SafFs fs = thumbFs.computeIfAbsent(folderUri, u -> new SafFs(getContext(), Uri.parse(u)));
+                java.io.File f = Thumbs.jpeg(getContext(), fs, folderUri, path, px);
                 JSObject ret = new JSObject();
                 ret.put("path", f.getAbsolutePath());
                 call.resolve(ret);
@@ -236,45 +221,6 @@ public class AindriveAgentPlugin extends Plugin {
                 call.reject("No thumbnail: " + ex.getMessage());
             }
         });
-    }
-
-    /** Decode at ~px from the file descriptor (no full read into memory), EXIF-rotated. */
-    private static @androidx.annotation.Nullable android.graphics.Bitmap decodeSmall(SafFs fs, String docId, int px) throws java.io.IOException {
-        try (android.os.ParcelFileDescriptor pfd = fs.openFd(docId)) {
-            java.io.FileDescriptor fd = pfd.getFileDescriptor();
-            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
-            o.inJustDecodeBounds = true;
-            android.graphics.BitmapFactory.decodeFileDescriptor(fd, null, o);
-            if (o.outWidth <= 0) return null;
-            int sample = 1;
-            while (Math.min(o.outWidth, o.outHeight) / (sample * 2) >= px) sample *= 2;
-            android.system.Os.lseek(fd, 0, android.system.OsConstants.SEEK_SET);
-            android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
-            o2.inSampleSize = sample;
-            android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFileDescriptor(fd, null, o2);
-            if (bmp == null) return null;
-            try {
-                android.system.Os.lseek(fd, 0, android.system.OsConstants.SEEK_SET);
-                int rot = new androidx.exifinterface.media.ExifInterface(fd).getRotationDegrees();
-                if (rot != 0) {
-                    android.graphics.Matrix m = new android.graphics.Matrix(); m.postRotate(rot);
-                    android.graphics.Bitmap r = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
-                    if (r != bmp) { bmp.recycle(); bmp = r; }
-                }
-            } catch (Exception ignored) { }
-            return bmp;
-        } catch (android.system.ErrnoException e) {
-            throw new java.io.IOException(e);
-        }
-    }
-
-    private static String sha1(String s) {
-        try {
-            byte[] d = java.security.MessageDigest.getInstance("SHA-1").digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder h = new StringBuilder();
-            for (byte b : d) h.append(String.format("%02x", b));
-            return h.toString();
-        } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
 
     /**

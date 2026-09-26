@@ -6,7 +6,8 @@ export type RpcMethod =
   | "yjs-write" | "yjs-read"
   | "agent-ask"
   // Device-only (mobile/): bytes of one file the owner registered for a handoff link (lib/handoff.ts).
-  | "handoff-read";
+  | "handoff-read"
+  | "thumbnail";
 
 export type RpcParams =
   | { method: "list"; path: string }
@@ -21,7 +22,8 @@ export type RpcParams =
   | { method: "yjs-write"; docId: string; data: string }
   | { method: "yjs-read"; docId: string }
   | { method: "agent-ask"; agentId: string; query: string }
-  | { method: "handoff-read"; key: string; offset: number; length: number };
+  | { method: "handoff-read"; key: string; offset: number; length: number }
+  | { method: "thumbnail"; path: string; px?: number };
 
 export type AskSource = {
   path: string;
@@ -61,7 +63,8 @@ export type RpcResult =
   | { method: "yjs-write"; ok: true; bytes: number }
   | { method: "yjs-read"; data: string; bytes: number }
   | { method: "agent-ask"; answer: string; sources: AskSource[]; action?: Record<string, unknown> }
-  | { method: "handoff-read"; data: string; eof: boolean; size: number };
+  | { method: "handoff-read"; data: string; eof: boolean; size: number }
+  | { method: "thumbnail"; data: string; mime: string };
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;
