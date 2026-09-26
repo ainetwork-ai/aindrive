@@ -22,7 +22,7 @@ export function GetMacApp({ server, available = true, compact = false }: { serve
     if (!available) return null;
     return (
       <a href="/download/mac" className="text-sm text-drive-muted hover:text-drive-accent hover:underline" data-testid="get-mac-app-link">
-        Get the Mac app
+        Share another folder
       </a>
     );
   }
@@ -31,7 +31,8 @@ export function GetMacApp({ server, available = true, compact = false }: { serve
     <div className="rounded-2xl border border-drive-border bg-white p-8 text-center" data-testid="get-mac-app">
       <p className="text-lg font-medium">Share a folder from your computer</p>
       <p className="mt-1 text-sm text-drive-muted">
-        Its files stay on your computer — aindrive shows them here while it runs.
+        The only thing to install — and only on the computer that holds the folder. Its files stay there; you open
+        them here, from any browser.
       </p>
       {showApp ? (
         <>
