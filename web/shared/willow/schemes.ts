@@ -5,7 +5,7 @@
 // over the encoded entry. Membership (who may write where) is policy.ts, applied
 // by peers at ingest (D4); this file is only "is it really from that device".
 import { sha256 } from "@noble/hashes/sha2.js";
-import { encodeEntry, type Entry, type GrowingBytes } from "@earthstar/willow-utils";
+import { encodeEntry, type Entry, type GrowingBytes } from "@jsr/earthstar__willow-utils";
 import { Store } from "@earthstar/willow";
 import { equalBytes, utf8 } from "./bytes";
 import { sign, verify, type DeviceKeypair } from "./keys";
