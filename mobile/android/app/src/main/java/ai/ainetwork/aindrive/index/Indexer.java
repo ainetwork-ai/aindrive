@@ -187,6 +187,36 @@ public final class Indexer {
         progress.onProgress(recognised, toRecognise, phase);
     }
 
+    /**
+     * Index one file now — a fresh upload or a file the server just wrote — so the agent finds it
+     * without a full run. Metadata first (name, kind, date, place: findable at once), then what is
+     * in it (CLIP vector / transcript) when a recogniser is loaded. Leaves the full run's progress
+     * counters alone; the caller runs it on the same single index thread as full runs.
+     */
+    public void indexFile(SafFs.Entry e) throws Exception {
+        if (e == null || e.isDir) return;
+        if (index.needsIndex(e.docId, e.mtimeMs, e.size)) indexOne(e);
+        String kind = FileIndex.kindOf(e.mime, e.name);
+        boolean photo = FileIndex.PHOTO.equals(kind) || FileIndex.SCREENSHOT.equals(kind);
+        boolean av = FileIndex.AUDIO.equals(kind) || FileIndex.VIDEO.equals(kind);
+        if (!photo && !av) return;
+        ClipEmbedder clip = photo ? recognisers.clip() : null;
+        SpeechRecognizer speech = av ? recognisers.speech() : null;
+        if (clip == null && speech == null) return;
+        if (!index.needsRecognition(e.docId, clip != null, speech != null)) return;
+        if (clip != null) {
+            try (InputStream in = fs.open(e.docId)) {
+                float[] v = clip.embedImage(in);
+                if (v != null) index.setRecognition(e.docId, FileIndex.encodeVec(v), null);
+            }
+        } else {
+            try (android.os.ParcelFileDescriptor pfd = fs.openFd(e.docId)) {
+                SpeechRecognizer.Transcript t = speech.transcribe(pfd.getFileDescriptor(), recognisers.speechSeconds());
+                index.setRecognition(e.docId, null, t == null ? "" : t.text);
+            }
+        }
+    }
+
     private void indexOne(SafFs.Entry e) throws Exception {
         FileIndex.Row r = new FileIndex.Row();
         r.docId = e.docId;

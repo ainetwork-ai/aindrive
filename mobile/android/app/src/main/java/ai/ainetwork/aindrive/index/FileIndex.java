@@ -56,6 +56,12 @@ public final class FileIndex extends SQLiteOpenHelper {
         public boolean keywordsInTranscript;
         /** Only rows that have a CLIP vector. */
         public boolean withVec;
+        /**
+         * Only rows at or below this folder, given as its spellings (NFC and NFD of one path);
+         * empty = the whole drive. Compared exactly (case-sensitive), never with LIKE: SQLite's
+         * LIKE ignores ASCII case, and "Camera" must not match "camera".
+         */
+        public List<String> under = new ArrayList<>();
     }
 
     public FileIndex(Context ctx, String driveId) {
@@ -188,6 +194,76 @@ public final class FileIndex extends SQLiteOpenHelper {
         return dead.size();
     }
 
+    /**
+     * Drop the rows at `path` or below it (any of its spellings), e.g. after the file was deleted
+     * or moved away. Returns how many went.
+     */
+    public int removeUnder(List<String> spellings) {
+        StringBuilder where = new StringBuilder();
+        List<String> args = new ArrayList<>();
+        appendUnder(where, args, spellings);
+        if (args.isEmpty()) return 0;
+        return getWritableDatabase().delete("files", where.toString(), args.toArray(new String[0]));
+    }
+
+    /**
+     * A file moved from `oldPath` (any of its spellings) to `newPath`, and the storage may have
+     * given it a new document id: when the old row is the same file (same size, mtime and kind),
+     * re-key it instead of indexing it again, so its photo vector and transcript survive the move.
+     * Returns false when there was no such row (the caller indexes the file afresh).
+     */
+    public boolean rekey(List<String> oldPath, String newDocId, String newPath, String newName, String newKind, long mtimeMs, long size) {
+        SQLiteDatabase db = getWritableDatabase();
+        for (String old : oldPath) {
+            String oldId;
+            try (Cursor c = db.rawQuery("SELECT doc_id FROM files WHERE path = ? AND mtime_ms = ? AND size = ? AND kind = ?",
+                    new String[]{old, String.valueOf(mtimeMs), String.valueOf(size), newKind})) {
+                if (!c.moveToFirst()) continue;
+                oldId = c.getString(0);
+            }
+            db.beginTransaction();
+            try {
+                if (!oldId.equals(newDocId)) db.delete("files", "doc_id = ?", new String[]{newDocId});
+                ContentValues v = new ContentValues();
+                v.put("doc_id", newDocId);
+                v.put("path", newPath);
+                v.put("name", newName);
+                v.put("name_lc", newName.toLowerCase(Locale.ROOT));
+                db.update("files", v, "doc_id = ?", new String[]{oldId});
+                db.setTransactionSuccessful();
+            } finally { db.endTransaction(); }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Drop rows that sit exactly at `path` (any spelling) under another document id than
+     * `keepDocId` — what is left of a file that a write or an upload's rename just replaced.
+     */
+    public int removeAtExcept(List<String> spellings, String keepDocId) {
+        int n = 0;
+        for (String p : spellings) {
+            if (p == null || p.isEmpty()) continue;
+            n += getWritableDatabase().delete("files", "path = ? AND doc_id != ?", new String[]{p, keepDocId});
+        }
+        return n;
+    }
+
+    /** `(path = ? OR substr(path, 1, length(?)) = ?)` for each spelling; nothing for an empty list or the root "". */
+    static void appendUnder(StringBuilder where, List<String> args, List<String> spellings) {
+        List<String> real = new ArrayList<>();
+        for (String s : spellings) if (s != null && !s.isEmpty()) real.add(s);
+        if (real.isEmpty()) return;
+        where.append("(");
+        for (int i = 0; i < real.size(); i++) {
+            String p = real.get(i);
+            where.append(i > 0 ? " OR " : "").append("path = ? OR substr(path, 1, length(?)) = ?");
+            args.add(p); args.add(p + "/"); args.add(p + "/");
+        }
+        where.append(")");
+    }
+
     public int count() {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM files", null)) {
             return c.moveToFirst() ? c.getInt(0) : 0;
@@ -221,6 +297,11 @@ public final class FileIndex extends SQLiteOpenHelper {
             }
         }
         if (f.withVec) where.append(" AND vec IS NOT NULL");
+        if (!f.under.isEmpty()) {
+            StringBuilder under = new StringBuilder();
+            appendUnder(under, args, f.under);
+            if (under.length() > 0) where.append(" AND ").append(under);
+        }
         String order = f.minSize != null ? "size DESC, when_ms DESC" : "when_ms DESC, path ASC";
         String sql = "SELECT doc_id, path, name, kind, mime, mtime_ms, size, when_ms, lat, lon, country, city, vec, transcript FROM files WHERE "
                 + where + " ORDER BY " + order + (limit > 0 ? " LIMIT " + limit : "");

@@ -201,7 +201,7 @@ public class AgentService extends Service {
             conn.index = new FileIndex(this, driveId);
             conn.index.adoptSpeechEngine(speechEngineName());
             try { conn.index.adoptImageModel(clipStore().manifest.optString("model", "")); } catch (Exception ignored) { }
-            conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner);
+            conn.rpc = new RpcHandler(this, conn.fs, driveId, conn::askRunner, conn);
         } catch (Exception e) {
             conn.lastError = "Could not open folder: " + e.getMessage();
             synchronized (conns) { conns.put(driveId, conn); }
@@ -221,10 +221,18 @@ public class AgentService extends Service {
 
     // ------------------------------------------------------------ one drive
 
+    /** How long an RPC response may wait for room in the socket's send queue before it is dropped. */
+    private static final long SEND_WAIT_MS = 60_000;
+
+    /** "1.0+1": versionName + build number, sent as appVersion in the agent-hello. */
+    static String appVersion() { return BuildConfig.VERSION_NAME + "+" + BuildConfig.VERSION_CODE; }
+
     /** Everything that belongs to ONE drive: credentials, folder, socket, counters. */
-    private final class Conn {
+    private final class Conn implements RpcHandler.Changes {
         final String serverUrl, driveId, agentToken, driveSecret, folderLabel;
         final AtomicInteger rpcCount = new AtomicInteger();
+        /** Every frame this drive sends goes through here: OkHttp closes a socket whose queue passes 16 MiB. */
+        final SendGate gate = new SendGate();
         /**
          * An agent SOURCE: a folder the agent may read for its tasks (call
          * recordings, the camera roll) that is NOT served to the web. No
@@ -242,7 +250,7 @@ public class AgentService extends Service {
         FileIndex index;
         Indexer indexer;
         AskRunner ask;
-        WebSocket ws;
+        volatile WebSocket ws;
         volatile boolean connected;
         volatile boolean closed;
         int attempt;
@@ -265,16 +273,19 @@ public class AgentService extends Service {
                     .build();
             ws = http.newWebSocket(req, new WebSocketListener() {
                 @Override public void onOpen(WebSocket socket, Response response) {
+                    if (closed) { socket.close(1001, "agent shutting down"); return; }   // stopped while dialling
+                    ws = socket;   // before any frame of this socket is handled (same OkHttp thread)
                     connected = true;
                     attempt = 0;
                     lastError = null;
                     Log.i(TAG, "connected to " + wsUrl);
+                    // Protocol v2 hello: platform, appVersion, methods and caps ("ask.v2"). A fresh
+                    // socket's queue is empty, so this small frame goes straight out; a false return
+                    // means the socket is already closing and the reconnect loop takes over.
                     try {
-                        socket.send(new JSONObject()
-                                .put("type", "agent-hello")
-                                .put("hostname", deviceName())
-                                .toString());
-                    } catch (Exception ignored) { }
+                        if (!socket.send(Hello.build(deviceName(), appVersion()).toString()))
+                            Log.w(TAG, "agent-hello not sent: socket closing");
+                    } catch (Exception e) { Log.w(TAG, "agent-hello failed: " + e.getMessage()); }
                     notifyStatus();
                 }
 
@@ -405,16 +416,101 @@ public class AgentService extends Service {
                 } catch (Exception ignored) { return; }
             }
 
+            String method = p0 == null ? "?" : p0.optString("method", "?");
+            SendGate.Result sent = sendSigned(socket, response);
+            if (sent == SendGate.Result.TOO_LARGE) {
+                // One frame this big would make OkHttp close the socket: answer with an error instead.
+                Log.w(TAG, "rpc " + method + " response too large to send — answering with an error");
+                JSONObject error = new JSONObject();
+                try { error.put("reqId", reqId).put("ok", false).put("error", "response too large"); } catch (Exception ignored) { }
+                sent = sendSigned(socket, error);
+            }
+            if (sent != SendGate.Result.SENT) Log.w(TAG, "rpc " + method + " response not sent: " + sent);
+            notifyStatus();
+        }
+
+        /** Sign (WITHOUT `type`, then add it — what the desktop agent does and the server strips) and send through the gate. */
+        private SendGate.Result sendSigned(WebSocket socket, JSONObject response) {
+            String text;
             try {
-                // Sign the payload WITHOUT `type`, then add `type` — exactly what the
-                // desktop agent does, and what the server strips before verifying.
                 String responseSig = Sig.sign(driveSecret, response);
                 response.put("type", "response").put("sig", responseSig);
-                socket.send(response.toString());
+                text = response.toString();
             } catch (Exception e) {
-                Log.e(TAG, "send failed", e);
+                Log.e(TAG, "sign failed: " + e.getMessage());
+                return SendGate.Result.REFUSED;
             }
-            notifyStatus();
+            try {
+                return gate.send(new SendGate.Socket() {
+                    @Override public long queueSize() { return socket.queueSize(); }
+                    @Override public boolean send(String t) { return socket.send(t); }
+                }, text, SEND_WAIT_MS, () -> !closed && connected && ws == socket);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return SendGate.Result.CLOSED;
+            }
+        }
+
+        // ------------------------------------------------ incremental index (RpcHandler.Changes)
+        // What the server just wrote is indexed on the single index thread (after or before a full
+        // run, never beside it), so a fresh upload is findable at once. Only once the drive has
+        // been indexed: into an empty index one file would make "index is empty" a wrong answer.
+
+        @Override public void written(String path) {
+            indexLater(() -> {
+                String p = normalized(path);
+                if (!fs.indexable(p)) return;
+                SafFs.Entry e = fs.stat(p);
+                if (e == null || e.isDir) return;
+                index.removeAtExcept(ai.ainetwork.aindrive.agent.AskScope.spellings(p), e.docId);
+                indexer().indexFile(e);
+            });
+        }
+
+        @Override public void moved(String from, String to) {
+            indexLater(() -> {
+                String f = normalized(from), t = normalized(to);
+                java.util.List<String> fromSpellings = ai.ainetwork.aindrive.agent.AskScope.spellings(f);
+                SafFs.Entry e = fs.indexable(t) ? fs.stat(t) : null;
+                if (e == null) { index.removeUnder(fromSpellings); return; }
+                if (!e.isDir) {
+                    // A rename replaces an existing target: its row is stale now.
+                    index.removeAtExcept(ai.ainetwork.aindrive.agent.AskScope.spellings(t), e.docId);
+                    // A published upload (.aindrive/uploads/x.part → its path) has no old row: index it.
+                    if (t.equals(f) || !index.rekey(fromSpellings, e.docId, e.path, e.name, FileIndex.kindOf(e.mime, e.name), e.mtimeMs, e.size)) {
+                        if (!t.equals(f)) index.removeUnder(fromSpellings);
+                        indexer().indexFile(e);
+                    }
+                    return;
+                }
+                // A folder: re-key what was indexed under the old name (keeps vectors/transcripts), index the rest.
+                for (SafFs.Entry x : fs.walkFiles(t)) {
+                    String old = f + x.path.substring(Math.min(t.length(), x.path.length()));
+                    if (!index.rekey(ai.ainetwork.aindrive.agent.AskScope.spellings(old), x.docId, x.path, x.name,
+                            FileIndex.kindOf(x.mime, x.name), x.mtimeMs, x.size)) indexer().indexFile(x);
+                }
+                index.removeUnder(fromSpellings);
+            });
+        }
+
+        @Override public void removed(String path) {
+            indexLater(() -> index.removeUnder(ai.ainetwork.aindrive.agent.AskScope.spellings(normalized(path))));
+        }
+
+        private void indexLater(IndexTask task) {
+            if (fs == null || index == null || source) return;
+            try {
+                indexPool.execute(() -> {
+                    if (closed) return;
+                    try {
+                        if (index.count() == 0) return;
+                        task.run();
+                        notifyStatus();
+                    } catch (Exception e) {
+                        if (!closed) Log.w(TAG, "incremental index skipped: " + sanitize(e.getMessage()));
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException ignored) { /* service is stopping */ }
         }
 
         JSONObject statusJson() {
@@ -445,6 +541,11 @@ public class AgentService extends Service {
             return o;
         }
     }
+
+    private interface IndexTask { void run() throws Exception; }
+
+    /** The drive-relative form SafFs uses ("a/b", no "./" or doubled slashes); throws on "..". */
+    static String normalized(String rel) throws java.io.IOException { return String.join("/", SafFs.splitPath(rel)); }
 
     // ------------------------------------------------------------ recognition models
 

@@ -32,11 +32,13 @@ drive and a laptop drive are the same thing to the server.
 | `src/device.ts` | phone or Mac: the same shell is also the Mac app (`desktop/`, platform `electron`), so device names in copy and phone-only features (call/camera sources, models, Google picker) go through `ON_MAC` / `DEVICE` |
 | `src/ui.css`, `src/icons.ts` | the web's design language: tokens mirror `web/tailwind.config.ts` (cool-gray page, white cards, `#0b57d0`, Inter bundled via `@fontsource-variable/inter`, pill buttons, soft slate shadows, light only) and lucide icons like `web/components`. Change the web tokens → change these |
 | `android/…/AgentService.java` | the agent: one `Conn` (WSS socket + reconnect) per drive, in a single foreground service |
+| `android/…/{Hello,SendGate}.java` | the protocol v2 `agent-hello` (platform, appVersion, methods, caps `ask.v2`) and the send gate every frame goes through |
 | `android/…/SafFs.java` | filesystem over the picked SAF tree (real device storage) |
 | `android/…/RpcHandler.java` | RPC method dispatch, mirroring `cli/src/rpc.js` |
 | `android/…/Sig.java` | HMAC frame signing, byte-compatible with `web/lib/sig.js` |
 | `android/…/index/{PhotoIndex,Indexer,ExifMeta,GeoLookup}.java` | on-device photo index: app-private SQLite, EXIF date/GPS, offline GeoNames gazetteer (`assets/geo/cities.tsv.gz`, built by `scripts/build-gazetteer.py`) |
 | `android/…/agent/{QueryParser,AskRunner,SearchQuery,ContentWords}.java` | the on-device agent: question → kind/place/date/size filters + content words → name, transcript and photo matching → `{answer, sources}`; answers `agent-ask` and the in-app search |
+| `android/…/agent/AskScope.java` | what one `agent-ask` may touch: `mode` read/act and the `root` folder (v2) — read-only gating, the root prefix filter and the last-line `confine` of the reply |
 | `android/…/agent/{Router,SocialReply}.java` | decides what a turn is before the index is touched — small talk, social chit-chat (answered by the on-device LLM, else `SocialReply`), out of scope ("book a table for 4"), call report, one call transcribed ("엄유준 최신 통화 stt 해줘" → that person's newest recording, heard in full, from whichever call folder holds it), or a file question — and carries the dialogue state (`understand`). Guards: `RouterTest` replays every SGD user turn (none may reach the index) and one speaker of every Synthetic-Persona-Chat conversation (`persona-chat-turns.tsv.gz`, CC BY 4.0; none searched, ≥97% answered socially) |
 | `scripts/make-dialogues.py` → `test/resources/dialogues/` | the aindrive dialogue benchmark: DSTC8-style multi-turn dialogues about the phone's files (find/refine/collect/share/count/delete, calls, chat, out of scope) with the full dialogue state per turn; `dev`/`test` splits use disjoint phrasings and values, `holdout` was written after tuning. `DialogueDatasetTest` reports route/intent/slot accuracy and joint goal accuracy and fails below its floors |
 | `android/…/clip/{ClipEmbedder,ClipTokenizer,ModelStore,SceneLabels}.java` | photo recognition: **MobileCLIP2-S2** on ONNX Runtime (`assets/clip/mobileclip2-s2.json`, fp32, external-data weights, 400 MB; on the real corpus P@4 0.93 vs MobileCLIP-S0 0.88 vs SigLIP2-B/16 0.85 — see `scripts/` calibration; a photo matches a concept by zero-shot classification against ~90 everyday scenes (`SceneLabels`), not a cosine cut-off (the manifest's `minScore`/`margin` are unused legacy); licence apple-amlr = research use, SigLIP 2 is the Apache-2.0 alternative), CLIP BPE tokenizer port, checksum-verified model store (single files or tar.bz2 bundles). Changing the image model drops old vectors (`FileIndex.adoptImageModel`) |
@@ -166,6 +168,23 @@ drive and a laptop drive are the same thing to the server.
   [{path, snippet, matchedBy}]}` as the desktop agent, produced by
   `agent/AskRunner` over this drive's index; `agent.json` is never read (the
   phone has one kind of agent) and no LLM key exists on the device.
+  Protocol v2 (`caps: ["ask.v2"]` in the hello; contract in `docs/AINUI.md` §6
+  "Drive hosts"): `mode: "read"` never collects, moves, lists files for deletion,
+  writes or opens the call log; `root` limits every source, count and answer to
+  one folder; the reply carries `action`. The server sends `read` for everyone but
+  the drive owner. The in-app chat still asks with act over the whole drive.
+- **Every frame goes through `SendGate`.** OkHttp's `send()` never blocks: it
+  queues, and closes the socket when the queue would pass 16 MiB. So one RPC
+  response is admitted at a time, only while the queue stays under 12 MiB
+  (waiting up to 60 s for it to drain); a single frame over 12 MiB is answered
+  with `response too large` instead. iOS sets `maximumMessageSize` to 16 MiB:
+  the 1 MiB default refused the first 4 MiB upload chunk.
+- **Uploads are indexed as they land.** After a `write`, an upload's publish
+  (`rename` from `.aindrive/uploads/*.part`) or a `delete`, the drive's index
+  is updated for that path on the index thread (a moved file keeps its photo
+  vector and transcript), so a fresh upload is findable at once. Only for a
+  drive indexed at least once; edits made in the in-app browser still wait for
+  the next index run.
 - **Recognition is real and on-device.** Photos get a MobileCLIP vector (the
   question's content words become "a photo of …" and rank photos by cosine;
   ≥ 0.17 and within 0.08 of the best counts as a match), recordings and videos

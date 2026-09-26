@@ -144,6 +144,16 @@ public final class AskRunner {
      * to the same files. The result carries the effective filters back.
      */
     public JSONObject ask(String question, @Nullable JSONObject context) throws Exception {
+        return ask(question, context, AskScope.ACT_ALL);
+    }
+
+    /**
+     * The same, limited by `scope` (phone protocol v2, {@link AskScope}): with a root, every
+     * source, count and place/year summary is computed over files at or below it; read-only,
+     * nothing is collected, moved or marked for deletion and no call report runs (the call log
+     * is never read) — the action comes back skipped with reason "read_only".
+     */
+    public JSONObject ask(String question, @Nullable JSONObject context, AskScope scope) throws Exception {
         if (question == null || question.trim().isEmpty()) throw new IllegalArgumentException("empty_query");
         Router.Turn turn = Router.understand(parser, question, System.currentTimeMillis(), context);
         if (turn.social) {
@@ -153,6 +163,17 @@ public final class AskRunner {
         JSONObject routed = replyOf(turn);
         if (routed != null) return routed;
         SearchQuery q = turn.query;
+        JSONObject blocked = scope.blocked(q);
+        if (q.calls && (blocked != null || !scope.root.isEmpty())) {
+            // Read-only: the report writes files and reads the call log. Inside a folder: it is about
+            // the whole phone. Either way nothing runs, and the call log is never opened.
+            JSONObject action = blocked != null ? blocked : AskScope.skipped("collect", AskScope.OUTSIDE_ROOT).put("report", "calls");
+            String answer = blocked != null
+                    ? (q.korean ? "통화 요약은 통화 기록을 읽고 파일을 만들어야 해서 만들지 않았어요." : "A call report reads the call history and writes a file, so I didn't make one.") + AskScope.onlyLooked(q.korean)
+                    : AskScope.reportNeedsWholePhone(q.korean);
+            return new JSONObject().put("answer", answer).put("sources", new JSONArray()).put("action", action)
+                    .put("query", "calls").put("context", context == null ? JSONObject.NULL : context);
+        }
         if (q.calls) {
             try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).withOpener(callOpener).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
@@ -168,7 +189,7 @@ public final class AskRunner {
         }
 
         List<String> relaxed = new ArrayList<>();
-        Map<String, Hit> hits = search(q);
+        Map<String, Hit> hits = search(q, scope);
         // A bare word that matches nothing ("hi", a typo) is not a request for every file:
         // relax it only when something else (a kind, place, date, size, task) narrows the search.
         boolean onlyWords = q.kind == null && q.country == null && q.city == null && q.dateFrom == null && q.dateTo == null
@@ -185,7 +206,7 @@ public final class AskRunner {
         // in Paris" with no Paris photos says so. Only the kind is loosened ("Paris videos" → Paris
         // photos), and only for a bare place/date question.
         if (hits.isEmpty() && q.kind != null && q.keywords.isEmpty() && (q.city != null || q.country != null || q.dateFrom != null)) {
-            String kind = q.kind; q.kind = null; relaxed.add("kind"); hits = search(q);
+            String kind = q.kind; q.kind = null; relaxed.add("kind"); hits = search(q, scope);
             if (hits.isEmpty()) { q.kind = kind; relaxed.remove("kind"); }
         }
 
@@ -209,9 +230,10 @@ public final class AskRunner {
             anyContent |= h.tier == 2;
             anySpeech |= h.tier == 1;
         }
-        String answer = answerFor(q, ranked, total, relaxed, anyContent, anySpeech);
+        String answer = answerFor(q, ranked, total, relaxed, anyContent, anySpeech, scope);
         // "Photos from 2026" → 1: say where the rest are, so a small number doesn't look like a miss.
-        if (q.dateFrom != null && total > 0 && total <= 3 && relaxed.isEmpty()) answer += otherYears(q);
+        if (q.dateFrom != null && total > 0 && total <= 3 && relaxed.isEmpty()) answer += otherYears(q, scope);
+        if (blocked != null) answer += AskScope.onlyLooked(q.korean);
         if (q.count) {
             answer = (q.korean ? "모두 " + total + "개예요. " : "There are " + total + ". ") + answer;
             out.put("action", new JSONObject().put("type", "count").put("count", total));
@@ -221,14 +243,17 @@ public final class AskRunner {
         boolean exact = !ranked.isEmpty() && relaxed.isEmpty();
         // Lets the service drop this folder's loose matches when another folder matched exactly.
         out.put("relaxed", !relaxed.isEmpty());
-        if (q.delete) {
+        if (blocked != null) {
+            // Read-only: say what it would have done, touch nothing (not even a pending delete list).
+            out.put("action", blocked);
+        } else if (q.delete) {
             // Never delete on the strength of a parse: list what would go and wait for a tap.
             JSONArray files = new JSONArray();
             for (Hit h : ranked) files.put(h.row.path);
             out.put("action", new JSONObject().put("type", "delete").put("pending", true).put("count", exact ? ranked.size() : 0)
                     .put("files", files).put("skipped", !exact).put("reason", exact ? JSONObject.NULL : (ranked.isEmpty() ? "nothing matched" : "only loose matches")));
         } else if (q.collect && ops != null && ops.canWrite() && exact) {
-            out.put("action", collect(q, ranked));
+            out.put("action", collect(q, ranked, scope));
         } else if (q.collect) {
             out.put("action", new JSONObject().put("type", q.move ? "move" : "collect").put("skipped", true)
                     .put("reason", ranked.isEmpty() ? "nothing matched" : !relaxed.isEmpty() ? "only loose matches" : "no file access"));
@@ -241,8 +266,9 @@ public final class AskRunner {
      * question, e.g. "음식 사진 2026-09". Sharing the folder needs the web
      * session, which lives in the shell, so that step is reported for it.
      */
-    private JSONObject collect(SearchQuery q, List<Hit> hits) throws Exception {
-        String folder = folderName(q);
+    private JSONObject collect(SearchQuery q, List<Hit> hits, AskScope scope) throws Exception {
+        // Inside the asked-about folder, so an act never writes outside it (the whole drive: top level, as before).
+        String folder = scope.collectInto(folderName(q));
         int copied = 0, failed = 0;
         JSONArray files = new JSONArray();
         for (Hit h : hits) {
@@ -261,8 +287,8 @@ public final class AskRunner {
 
     /** " Photos here are from Tokyo (120), Seoul (80), …" — so a miss says where to look instead. */
     /** " Others here: 2024 (10), 2023 (1)." — the same search without its date, by year, outside the asked range. */
-    private String otherYears(SearchQuery q) {
-        FileIndex.Filter f = new FileIndex.Filter();
+    private String otherYears(SearchQuery q, AskScope scope) {
+        FileIndex.Filter f = filter(scope);
         f.kind = q.kind; f.country = q.country; f.city = q.city; f.minSize = q.minSize;
         Map<Integer, Integer> byYear = new java.util.TreeMap<>(java.util.Collections.reverseOrder());
         Calendar c = Calendar.getInstance();
@@ -279,8 +305,8 @@ public final class AskRunner {
         return sb.append(".").toString();
     }
 
-    private String knownPlaces(@Nullable String kind, boolean ko) {
-        FileIndex.Filter f = new FileIndex.Filter();
+    private String knownPlaces(@Nullable String kind, boolean ko, AskScope scope) {
+        FileIndex.Filter f = filter(scope);
         f.kind = kind == null ? FileIndex.PHOTO : kind;
         Map<String, Integer> byPlace = new LinkedHashMap<>();
         for (FileIndex.Row r : index.query(f, 0)) {
@@ -371,9 +397,9 @@ public final class AskRunner {
     }
 
     /** All rows matching the hard filters, each with the strongest way its content matched. */
-    private Map<String, Hit> search(SearchQuery q) throws Exception {
+    private Map<String, Hit> search(SearchQuery q, AskScope scope) throws Exception {
         Map<String, Hit> out = new LinkedHashMap<>();
-        FileIndex.Filter base = new FileIndex.Filter();
+        FileIndex.Filter base = filter(scope);
         base.kind = q.kind; base.country = q.country; base.city = q.city;
         base.dateFrom = q.dateFrom; base.dateTo = q.dateTo; base.minSize = q.minSize;
 
@@ -435,7 +461,15 @@ public final class AskRunner {
     private static FileIndex.Filter copy(FileIndex.Filter f) {
         FileIndex.Filter c = new FileIndex.Filter();
         c.kind = f.kind; c.country = f.country; c.city = f.city; c.dateFrom = f.dateFrom; c.dateTo = f.dateTo; c.minSize = f.minSize;
+        c.under = new ArrayList<>(f.under);
         return c;
+    }
+
+    /** A filter already limited to the scope's root: every index query of an ask starts here. */
+    private static FileIndex.Filter filter(AskScope scope) {
+        FileIndex.Filter f = new FileIndex.Filter();
+        f.under = scope.rootSpellings();
+        return f;
     }
 
     /** A short window of the transcript around the first keyword, for the result row. */
@@ -460,7 +494,7 @@ public final class AskRunner {
         return s.toString();
     }
 
-    private String answerFor(SearchQuery q, List<Hit> rows, int total, List<String> relaxed, boolean anyContent, boolean anySpeech) {
+    private String answerFor(SearchQuery q, List<Hit> rows, int total, List<String> relaxed, boolean anyContent, boolean anySpeech, AskScope within) {
         boolean ko = q.korean;
         if (rows.isEmpty()) {
             String where = q.city != null ? (ko && geo.cityKo(q.city) != null ? geo.cityKo(q.city) : q.city) : q.country != null ? geo.countryName(q.country, ko) : null;
@@ -474,7 +508,7 @@ public final class AskRunner {
                         : "No " + what + (where != null ? " taken in " + where : "") + (when != null ? " from " + when : "") + " here.";
                 if (!topic.isEmpty()) {
                     // The place/date has files, just none showing the topic: say that, not "no photos from Tokyo".
-                    FileIndex.Filter f = new FileIndex.Filter();
+                    FileIndex.Filter f = filter(within);
                     f.kind = q.kind == null ? FileIndex.PHOTO : q.kind; f.country = q.country; f.city = q.city; f.dateFrom = q.dateFrom; f.dateTo = q.dateTo;
                     int there = index.query(f, 0).size();
                     String scope = kindNoun(f.kind, there, ko) + (where != null ? (ko ? "" : " taken in " + where) : "") + (when != null ? (ko ? "" : " from " + when) : "");
@@ -482,7 +516,7 @@ public final class AskRunner {
                             ? (where != null ? where + "에서 찍은 " : "") + (when != null ? when + " " : "") + kindNoun(f.kind, there, ko) + " " + there + "개 중에 “" + topic + "”에 해당하는 건 없어요."
                             : "There are " + there + " " + scope + ", but none of them show “" + topic + "”.";
                 }
-                String places = where != null ? knownPlaces(q.kind, ko) : "";
+                String places = where != null ? knownPlaces(q.kind, ko, within) : "";
                 return none + places;
             }
             return ko ? "조건에 맞는 파일을 찾지 못했어요." : "No files matched your question.";
