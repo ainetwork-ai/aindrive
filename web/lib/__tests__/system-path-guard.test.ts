@@ -58,7 +58,9 @@ beforeEach(() => { calls.length = 0; });
 describe(".aindrive is unreachable", () => {
   it("fs/read refuses it for the owner, however the path is spelled", async () => {
     cookieJar.set("aindrive_session", await sign("owner1"));
-    for (const p of [".aindrive/config.json", "/.aindrive/config.json", "./.aindrive//config.json", ".aindrive"]) {
+    // Upper-case spellings too: a macOS agent's filesystem ignores case, so
+    // ".AINDRIVE/config.json" is the same file there.
+    for (const p of [".aindrive/config.json", "/.aindrive/config.json", "./.aindrive//config.json", ".aindrive", ".AINDRIVE/config.json", ".Aindrive/agents/a.json"]) {
       const res = await readRoute.GET(new Request(`http://x/api?path=${encodeURIComponent(p)}`), ctx);
       expect(res.status, p).toBe(403);
     }
@@ -68,6 +70,7 @@ describe(".aindrive is unreachable", () => {
   it("zPath rejects it, so JSON-body routes 400 before touching the agent", async () => {
     expect(zPath.safeParse(".aindrive/config.json").success).toBe(false);
     expect(zPath.safeParse("/.aindrive").success).toBe(false);
+    expect(zPath.safeParse(".AINDRIVE/config.json").success).toBe(false);
     expect(zPath.safeParse("docs/.aindrive/x").success).toBe(true); // only reserved at root
     cookieJar.set("aindrive_session", await sign("owner1"));
     const w = await writeRoute.POST(post({ path: ".aindrive/config.json", content: "{}" }), ctx);
@@ -78,7 +81,7 @@ describe(".aindrive is unreachable", () => {
   });
 
   it("runSkill (MCP/A2A) refuses it", async () => {
-    for (const p of [".aindrive/config.json", "/.aindrive/config.json"]) {
+    for (const p of [".aindrive/config.json", "/.aindrive/config.json", ".AINDRIVE/config.json"]) {
       const r = await runSkill({ userId: "owner1" }, "read_file", { drive_id: "d1", path: p });
       expect(r, p).toMatchObject({ kind: "err", code: "forbidden" });
     }

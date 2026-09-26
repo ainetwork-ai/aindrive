@@ -86,6 +86,13 @@ describe("paidAccessDenial — paid carve-out read gate (DB)", () => {
     expect(paidAccessDenial(DRIVE, "old/x.pdf", "viewer", OTHER)).toBeNull();
   });
 
+  it("a sale covers every letter case of its path — a macOS agent serves Premium/ for premium/", () => {
+    expect(paidAccessDenial(DRIVE, "PREMIUM/a.pdf", "viewer", OTHER)).toMatchObject({ gatePath: "premium" });
+    expect(paidAccessDenial(DRIVE, "Premium/Secret/x.pdf", "viewer", BUYER)).toMatchObject({ gatePath: "premium/secret" });
+    expect(paidAccessDenial(DRIVE, "Premium/a.pdf", "viewer", BUYER)).toBeNull(); // the buyer's receipt covers any spelling
+    expect(paidLocksForListing(DRIVE, "", ["Premium"], "viewer", OTHER).Premium).toMatchObject({ shareId: "s-premium" });
+  });
+
   it("the denial says whether the gate is listed — the paywall offers Buy only for a listed sale", () => {
     expect(paidAccessDenial(DRIVE, "premium/a.pdf", "viewer", OTHER)).toMatchObject({ listed: true });
     expect(paidAccessDenial(DRIVE, "private/a.pdf", "viewer", OTHER)).toMatchObject({ gatePath: "private", listed: false });

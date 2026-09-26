@@ -82,9 +82,12 @@ const LIMITS = {
 // reserved-path gate. Mirrors web/shared/domain/policy/system-paths.ts.
 const RPC_ALLOWED_SYSTEM_DIRS = [".aindrive/agents", ".aindrive/uploads"];
 
+// Compared in lower case: on a case-insensitive filesystem (macOS)
+// ".AINDRIVE/config.json" opens the same file.
 export function isReservedRpcPath(rel) {
-  if (rel !== ".aindrive" && !rel.startsWith(".aindrive/")) return false;
-  return !RPC_ALLOWED_SYSTEM_DIRS.some((d) => rel === d || rel.startsWith(d + "/"));
+  const r = rel.toLowerCase();
+  if (r !== ".aindrive" && !r.startsWith(".aindrive/")) return false;
+  return !RPC_ALLOWED_SYSTEM_DIRS.some((d) => r === d || r.startsWith(d + "/"));
 }
 
 export function safeResolve(root, rel) {

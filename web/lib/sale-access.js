@@ -12,6 +12,11 @@ import { db } from "./db.js";
 import { atLeast, canReadContent, isAncestorOrSelf } from "./access-core.js";
 
 const depth = (p) => (p === "" ? 0 : p.split("/").length);
+// A sale covers every letter case of its path: a macOS agent's filesystem
+// ignores case, so "premium/a.pdf" there IS the file under a sale at
+// "Premium". On a case-sensitive agent this also locks a sibling differing only
+// in case — the safe direction. Grants (bestMatchingRole) stay exact.
+const foldCase = (p) => p.toUpperCase().toLowerCase();
 
 /**
  * The nearest gate covering `targetPath`: the deepest ancestor-or-self priced
@@ -22,9 +27,10 @@ const depth = (p) => (p === "" ? 0 : p.split("/").length);
  * @param {string} targetPath
  */
 function nearestSale(rows, targetPath) {
+  const target = foldCase(targetPath);
   let best = null;
   for (const r of rows) {
-    if (!isAncestorOrSelf(r.path, targetPath)) continue;
+    if (!isAncestorOrSelf(foldCase(r.path), target)) continue;
     if (!best || depth(r.path) > depth(best.path)) best = r;
   }
   return best;

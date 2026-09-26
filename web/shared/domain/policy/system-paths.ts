@@ -30,6 +30,8 @@ const SYSTEM_PREFIX = ".aindrive";
  *   isSystemPath(".aindrive")              → true
  *   isSystemPath(".aindrive/")             → true
  *   isSystemPath(".aindrive/agents/x.json")→ true
+ *   isSystemPath(".AINDRIVE/config.json")  → true   (any letter case: a macOS
+ *                                                    agent's filesystem ignores it)
  *   isSystemPath("docs/.aindrive-notes")   → false  (only reserved at root)
  *   isSystemPath("aindrive")               → false  (no leading dot)
  *   isSystemPath("")                       → false  (root, allowed)
@@ -40,7 +42,5 @@ const SYSTEM_PREFIX = ".aindrive";
  */
 export function isSystemPath(path: string): boolean {
   if (typeof path !== "string") return false;
-  if (path === SYSTEM_PREFIX) return true;
-  if (path.startsWith(SYSTEM_PREFIX + "/")) return true;
-  return false;
+  return path.split("/")[0].toLowerCase() === SYSTEM_PREFIX;
 }
