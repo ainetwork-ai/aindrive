@@ -85,7 +85,7 @@ export class ShareSheet implements Sheet {
               <li data-app="${esc(app.id)}" data-space="${esc(sp.id)}">
                 <div class="avatar">${esc(sp.icon || "👥")}</div>
                 <div class="grow"><div class="t">${esc(sp.name)}</div><div class="s">${esc([sp.group, sp.members ? `${sp.members} people` : ""].filter(Boolean).join(" · "))}</div></div>
-                <button class="switch" role="switch" aria-checked="${sp.shared}" aria-label="Share into ${esc(sp.name)}" data-app-toggle ${this.busy ? "disabled" : ""}></button>
+                <button class="switch" role="switch" aria-checked="${sp.shared}" aria-label="Share into ${esc(sp.name)}" data-app-toggle></button>
               </li>`).join("")}
           </ul>`}`).join("")}
       </div>` : "";
@@ -207,13 +207,9 @@ export class ShareSheet implements Sheet {
       const s = this.shares.find((x) => x.id === sid);
       await this.ctx.web.editShare(this.driveId, sid, { listed: !s?.listed });
     }));
-    on(root, "[data-space] [data-app-toggle]", "click", (el) => this.act(async () => {
-      const li = el.closest<HTMLElement>("[data-space]")!;
-      const shared = el.getAttribute("aria-checked") !== "true";
-      const name = this.apps.flatMap((a) => a.spaces).find((s) => s.id === li.dataset.space)?.name ?? "the workspace";
-      await this.ctx.web.setAppShared(this.driveId, li.dataset.app!, li.dataset.space!, this.path, shared);
-      this.ctx.notify(shared ? `Shared into ${name}` : `No longer shared into ${name}`);
-    }));
+    // An app switch flips in place and saves in the background — no busy state and no reload of the
+    // whole sheet (each was a full redraw, and the switch showed its old state until the reload: it blinked).
+    on(root, "[data-space] [data-app-toggle]", "click", (el) => void this.toggleApp(el));
     on(root, "#sh-sell", "click", () => this.act(async () => {
       const price = Number(val(root, "sh-price"));
       if (!(price >= 0.01 && price <= 9999.99)) throw new Error("Price must be between 0.01 and 9999.99");
@@ -244,6 +240,27 @@ export class ShareSheet implements Sheet {
       this.justSold = { id: made.id ?? made.share?.id, url: made.url, price, currency: val(root, "sh-cur") || "USDC", listed };
       this.focusSell = true;   // after the reload, keep the Sell card (and the new sale) in view
     }));
+  }
+
+  private readonly appSaving = new Set<string>();
+
+  private async toggleApp(el: HTMLElement) {
+    const li = el.closest<HTMLElement>("[data-space]")!;
+    const appId = li.dataset.app!, spaceId = li.dataset.space!, k = `${appId}|${spaceId}`;
+    const sp = this.apps.find((a) => a.app.id === appId)?.spaces.find((x) => x.id === spaceId);
+    if (!sp || this.appSaving.has(k)) return;
+    const shared = !sp.shared;
+    const flip = (v: boolean) => { sp.shared = v; el.setAttribute("aria-checked", String(v)); };
+    flip(shared);
+    this.appSaving.add(k);
+    try {
+      await this.ctx.web.setAppShared(this.driveId, appId, spaceId, this.path, shared);
+      ShareSheet.appCache.set(`${this.driveId}|${this.path}`, this.apps);
+      this.ctx.notify(shared ? `Shared into ${sp.name}` : `No longer shared into ${sp.name}`);
+    } catch (e) {
+      flip(!shared);
+      this.ctx.notify(msgOf(e), true);
+    } finally { this.appSaving.delete(k); }
   }
 
   private async act(fn: () => Promise<void>) {
