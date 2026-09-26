@@ -38,7 +38,7 @@ export class AindriveProvider {
   agentMaterializes = false;
   private driveIdForAgent = "";
 
-  /** Asks the server now (the agent may have just become ready); offline, the last answer for this drive. */
+  /** True when the browser should NOT save the file: the agent writes it, or we are offline. Asks the server now (the agent may have just become ready). */
   async agentWrites(): Promise<boolean> {
     const memo = `aindrive-willow-agent-${this.driveIdForAgent}`;
     try {
@@ -46,7 +46,10 @@ export class AindriveProvider {
       this.agentMaterializes = !!j.materializes;
       try { localStorage.setItem(memo, this.agentMaterializes ? "1" : "0"); } catch {}
     } catch {
+      // offline: a file write cannot succeed now, and the edit is safe in the Willow
+      // store; skip saving (the next save after reconnecting writes it, or the agent does)
       try { this.agentMaterializes = localStorage.getItem(memo) === "1"; } catch {}
+      return true;
     }
     return this.agentMaterializes;
   }

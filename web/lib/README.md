@@ -66,6 +66,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `migrations/` — one-shot idempotent migrations (`run.js` runs all at startup).
 
 **Media**
+- `media/rtc-signal.ts` + `media/p2p-client.ts` — the direct device → browser path: the server gates and relays WebRTC signalling (token scoped to drive/path/root/expiry, signed with the drive secret); the page takes verified chunks over a data channel, the service worker (`public/sw.js`) hands it the page's fs/stream requests; anything the device does not bring comes from the server. `window.__aindriveP2P` has the byte counters and a `disabled` switch.
 - `media/cache.ts` — the server as a verifying cache for large files: `media-index` (the device's 1 MiB chunk hash list) + `download-chunk`, every chunk checked (`shared/media/chunks.ts`), kept under `<data>/media-cache/<drive>/<root>/`, LRU per drive (`AINDRIVE_MEDIA_CACHE_MB`), cached ranges served while the device is offline. `bytesFor` is what fs/stream and fs/download call.
 
 **Collab / Willow**

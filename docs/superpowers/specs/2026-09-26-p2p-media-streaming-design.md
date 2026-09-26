@@ -105,4 +105,8 @@ first-class browser path. Revisit if Phase 2's direct transport ends up on iroh 
    (`web/lib/media/cache.ts`, `media-index` on the CLI, Android and iOS). M7 (binary
    frames) is still open: chunks still travel as base64 inside `download-chunk`.
 2. Playback copy (M6).
-3. Direct WebRTC path (M5), together with Phase 2's direct transport.
+3. Direct WebRTC path (M5). **Shipped for CLI/Mac agents** (`werift` in the agent,
+   `web/lib/media/p2p-client.ts` + the service worker in the browser, signalling
+   `/api/media/rtc` with a drive-secret token scoped to drive, path, content root and
+   expiry). Pieces are 16 KiB. Phones need the WebView peer (the phone shell plan).
+   No TURN: without a direct path the server cache serves.
