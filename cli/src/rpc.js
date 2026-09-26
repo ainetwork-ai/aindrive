@@ -2,9 +2,9 @@ import { promises as fsp, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as Y from "yjs";
-import sharp from "sharp";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
 import { runAgentAsk } from "./agent-runner.js";
+import { readHandoff } from "./handoffs.js";
 
 import { log, trace as pinoTrace } from "./logger.js";
 
@@ -68,6 +68,8 @@ const RPC_METHODS = new Set([
   "upload-chunk", "download-chunk", "thumbnail",
   "yjs-write", "yjs-read", "yjs-stats",
   "agent-ask",
+  // Mac app only: bytes of a file the owner handed to another agent (handoffs.js).
+  "handoff-read",
 ]);
 
 const HIDDEN = new Set([".aindrive", ".DS_Store", ".git"]);
@@ -167,6 +169,17 @@ async function toEntry(root, abs) {
   };
 }
 
+/**
+ * sharp is loaded on the first thumbnail, not at start: the Mac app's bundled agent ships without it
+ * (native, per-arch), and a missing module must fail that one request — the web route then pulls the
+ * original — never stop the agent from connecting at all.
+ */
+let _sharp = null;
+async function loadSharp() {
+  if (!_sharp) _sharp = (await import("sharp")).default;
+  return _sharp;
+}
+
 export async function handleRpc(params, root) {
   if (!params || !RPC_METHODS.has(params.method)) throw new Error("unknown method");
 
@@ -241,6 +254,11 @@ export async function handleRpc(params, root) {
       finally { await fh.close(); }
       return { method: "upload-chunk", ok: true, receivedBytes: buf.length };
     }
+    case "handoff-read": {
+      // Not a path in this drive: a key the owner registered for one file (never `root`-relative).
+      const r = await readHandoff(params.key, params.offset, params.length);
+      return { method: "handoff-read", ...r };
+    }
     case "download-chunk": {
       const abs = safeResolve(root, params.path);
       const fh = await fsp.open(abs, "r");
@@ -260,7 +278,7 @@ export async function handleRpc(params, root) {
       // (usually ~20 KB) crosses the network.
       const abs = safeResolve(root, params.path);
       const px = params.px ?? 256;
-      const jpeg = await sharp(abs, { failOn: "none" })
+      const jpeg = await (await loadSharp())(abs, { failOn: "none" })
         .rotate()
         .resize({ width: px, height: px, fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 82 })

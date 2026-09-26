@@ -1,0 +1,4 @@
+cities.tsv.gz is derived from the GeoNames "cities15000" export
+(https://download.geonames.org/export/dump/), licensed under the
+Creative Commons Attribution 4.0 License (https://creativecommons.org/licenses/by/4.0/).
+Columns: name, ISO-3166 country, lat, lon, population, Korean alternate name (if any).

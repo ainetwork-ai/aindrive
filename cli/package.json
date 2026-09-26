@@ -1,6 +1,6 @@
 {
   "name": "aindrive",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Local agent for aindrive — connects any folder to a running aindrive web server (local or remote) via an outbound WebSocket. No inbound ports opened on your machine.",
   "keywords": [
     "drive",
@@ -25,7 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.11.1",
     "sharp": "^0.35.4"
   },
   "devDependencies": {
