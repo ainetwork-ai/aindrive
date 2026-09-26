@@ -72,6 +72,11 @@ const RPC_METHODS = new Set([
   "handoff-read",
 ]);
 
+/** The methods handleRpc answers, sorted (a copy: the set itself stays private). */
+export function rpcMethodNames() {
+  return [...RPC_METHODS].sort();
+}
+
 const HIDDEN = new Set([".aindrive", ".DS_Store", ".git"]);
 const LIMITS = {
   maxPathBytes: 4096,

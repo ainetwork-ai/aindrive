@@ -15,7 +15,7 @@ internals.
 |------------|----------------|
 | `main.js` | CLI entrypoint — commander wiring of `commands/` |
 | `commands/` | one file per verb: `login` `serve` `rotate` `status` `stop` `logs` `mcp` |
-| `agent.js` | WS bridge to the server: signed-RPC loop, `fs.watch` change gossip, graceful drain/shutdown. Pure helpers `toWsUrl`/`sanitize` exported for test |
+| `agent.js` | WS bridge to the server: `agent-hello`, signed-RPC loop, `fs.watch` change gossip, graceful drain/shutdown. Pure helpers `toWsUrl`/`sanitize`/`agentHello` exported for test |
 | `agent-runner.js` | local `agent-ask` execution (knowledge fetch + LLM call). The API key never leaves this process — the whole point of running it here |
 | `rpc.js` | the RPC dispatch (`handleRpc`): fs `read`/`write`/`list`/`stat`, chunked `upload`/`download`, `yjs-*`, `agent-ask`. Path guard `safeResolve`: no root escape, and `.aindrive/` refused except `agents/` + `uploads/` (`isReservedRpcPath`) |
 | `willow-store.js` | the `yjs_entries` SQLite store — **authoritative for all reads**; the official Willow `Store` is also written but fire-and-forget / not read back (see Gotchas) |
@@ -36,6 +36,12 @@ internals.
 - **`sig.js` ↔ `web/lib/sig.js` must stay byte-compatible** — `__tests__/sig.test.mjs`
   imports the web copy and round-trips against it. Signed payloads should stay flat
   (canonicalisation does not recurse — see the `sig.js` header).
+- **`agent-hello` is the first frame** (phone protocol v2, `docs/AINUI.md` §6 "Drive
+  hosts"): `platform: "cli"`, `appVersion` from `package.json`, `methods` =
+  `rpcMethodNames()` + `rotate-credentials`, and `caps: []`. The CLI does not claim
+  `ask.v2`: `agent-ask` here runs the owner's LLM agent, which has no read-only mode
+  or root filter yet, so the server's `ask` skill refuses questions to CLI drives.
+  The Mac app runs this same agent, so its drives also say `cli`.
 - **`willow-store.js`: the `yjs_entries` mirror is the source of truth for reads**;
   the Willow `Store` write is write-only decoration today.
 - **Tests**: vitest (`npm test`). `__tests__/*.test.mjs` includes characterization
