@@ -10,7 +10,7 @@ await build({
   platform: "node",
   target: "node20",
   format: "esm",
-  external: ["better-sqlite3"],
+  external: ["better-sqlite3", "sharp"],
   banner: {
     js: [
       "#!/usr/bin/env node",

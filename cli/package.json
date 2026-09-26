@@ -25,7 +25,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0"
+    "better-sqlite3": "^11.7.0",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@earthstar/meadowcap": "npm:@jsr/earthstar__meadowcap@^0.6.4",
@@ -36,12 +37,21 @@
     "esbuild": "^0.28.1",
     "mime-types": "^2.1.35",
     "pino": "^10.3.1",
-    "undici": "^7.28.0",
-    "vitest": "^4.1.8",
+    "undici": "^8.11.2",
+    "vitest": "^5.0.2",
     "ws": "^8.18.0",
     "yjs": "^13.6.30"
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "postcss": "^8.5.28",
+    "qs": "^6.16.0",
+    "hono": "^4.13.9",
+    "@hono/node-server": "^1.19.15",
+    "fast-uri": "^4.2.1",
+    "ip-address": "^10.7.2",
+    "nanoid": "^6.0.1"
   }
 }

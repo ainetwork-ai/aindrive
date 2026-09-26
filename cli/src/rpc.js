@@ -2,6 +2,7 @@ import { promises as fsp, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as Y from "yjs";
+import sharp from "sharp";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
 import { runAgentAsk } from "./agent-runner.js";
 
@@ -64,7 +65,8 @@ export function isSelfWrite(path) {
 
 const RPC_METHODS = new Set([
   "list", "stat", "read", "write", "mkdir", "rename", "delete",
-  "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
+  "upload-chunk", "download-chunk", "thumbnail",
+  "yjs-write", "yjs-read", "yjs-stats",
   "agent-ask",
 ]);
 
@@ -250,6 +252,20 @@ export async function handleRpc(params, root) {
         const eof = params.offset + bytesRead >= st.size;
         return { method: "download-chunk", data: buf.subarray(0, bytesRead).toString("base64"), eof };
       } finally { await fh.close(); }
+    }
+    case "thumbnail": {
+      // Generate a small JPEG thumbnail for image files. Desktop doesn't have
+      // system-cached thumbnails like mobile, so we decode + resize via sharp.
+      // Still much faster than sending the full original: only this small JPEG
+      // (usually ~20 KB) crosses the network.
+      const abs = safeResolve(root, params.path);
+      const px = params.px ?? 256;
+      const jpeg = await sharp(abs, { failOn: "none" })
+        .rotate()
+        .resize({ width: px, height: px, fit: "inside", withoutEnlargement: true })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+      return { method: "thumbnail", data: jpeg.toString("base64"), size: jpeg.length, mime: "image/jpeg" };
     }
     case "yjs-write": {
       const docId = String(params.docId || "");
