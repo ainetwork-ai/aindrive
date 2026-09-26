@@ -10,6 +10,7 @@ import { handoffParts, type Handed } from "./a2a-parts";
 export type { Handed, LinkedFile, HandoffMcp } from "./a2a-parts";
 export { HANDOFF_MCP_PART } from "./a2a-parts";
 import { Preferences } from "@capacitor/preferences";
+import { a2aReplyStart, a2aReplyText, foldA2aEvent } from "./a2a-stream";
 import { ClientFactory, ClientFactoryOptions, DefaultAgentCardResolver, JsonRpcTransportFactory, RestTransportFactory } from "@a2a-js/sdk/client";
 import type { AgentCard, Message, Task } from "@a2a-js/sdk";
 
@@ -176,34 +177,20 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
 }
 
 /**
- * One streamed turn: status messages carry the text most agents write (a fuller draft each time or,
- * with `append`, a chunk), artifacts carry deliverables; the composed text goes to `onDelta` after
- * every event and is returned at the end.
+ * One streamed turn, folded by a2a-stream.ts: a working step shows until answer text arrives, appended
+ * chunks grow the answer, and the final status (the whole answer) replaces the chunks rather than adding
+ * to them. The composed text goes to `onDelta` whenever it changes and is returned at the end.
  */
 async function stream(client: { sendMessageStream(p: { message: Message; configuration?: Record<string, unknown> }): AsyncGenerator<unknown> },
                       message: Message, contextId: string | undefined, onDelta: (text: string) => void): Promise<{ text: string; contextId?: string }> {
-  let said = "", ctx = contextId, last = "";
-  const arts = new Map<string, string>();
-  const compose = () => uniqueTexts([said, ...arts.values()]).join("\n\n");
-  for await (const raw of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
-    const ev = raw as Record<string, unknown>;
-    if (typeof ev.contextId === "string") ctx = ev.contextId;
-    if (ev.kind === "message") said = textOf(ev.parts);
-    else if (ev.kind === "task") {
-      const t = ev as unknown as Task;
-      if (t.status?.message) said = textOf(t.status.message.parts);
-      for (const a of t.artifacts ?? []) arts.set(a.artifactId ?? String(arts.size), textOf(a.parts));
-    } else if (ev.kind === "status-update") {
-      const m = (ev.status as { message?: { parts?: unknown } } | undefined)?.message;
-      if (m) { const t = textOf(m.parts); said = ev.append ? said + t : t; }
-    } else if (ev.kind === "artifact-update") {
-      const a = ev.artifact as { artifactId?: string; parts?: unknown } | undefined;
-      if (a) { const k = a.artifactId ?? "0"; const t = textOf(a.parts); arts.set(k, ev.append ? (arts.get(k) ?? "") + t : t); }
-    }
-    const now = compose();
-    if (now !== last) { last = now; onDelta(now); }
+  let reply = a2aReplyStart(contextId), last = "";
+  for await (const event of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
+    reply = foldA2aEvent(reply, event);
+    const now = reply.text || reply.step || "";
+    if (now && now !== last) { last = now; onDelta(now); }
+    if (reply.done) break;
   }
-  return { text: compose() || "(empty reply)", contextId: ctx };
+  return { text: a2aReplyText(reply), contextId: reply.contextId };
 }
 
 /** Non-empty texts, each once — a text contained in an earlier one is a repeat, not an addition. */

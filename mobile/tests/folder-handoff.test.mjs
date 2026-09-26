@@ -8,7 +8,7 @@ const result = await build({
   stdin: { contents: 'export * from "./src/folder-handoff"; export * from "./src/a2a-parts";', resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' },
   bundle: true, write: false, format: 'esm', platform: 'node',
 });
-const { prepareFolderHandoff, handoffParts, HANDOFF_MCP_PART } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
+const { prepareFolderHandoff, handoffParts, HANDOFF_MCP_PART, FOLDER_FILE_LIMIT, FOLDER_ENTRY_LIMIT, FOLDER_DEPTH_LIMIT, FILE_PART_LIMIT } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 const entry = (name, isDir = false) => ({ name, path: name, isDir, size: 42, mtimeMs: 1, mime: isDir ? '' : 'text/plain' });
 const mcp = { url: 'https://drive.test/mcp/h/grant', token: 'test-grant-token', expiresAt: '2099-01-01T00:00:00Z' };
 
@@ -37,7 +37,8 @@ for (const uri of ['content://test/tree/folder', 'file:///test/folder']) {
 
 test('empty and directory-only folders still provide a usable listing without an invented MCP link', async () => {
   for (const entries of [[], [entry('archive', true)]]) {
-    const handed = await prepareFolderHandoff({ uri: 'local', label: 'Folder' }, async () => ({ entries }), async picked => {
+    // the root has `entries`; every subfolder is empty
+    const handed = await prepareFolderHandoff({ uri: 'local', label: 'Folder' }, async ({ path }) => ({ entries: path === '' ? entries : [] }), async picked => {
       assert.deepEqual(picked, []);
       return { files: [], links: [] };
     });
@@ -49,16 +50,53 @@ test('empty and directory-only folders still provide a usable listing without an
 });
 
 test('listing bounds and read grants are explicit and never include directories', async () => {
-  const entries = [entry('subfolder', true), ...Array.from({ length: 250 }, (_, i) => entry(`file-${i}.txt`))];
-  const handed = await prepareFolderHandoff({ uri: 'selected', label: 'Large folder' }, async () => ({ entries }), async picked => {
-    assert.equal(picked.length, 10);
+  const entries = [entry('subfolder', true), ...Array.from({ length: 600 }, (_, i) => entry(`file-${i}.txt`))];
+  const handed = await prepareFolderHandoff({ uri: 'selected', label: 'Large folder' }, async ({ path }) => ({ entries: path === '' ? entries : [] }), async picked => {
+    assert.equal(picked.length, FOLDER_FILE_LIMIT);
     assert.ok(picked.every(p => p.folderUri === 'selected' && p.path !== 'subfolder'));
     return { files: [], links: [] };
   });
-  assert.equal(handed.folder.totalEntries, 251);
-  assert.equal(handed.folder.entries.length, 200);
+  assert.equal(handed.folder.entries.length, FOLDER_ENTRY_LIMIT);
   assert.equal(handed.folder.truncated, true);
-  assert.equal(handed.folder.recursive, false);
+});
+
+test('subfolders are walked breadth-first, bounded by depth, and their files are granted by path', async () => {
+  // Photos/ has two pictures and 2024/ below it; 2024/ has Deep/, which has deeper/ (depth 3), which has deepest/ (not walked)
+  const tree = {
+    '': [entry('readme.txt'), entry('Photos', true)],
+    'Photos': [entry('a.jpg'), entry('b.jpg'), entry('2024', true)].map((e) => ({ ...e, path: `Photos/${e.name}`, mime: e.isDir ? '' : 'image/jpeg' })),
+    'Photos/2024': [{ ...entry('Deep', true), path: 'Photos/2024/Deep' }],
+    'Photos/2024/Deep': [{ ...entry('deeper', true), path: 'Photos/2024/Deep/deeper' }, { ...entry('c.jpg'), path: 'Photos/2024/Deep/c.jpg' }],
+    'Photos/2024/Deep/deeper': [{ ...entry('never.jpg'), path: 'Photos/2024/Deep/deeper/never.jpg' }],
+  };
+  const listed = [];
+  const handed = await prepareFolderHandoff({ uri: 'root', label: 'Mine' }, async ({ path }) => { listed.push(path); return { entries: tree[path] ?? [] }; }, async picked => {
+    assert.deepEqual(picked.map(p => p.path), ['readme.txt', 'Photos/a.jpg', 'Photos/b.jpg', 'Photos/2024/Deep/c.jpg'], 'nearest first; subfolder files by their path');
+    return { files: [], links: [] };
+  });
+  assert.deepEqual(listed, ['', 'Photos', 'Photos/2024', 'Photos/2024/Deep'], 'breadth-first, and not below depth 3');
+  assert.equal(handed.folder.recursive, true);
+  assert.equal(handed.folder.depth, FOLDER_DEPTH_LIMIT);
+  assert.equal(handed.folder.truncated, true, 'a folder below the depth limit makes the snapshot say it is cut');
+  const text = handoffParts('what is in this folder?', { ...handed, mcp }).find(p => p.kind === 'text' && p.text.startsWith('Current folder snapshot')).text;
+  assert.match(text, /includes subfolders/);
+  assert.match(text, /pictures as images/);
+  assert.doesNotMatch(text, /subfolders and other entries have not been granted/);
+});
+
+test('a subfolder that cannot be listed is skipped, the root failing still stops the handoff', async () => {
+  const handed = await prepareFolderHandoff({ uri: 'r', label: 'R' }, async ({ path }) => {
+    if (path === 'locked') throw new Error('no permission');
+    return { entries: path === '' ? [entry('a.txt'), entry('locked', true)] : [] };
+  }, async () => ({ files: [], links: [] }));
+  assert.equal(handed.folder.truncated, true);
+  assert.deepEqual(handed.folder.entries.map(e => e.path), ['a.txt', 'locked']);
+});
+
+test('file parts stay at the contract\'s 10 even when the grant covers more', () => {
+  const files = Array.from({ length: 30 }, (_, i) => ({ uri: `https://drive.test/h/${i}`, name: `f${i}.txt`, mimeType: 'text/plain' }));
+  const parts = handoffParts('q', { files, mcp });
+  assert.equal(parts.filter(p => p.kind === 'file').length, FILE_PART_LIMIT);
 });
 
 test('a failed native listing or refused handoff never becomes a context-free send', async () => {

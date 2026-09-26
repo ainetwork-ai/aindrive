@@ -193,7 +193,9 @@ async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path:
   const reg = await AindriveAgent.registerHandoffs({ files: picked, ttlSeconds: HANDOFF_TTL_SECONDS });
   const r = await new Web(state.server, state.sessionCookie!).handoffs({
     driveId: carrier.drive.driveId, audience: agent.name, ttlSeconds: HANDOFF_TTL_SECONDS,
-    files: reg.files.map((f) => ({ deviceKey: f.key, name: f.name, mime: f.mime, size: f.size })),
+    // A file in a subfolder is named by its path under the chosen folder ("사진/IMG_1.jpg"): two IMG_1.jpg in
+    // different subfolders stay two files, and the agent sees where each one is.
+    files: reg.files.map((f, i) => ({ deviceKey: f.key, name: picked[i]?.path.includes("/") ? picked[i]!.path : f.name, mime: f.mime, size: f.size })),
   });
   const mime = new Map(reg.files.map((f) => [f.key, f.mime]));
   return {
