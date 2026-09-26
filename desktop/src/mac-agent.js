@@ -7,7 +7,7 @@
  *   list/read/write/…   the folder, read locally (Node fs) — like SafFs / DriveFs
  *   openFile            Quick Look, like iOS
  *   thumbnail           macOS thumbnails, served as app://thumb/…
- *   ask                 file-name search over the folders this Mac holds
+ *   ask                 aindrive-on-device: the phone's agent over this Mac's folders (agent/)
  *
  * What only the phone has — call log, on-device recognition models, Google's
  * account picker, handoff links (served by the phone agent's `handoff-read`) —
@@ -17,11 +17,13 @@
  * is refused unless the folder was picked (or served) on this Mac, and every
  * path inside it must stay inside it.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { driveUrlOf, isFolder } from "./agents.js";
+import { createDeviceAgent } from "./agent/device-agent.js";
 
 const MIME = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic", ".svg": "image/svg+xml",
@@ -98,36 +100,6 @@ export async function listEntries(root, rel = "") {
   return out.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
 }
 
-/** The on-device agent's Mac stand-in: files whose names hold every word of the question. */
-export async function searchFolders(folders, query, limit = 30) {
-  const STOP = new Set(["the", "a", "an", "of", "in", "on", "my", "me", "find", "show", "files", "file", "photos", "photo", "where", "is", "are", "all", "and", "for", "with"]);
-  const words = query.normalize("NFC").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1 && !STOP.has(w));
-  const sources = [];
-  if (!words.length) return { words, sources };
-  for (const f of folders) {
-    const stack = [f.path];
-    let seen = 0;
-    while (stack.length && sources.length < limit && seen < 20_000) {
-      const dir = /** @type {string} */ (stack.pop());
-      let items;
-      try { items = await fsp.readdir(dir, { withFileTypes: true }); } catch { continue; }
-      for (const d of items) {
-        seen++;
-        if (d.name.startsWith(".") || d.name === "node_modules") continue;
-        const abs = join(dir, d.name);
-        if (d.isDirectory()) { stack.push(abs); continue; }
-        const rel = relative(f.path, abs).split(sep).join("/").normalize("NFC");
-        const hay = rel.toLowerCase();
-        if (words.every((w) => hay.includes(w))) {
-          sources.push({ path: rel, snippet: `${f.label}/${rel}`, driveId: f.driveId, matchedBy: "name" });
-          if (sources.length >= limit) break;
-        }
-      }
-    }
-  }
-  return { words, sources };
-}
-
 /** `<folder>/.aindrive/config.json` as the CLI keeps it — the shell paired, the CLI serves. */
 export function writeDriveConfig(folder, cfg) {
   const dir = join(folder, ".aindrive");
@@ -159,7 +131,21 @@ export function writeDriveConfig(folder, cfg) {
  *   emit: (status: unknown) => void,
  * }} deps
  */
-export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
+/** ~/.aindrive/handoffs.json — mirrors cli/src/handoffs.js (the CLI agents read it). Expired keys are dropped on write. */
+export const HANDOFFS_FILE = join(homedir(), ".aindrive", "handoffs.json");
+
+export function writeHandoffs(add, file = HANDOFFS_FILE, now = Date.now()) {
+  let all = {};
+  try { all = JSON.parse(readFileSync(file, "utf8")) ?? {}; } catch { /* first handoff */ }
+  const next = {};
+  for (const [k, v] of Object.entries({ ...all, ...add })) if (v?.expiresAt > now && typeof v.path === "string") next[k] = v;
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
+  renameSync(tmp, file);
+}
+
+export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = join(thumbsDir, "..", "index"), emit }) {
   const { dialog, nativeImage, shell, getWindow } = electron;
   /** driveId → { folder, label, localOnly } for everything started here */
   const drives = () => store.get().drives ?? [];
@@ -184,6 +170,16 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
     try { return statSync(dirname(uri)).dev === dev; } catch { return false; }
   }
 
+  /** aindrive-on-device: the phone's agent over the folders this Mac holds (agent/device-agent.js). */
+  const device = createDeviceAgent({
+    indexDir, inside, mimeOf,
+    folders: () => drives().filter((d) => isFolder(d.folder)).map((d) => ({ driveId: d.driveId, folder: d.folder, label: d.label ?? basename(d.folder) })),
+    onChange: () => emit(status()),
+  });
+  const indexSoon = (d) => { if (d && isFolder(d.folder)) void device.reindex({ driveId: d.driveId, folder: d.folder, label: d.label ?? basename(d.folder) }); };
+  // Folders restored at launch are indexed too (incremental: only new or changed files are read).
+  setTimeout(() => { for (const d of drives()) indexSoon(d); }, 2000).unref?.();
+
   function status() {
     const list = agents.list();
     const byFolder = new Map(list.map((f) => [f.folder, f]));
@@ -198,6 +194,7 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
         connected: a?.state === "online",
         rpcCount: 0,
         lastError: a?.state === "error" ? a.detail : null,
+        index: device.indexStatus(d.driveId),
       };
     });
     return { running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out };
@@ -328,8 +325,25 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
       throw new Error("Google sign-in isn't on the Mac app yet — use “Other ways to sign in”: it opens aindrive in your browser.");
     },
 
-    async registerHandoffs() {
-      throw new Error("Sending files to other agents works from the phone app for now.");
+    /**
+     * Files the owner confirmed handing to another agent (aindrive-cloud): a random key per file in
+     * ~/.aindrive/handoffs.json, which this Mac's CLI agents serve over `handoff-read` (cli/src/handoffs.js)
+     * — only those keys, only until they expire. Mirrors AindriveAgentPlugin.registerHandoffs on the phone.
+     */
+    async registerHandoffs({ files, ttlSeconds = 900 } = {}) {
+      if (!Array.isArray(files) || !files.length) throw new Error("missing files");
+      const expiresAt = Date.now() + Number(ttlSeconds) * 1000 + 60_000;
+      const out = [], entries = {};
+      for (const f of files) {
+        const abs = realpathSync.native(inside(folderOf(f?.folderUri), f?.path));
+        const st = statSync(abs);
+        if (!st.isFile()) throw new Error(`Not a file: ${f.path}`);
+        const key = randomBytes(18).toString("base64url");
+        entries[key] = { path: abs, expiresAt };
+        out.push({ key, path: f.path, name: basename(abs), mime: mimeOf(abs), size: st.size });
+      }
+      writeHandoffs(entries);
+      return { files: out };
     },
 
     async start(config) {
@@ -342,6 +356,7 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
       // one entry per folder: a folder that goes from local-only to connected keeps one agent
       store.update((s) => ({ ...s, drives: (s.drives ?? []).filter((d) => d.folder !== folder || d.driveId === config.driveId) }));
       remember({ driveId: config.driveId, folder, label: config.folderLabel ?? basename(folder), localOnly: !!config.localOnly, server: config.serverUrl });
+      indexSoon(drives().find((d) => d.driveId === config.driveId));
       if (config.localOnly) agents.stop(folder);
       else agents.start(folder);
       const s = status();
@@ -355,6 +370,7 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
         const d = drives().find((x) => x.driveId === id);
         if (!d) continue;
         agents.remove(d.folder);
+        device.forget(id);
         store.update((s) => ({ ...s, drives: (s.drives ?? []).filter((x) => x.driveId !== id) }));
         // the shell keeps the credentials it needs to turn it on again; the folder should not
         if (!d.localOnly) forgetConfig(d.folder, id);
@@ -364,20 +380,15 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
       return s;
     },
 
-    async reindex() { return status(); },
+    async reindex(opts) {
+      for (const d of drives()) if (!opts?.driveId || d.driveId === opts.driveId) indexSoon(d);
+      return status();
+    },
     async ensureModels() { return status(); },
 
-    async ask({ query, driveId }) {
-      const folders = drives()
-        .filter((d) => (driveId ? d.driveId === driveId : true) && isFolder(d.folder))
-        .map((d) => ({ path: d.folder, label: d.label ?? basename(d.folder), driveId: d.driveId }));
-      const { words, sources } = await searchFolders(folders, String(query ?? ""));
-      const answer = !words.length
-        ? "On the Mac I can find files by name — try a word from the file name."
-        : sources.length
-          ? `Found ${sources.length}${sources.length >= 30 ? "+" : ""} file${sources.length === 1 ? "" : "s"} named like “${words.join(" ")}”.`
-          : `No file names here match “${words.join(" ")}”.`;
-      return { answer, query: "name", context: null, sources };
+    /** The phone's on-device agent, on this Mac's folders: small talk, dates, places (EXIF GPS), kinds, names, tasks. */
+    async ask({ query, context, driveId }) {
+      return device.ask(String(query ?? ""), context ?? null, driveId);
     },
 
     /**
