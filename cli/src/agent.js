@@ -6,6 +6,7 @@ import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rp
 import { signPayload, verifyPayload } from "./sig.js";
 import { startWillowPeer } from "./willow-peer.js";
 import { createDisk } from "./willow-materializer.js";
+import { handleRtc } from "./media-rtc.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
@@ -221,6 +222,13 @@ function connectOnce({ root, drive, wsUrl }) {
         // The server only says hello after accepting our token → any fallback
         // pair kept from a previous rotation can go.
         commitRotation({ root, drive }).catch((e) => log.warn({ err: e.message }, "commitRotation failed"));
+        return;
+      }
+      // P2P media: signalling relayed by the server; the token inside is what authorises it
+      if (frame?.type === "rtc") {
+        const stun = process.env.AINDRIVE_STUN ?? "stun:stun.l.google.com:19302";
+        handleRtc(frame, { root, driveSecret: drive.driveSecret, log, iceServers: stun ? [{ urls: stun }] : [], send: (f) => { try { ws.send(JSON.stringify(f)); } catch {} } })
+          .catch((e) => log.warn({ err: e.message }, "p2p signalling failed"));
         return;
       }
       if (frame?.type !== "request" || !frame.reqId) { log.debug({ type: frame?.type }, "[agent recv] ignored"); return; }

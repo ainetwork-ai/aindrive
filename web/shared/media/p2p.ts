@@ -2,14 +2,15 @@
 // the signalling token. Pure; mirrored into the CLI (web/scripts/mirror-willow-to-cli.mjs).
 //
 // Wire: the browser sends text frames {"want": <chunk index>}; the device answers
-// with binary pieces `u32 index | u32 offset | u32 total | bytes` of at most PIECE
+// with binary pieces `u32 index | u32 offset | u32 total | bytes` of at most PIECE (16 KiB)
 // bytes (browser SCTP message limits). The receiver reassembles a chunk and then
 // verifies it against the chunk hash list before using it.
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { canonicalJson, equalBytes } from "../willow/bytes";
 
-export const PIECE = 65536;
+// 16 KiB: the size every WebRTC stack accepts (a 64 KiB piece + header exceeds common max-message-size)
+export const PIECE = 16384;
 const CHUNK_MAX = 1048576;
 const HEADER = 12;
 

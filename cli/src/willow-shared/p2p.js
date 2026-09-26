@@ -2,7 +2,7 @@
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { canonicalJson, equalBytes } from "./bytes.js";
-const PIECE = 65536;
+const PIECE = 16384;
 const CHUNK_MAX = 1048576;
 const HEADER = 12;
 const encodeWant = (index) => JSON.stringify({ want: index });
