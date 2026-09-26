@@ -77,15 +77,22 @@ explicit role change (PATCH) can lower a role.
 
 ## What a member sees on entry
 
-`entryView` decides where a non-owner lands:
+`entryView` (membership) plus a stat of the path decide where a user lands —
+`web/lib/drive-location.ts`. A grant may be a folder or a single file (a paid
+file share grants the file itself):
 
 - **root** — owner, or a grant at `""`: enters the drive root.
-- **single** — exactly one accessible subtree: enters that path directly.
-- **multi** — several unrelated grants: a **synthetic root** lists those grant
-  paths as the top level (the real drive root would 403).
+- **single folder grant** — enters that folder; the breadcrumb tops out there.
+- **several grants, or one file grant** — a **grant listing** shows those grant
+  paths as the top level (the real drive root would 403); a lone file grant
+  opens in the viewer.
 
-Navigation, breadcrumbs and the file listing all stay within what the member's
-grants cover; the server re-checks every API call regardless of the UI.
+`?path` names what the user is looking at, folder or file. A file opens in the
+viewer inside its folder, or inside the grant listing when the member can't list
+that folder (a file bought on its own). An unreadable `?path` is a uniform hard
+deny — never a redirect to the entry, which would make the response a path
+oracle. Navigation and breadcrumbs stay within what the grants cover; the server
+re-checks every API call regardless of the UI.
 
 ## Identity note
 

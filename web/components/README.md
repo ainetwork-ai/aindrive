@@ -25,7 +25,8 @@ helpers. Shells lazy-load heavy children via `next/dynamic`.
 
 Browser shell:
 - `drive-shell(.tsx/-parts)` — file browser: sidebar, header/breadcrumbs,
-  grid+list, selection, sort/search, showcase section.
+  grid+list, selection, sort/search, showcase section. Its location (listed
+  folder + open file) is mirrored in `?path` and history state.
 - `file-icons` — file-type → icon+color map (list rows + grid cards share it).
 - `row-menu` — single source for the `⋮` dropdown + right-click context-menu
   items, with permission gates (sell/share owner-only; rename/delete = canManage).

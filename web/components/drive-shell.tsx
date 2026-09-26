@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import type { DriveEntry } from "@/lib/protocol";
 import type { ShowcaseItem } from "@/lib/showcase";
 import { apiFetch } from "@/lib/api-client";
 import { sortEntries, type SortKey, type SortState } from "@/lib/sort-entries";
+import { locationPath, viewerHistory } from "@/lib/drive-location";
 import {
   DriveSidebar, DriveHeader, FileTable, ShowcaseSection, LockedPreview,
   type DriveSummary, type ShareSummary, type ViewMode,
@@ -26,40 +27,72 @@ const FolderChat = dynamic(() => import("./folder-chat").then((m) => m.FolderCha
 type Props = {
   driveId: string;
   driveName: string;
-  initialPath?: string;
+  /** folder listed first — always a folder; the page resolves a file ?path to its folder */
+  initialFolder: string;
+  /** highest folder the breadcrumb may reach (the member's grant, or "" for the drive root) */
+  scopeRoot: string;
+  /** file opened in the viewer on arrival (a file ?path, or a single-file grant) */
+  initialOpen?: DriveEntry | null;
   initialRole?: string;
-  /** Multi-grant member's accessible entries; "" renders these instead of fs/list (synthetic root). */
+  /** Grant-listing member's accessible entries; "" renders these instead of fs/list (synthetic root). */
   entryItems?: DriveEntry[];
 };
 
-export function DriveShell({ driveId, driveName, initialPath, initialRole, entryItems }: Props) {
-  const [path, setPathState] = useState(() => {
-    if (initialPath !== undefined) return initialPath;
-    if (typeof window === "undefined") return "";
-    const url = new URL(window.location.href);
-    return url.searchParams.get("path") || "";
-  });
-  // Wrap setPath so every folder navigation pushes a history entry — this
-  // makes the browser/system back button (especially on mobile) walk the
-  // folder hierarchy instead of leaving the drive.
-  const setPath = useCallback((next: string) => {
-    setPathState((prev) => {
-      if (next === prev) return prev;
-      if (typeof window !== "undefined") {
-        const url = new URL(window.location.href);
-        if (next) url.searchParams.set("path", next);
-        else url.searchParams.delete("path");
-        window.history.pushState(null, "", url.toString());
-      }
-      return next;
-    });
-  }, []);
-  // Sync state when the user hits Back/Forward.
+type Loc = { folder: string; open: DriveEntry | null };
+const HISTORY_KEY = "aindriveLoc";
+
+export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initialOpen, initialRole, entryItems }: Props) {
+  // Location = the listed folder + the open file. ?path mirrors whichever the
+  // user is looking at (the file when one is open), so links, reloads and the
+  // back button all land on the same view. See lib/drive-location.ts.
+  const [loc, setLoc] = useState<Loc>({ folder: initialFolder, open: initialOpen ?? null });
+  const path = loc.folder;
+  const selected = loc.open;
+  // True while the current history entry was pushed by opening a file here:
+  // switching files replaces it and closing steps back over it (viewerHistory).
+  const openPushedRef = useRef(false);
+
+  // Each history entry carries its Loc: the URL alone can't say file vs
+  // folder, and history state survives reloads. Next.js merges its own keys
+  // into the object we pass (and keeps ours), so its popstate handling is unaffected.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const onPop = () => {
-      const url = new URL(window.location.href);
-      setPathState(url.searchParams.get("path") || "");
+    window.history.replaceState({ ...(window.history.state ?? {}), [HISTORY_KEY]: { folder: initialFolder, open: initialOpen ?? null } }, "");
+  }, [initialFolder, initialOpen]);
+  const urlFor = useCallback((next: Loc) => {
+    const url = new URL(window.location.href);
+    // A locked (unpaid) entry stays out of the URL: the page can't open a
+    // paywalled file, so a reload would land on a payment-required listing
+    // instead of this preview.
+    const p = locationPath(next.folder, next.open && !next.open.locked ? next.open.path : null);
+    if (p) url.searchParams.set("path", p); else url.searchParams.delete("path");
+    return url.toString();
+  }, []);
+  // Folder navigation (closes any open file — the URL names one location)
+  // pushes a history entry so the back button walks the folder hierarchy.
+  const setPath = useCallback((folder: string) => {
+    const next = { folder, open: null };
+    openPushedRef.current = false;
+    setLoc(next);
+    const url = urlFor(next);
+    if (url !== window.location.href) window.history.pushState({ [HISTORY_KEY]: next }, "", url);
+  }, [urlFor]);
+  const setSelected = useCallback((entry: DriveEntry | null) => {
+    const next = { folder: loc.folder, open: entry };
+    const url = urlFor(next);
+    const step = viewerHistory({ openPushed: openPushedRef.current, opening: !!entry, urlChanged: url !== window.location.href });
+    openPushedRef.current = step.openPushed;
+    if (step.action === "back") { window.history.back(); return; } // popstate restores the folder
+    setLoc(next);
+    if (step.action === "push") window.history.pushState({ [HISTORY_KEY]: next }, "", url);
+    if (step.action === "replace") window.history.replaceState({ ...(window.history.state ?? {}), [HISTORY_KEY]: next }, "", url);
+  }, [loc.folder, urlFor]);
+  // Sync state when the user hits Back/Forward. An entry without our Loc
+  // (pushed before this page existed) can only have been a folder.
+  useEffect(() => {
+    const onPop = (ev: PopStateEvent) => {
+      openPushedRef.current = false;
+      const saved = (ev.state as Record<string, unknown> | null)?.[HISTORY_KEY] as Loc | undefined;
+      setLoc(saved ?? { folder: new URL(window.location.href).searchParams.get("path") || "", open: null });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -69,7 +102,6 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   const [role, setRole] = useState<string>(initialRole ?? "viewer");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [selected, setSelected] = useState<DriveEntry | null>(null);
   const [shareOpen, setShareOpen] = useState<{ path: string; focus?: "sell" } | null>(null);
   const [shares, setShares] = useState<ShareSummary[]>([]);
   const [showcase, setShowcase] = useState<ShowcaseItem[]>([]);
@@ -181,7 +213,6 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
   }, [entries, query, sort]);
 
   const canEdit = !isSyntheticRoot && (role === "editor" || role === "owner");
-  const rootPath = initialPath ?? "";
   const crumbs = useMemo(() => {
     if (entryItems) {
       // Synthetic mode: never emit clickable segments between "" and the grant
@@ -198,21 +229,22 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
       }
       return acc;
     }
-    // Visual root is the member's grant (rootPath), not the drive root: a
-    // sub-path member must not be able to navigate above what they were
-    // granted. Only render segments at-or-below rootPath.
-    // If `path` is somehow not under `rootPath` (e.g. a stale popstate URL),
+    // Visual root is scopeRoot — the highest folder this user may reach (their
+    // grant, or the drive root) — not where they landed: a sub-path member
+    // must not navigate above their grant, and a deep link must not trap an
+    // owner below the root. Only render segments at-or-below scopeRoot.
+    // If `path` is somehow not under `scopeRoot` (e.g. a stale popstate URL),
     // the breadcrumb chain is only cosmetically off — the server enforces
     // access on every API call, so no unauthorized data is exposed.
-    const rel = rootPath && path.startsWith(rootPath + "/")
-      ? path.slice(rootPath.length + 1)
-      : path === rootPath ? "" : path;
+    const rel = scopeRoot && path.startsWith(scopeRoot + "/")
+      ? path.slice(scopeRoot.length + 1)
+      : path === scopeRoot ? "" : path;
     const parts = rel.split("/").filter(Boolean);
-    const acc: { label: string; path: string }[] = [{ label: driveName, path: rootPath }];
-    let cur = rootPath;
+    const acc: { label: string; path: string }[] = [{ label: driveName, path: scopeRoot }];
+    let cur = scopeRoot;
     for (const p of parts) { cur = cur ? `${cur}/${p}` : p; acc.push({ label: p, path: cur }); }
     return acc;
-  }, [path, driveName, rootPath, entryItems]);
+  }, [path, driveName, scopeRoot, entryItems]);
 
   async function onNewFolder() {
     const name = prompt("New folder name");
@@ -383,7 +415,7 @@ export function DriveShell({ driveId, driveName, initialPath, initialRole, entry
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}
-            {(path === rootPath || isSyntheticRoot) && <ShowcaseSection driveId={driveId} items={showcase} />}
+            {(path === scopeRoot || isSyntheticRoot) && <ShowcaseSection driveId={driveId} items={showcase} />}
           </div>
           {selected && (selected.locked ? (
             <LockedPreview
