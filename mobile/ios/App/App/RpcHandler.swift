@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Dispatches one signed RPC onto the picked device folder.
@@ -33,12 +34,14 @@ struct RpcHandler {
 
     private static let methods: Set<String> = [
         "list", "stat", "read", "write", "mkdir", "rename", "delete",
-        "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
+        "upload-chunk", "download-chunk", "media-index", "yjs-write", "yjs-read", "yjs-stats",
         "agent-ask",
     ]
 
     let fs: DriveFs
     let yjsDir: URL
+    /// media-index results by "path|size|mtime": re-hashing a long video on every play would drain the battery.
+    static var mediaIndexMemo: [String: [String]] = [:]
 
     init(fs: DriveFs, driveId: String) {
         self.fs = fs
@@ -99,6 +102,19 @@ struct RpcHandler {
             try fs.write(params["path"] as? String ?? "", data: data, append: append)
             return ["method": method, "ok": true, "receivedBytes": data.count]
 
+        case "media-index":
+            // the file's 1 MiB chunk hash list: the server checks every chunk it fetches
+            // from this phone against it, and keeps them, so the uplink carries each byte once
+            let path = params["path"] as? String ?? ""
+            guard let e = fs.stat(path), !e.isDir else { throw NSError(domain: "aindrive", code: 404, userInfo: [NSLocalizedDescriptionKey: "not a file"]) }
+            let memoKey = "\(path)|\(e.size)|\(e.mtimeMs)"
+            let leaves: [String]
+            if let hit = RpcHandler.mediaIndexMemo[memoKey] { leaves = hit } else {
+                leaves = try MediaIndex.leaves(size: UInt64(e.size)) { off, len in try fs.readChunk(path, offset: off, length: len) }
+                if RpcHandler.mediaIndexMemo.count > 200 { RpcHandler.mediaIndexMemo.removeAll() }
+                RpcHandler.mediaIndexMemo[memoKey] = leaves
+            }
+            return ["method": method, "size": e.size, "mtimeMs": e.mtimeMs, "chunk": MediaIndex.chunk, "leaves": leaves]
         case "download-chunk":
             let path = params["path"] as? String ?? ""
             let offset = UInt64(params["offset"] as? Int ?? 0)
@@ -158,5 +174,33 @@ struct RpcHandler {
         let ok = docId.range(of: "^[A-Za-z0-9_-]{8,64}$", options: .regularExpression) != nil
         guard ok else { throw RpcError.invalidDocId }
         return docId
+    }
+}
+
+
+/// A file's chunk hash list for the server's verifying media cache (web
+/// docs/superpowers/specs/2026-09-26-p2p-media-streaming-design.md, M2): 1 MiB
+/// leaves, SHA-256 each, read chunk by chunk. Same algorithm as
+/// web/shared/media/chunks.ts and MediaIndex.java; web/shared/media/chunk-vectors.json
+/// pins it across all three.
+enum MediaIndex {
+    static let chunk = 1 << 20
+
+    /// `read(offset, length)` returns up to `length` bytes; fewer only at the end of the file.
+    static func leaves(size: UInt64, read: (UInt64, Int) throws -> Data) throws -> [String] {
+        var out: [String] = []
+        var offset: UInt64 = 0
+        while offset < size {
+            let want = Int(min(UInt64(chunk), size - offset))
+            var buf = Data(capacity: want)
+            while buf.count < want { // a reader may return less than asked: keep reading this chunk
+                let part = try read(offset + UInt64(buf.count), want - buf.count)
+                if part.isEmpty { throw NSError(domain: "aindrive", code: 1, userInfo: [NSLocalizedDescriptionKey: "file shrank while indexing"]) }
+                buf.append(part)
+            }
+            out.append(SHA256.hash(data: buf).map { String(format: "%02x", $0) }.joined())
+            offset += UInt64(buf.count)
+        }
+        return out
     }
 }

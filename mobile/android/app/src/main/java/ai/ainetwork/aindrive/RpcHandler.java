@@ -39,9 +39,12 @@ import java.util.Set;
  * the user did not ask for and cannot easily clean up.
  */
 final class RpcHandler {
+    /** media-index results by "path|size|mtime": re-hashing a long video on every play would drain the battery. */
+    private static final java.util.Map<String, java.util.List<String>> MEDIA_INDEX = new java.util.concurrent.ConcurrentHashMap<>();
+
     private static final Set<String> METHODS = new HashSet<>(Arrays.asList(
             "list", "stat", "read", "write", "mkdir", "rename", "delete",
-            "upload-chunk", "download-chunk", "yjs-write", "yjs-read", "yjs-stats",
+            "upload-chunk", "download-chunk", "media-index", "yjs-write", "yjs-read", "yjs-stats",
             "agent-ask", "handoff-read"));
 
     private final SafFs fs;
@@ -122,6 +125,22 @@ final class RpcHandler {
                 return result(method)
                         .put("data", Base64.encodeToString(data, Base64.NO_WRAP))
                         .put("eof", offset + data.length >= size);
+            }
+            case "media-index": {
+                // the file's 1 MiB chunk hash list: the server checks every chunk it fetches
+                // from this phone against it, and keeps them, so the uplink carries each byte once
+                String path = params.optString("path", "");
+                SafFs.Entry e = fs.stat(path);
+                if (e == null || e.isDir) throw new IOException("not a file");
+                String memoKey = path + "|" + e.size + "|" + e.mtimeMs;
+                java.util.List<String> leaves = MEDIA_INDEX.get(memoKey);
+                if (leaves == null) {
+                    leaves = MediaIndex.leaves((off, len) -> fs.readChunk(path, off, len), e.size);
+                    if (MEDIA_INDEX.size() > 200) MEDIA_INDEX.clear();
+                    MEDIA_INDEX.put(memoKey, leaves);
+                }
+                return result(method).put("size", e.size).put("mtimeMs", e.mtimeMs)
+                        .put("chunk", MediaIndex.CHUNK).put("leaves", new org.json.JSONArray(leaves));
             }
             case "handoff-read": {
                 // A file the owner registered for a handoff link (Handoffs) — never a path the server names.
