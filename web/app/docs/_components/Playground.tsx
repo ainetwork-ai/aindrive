@@ -12,9 +12,14 @@ const MTIME = 1790371220456;
 
 type Entry = { name: string; isDir: boolean; size?: number; locked?: boolean; mtimeMs?: number };
 
-const svg = (fill: string, label: string) => typeof btoa === "function"
-  ? btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" rx="24" fill="${fill}"/><text x="60" y="74" font-size="36" text-anchor="middle" fill="#fff" font-family="sans-serif">${label}</text></svg>`)
-  : "";
+/** base64 of a UTF-8 string. Plain btoa() throws InvalidCharacterError on anything outside
+ *  Latin-1 (the ☀/🌲 sample labels), and this runs at module load — so it broke the docs
+ *  page's prerender in `next build`. */
+const b64 = (s: string) => typeof Buffer !== "undefined"
+  ? Buffer.from(s, "utf8").toString("base64")
+  : btoa(Array.from(new TextEncoder().encode(s), (c) => String.fromCharCode(c)).join(""));
+const svg = (fill: string, label: string) =>
+  b64(`<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" rx="24" fill="${fill}"/><text x="60" y="74" font-size="36" text-anchor="middle" fill="#fff" font-family="sans-serif">${label}</text></svg>`);
 
 /** A fake drive so the playground can answer clicks with real surfaces (AINUI mode may edit it). */
 const TREE: Record<string, Entry[]> = {
