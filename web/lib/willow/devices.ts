@@ -3,13 +3,15 @@
 // attestation key, written into every drive store where the device is known. Sync
 // carries it to every peer; resolvePerson refuses the device's entries from then on.
 import { db } from "@/lib/db.js";
-import { certsIn, revocationsIn } from "@/shared/willow/doc";
+import { certsIn } from "@/shared/willow/doc";
 import { resolvePerson, revokeAttested } from "@/shared/willow/cert";
 import { fromHex, pathOf, utf8 } from "@/shared/willow/bytes";
 import { nowMicros } from "@/shared/willow/schemes";
 import { openDriveStore } from "./store-node";
 import { storeDir } from "./peer";
 import { attestationKey, trust } from "./attestation";
+import { isRevoked, recordRevocation } from "./revocations";
+export { isRevoked } from "./revocations";
 
 export type Device = { deviceKey: string; label: string; issuedAt: string; strength: "wallet" | "attested" | "unverified"; revoked: boolean; drives: string[] };
 
@@ -24,16 +26,12 @@ export async function listDevices(userId: string): Promise<Device[]> {
   for (const driveId of drivesOf(userId)) {
     const store = openDriveStore(driveId, storeDir());
     const certs = await certsIn(store);
-    const revs = await revocationsIn(store);
     for (const c of certs.filter((c) => c.userId === userId)) {
       let d = byKey.get(c.deviceKey);
       if (!d) {
         const ever = await resolvePerson(c.deviceKey, certs, [], trust());
-        const now = await resolvePerson(c.deviceKey, certs, revs, trust(), nowMicros());
-        d = { deviceKey: c.deviceKey, label: c.label, issuedAt: c.issuedAt, strength: ever?.strength ?? "unverified", revoked: !!ever && !now, drives: [] };
+        d = { deviceKey: c.deviceKey, label: c.label, issuedAt: c.issuedAt, strength: ever?.strength ?? "unverified", revoked: isRevoked(userId, c.deviceKey), drives: [] };
         byKey.set(c.deviceKey, d);
-      } else if (!d.revoked) {
-        d.revoked = !(await resolvePerson(c.deviceKey, certs, revs, trust(), nowMicros())) && d.strength !== "unverified";
       }
       d.drives.push(driveId);
     }
@@ -41,15 +39,21 @@ export async function listDevices(userId: string): Promise<Device[]> {
   return [...byKey.values()];
 }
 
-export async function revokeDevice(userId: string, deviceKeyHex: string): Promise<{ drives: string[] }> {
+export async function revokeDevice(userId: string, deviceKeyHex: string): Promise<{ drives: string[]; failed: string[] }> {
   const device = (await listDevices(userId)).find((d) => d.deviceKey === deviceKeyHex);
   if (!device) throw new Error("not your device");
   const att = attestationKey();
-  const r = await revokeAttested(att, fromHex(deviceKeyHex), userId, nowMicros());
+  const at = nowMicros();
+  if (!recordRevocation(userId, deviceKeyHex, at)) throw new Error("already removed"); // review M2: never re-stamp a revocation later
+  const r = await revokeAttested(att, fromHex(deviceKeyHex), userId, at);
+  const failed: string[] = [];
   for (const driveId of device.drives) {
-    // written in the attestation key's own subspace; peers verify the revocation's signature
-    const res = await openDriveStore(driveId, storeDir()).set({ path: pathOf(["_id", "revoke", deviceKeyHex]), subspace: att.publicKey, payload: utf8(JSON.stringify(r)) }, att);
-    if (res.kind !== "success") throw new Error(`revocation not stored in ${driveId}`);
+    // written in the attestation key's own subspace; peers verify the revocation's signature.
+    // One drive failing does not stop the others (review M3); the central record covers it anyway.
+    try {
+      const res = await openDriveStore(driveId, storeDir()).set({ path: pathOf(["_id", "revoke", deviceKeyHex]), subspace: att.publicKey, payload: utf8(JSON.stringify(r)) }, att);
+      if (res.kind !== "success") failed.push(driveId);
+    } catch { failed.push(driveId); }
   }
-  return { drives: device.drives };
+  return { drives: device.drives, failed };
 }

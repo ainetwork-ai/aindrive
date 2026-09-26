@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/session";
 import { agentUser } from "@/lib/willow/agent-auth";
+import { isRevoked } from "@/lib/willow/revocations";
 import { attestationKey, certify } from "@/lib/willow/attestation";
 import { toHex } from "@/shared/willow/bytes";
 
@@ -12,6 +13,7 @@ export async function POST(req: Request) {
   const userId = (await getUser())?.id ?? (typeof body.drive === "string" ? await agentUser(body.drive, req.headers.get("authorization") ?? undefined) : null);
   if (!userId) return NextResponse.json({ error: "sign in" }, { status: 401 });
   if (typeof body.deviceKey !== "string" || !/^[0-9a-f]{64}$/.test(body.deviceKey)) return NextResponse.json({ error: "deviceKey" }, { status: 400 });
+  if (isRevoked(userId, body.deviceKey)) return NextResponse.json({ error: "this device was removed" }, { status: 403 });
   const cert = await certify(userId, body.deviceKey, typeof body.label === "string" ? body.label : "browser");
   return NextResponse.json({ cert, attestationKey: toHex(attestationKey().publicKey) });
 }

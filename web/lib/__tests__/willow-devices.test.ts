@@ -5,7 +5,7 @@ import { join } from "node:path";
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-devices-"));
 const { db } = await import("../db.js");
 const { createDrive } = await import("../drives");
-const { listDevices, revokeDevice } = await import("../willow/devices");
+const { listDevices, revokeDevice, isRevoked } = await import("../willow/devices");
 const { certify, trust } = await import("../willow/attestation");
 const { openDriveStore, closeDriveStores } = await import("../willow/store-node");
 const { storeDir } = await import("../willow/peer");
@@ -48,6 +48,19 @@ describe("devices", () => {
       expect(await resolvePerson(toHex(kp.publicKey), await certsIn(s), await revocationsIn(s), trust(), nowMicros() + 1n)).toBeNull();
     }
     expect((await listDevices("mom")).find((d) => d.label === "lost phone")!.revoked).toBe(true);
+  });
+
+  it("review I1: a removed device is refused a new certificate and a place in another drive; revoking twice is refused", async () => {
+    const kp = await deviceIn([d1.driveId], "mom", "stolen");
+    await revokeDevice("mom", toHex(kp.publicKey));
+    expect(isRevoked("mom", toHex(kp.publicKey))).toBe(true);
+    const { acceptFor } = await import("../willow/peer");
+    const cert = await certify("mom", toHex(kp.publicKey), "again");
+    const { newStore } = await import("@/shared/willow/schemes");
+    const r = await newStore(d2.driveId).set({ path: pathOf(["_id", "cert"]), subspace: kp.publicKey, payload: utf8(JSON.stringify(cert)) }, kp);
+    if (r.kind !== "success") throw new Error("setup");
+    expect(await acceptFor(d2.driveId, openDriveStore(d2.driveId, storeDir()))({ entry: r.entry, token: r.authToken, payload: utf8(JSON.stringify(cert)) })).toBe("revoked");
+    await expect(revokeDevice("mom", toHex(kp.publicKey))).rejects.toThrow(/already/);
   });
 
   it("refuses to revoke someone else's device", async () => {

@@ -20,6 +20,7 @@ import { dataDir } from "@/lib/env";
 import { openDriveStore } from "./store-node";
 import { trust } from "./attestation";
 import { roleOf, isMember, paywalled } from "./roles";
+import { isRevoked } from "./revocations";
 export { agentUser } from "./agent-auth";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
@@ -86,6 +87,7 @@ export function acceptFor(driveId: string, store: AnyStore) {
         const parsed = certsFrom([{ subspaceHex: subspace, payload: w.payload ?? new Uint8Array() }]);
         if (!parsed.length) return "bad-cert";
         cert = parsed[0];
+        if (isRevoked(cert.userId, subspace)) return "revoked"; // a removed device joins no drive (plan 4 review I1)
       }
       const v = await mayWrite({ subspaceHex: subspace, path: parts, timestamp: w.entry.timestamp, payloadLength: w.entry.payloadLength, cert },
         { driveId, ownerUserId: "", grants: [], certs, revocations: revs, trust: trust(), now });

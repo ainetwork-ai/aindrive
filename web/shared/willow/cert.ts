@@ -41,13 +41,20 @@ export async function signLink(attestation: DeviceKeypair, address: string, user
   return { address: address.toLowerCase(), userId, sig: toHex(await sign(attestation, linkBody(address, userId))) };
 }
 
-export function issueWalletCert(p: {
+/**
+ * A wallet cert is countersigned by aindrive's attestation key at sign-in, after the
+ * server checked the SIWE domain, nonce and chain (plan 4 review C1): a signature
+ * phished for another site, or a copied wallet link, can never be assembled into one.
+ * The countersignature also covers the label and the time.
+ */
+export async function issueWalletCert(p: {
   deviceKey: Uint8Array; userId: string; label: string; at: bigint; address: string; message: string; signature: string; link: SignedLink;
-}): Cert {
-  return {
-    v: 1, deviceKey: toHex(p.deviceKey), userId: p.userId, label: p.label, issuedAt: p.at.toString(),
-    issuer: { type: "wallet", address: p.address.toLowerCase(), message: p.message, signature: p.signature, link: p.link }, sig: "",
+}, countersigner?: DeviceKeypair): Promise<Cert> {
+  const c = {
+    v: 1 as const, deviceKey: toHex(p.deviceKey), userId: p.userId, label: p.label, issuedAt: p.at.toString(),
+    issuer: { type: "wallet" as const, address: p.address.toLowerCase(), message: p.message, signature: p.signature, link: p.link },
   };
+  return { ...c, sig: countersigner ? toHex(await sign(countersigner, body(c))) : "" };
 }
 
 export async function revoke(by: DeviceKeypair, deviceKey: Uint8Array, userId: string, at: bigint): Promise<Revocation> {
@@ -161,6 +168,10 @@ export async function resolvePerson(deviceKeyHex: string, certs: Cert[], revocat
       return parent && parent.userId === c.userId ? parent : null;
     }
     const w = c.issuer;
+    // countersigned by a trusted attestation key (review C1)
+    let countersigned = false;
+    for (const k of trust.attestationKeys) if (HEX128.test(sig) && (await verifyMemo(k, body(rest), sig))) { countersigned = true; break; }
+    if (!countersigned) return null;
     const want = `urn:aindrive:device:ed25519:${c.deviceKey}`;
     if (!w.message.split(/\r?\n/).some((l) => l.trim() === want || l.trim() === `- ${want}`)) return null;
     if ((await trust.verifyWallet(w.message, w.signature))?.toLowerCase() !== w.address) return null;

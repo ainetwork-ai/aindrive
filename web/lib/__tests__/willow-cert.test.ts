@@ -54,9 +54,9 @@ describe("device certificates", () => {
     const message = `aindrive.ainetwork.ai wants you to sign in\n${walletCertMessageLine(d.publicKey)}`;
     const link = await signLink(aindrive, "0xabc", "u-mom");
     const trust: Trust = { attestationKeys: [toHex(aindrive.publicKey)], verifyWallet: async (m, s) => (m === message && s === "0xsig" ? "0xabc" : null) };
-    const cert = issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "browser", at: T0, address: "0xabc", message, signature: "0xsig", link });
+    const cert = await issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "browser", at: T0, address: "0xabc", message, signature: "0xsig", link }, aindrive);
     expect(await resolvePerson(toHex(d.publicKey), [cert], [], trust)).toEqual({ userId: "u-mom", strength: "wallet" });
-    const other = issueWalletCert({ deviceKey: (await generateDeviceKey()).publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "0xsig", link });
+    const other = await issueWalletCert({ deviceKey: (await generateDeviceKey()).publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "0xsig", link }, aindrive);
     expect(await resolvePerson(other.deviceKey, [other], [], trust)).toBeNull(); // the signed message names a different key
   });
 
@@ -89,10 +89,10 @@ describe("device certificates", () => {
     const message = `aindrive.example wants you to sign in with your Ethereum account:\n0xabc\n\nsign in\n\nURI: https://x\nVersion: 1\nChain ID: 1\nNonce: n\nIssued At: t\nResources:\n- ${line}`;
     const link = await signLink(aindrive, "0xabc", "u-mom");
     const trust: Trust = { attestationKeys: [toHex(aindrive.publicKey)], verifyWallet: async (m) => (m === message ? "0xabc" : null) };
-    const cert = issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "s", link });
+    const cert = await issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "s", link }, aindrive);
     expect(await resolvePerson(toHex(d.publicKey), [cert], [], trust)).toEqual({ userId: "u-mom", strength: "wallet" });
     const other = await generateDeviceKey();
-    const forged = issueWalletCert({ deviceKey: other.publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "s", link });
+    const forged = await issueWalletCert({ deviceKey: other.publicKey, userId: "u-mom", label: "b", at: T0, address: "0xabc", message, signature: "s", link }, aindrive);
     expect(await resolvePerson(toHex(other.publicKey), [forged], [], trust)).toBeNull();
   });
 
@@ -102,7 +102,20 @@ describe("device certificates", () => {
     const message = `x\nResources:\n- ${walletCertMessageLine(d.publicKey)}`;
     const trust: Trust = { attestationKeys: [toHex(aindrive.publicKey)], verifyWallet: async () => "0xabc" };
     const attested = await issueAttestedCert(aindrive, d.publicKey, "u-mom", "a", T0);
-    const wallet = issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "w", at: T0, address: "0xabc", message, signature: "s", link: await signLink(aindrive, "0xabc", "u-mom") });
+    const wallet = await issueWalletCert({ deviceKey: d.publicKey, userId: "u-mom", label: "w", at: T0, address: "0xabc", message, signature: "s", link: await signLink(aindrive, "0xabc", "u-mom") }, aindrive);
     expect(await resolvePerson(toHex(d.publicKey), [attested, wallet], [], trust)).toEqual({ userId: "u-mom", strength: "wallet" });
+  });
+
+  it("review C1: a wallet cert someone assembled from a phished signature and a copied link is not valid", async () => {
+    const { aindrive } = await setup();
+    const d = await generateDeviceKey();
+    const message = `evil.com wants you to sign in\nResources:\n- ${walletCertMessageLine(d.publicKey)}`;
+    const trust: Trust = { attestationKeys: [toHex(aindrive.publicKey)], verifyWallet: async () => "0xabc" };
+    const link = await signLink(aindrive, "0xabc", "u-victim");
+    const selfMade = await issueWalletCert({ deviceKey: d.publicKey, userId: "u-victim", label: "x", at: T0, address: "0xabc", message, signature: "s", link }); // no countersignature
+    expect(await resolvePerson(toHex(d.publicKey), [selfMade], [], trust)).toBeNull();
+    const rogue = await generateDeviceKey();
+    const rogueSigned = await issueWalletCert({ deviceKey: d.publicKey, userId: "u-victim", label: "x", at: T0, address: "0xabc", message, signature: "s", link }, rogue);
+    expect(await resolvePerson(toHex(d.publicKey), [rogueSigned], [], trust)).toBeNull();
   });
 });

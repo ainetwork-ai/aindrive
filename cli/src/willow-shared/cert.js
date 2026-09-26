@@ -14,16 +14,16 @@ const issueDeviceCert = (issuer, deviceKey, userId, label, at) => issueSigned(is
 async function signLink(attestation, address, userId) {
   return { address: address.toLowerCase(), userId, sig: toHex(await sign(attestation, linkBody(address, userId))) };
 }
-function issueWalletCert(p) {
-  return {
+async function issueWalletCert(p, countersigner) {
+  const c = {
     v: 1,
     deviceKey: toHex(p.deviceKey),
     userId: p.userId,
     label: p.label,
     issuedAt: p.at.toString(),
-    issuer: { type: "wallet", address: p.address.toLowerCase(), message: p.message, signature: p.signature, link: p.link },
-    sig: ""
+    issuer: { type: "wallet", address: p.address.toLowerCase(), message: p.message, signature: p.signature, link: p.link }
   };
+  return { ...c, sig: countersigner ? toHex(await sign(countersigner, body(c))) : "" };
 }
 async function revoke(by, deviceKey, userId, at) {
   const r = { v: 1, deviceKey: toHex(deviceKey), userId, at: at.toString(), by: toHex(by.publicKey) };
@@ -124,6 +124,12 @@ async function resolvePerson(deviceKeyHex, certs, revocations, trust, at) {
       return parent && parent.userId === c.userId ? parent : null;
     }
     const w = c.issuer;
+    let countersigned = false;
+    for (const k of trust.attestationKeys) if (HEX128.test(sig) && await verifyMemo(k, body(rest), sig)) {
+      countersigned = true;
+      break;
+    }
+    if (!countersigned) return null;
     const want = `urn:aindrive:device:ed25519:${c.deviceKey}`;
     if (!w.message.split(/\r?\n/).some((l) => l.trim() === want || l.trim() === `- ${want}`)) return null;
     if ((await trust.verifyWallet(w.message, w.signature))?.toLowerCase() !== w.address) return null;

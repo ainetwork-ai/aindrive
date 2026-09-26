@@ -46,3 +46,13 @@ describe("the sign-in message with a device resource still parses", () => {
     expect(cert?.deviceKey).toBe(toHex(device.publicKey));
   });
 });
+
+describe("review C2: a signature the server cannot verify gets no wallet cert", () => {
+  it("returns null (the browser falls back to an attested cert)", async () => {
+    const wallet = privateKeyToAccount(generatePrivateKey());
+    const device = await generateDeviceKey();
+    const message = siwe(wallet.address, walletCertMessageLine(device.publicKey));
+    const other = privateKeyToAccount(generatePrivateKey());
+    expect(await walletCertFromLogin({ message, signature: await other.signMessage({ message }), address: wallet.address, userId: "u-1", label: "x" })).toBeNull();
+  });
+});
