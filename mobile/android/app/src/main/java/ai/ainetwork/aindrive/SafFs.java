@@ -221,10 +221,13 @@ public final class SafFs {
      * Every file in the tree (HIDDEN dirs skipped), one child query per
      * directory. Used by the file indexer; the web side never asks for this.
      */
-    public List<Entry> walkFiles() throws IOException {
+    public List<Entry> walkFiles() throws IOException { return walkFiles(""); }
+
+    /** Every file at or below the folder `rel`, the same way {@link #walkFiles()} walks the whole tree. */
+    public List<Entry> walkFiles(String rel) throws IOException {
         List<Entry> out = new ArrayList<>();
         java.util.ArrayDeque<String> dirs = new java.util.ArrayDeque<>();
-        dirs.push("");
+        dirs.push(String.join("/", splitPath(rel)));
         while (!dirs.isEmpty()) {
             String dir = dirs.pop();
             for (Entry e : list(dir)) {
@@ -233,6 +236,25 @@ public final class SafFs {
             }
         }
         return out;
+    }
+
+    /**
+     * True when the walk in {@link #walkFiles()} would reach `rel`: no hidden segment (.aindrive/
+     * in any letter case, .git, .DS_Store) and no folder on the way that is served as a drive of
+     * its own. What an RPC just wrote is indexed only then, exactly as a full run would.
+     */
+    boolean indexable(String rel) throws IOException {
+        List<String> segs = splitPath(rel);
+        if (segs.isEmpty()) return false;
+        for (String seg : segs) if (HIDDEN.contains(seg) || seg.equalsIgnoreCase(".aindrive")) return false;
+        StringBuilder walked = new StringBuilder();
+        for (String seg : segs) {
+            if (walked.length() > 0) walked.append('/');
+            walked.append(seg);
+            String id = resolve(walked.toString());
+            if (id == null || excluded.contains(id)) return false;
+        }
+        return true;
     }
 
     /** Seekable descriptor for one document — MediaExtractor needs to seek, a stream will not do. */

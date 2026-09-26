@@ -1,14 +1,17 @@
 import WebSocket from "ws";
 import { watch } from "node:fs";
+import { createRequire } from "node:module";
 import { hostname as osHostname } from "node:os";
 import { join, sep } from "node:path";
-import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
+import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite, rpcMethodNames } from "./rpc.js";
 import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
 const PROTOCOL_VERSION = 1;
+const require = createRequire(import.meta.url);
+const { version: APP_VERSION } = require("../package.json");
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
 const FS_DEBOUNCE_MS = 500;
 const DRAIN_TIMEOUT_MS = 10_000;
@@ -115,6 +118,25 @@ export function watchServerSilence(ws, { limitMs = SERVER_SILENCE_LIMIT_MS, chec
   ws.once("close", () => clearInterval(timer));
 }
 
+/**
+ * The first frame on the socket (phone protocol v2, docs/AINUI.md §6): the
+ * hostname as before, plus platform, appVersion, every RPC method this agent
+ * answers and its optional capabilities. `caps` is empty: the desktop agent's
+ * LLM `agent-ask` has no read-only mode yet, so it does not claim "ask.v2" and
+ * the server's `ask` skill refuses questions to it up front.
+ */
+export function agentHello({ hostname = osHostname() } = {}) {
+  return {
+    type: "agent-hello",
+    hostname,
+    platform: "cli",
+    appVersion: APP_VERSION,
+    // rotate-credentials is answered here in agent.js, the rest by handleRpc.
+    methods: [...rpcMethodNames(), "rotate-credentials"].sort(),
+    caps: [],
+  };
+}
+
 // Exported for characterization tests (pure helper, no IO). Used by runAgent.
 export function toWsUrl(server, driveId) {
   const u = new URL(`/api/agent/connect?driveId=${encodeURIComponent(driveId)}`, server);
@@ -143,9 +165,9 @@ function connectOnce({ root, drive, wsUrl }) {
       activeWs = ws;
       watchServerSilence(ws);
       log.info({ driveId: drive.driveId }, "connected");
-      // Tell the server which machine this agent is running on so it can show
-      // the hostname next to the drive in the UI.
-      try { ws.send(JSON.stringify({ type: "agent-hello", hostname: osHostname() })); } catch {}
+      // Tell the server which machine this agent is running on (shown next to
+      // the drive in the UI) and what it can do (phone protocol v2).
+      try { ws.send(JSON.stringify(agentHello())); } catch {}
       // Multi-device sync: gossip yjs_entries with peers via the same WS
       try { attachSync(ws, drive, root); } catch (e) { log.warn({ err: e.message }, "attachSync failed"); }
       // Start fs watcher — sends {type:'fs-changed', path} frames so the server can

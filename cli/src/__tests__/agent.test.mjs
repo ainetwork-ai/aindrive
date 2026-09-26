@@ -7,7 +7,11 @@
 // injection seam, so locking it needs a source change (deferred to the structure
 // phase). Every assertion below was verified by probing the real module first.
 import { describe, it, expect } from "vitest";
-import { toWsUrl, sanitize } from "../agent.js";
+import { createRequire } from "node:module";
+import { hostname } from "node:os";
+import { toWsUrl, sanitize, agentHello } from "../agent.js";
+
+const pkg = createRequire(import.meta.url)("../../package.json");
 
 describe("toWsUrl", () => {
   it("maps http:// to ws:// and builds the /api/agent/connect path", () => {
@@ -49,5 +53,36 @@ describe("sanitize", () => {
 
   it("caps the result at 300 chars", () => {
     expect(sanitize("x".repeat(400))).toHaveLength(300);
+  });
+});
+
+describe("agentHello (phone protocol v2)", () => {
+  it("keeps the hostname and adds platform, appVersion and empty caps", () => {
+    expect(agentHello({ hostname: "mbp" })).toMatchObject({
+      type: "agent-hello", hostname: "mbp", platform: "cli", appVersion: pkg.version, caps: [],
+    });
+  });
+
+  it("defaults the hostname to this machine's", () => {
+    expect(agentHello().hostname).toBe(hostname());
+  });
+
+  it("lists every RPC method the agent answers, sorted and without duplicates", () => {
+    const { methods } = agentHello();
+    for (const m of ["list", "stat", "read", "write", "mkdir", "rename", "delete", "upload-chunk",
+      "download-chunk", "yjs-write", "yjs-read", "yjs-stats", "agent-ask", "rotate-credentials"]) {
+      expect(methods).toContain(m);
+    }
+    expect(methods).toEqual([...methods].sort());
+    expect(new Set(methods).size).toBe(methods.length);
+  });
+
+  it("does not claim ask.v2: the LLM agent has no read-only mode yet", () => {
+    expect(agentHello().caps).not.toContain("ask.v2");
+  });
+
+  it("is plain JSON", () => {
+    const h = agentHello({ hostname: "x" });
+    expect(JSON.parse(JSON.stringify(h))).toEqual(h);
   });
 });

@@ -38,6 +38,11 @@ public final class Indexer {
     /** Which recognisers are available for this run; null = that kind of recognition is skipped. */
     public interface Recognisers {
         @Nullable ClipEmbedder clip();
+        /**
+         * The photo recogniser only if it is already in memory, never loading it (null otherwise):
+         * for one file indexed as it lands, which must not make a serving phone load ~400 MB.
+         */
+        default @Nullable ClipEmbedder loadedClip() { return null; }
         @Nullable SpeechRecognizer speech();
         /** How much of each recording to hear; a call archive of thousands of hours needs a cap. */
         default int speechSeconds() { return SpeechRecognizer.MAX_SECONDS; }
@@ -185,6 +190,31 @@ public final class Indexer {
         }
         Log.i(TAG, "recognised " + recognised + " files (" + failed + " failed)");
         progress.onProgress(recognised, toRecognise, phase);
+    }
+
+    /**
+     * Index one file now — a fresh upload or a file the server just wrote — so the agent finds it
+     * without a full run. Metadata (name, kind, date, place: findable at once), plus a photo's
+     * CLIP vector when the model is already in memory (one image through it; a full run or a
+     * photo question loads it). The model is never loaded here: ~400 MB kept resident for one
+     * upload is too much for a phone that mostly serves files, so without it the vector comes
+     * with the next full run. A recording or video is NOT transcribed here: that can take
+     * minutes (up to {@link SpeechRecognizer#MAX_SECONDS} of audio) on the one index thread every
+     * drive shares, so its transcript comes with the next full run, which picks up whatever
+     * still needs recognition. Leaves the full run's progress counters alone; the caller runs it
+     * on the same single index thread as full runs.
+     */
+    public void indexFile(SafFs.Entry e) throws Exception {
+        if (e == null || e.isDir) return;
+        if (index.needsIndex(e.docId, e.mtimeMs, e.size)) indexOne(e);
+        String kind = FileIndex.kindOf(e.mime, e.name);
+        if (!FileIndex.PHOTO.equals(kind) && !FileIndex.SCREENSHOT.equals(kind)) return;
+        ClipEmbedder clip = recognisers.loadedClip();
+        if (clip == null || !index.needsRecognition(e.docId, true, false)) return;
+        try (InputStream in = fs.open(e.docId)) {
+            float[] v = clip.embedImage(in);
+            if (v != null) index.setRecognition(e.docId, FileIndex.encodeVec(v), null);
+        }
     }
 
     private void indexOne(SafFs.Entry e) throws Exception {
