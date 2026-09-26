@@ -50,7 +50,9 @@ h1 { margin: 0; font-size: 18px; font-weight: 650; }
 #account { margin: 1px 0 0; font-size: 12px; }
 main {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 4px 20px 16px;
   border: 2px dashed transparent;
   border-radius: 14px;
@@ -89,12 +91,15 @@ button.primary:hover { background: #0842a0; }
   margin-right: 8px;
   font-size: 11px;
 }
-.folders { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+/* minmax(0, 1fr): a grid item's min-width is its content by default, so one long
+   no-wrap name or path widened the column past the window instead of ellipsizing */
+.folders { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .folder {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
+  min-width: 0;
 }
 .row { display: flex; align-items: center; gap: 10px; }
 .info { flex: 1; min-width: 0; }
@@ -105,8 +110,8 @@ button.primary:hover { background: #0842a0; }
 .state-connecting .dot, .state-starting .dot { background: #f9ab00; animation: pulse 1.2s infinite; }
 .state-approve .dot { background: var(--warn); animation: pulse 1.2s infinite; }
 .state-error .dot { background: var(--err); }
-.state-error .detail { color: var(--err); white-space: normal; }
-.state-approve .detail { color: var(--warn); white-space: normal; }
+.state-error .detail { color: var(--err); white-space: normal; overflow-wrap: anywhere; }
+.state-approve .detail { color: var(--warn); white-space: normal; overflow-wrap: anywhere; }
 @keyframes pulse { 50% { opacity: .35; } }
 .badge { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding-left: 19px; }
