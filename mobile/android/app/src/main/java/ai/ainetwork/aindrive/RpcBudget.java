@@ -26,10 +26,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  *  - 90 s: agent-ask (the `ask` skill of phone protocol v2; the owner's /ask route gives 60).
  *
  * Lanes: every drive has its own workers, so one drive's traffic never holds another's
- * requests; and within a drive, the methods whose reply can be megabytes (a whole file in
- * base64) have a lane of their own, so a thumbnail grid pulling whole photos can't take
- * the workers a list or stat needs. Across drives, at most {@link #MAX_BULK_IN_FLIGHT} of
- * those big replies are in memory at once ({@link #bulkSlots}).
+ * requests; and within a drive three lanes ({@link #laneOf}): the methods whose reply can be
+ * megabytes (a whole file in base64) or that decode an image, so a thumbnail grid can't take
+ * the workers a list or stat needs; `agent-ask`, which can run for a minute (a photo
+ * question may load the ~400 MB image model) and which anyone with read access to the
+ * folder can now send, so questions can't take them either; and everything else. Across
+ * drives, at most {@link #MAX_BULK_IN_FLIGHT} bulk replies are in memory at once
+ * ({@link #bulkSlots}), and at most {@link #MAX_BIG_FRAMES_IN_FLIGHT} big incoming frames
+ * (an upload chunk, a write) are being parsed and applied at once ({@link #bigFrameSlots}).
  *
  * Pure (no Android types) so it is unit-tested on the JVM.
  */
@@ -44,6 +48,47 @@ final class RpcBudget {
 
     /** Workers per drive for bulk replies (read, download-chunk, …) and for everything else. */
     static final int BULK_WORKERS = 2, CONTROL_WORKERS = 4;
+
+    /**
+     * Questions (`agent-ask`) answered at once per drive, on their own workers: two, so one slow
+     * question (an owner's call report can run for minutes) doesn't hold every other one, and a
+     * burst of questions never holds the drive's list/stat. More would only compete for the same
+     * CPU and image model.
+     */
+    static final int ASK_WORKERS = 2;
+
+    /** Which of a drive's worker lanes runs a method. */
+    enum Lane { BULK, ASK, CONTROL }
+
+    static Lane laneOf(String method) {
+        if (bulk(method)) return Lane.BULK;
+        if ("agent-ask".equals(method)) return Lane.ASK;
+        return Lane.CONTROL;
+    }
+
+    /** The lane for the request in `frame` (see {@link #methodOf}). */
+    static Lane laneOfFrame(String frame) { return laneOf(methodOf(frame)); }
+
+    /**
+     * An incoming frame this long (UTF-16 chars) is big: an upload chunk (~5.6 MB of base64), a
+     * `write` or a `yjs-write`. While one is parsed and applied it costs the frame text, its parsed
+     * copy and the decoded bytes — tens of MB.
+     */
+    static final int BIG_FRAME_CHARS = 1024 * 1024;
+
+    /**
+     * Big incoming frames parsed and applied at once, on the whole phone: the ceiling the one
+     * process-wide pool of 4 RPC workers gave before every drive had lanes of its own. A frame
+     * waits for a slot (writes are never skipped); with one drive and the web's one PATCH in
+     * flight per upload, it never does.
+     */
+    static final int MAX_BIG_FRAMES_IN_FLIGHT = 4;
+
+    /** The phone's big-frame slots, first come first served. */
+    static Semaphore bigFrameSlots() { return new Semaphore(MAX_BIG_FRAMES_IN_FLIGHT, true); }
+
+    /** True when `frame` takes a big-frame slot while it is parsed and applied. */
+    static boolean bigFrame(String frame) { return frame != null && frame.length() >= BIG_FRAME_CHARS; }
 
     /**
      * Bulk replies being built or waiting to be sent, on the whole phone: each holds an 8 MiB
@@ -98,13 +143,18 @@ final class RpcBudget {
     /** True when the request in `frame` runs in the bulk lane (see {@link #methodOf}). */
     static boolean bulkFrame(String frame) { return bulk(methodOf(frame)); }
 
-    /** Methods whose reply can be megabytes: they run in the drive's bulk lane and take a bulk slot. */
+    /**
+     * Methods whose reply can be megabytes, or that decode an image (`thumbnail`: a small reply,
+     * but a camera original decoded, down-sampled, into a bitmap): they run in the drive's bulk
+     * lane and take a bulk slot.
+     */
     static boolean bulk(String method) {
         switch (method == null ? "" : method) {
             case "read":
             case "download-chunk":
             case "handoff-read":
             case "yjs-read":
+            case "thumbnail":
                 return true;
             default:
                 return false;
@@ -124,12 +174,23 @@ final class RpcBudget {
             case "read":
             case "download-chunk":
             case "handoff-read":
+            case "thumbnail":          // writes only the app's own thumbnail cache, never the folder
             case "yjs-read":
             case "yjs-stats":
                 return true;
             default:
                 return false;
         }
+    }
+
+    /**
+     * Requests skipped when still queued at their deadline: every {@link #readOnly} method, and
+     * `agent-ask`. A question the server has stopped waiting for is not answered late: in read
+     * mode that is work (maybe the image model loaded) nobody reads, and in act mode it would collect or move files
+     * for an owner who was already told the question timed out.
+     */
+    static boolean skipWhenExpired(String method) {
+        return readOnly(method) || "agent-ask".equals(method);
     }
 
     /** How far into a frame the method is looked for: it sits right after the frame's envelope. */

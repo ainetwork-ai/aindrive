@@ -40,7 +40,7 @@ public class RpcBudgetTest {
     @Test
     public void everyDeadlineIsUnderTheServersTimeout() {
         String[] methods = {"list", "stat", "read", "write", "mkdir", "rename", "delete", "upload-chunk", "download-chunk",
-                "yjs-write", "yjs-read", "yjs-stats", "agent-ask", "handoff-read", "no-such-method", "", null};
+                "yjs-write", "yjs-read", "yjs-stats", "agent-ask", "handoff-read", "thumbnail", "no-such-method", "", null};
         for (String m : methods) {
             long budgetMs = (RpcBudget.deadlineNanos(m, 0) / 1_000_000L);
             assertTrue(m, budgetMs < RpcBudget.serverTimeoutMs(m));
@@ -57,14 +57,87 @@ public class RpcBudgetTest {
 
     @Test
     public void lanesAndSkippableMethods() {
-        for (String m : new String[]{"read", "download-chunk", "handoff-read", "yjs-read"}) assertTrue(m, RpcBudget.bulk(m));
+        for (String m : new String[]{"read", "download-chunk", "handoff-read", "yjs-read", "thumbnail"}) assertTrue(m, RpcBudget.bulk(m));
         for (String m : new String[]{"list", "stat", "write", "upload-chunk", "rename", "delete", "agent-ask", "", null}) assertFalse(String.valueOf(m), RpcBudget.bulk(m));
-        for (String m : new String[]{"list", "stat", "read", "download-chunk", "handoff-read", "yjs-read", "yjs-stats"}) assertTrue(m, RpcBudget.readOnly(m));
+        for (String m : new String[]{"list", "stat", "read", "download-chunk", "handoff-read", "thumbnail", "yjs-read", "yjs-stats"}) assertTrue(m, RpcBudget.readOnly(m));
         // Anything that may change the folder always runs, as before.
         for (String m : new String[]{"write", "upload-chunk", "rename", "delete", "mkdir", "yjs-write", "agent-ask", "", null})
             assertFalse(String.valueOf(m), RpcBudget.readOnly(m));
         // A bulk request that can't get a slot by its deadline is skipped: only safe if it changes nothing.
         for (String m : RpcHandler.methods()) if (RpcBudget.bulk(m)) assertTrue(m + " is bulk but not read-only", RpcBudget.readOnly(m));
+        // Questions have their own lane, and one still queued at its deadline is not answered late.
+        assertEquals(RpcBudget.Lane.ASK, RpcBudget.laneOf("agent-ask"));
+        assertEquals(RpcBudget.Lane.BULK, RpcBudget.laneOf("thumbnail"));
+        for (String m : new String[]{"list", "stat", "write", "upload-chunk", "rename", "", null}) assertEquals(String.valueOf(m), RpcBudget.Lane.CONTROL, RpcBudget.laneOf(m));
+        assertTrue(RpcBudget.skipWhenExpired("agent-ask"));
+        for (String m : new String[]{"write", "upload-chunk", "rename", "delete", "mkdir", "yjs-write", "", null})
+            assertFalse(String.valueOf(m), RpcBudget.skipWhenExpired(m));
+    }
+
+    /**
+     * Every method the host answers has been placed on purpose: a method added upstream (as
+     * `thumbnail` was) fails here until someone decides its lane and whether it may be skipped.
+     * {lane, read-only}.
+     */
+    @Test
+    public void everyMethodTheHostAnswersIsClassified() {
+        Map<String, Object[]> expected = new HashMap<>();
+        expected.put("list", new Object[]{RpcBudget.Lane.CONTROL, true});
+        expected.put("stat", new Object[]{RpcBudget.Lane.CONTROL, true});
+        expected.put("read", new Object[]{RpcBudget.Lane.BULK, true});
+        expected.put("write", new Object[]{RpcBudget.Lane.CONTROL, false});
+        expected.put("mkdir", new Object[]{RpcBudget.Lane.CONTROL, false});
+        expected.put("rename", new Object[]{RpcBudget.Lane.CONTROL, false});
+        expected.put("delete", new Object[]{RpcBudget.Lane.CONTROL, false});
+        expected.put("upload-chunk", new Object[]{RpcBudget.Lane.CONTROL, false});
+        expected.put("download-chunk", new Object[]{RpcBudget.Lane.BULK, true});
+        expected.put("yjs-write", new Object[]{RpcBudget.Lane.CONTROL, false});
+        expected.put("yjs-read", new Object[]{RpcBudget.Lane.BULK, true});
+        expected.put("yjs-stats", new Object[]{RpcBudget.Lane.CONTROL, true});
+        expected.put("agent-ask", new Object[]{RpcBudget.Lane.ASK, false});
+        expected.put("handoff-read", new Object[]{RpcBudget.Lane.BULK, true});
+        expected.put("thumbnail", new Object[]{RpcBudget.Lane.BULK, true});
+        assertEquals("classify every new method here", new TreeSet<>(expected.keySet()), new TreeSet<>(RpcHandler.methods()));
+        for (Map.Entry<String, Object[]> e : expected.entrySet()) {
+            assertEquals(e.getKey(), e.getValue()[0], RpcBudget.laneOf(e.getKey()));
+            assertEquals(e.getKey(), e.getValue()[1], RpcBudget.readOnly(e.getKey()));
+        }
+    }
+
+    @Test
+    public void bigIncomingFramesTakeASlotAndSmallOnesNever() throws Exception {
+        assertFalse(RpcBudget.bigFrame(null));
+        assertFalse(RpcBudget.bigFrame(frame("{\"method\":\"list\",\"path\":\"\"}")));
+        assertFalse(RpcBudget.bigFrame(rep('x', RpcBudget.BIG_FRAME_CHARS - 1)));
+        assertTrue(RpcBudget.bigFrame(rep('x', RpcBudget.BIG_FRAME_CHARS)));
+        // A 4 MiB upload chunk is ~5.6 M chars of base64: big.
+        StringBuilder data = new StringBuilder();
+        for (int i = 0; i < 4 * MIB / 3; i++) data.append("QUJD");
+        assertTrue(RpcBudget.bigFrame(frame("{\"method\":\"upload-chunk\",\"path\":\".aindrive/uploads/x.part\",\"data\":\"" + data + "\"}")));
+        // At most MAX_BIG_FRAMES_IN_FLIGHT at once on the phone, however many drives are uploading.
+        Semaphore slots = RpcBudget.bigFrameSlots();
+        assertEquals(RpcBudget.MAX_BIG_FRAMES_IN_FLIGHT, slots.availablePermits());
+        ExecutorService[] lanes = new ExecutorService[3];
+        AtomicInteger inFlight = new AtomicInteger(), peak = new AtomicInteger();
+        List<Future<?>> done = new ArrayList<>();
+        try {
+            for (int d = 0; d < lanes.length; d++) {
+                lanes[d] = RpcBudget.lane("up" + d, RpcBudget.CONTROL_WORKERS);
+                for (int i = 0; i < RpcBudget.CONTROL_WORKERS; i++) done.add(lanes[d].submit(() -> {
+                    slots.acquire();
+                    try {
+                        int n = inFlight.incrementAndGet(); peak.accumulateAndGet(n, Math::max);
+                        Thread.sleep(100);
+                        inFlight.decrementAndGet();
+                    } finally { slots.release(); }
+                    return null;
+                }));
+            }
+            for (Future<?> f : done) f.get(10, TimeUnit.SECONDS);
+        } finally {
+            for (ExecutorService l : lanes) if (l != null) l.shutdownNow();
+        }
+        assertTrue("peak " + peak.get(), peak.get() <= RpcBudget.MAX_BIG_FRAMES_IN_FLIGHT && peak.get() >= 2);
     }
 
     private static String rep(char c, int n) {
@@ -326,16 +399,25 @@ public class RpcBudgetTest {
         }
     }
 
-    /** One drive: its gate, its socket and its two lanes, as AgentService.Conn has them. */
+    /** One drive: its gate, its socket and its three lanes, as AgentService.Conn has them. */
     static final class Drive {
         final SendGate gate = new SendGate();
         final Link link;
-        final ExecutorService bulk, control;
+        final ExecutorService bulk, ask, control;
 
         Drive(String name, double bytesPerSecond) {
             link = new Link(bytesPerSecond);
             bulk = RpcBudget.lane(name + "-bulk", RpcBudget.BULK_WORKERS);
+            ask = RpcBudget.lane(name + "-ask", RpcBudget.ASK_WORKERS);
             control = RpcBudget.lane(name, RpcBudget.CONTROL_WORKERS);
+        }
+
+        ExecutorService lane(String method) {
+            switch (RpcBudget.laneOf(method)) {
+                case BULK: return bulk;
+                case ASK: return ask;
+                default: return control;
+            }
         }
 
         /** What onMessage + onFrame do: pick the lane by method, then send the reply with the arrival deadline. */
@@ -346,12 +428,14 @@ public class RpcBudgetTest {
         /**
          * The same with the phone's bulk slots: a bulk request takes one before it reads (here:
          * holds `readMs`, counted in `inFlight`/`peak`) and keeps it until its reply is sent.
-         * -1 when the reply was not sent, -2 when no slot came before the deadline.
+         * -1 when the reply was not sent, -2 when no slot came before the deadline, -3 when it was
+         * still queued at its deadline and skipped.
          */
         Future<Long> answer(String method, String reply, long deadlineMs, Semaphore slots, long readMs, AtomicInteger inFlight, AtomicInteger peak) {
             long arrived = System.nanoTime();
             long deadline = arrived + deadlineMs * 1_000_000L;
-            return (RpcBudget.bulk(method) ? bulk : control).submit(() -> {
+            return lane(method).submit(() -> {
+                if (RpcBudget.skipWhenExpired(method) && System.nanoTime() - deadline >= 0) return -3L;
                 boolean slot = slots != null && RpcBudget.bulk(method);
                 if (slot && !RpcBudget.takeSlot(slots, deadline)) return -2L;
                 try {
@@ -365,7 +449,7 @@ public class RpcBudgetTest {
             });
         }
 
-        void stop() { bulk.shutdownNow(); control.shutdownNow(); }
+        void stop() { bulk.shutdownNow(); ask.shutdownNow(); control.shutdownNow(); }
     }
 
     /** How many bulk replies were in memory at once: three drives, each reading on both its bulk workers. */
@@ -435,6 +519,39 @@ public class RpcBudgetTest {
         } finally {
             a.stop();
             b.stop();
+        }
+    }
+
+    /**
+     * Questions can run for a minute and anyone with read access may send them: a burst of them
+     * on one drive runs at most ASK_WORKERS at a time, on the drive's ask lane, and never holds
+     * its list/stat. One still queued at its deadline is skipped, not answered late.
+     */
+    @Test
+    public void slowQuestionsHoldNeitherListNorEachOtherBeyondTheAskLane() throws Exception {
+        Drive a = new Drive("a", 50_000_000);
+        try {
+            AtomicInteger inFlight = new AtomicInteger(), peak = new AtomicInteger();
+            List<Future<Long>> asks = new ArrayList<>();
+            for (int i = 0; i < 4 * RpcBudget.ASK_WORKERS; i++)
+                asks.add(a.answer("agent-ask", "{\"answer\":\"…\"}", 5_000, null, 400, inFlight, peak));
+            Thread.sleep(100);                                     // the ask lane is busy now
+
+            for (String m : new String[]{"list", "stat"}) {
+                long t = a.answer(m, "{\"entries\":[]}", 3_000).get(2, TimeUnit.SECONDS);
+                assertTrue(m + " waited " + t + " ms behind the questions", t >= 0 && t < 300);
+            }
+            for (Future<Long> f : asks) assertTrue(f.get(10, TimeUnit.SECONDS) >= 0);
+            assertEquals(RpcBudget.ASK_WORKERS, peak.get());
+
+            // A question that waited past its deadline behind a long one is skipped.
+            Future<Long> slow1 = a.answer("agent-ask", "{}", 5_000, null, 600, null, null);
+            Future<Long> slow2 = a.answer("agent-ask", "{}", 5_000, null, 600, null, null);
+            Future<Long> late = a.answer("agent-ask", "{}", 200, null, 0, null, null);
+            assertEquals(-3L, (long) late.get(5, TimeUnit.SECONDS));
+            assertTrue(slow1.get(5, TimeUnit.SECONDS) >= 0 && slow2.get(5, TimeUnit.SECONDS) >= 0);
+        } finally {
+            a.stop();
         }
     }
 }

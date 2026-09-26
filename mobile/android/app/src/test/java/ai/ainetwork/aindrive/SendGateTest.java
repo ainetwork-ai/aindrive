@@ -295,6 +295,45 @@ public class SendGateTest {
         assertTrue(other.messages.isEmpty());
     }
 
+    /**
+     * A slow patch is timed, then the link recovers while the socket sits idle. Only big messages
+     * are timed and a LATE one is never sent, so without the idle rule the old rate would drop
+     * every big reply for the rest of its minute. Within RATE_IDLE_FRESH_NS it still counts; after
+     * it the reply goes out (and makes its deadline), timing the link again. With a backlog
+     * queued the full window still applies.
+     */
+    @Test
+    public void anIdleSocketRetimesAStaleLowRate() throws Exception {
+        FakeClock clock = new FakeClock();
+        SendGate gate = new SendGate(25, clock);
+        LinkSocket slow = new LinkSocket(clock, 200_000);            // a slow patch: 0.2 MB/s
+        String seven = ascii(7_000_000);
+        assertEquals(SendGate.Result.SENT, gate.send(slow, seven, clock.in(120_000), () -> true));
+        assertEquals(SendGate.Result.SENT, gate.send(slow, seven, clock.in(120_000), () -> true));
+        assertEquals(200_000, gate.bytesPerSecond(), 2_000);
+
+        // The same uplink, recovered to 5 MB/s, idle 5 s after the measurement: still trusted
+        // (11 MB due in 23 s needs more than 1.5 × 0.2 MB/s).
+        LinkSocket fast = new LinkSocket(clock, 5_000_000);
+        clock.advanceMs(5_000);
+        String eleven = ascii(11_000_000);
+        assertEquals(SendGate.Result.LATE, gate.send(fast, eleven, clock.in(23_000), () -> true));
+        assertTrue(fast.messages.isEmpty());
+
+        // Idle past RATE_IDLE_FRESH_NS (the rate is still inside its 60 s): sent, and in time.
+        clock.advanceMs(SendGate.RATE_IDLE_FRESH_NS / 1_000_000);
+        assertTrue("still fresh by the 60 s rule", gate.bytesPerSecond() > 0);
+        long deadline = clock.in(23_000);
+        assertEquals(SendGate.Result.SENT, gate.send(fast, eleven, deadline, () -> true));
+        assertTrue(fast.doneAt(0) <= deadline);
+
+        // A second one right behind it: the queue is not idle, so the measured rate still decides.
+        long before = clock.now;
+        assertEquals(SendGate.Result.LATE, gate.send(fast, eleven, clock.in(23_000), () -> true));
+        assertEquals("written off at once, not after waiting", before, clock.now);
+        assertEquals(1, fast.messages.size());
+    }
+
     @Test
     public void withoutAMeasuredRateOnlyTheDeadlineCounts() throws Exception {
         FakeClock clock = new FakeClock();

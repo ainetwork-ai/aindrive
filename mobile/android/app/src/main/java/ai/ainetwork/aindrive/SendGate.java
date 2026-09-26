@@ -29,7 +29,9 @@ import java.util.function.BooleanSupplier;
  *    on a message that would still be leaving the phone after the deadline even
  *    were the link {@link #LATE_RATE_SLACK}× faster than measured — the uplink
  *    is better spent on replies the server still wants, but a measurement that
- *    came out low must not cost a reply that would have made it;
+ *    came out low must not cost a reply that would have made it (and on an idle
+ *    socket a rate older than {@link #RATE_IDLE_FRESH_NS} is not used: the
+ *    message goes out and times the link again);
  *  - reports send()'s own return value instead of ignoring it.
  *
  * The agent-hello is the one frame sent around the gate: it is the first frame
@@ -58,6 +60,15 @@ final class SendGate {
     static final long WATCH_GAP_NS = 200_000_000L;
     /** A drain rate older than this is not used: the phone may have changed networks. */
     static final long RATE_FRESH_NS = 60_000_000_000L;
+    /**
+     * On an idle socket (nothing queued) a rate older than this is not used to write a message
+     * off as LATE. Only big messages are timed and a LATE one is never sent, so a rate measured
+     * during a slow patch could not be re-measured until {@link #RATE_FRESH_NS} passed, and big
+     * replies that would now make it were dropped meanwhile. With nothing queued ahead, the
+     * message goes out and times the link again. While messages are queued the full window
+     * applies: that backlog is what LATE protects the small replies behind it from.
+     */
+    static final long RATE_IDLE_FRESH_NS = 10_000_000_000L;
     /**
      * A message is written off as LATE only if it would still be leaving after the deadline at
      * this multiple of the measured rate. The measurement can come out low: a drain is noticed
@@ -220,10 +231,12 @@ final class SendGate {
 
     /**
      * With a measured rate: would the queue ahead plus this message still be leaving at the
-     * deadline, even at {@link #LATE_RATE_SLACK} times that rate?
+     * deadline, even at {@link #LATE_RATE_SLACK} times that rate? On an idle socket only a
+     * rate from the last {@link #RATE_IDLE_FRESH_NS} counts.
      */
     private boolean lateAt(long now, long queued, long bytes, long deadlineNanos) {
         if (!fresh(now)) return false;
+        if (queued <= 0 && now - rateAtNs > RATE_IDLE_FRESH_NS) return false;   // idle: send it, and re-time the link
         double leaves = now + (Math.max(0, queued) + bytes) / (bytesPerNs * LATE_RATE_SLACK);
         return leaves > deadlineNanos;
     }

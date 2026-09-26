@@ -100,6 +100,8 @@ public class AgentService extends Service {
     private final ExecutorService callPool = Executors.newSingleThreadExecutor();
     /** Big replies (a whole file in base64) in memory at once, across every drive: {@link RpcBudget#MAX_BULK_IN_FLIGHT}. */
     private final java.util.concurrent.Semaphore bulkSlots = RpcBudget.bulkSlots();
+    /** Big incoming frames (upload chunks, writes) parsed and applied at once, across every drive: {@link RpcBudget#MAX_BIG_FRAMES_IN_FLIGHT}. */
+    private final java.util.concurrent.Semaphore bigFrameSlots = RpcBudget.bigFrameSlots();
     private volatile GeoLookup geo;
     /** driveId → live connection. Insertion order = the order the user started them. */
     private final Map<String, Conn> conns = new LinkedHashMap<>();
@@ -237,9 +239,10 @@ public class AgentService extends Service {
         /**
          * This drive's RPC workers — its own, so a drive answering big reads over a slow uplink
          * never holds another drive's requests — split into a bulk lane for methods whose reply
-         * can be megabytes and a lane for everything else (see {@link RpcBudget}).
+         * can be megabytes (or that decode an image), an ask lane for questions, and a lane for
+         * everything else (see {@link RpcBudget#laneOf}).
          */
-        final ExecutorService bulkLane, controlLane;
+        final ExecutorService bulkLane, askLane, controlLane;
         /**
          * An agent SOURCE: a folder the agent may read for its tasks (call
          * recordings, the camera roll) that is NOT served to the web. No
@@ -271,12 +274,17 @@ public class AgentService extends Service {
             this.folderLabel = folderLabel;
             String tag = "rpc-" + (driveId == null ? "?" : driveId.substring(0, Math.min(8, driveId.length())));
             this.bulkLane = RpcBudget.lane(tag + "-bulk", RpcBudget.BULK_WORKERS);
+            this.askLane = RpcBudget.lane(tag + "-ask", RpcBudget.ASK_WORKERS);
             this.controlLane = RpcBudget.lane(tag, RpcBudget.CONTROL_WORKERS);
         }
 
         /** The lane a frame runs on, from its method (read cheaply off the text; the worker verifies it). */
         ExecutorService lane(String frameText) {
-            return RpcBudget.bulkFrame(frameText) ? bulkLane : controlLane;
+            switch (RpcBudget.laneOfFrame(frameText)) {
+                case BULK: return bulkLane;
+                case ASK: return askLane;
+                default: return controlLane;
+            }
         }
 
         void connect() {
@@ -399,14 +407,33 @@ public class AgentService extends Service {
             }
             // Not shutdownNow(): an interrupt could cut a SAF write short. Queued frames see `closed` and return.
             bulkLane.shutdown();
+            askLane.shutdown();
             controlLane.shutdown();
         }
 
         void onFrame(WebSocket socket, String text, long arrivedNanos) {
             if (closed) return;
+            // A big frame (an upload chunk, a write) is parsed and applied under a phone-wide slot:
+            // its text, parsed copy and decoded bytes are tens of MB. It waits for one (never skipped).
+            boolean big = RpcBudget.bigFrame(text);
+            if (big) {
+                try { bigFrameSlots.acquire(); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+            }
+            try { handleFrame(socket, text, arrivedNanos); }
+            finally { if (big) bigFrameSlots.release(); }
+        }
+
+        private void handleFrame(WebSocket socket, String text, long arrivedNanos) {
+            if (closed) return;   // closed while it waited for a big-frame slot
             JSONObject frame;
             try { frame = new JSONObject(text); }
-            catch (Exception e) { Log.w(TAG, "frame parse failed (" + text.length() + " chars)", e); return; }
+            catch (Exception e) {
+                // Never the exception itself: org.json puts the whole input in its message, and a frame
+                // can carry credentials (rotate-credentials) or file content (write, upload-chunk).
+                Log.w(TAG, "frame parse failed (" + text.length() + " chars, " + e.getClass().getSimpleName() + ")");
+                return;
+            }
 
             String type = frame.optString("type", "");
             JSONObject p0 = frame.optJSONObject("params");
@@ -427,8 +454,8 @@ public class AgentService extends Service {
             String reqId = frame.optString("reqId");
             String method = p0 == null ? "?" : p0.optString("method", "?");
             long deadline = RpcBudget.deadlineNanos(method, arrivedNanos);
-            if (RpcBudget.readOnly(method) && System.nanoTime() - deadline >= 0) {
-                // Waited for a worker until the server gave up on it: reading it now would only be dropped.
+            if (RpcBudget.skipWhenExpired(method) && System.nanoTime() - deadline >= 0) {
+                // Waited for a worker until the server gave up on it: answering it now would only be dropped.
                 Log.w(TAG, "rpc " + method + " expired before it ran — skipped");
                 return;
             }
