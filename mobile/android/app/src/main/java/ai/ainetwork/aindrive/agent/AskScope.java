@@ -144,8 +144,12 @@ public final class AskScope {
                 : " I only looked — this request can't change any files.";
     }
 
-    /** The answer to a call report asked from inside one folder. */
-    public static String reportNeedsWholePhone(boolean korean) {
+    /** The answer to a call report, or (`transcribe`) one call transcribed, asked from inside one folder. */
+    public static String reportNeedsWholePhone(boolean korean, boolean transcribe) {
+        if (transcribe) {
+            return korean ? "통화 받아쓰기는 폰 전체의 통화 기록과 녹음을 봐야 해서, 폴더 하나 안에서는 할 수 없어요."
+                    : "Transcribing a call looks at the whole phone's call history and recordings, so it can't be done from inside one folder.";
+        }
         return korean ? "통화 요약은 폰 전체의 통화 기록을 봐야 해서, 폴더 하나 안에서는 만들 수 없어요."
                 : "A call report looks at the whole phone's call history, so it can't be made from inside one folder.";
     }
@@ -185,10 +189,16 @@ public final class AskScope {
         JSONObject ctx = result.optJSONObject("context");
         boolean ko = ctx != null && ctx.optBoolean("korean");
         result.put("sources", kept);
-        result.put("answer", kept.length() == 0
-                ? (ko ? "이 폴더에는 맞는 파일이 없어요." : "Nothing in this folder matched.")
-                : (ko ? "이 폴더에서 " + kept.length() + "개를 찾았어요."
-                      : "Found " + kept.length() + (kept.length() == 1 ? " file" : " files") + " in this folder."));
+        // "this folder" only for a root: over the whole drive, the drive is what was searched.
+        boolean folder = !root.isEmpty();
+        String answer = kept.length() == 0
+                ? (ko ? (folder ? "이 폴더에는" : "이 드라이브에는") + " 맞는 파일이 없어요."
+                      : "Nothing in " + (folder ? "this folder" : "this drive") + " matched.")
+                : (ko ? (folder ? "이 폴더에서 " : "이 드라이브에서 ") + kept.length() + "개를 찾았어요."
+                      : "Found " + kept.length() + (kept.length() == 1 ? " file" : " files") + " in " + (folder ? "this folder" : "this drive") + ".");
+        // A read-only ask that asked for an act still says it only looked (the replaced answer said so).
+        if (action != null && action.optBoolean("skipped") && READ_ONLY.equals(action.optString("reason"))) answer += onlyLooked(ko);
+        result.put("answer", answer);
         if (action != null && "count".equals(action.optString("type"))) action.put("count", kept.length());
         return result;
     }

@@ -168,12 +168,16 @@ public final class AskRunner {
         SearchQuery q = turn.query;
         JSONObject blocked = scope.blocked(q);
         if (q.calls && (blocked != null || !scope.root.isEmpty())) {
-            // Read-only: the report writes files and reads the call log. Inside a folder: it is about
-            // the whole phone. Either way nothing runs, and the call log is never opened.
+            // Read-only: the report writes files and reads the call log (a transcript reads the call
+            // log and the phone's call-recordings folders). Inside a folder: it is about the whole
+            // phone. Either way nothing runs, and the call log is never opened.
             JSONObject action = blocked != null ? blocked : AskScope.skipped("collect", AskScope.OUTSIDE_ROOT).put("report", "calls");
             String answer = blocked != null
-                    ? (q.korean ? "통화 요약은 통화 기록을 읽고 파일을 만들어야 해서 만들지 않았어요." : "A call report reads the call history and writes a file, so I didn't make one.") + AskScope.onlyLooked(q.korean)
-                    : AskScope.reportNeedsWholePhone(q.korean);
+                    ? (q.transcribe
+                        ? (q.korean ? "통화 받아쓰기는 통화 기록과 통화 녹음을 읽어야 해서 하지 않았어요." : "Transcribing a call reads the call history and the call recordings, so I didn't do it.")
+                        : (q.korean ? "통화 요약은 통화 기록을 읽고 파일을 만들어야 해서 만들지 않았어요." : "A call report reads the call history and writes a file, so I didn't make one."))
+                      + AskScope.onlyLooked(q.korean)
+                    : AskScope.reportNeedsWholePhone(q.korean, q.transcribe);
             return new JSONObject().put("answer", answer).put("sources", new JSONArray()).put("action", action)
                     .put("query", "calls").put("context", context == null ? JSONObject.NULL : context);
         }

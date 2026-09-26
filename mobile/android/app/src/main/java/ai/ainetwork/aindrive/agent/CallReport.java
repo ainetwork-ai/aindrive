@@ -105,7 +105,9 @@ public final class CallReport {
     /**
      * List as sources only recordings from `index` (the drive being asked), never from the other
      * call folders: a report asked over the drive's socket goes to the server, which reads every
-     * source path as a path in that drive. The report itself still counts every folder.
+     * source path as a path in that drive. The report itself still counts every folder. A single
+     * call's transcript ({@link #runTranscribe}) goes further: it picks among this drive's own
+     * recordings only, so neither its source nor the transcript in its answer is another folder's.
      */
     public CallReport onlyOwnSources() { ownSourcesOnly = true; return this; }
 
@@ -138,13 +140,30 @@ public final class CallReport {
         f.kind = FileIndex.AUDIO;
         List<FileIndex.Row> rows = new ArrayList<>();
         Map<FileIndex.Row, FileIndex> home = new HashMap<>();
-        String who = null;
-        for (FileIndex ix : indexes) for (FileIndex.Row r : ix.query(f, 0)) {
-            String p = personOf(r.name);
-            if (p == null) continue;
-            rows.add(r); home.put(r, ix);
-            String key = squash(p);
-            if (!key.isEmpty() && asked.contains(key) && (who == null || key.length() > squash(who).length())) who = p;
+        String who = null, whoElsewhere = null;
+        for (FileIndex ix : indexes) {
+            // Over the socket: only this drive's own recordings are candidates — the answer quotes the
+            // recording, and the server reads the source path as a file of the asked drive. The other
+            // folders' names are only matched, so "Bob" recorded elsewhere is not answered with Amy's call.
+            boolean own = !ownSourcesOnly || ix == index;
+            for (FileIndex.Row r : ix.query(f, 0)) {
+                String p = personOf(r.name);
+                if (p == null) continue;
+                String key = squash(p);
+                boolean named = !key.isEmpty() && asked.contains(key);
+                if (!own) {
+                    if (named && (whoElsewhere == null || key.length() > squash(whoElsewhere).length())) whoElsewhere = p;
+                    continue;
+                }
+                rows.add(r); home.put(r, ix);
+                if (named && (who == null || key.length() > squash(who).length())) who = p;
+            }
+        }
+        // The longest name wins, as below: "김민현" recorded elsewhere is not "김민" recorded here.
+        if (whoElsewhere != null && (who == null || squash(whoElsewhere).length() > squash(who).length())) {
+            return new JSONObject().put("answer", ko ? "이 드라이브에는 " + whoElsewhere + "님과의 통화 녹음이 없어요."
+                            : "There are no call recordings with " + whoElsewhere + " in this drive.")
+                    .put("sources", new JSONArray());
         }
         if (who == null && callLog != null) {
             // Named, but never recorded: say so rather than transcribe someone else's call.
@@ -153,8 +172,10 @@ public final class CallReport {
                 if (c.name == null) continue;
                 String key = squash(normName(c.name));
                 if (key.length() >= 2 && asked.contains(key)) {
-                    return new JSONObject().put("answer", ko ? normName(c.name) + "님과의 통화 녹음이 없어요." : "There are no call recordings with " + normName(c.name) + ".")
-                            .put("sources", new JSONArray());
+                    String none = ownSourcesOnly
+                            ? (ko ? "이 드라이브에는 " + normName(c.name) + "님과의 통화 녹음이 없어요." : "There are no call recordings with " + normName(c.name) + " in this drive.")
+                            : (ko ? normName(c.name) + "님과의 통화 녹음이 없어요." : "There are no call recordings with " + normName(c.name) + ".");
+                    return new JSONObject().put("answer", none).put("sources", new JSONArray());
                 }
             }
         }
@@ -164,8 +185,10 @@ public final class CallReport {
             if (newest == null || when(r) > when(newest)) newest = r;
         }
         if (newest == null) {
-            String why = ko ? "통화 녹음 파일이 없어요. 앱에서 '통화 녹음' 폴더를 에이전트 소스로 추가해 주세요."
-                    : "There are no call recordings. Add the call-recordings folder as an agent source in the app.";
+            String why = ownSourcesOnly
+                    ? (ko ? "이 드라이브에는 통화 녹음 파일이 없어요." : "There are no call recordings in this drive.")
+                    : (ko ? "통화 녹음 파일이 없어요. 앱에서 '통화 녹음' 폴더를 에이전트 소스로 추가해 주세요."
+                          : "There are no call recordings. Add the call-recordings folder as an agent source in the app.");
             return new JSONObject().put("answer", why).put("sources", new JSONArray());
         }
         String person = personOf(newest.name);

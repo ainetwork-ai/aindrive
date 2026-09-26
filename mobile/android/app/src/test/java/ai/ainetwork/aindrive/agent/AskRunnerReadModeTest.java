@@ -213,6 +213,85 @@ public class AskRunnerReadModeTest {
         assertTrue(all.toString(), all.contains(newerAmy) && all.contains(bob) && !all.contains(ownAmy));
     }
 
+    private static FileIndex.Row last(MemIndex ix) { return ix.rows.get(ix.rows.size() - 1); }
+
+    private static List<String> paths(JSONObject r) throws Exception {
+        List<String> out = new ArrayList<>();
+        JSONArray s = r.getJSONArray("sources");
+        for (int i = 0; i < s.length(); i++) out.add(s.getJSONObject(i).getString("path"));
+        return out;
+    }
+
+    /**
+     * One call transcribed over the socket (act, whole drive): the newest recording in the asked
+     * drive, never a newer one in the phone's call-recordings folder — its path would name another
+     * file of this drive, and its words would be read out to whoever asked this drive. A name
+     * recorded only elsewhere gets "none in this drive", not someone else's call. The in-app chat
+     * still transcribes the newest recording wherever it is.
+     */
+    @Test
+    public void aRemoteTranscriptIsOnlyOfThisDrivesRecordings() throws Exception {
+        MemIndex ix = drive();
+        String ownAmy = "Calls/" + recording("Amy Jang", 40);
+        ix.add(ownAmy, FileIndex.AUDIO, null, null, WHEN);
+        last(ix).transcript = "see you at the station";
+        MemIndex calls = new MemIndex();                               // the call-recordings folder: another folder
+        String newerAmy = recording("Amy Jang", 3), bob = recording("Bob Stone", 1);
+        calls.add(newerAmy, FileIndex.AUDIO, null, null, WHEN);
+        last(calls).transcript = "the door code is 4711";
+        calls.add(bob, FileIndex.AUDIO, null, null, WHEN);
+        last(calls).transcript = "bob talks about the loan";
+        CallReport.Opener opener = new CallReport.Opener() {
+            @Override public android.os.ParcelFileDescriptor open(FileIndex i, String docId) { return null; }
+            @Override public String driveIdOf(FileIndex i) { return i == ix ? "drv_asked" : "drv_calls"; }
+        };
+
+        JSONObject amy = runner(ix).withCallIndexes(() -> Arrays.asList(calls)).withCallOpener(opener)
+                .ask("transcribe my latest call with Amy Jang", null, new AskScope(false, ""));
+        assertEquals("calls", amy.getString("query"));
+        assertEquals(Arrays.asList(ownAmy), paths(amy));
+        assertEquals("drv_asked", amy.getJSONArray("sources").getJSONObject(0).optString("driveId", "drv_asked"));
+        assertTrue(amy.getString("answer"), amy.getString("answer").contains("see you at the station"));
+        assertFalse(amy.getString("answer"), amy.getString("answer").contains("4711"));
+
+        JSONObject other = runner(ix).withCallIndexes(() -> Arrays.asList(calls)).withCallOpener(opener)
+                .ask("transcribe my latest call with Bob Stone", null, new AskScope(false, ""));
+        assertEquals(0, other.getJSONArray("sources").length());
+        assertTrue(other.getString("answer"), other.getString("answer").contains("in this drive"));
+        assertFalse(other.getString("answer"), other.getString("answer").contains("loan") || other.getString("answer").contains("station"));
+
+        JSONObject local = runner(ix).withCallIndexes(() -> Arrays.asList(calls)).withCallOpener(opener)
+                .ask("transcribe my latest call with Amy Jang", null);
+        assertEquals(Arrays.asList(newerAmy), paths(local));
+        assertEquals("drv_calls", local.getJSONArray("sources").getJSONObject(0).getString("driveId"));
+        assertTrue(local.getString("answer"), local.getString("answer").contains("4711"));
+    }
+
+    /** Read-only, or inside a folder: a transcription does not run and the call log is never opened. */
+    @Test
+    public void aTranscriptIsNeverMadeInReadModeOrInsideAFolder() throws Exception {
+        for (String q : new String[]{"transcribe my latest call with Amy Jang", "엄유준 최신 통화 stt 해줘"}) {
+            MemIndex ix = drive();
+            ix.add("Calls/" + recording("Amy Jang", 4), FileIndex.AUDIO, null, null, WHEN);
+            last(ix).transcript = "see you at the station";
+            JSONObject read = runner(ix).ask(q, null, new AskScope(true, ""));
+            JSONObject a = read.getJSONObject("action");
+            assertEquals(q, AskScope.READ_ONLY, a.getString("reason"));
+            assertTrue(q, a.getBoolean("skipped"));
+            boolean ko = q.startsWith("엄");
+            assertTrue(q + ": " + read.getString("answer"), read.getString("answer").contains(ko ? "받아쓰기" : "Transcribing"));
+            assertTrue(q, read.getString("answer").endsWith(AskScope.onlyLooked(ko)));
+            assertFalse(q, read.getString("answer").contains("station"));
+            assertEquals(0, read.getJSONArray("sources").length());
+
+            JSONObject inside = runner(ix).ask(q, null, new AskScope(false, "Calls"));
+            assertEquals(q, AskScope.OUTSIDE_ROOT, inside.getJSONObject("action").getString("reason"));
+            assertTrue(q + ": " + inside.getString("answer"), inside.getString("answer").contains(ko ? "받아쓰기" : "Transcribing"));
+            assertEquals(0, inside.getJSONArray("sources").length());
+            assertTrue(q, ops.touched.isEmpty() && ix.writes.isEmpty() && callLogReads.isEmpty());
+        }
+    }
+
     @Test
     public void actModeDoesActSoTheFakesWouldHaveCaughtIt() throws Exception {
         MemIndex ix = drive();

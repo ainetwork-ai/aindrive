@@ -190,8 +190,37 @@ public class AskScopeTest {
         JSONObject skipped = new JSONObject().put("answer", "a").put("sources", new JSONArray().put(src("Elsewhere/x.jpg")))
                 .put("action", AskScope.skipped("collect", AskScope.READ_ONLY));
         new AskScope(true, "Camera").confine(skipped);
-        assertEquals("Nothing in this folder matched.", skipped.getString("answer"));
+        // The replacement still says it only looked (the contract's read-only answer).
+        assertEquals("Nothing in this folder matched." + AskScope.onlyLooked(false), skipped.getString("answer"));
         assertEquals(AskScope.READ_ONLY, skipped.getJSONObject("action").getString("reason"));
+    }
+
+    /**
+     * The verifier's sweep: read mode over the whole drive, a stray `.aindrive/` row dropped here —
+     * the neutral answer names the drive (not "this folder") and keeps "I only looked".
+     */
+    @Test
+    public void confineOverTheWholeDriveSaysDriveAndKeepsTheReadOnlyNotice() throws Exception {
+        JSONObject r = new JSONObject().put("answer", "Found 3 files: .aindrive/agents/tokyo_agent.json …")
+                .put("sources", new JSONArray().put(src("Trips/a.jpg")).put(src("Trips/b.jpg")).put(src(".aindrive/agents/tokyo_agent.json")))
+                .put("action", AskScope.skipped("collect", AskScope.READ_ONLY));
+        new AskScope(true, "").confine(r);
+        assertEquals("Found 2 files in this drive." + AskScope.onlyLooked(false), r.getString("answer"));
+        assertEquals(2, r.getJSONArray("sources").length());
+
+        JSONObject ko = new JSONObject().put("answer", "…").put("context", new JSONObject().put("korean", true))
+                .put("sources", new JSONArray().put(src(".AINDRIVE/agents/x.json")))
+                .put("action", AskScope.skipped("delete", AskScope.READ_ONLY));
+        new AskScope(true, "").confine(ko);
+        assertEquals("이 드라이브에는 맞는 파일이 없어요." + AskScope.onlyLooked(true), ko.getString("answer"));
+
+        // Not a read-only skip (an act, or a count): no notice.
+        JSONObject count = new JSONObject().put("answer", "…")
+                .put("sources", new JSONArray().put(src("Trips/a.jpg")).put(src(".aindrive/x")))
+                .put("action", new JSONObject().put("type", "count").put("count", 2));
+        new AskScope(true, "").confine(count);
+        assertEquals("Found 1 file in this drive.", count.getString("answer"));
+        assertEquals(1, count.getJSONObject("action").getInt("count"));
     }
 
     @Test
