@@ -1854,9 +1854,10 @@ registerCollabCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner, signu
 import { registerTraceCases } from "./trace-cases.mjs";
 registerTraceCases(add, state, { ensureDrive, ensureOwner, reEnsureOwner });
 
-// #176 — grid thumbnails: image → 256px webp (disk-cached by mtime), guarded
-// like fs/read; non-images 415; anonymous rejected.
-add(176, "thumbnail: image → 200 webp, cached second hit, non-image 415, anon rejected", async () => {
+// #176 — grid thumbnails: image → a small JPEG the agent makes itself (its `thumbnail` RPC), or
+// 256px webp resized here for an agent without it; disk-cached by mtime, guarded like fs/read;
+// non-images 415; anonymous rejected.
+add(176, "thumbnail: image → 200 jpeg/webp, cached second hit, non-image 415, anon rejected", async () => {
   await ensureDrive();
   const cookie = await reEnsureOwner();
   // 1×1 red PNG fixture.
@@ -1869,13 +1870,14 @@ add(176, "thumbnail: image → 200 webp, cached second hit, non-image 415, anon 
 
   const r1 = await jget(`/api/drives/${state.driveId}/fs/thumbnail?path=thumb-target.png`, { headers: { cookie } });
   eq(r1.status, 200, "thumbnail 200: " + JSON.stringify(r1.body).slice(0, 200));
-  eq(r1.headers.get("content-type"), "image/webp", "webp content type");
+  const type = r1.headers.get("content-type");
+  assert(type === "image/jpeg" || type === "image/webp", "thumbnail content type, got " + type);
   assert((r1.headers.get("cache-control") || "").includes("immutable"), "immutable cache header");
 
-  // Second hit serves the disk cache (same bytes, still 200/webp).
+  // Second hit serves the disk cache (same type, still 200).
   const r2 = await jget(`/api/drives/${state.driveId}/fs/thumbnail?path=thumb-target.png`, { headers: { cookie } });
   eq(r2.status, 200, "cache hit 200");
-  eq(r2.headers.get("content-type"), "image/webp", "cache hit content type");
+  eq(r2.headers.get("content-type"), type, "cache hit content type");
 
   const w2 = await jget(`/api/drives/${state.driveId}/fs/write`, {
     method: "POST", headers: { "content-type": "application/json", cookie },
