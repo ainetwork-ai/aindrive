@@ -86,7 +86,7 @@ let busy: string | null = null;
 let askQuery = "";
 let askResult: AskResult | null = null;
 /** One exchange with the agent. The thread is the conversation: kept across launches, cleared with "New chat". */
-interface Turn { q: string; r?: AskResult; error?: string; at: number; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
+interface Turn { q: string; r?: AskResult; error?: string; at: number; /** The folder this answer came from (folder chat). */ in?: string; /** Name of the A2A agent that answered (absent: the on-device agent). */ via?: string }
 /** A2A agents added to this chat, next to the on-device agent (which is always here). */
 let a2aAgents: A2aAgent[] = [];
 /** Each agent's A2A conversation id for this thread, so it keeps context. */
@@ -1265,7 +1265,7 @@ async function ask(q = askQuery) {
         return;
       }
     }
-    thread.push({ q, r: merged, at: Date.now() });
+    thread.push({ q, r: merged, at: Date.now(), ...(scope ? { in: scope.label } : {}) });
     askQuery = "";
     await saveThread();
     log(`Asked: ${q} → ${askResult.sources.length} result${askResult.sources.length === 1 ? "" : "s"}${targets.length ? ` across ${1 + targets.length} devices` : ""}`);
@@ -1643,7 +1643,7 @@ function localFolderFor(driveId?: string): SharedFolder | undefined {
 }
 
 async function loadAskThumbs() {
-  const want = [...document.querySelectorAll<HTMLElement>("[data-thumb]")].map((el) => el.dataset.thumb!).filter((k) => !askThumbs.has(k));
+  const want = [...new Set([...document.querySelectorAll<HTMLElement>("[data-thumb]")].map((el) => el.dataset.thumb!))].filter((k) => !askThumbs.has(k));
   if (!want.length) return;
   for (const k of want) askThumbs.set(k, null);
   // The phone's cached thumbnails, served as local files: several at once, each shown as it lands.
@@ -1656,9 +1656,14 @@ async function loadAskThumbs() {
       const r = await AindriveAgent.thumbnail({ folderUri: folder.folder.uri, path: rest.join("|"), px: 256 });
       askThumbs.set(k, Capacitor.convertFileSrc(r.path));
       // Patch the tile in place: no full re-render, so scrolling and typing are left alone.
-      const el = document.querySelector<HTMLElement>(`[data-thumb="${CSS.escape(k)}"]`);
-      const img = document.createElement("img"); img.src = askThumbs.get(k)!; img.alt = "";
-      if (el) { el.querySelector("span.ft-image")?.remove(); el.prepend(img); } else redraw++;
+      // The same photo can sit in several answers: fill every tile that shows it, once.
+      const els = [...document.querySelectorAll<HTMLElement>(`[data-thumb="${CSS.escape(k)}"]`)];
+      for (const el of els) {
+        if (el.querySelector("img")) continue;
+        const img = document.createElement("img"); img.src = askThumbs.get(k)!; img.alt = "";
+        el.querySelector("span.ft-image")?.remove(); el.prepend(img);
+      }
+      if (!els.length) redraw++;
     } catch { /* keep the icon */ }
   };
   const queue = [...want];
@@ -1792,7 +1797,7 @@ function searchSheet(): string {
         <div class="bubble">${esc(t.q)}</div>
         ${t.error ? `<p class="answer" style="color:var(--err)">${esc(t.error)}</p>` : t.r ? `
           ${last ? actionCard : collected(t.r) ? `<div class="card action compact"><div class="row" style="padding:0"><span class="k">${I.folder}</span><span class="v" style="text-align:left;flex:1;margin-left:10px"><b>${esc(t.r.action!.label ?? t.r.action!.folder ?? "")}</b> <span class="hint">· ${t.r.action!.copied ?? 0} files</span></span></div>${folderStrip(t.r, i)}</div>` : ""}
-          ${t.via ? `<p class="hint via">${icon("globe", 12)} ${esc(t.via)}</p>` : ""}
+          ${t.via ? `<p class="hint via">${icon("globe", 12)} ${esc(t.via)}</p>` : t.in ? `<p class="hint via">${icon("folder", 12)} In ${esc(t.in)}</p>` : ""}
           <p class="answer">${esc(t.r.answer)}</p>
           ${hitsList(t.r, i, last)}` : ""}
       </div>`;
@@ -1810,21 +1815,23 @@ function searchSheet(): string {
     <div class="sheet">
       <div class="bar">
         <button class="iconbtn ghost" id="close-search" aria-label="Back">${I.back}</button>
-        <div class="crumbs"><div class="title">Agent</div><div class="sub">${chatScope ? `In ${esc(chatScope.label)} · ` : ""}Runs on this phone${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
+        <div class="crumbs">${chatScope
+          ? `<div class="title scoped">${icon("folder", 18)}<span>${esc(chatScope.label)}</span></div><div class="sub">Folder chat · on this phone`
+          : `<div class="title">Agent</div><div class="sub">Runs on this phone`}${a2aAgents.length ? ` + ${a2aAgents.length} agent${a2aAgents.length === 1 ? "" : "s"}` : ""} · ${thread.length ? `${thread.length} message${thread.length === 1 ? "" : "s"}` : a2aAgents.length ? "A2A" : "offline"}</div></div>
         <button class="iconbtn" id="model-switch" aria-label="Model and agents" title="Model and agents">${icon("cpu", 20)}${a2aAgents.length ? `<span class="count-badge">${a2aAgents.length}</span>` : ""}</button>
         <!-- Always shown (with a label) so past conversations are findable even before the first "New chat". -->
         <button class="iconbtn" id="chat-history" aria-label="Past chats" title="Past chats">${icon("history", 20)}</button>
         ${thread.length ? `<button class="iconbtn" id="new-chat" aria-label="New chat" title="New chat">${icon("plus", 20)}</button>` : ""}
       </div>
+      ${chatScope ? (() => { const n = status.drives.find((d) => d.driveId === chatScope!.driveId)?.index?.indexed; return `<div class="scope-banner">${icon("folder", 18)}<span>Inside <b>${esc(chatScope!.label)}</b>${n ? ` · ${n.toLocaleString()} file${n === 1 ? "" : "s"}` : ""} — answers come from this folder only</span><button class="btn small secondary" id="scope-clear">Search all</button></div>`; })() : ""}
       <div class="body" id="ask-body">
-        ${chatScope ? `<div class="scope-chip">${icon("folder", 16)}<span>Answers from <b>${esc(chatScope.label)}</b> only</span><button class="link small" id="scope-clear">All files</button></div>` : ""}
         ${modelsLine}
         ${indexLine}
         ${body}
       </div>
       <!-- Composer at the bottom, like a chat: the conversation stays in view above the keyboard. -->
       <div class="bar composer">
-        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
+        <div class="field">${I.agent}<input id="ask-input" type="text" enterkeyhint="send" placeholder="${chatScope ? `Ask about “${esc(chatScope.label)}”` : thread.length ? "Follow up, or ask something new" : "Ask or tell me what to do"}" value="${esc(askQuery)}" autocomplete="off" />
           ${askQuery ? `<button id="clear-ask" aria-label="Clear">${I.close}</button>` : ""}</div>
         <button class="iconbtn primary" id="ask-send" aria-label="Send" ${askBusy ? "disabled" : ""}>${icon("up", 20)}</button>
       </div>
