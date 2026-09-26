@@ -220,7 +220,15 @@ function rebuildTrayMenu() {
     ...(served.length
       ? (store.get().drives ?? []).filter((d) => !d.localOnly).map((d) => {
           const a = byFolder.get(d.folder);
-          return { label: `${DOT[a?.state ?? "stopped"]} ${d.label ?? basename(d.folder)}`, enabled: false };
+          const url = a?.url;
+          // the files are on this Mac: opening the folder means Finder; the drive's page is for elsewhere
+          return {
+            label: `${DOT[a?.state ?? "stopped"]} ${d.label ?? basename(d.folder)}`,
+            submenu: [
+              { label: "Open folder", click: () => reveal(d.folder) },
+              { label: "Open on the web", enabled: !!url, click: () => url && shell.openExternal(url) },
+            ],
+          };
         })
       : [{ label: "No folders shared yet", enabled: false }]),
     { type: "separator" },
@@ -228,6 +236,13 @@ function rebuildTrayMenu() {
     { type: "separator" },
     { label: "Quit aindrive (stops sharing)", click: () => app.quit() },
   ]));
+}
+
+/** Open a shared folder in Finder — never "open" anything with an extension
+ *  (.app, .pkg, .prefPane… are folders that macOS would launch or install). */
+function reveal(folder) {
+  if (/\.[A-Za-z0-9-]+\/?$/.test(basename(folder))) shell.showItemInFolder(folder);
+  else void shell.openPath(folder);
 }
 
 /** app://shell/… is the shell's files; app://thumb/… the thumbnails mac-agent made. */
