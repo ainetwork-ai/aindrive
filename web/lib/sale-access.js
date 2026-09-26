@@ -16,7 +16,9 @@ const depth = (p) => (p === "" ? 0 : p.split("/").length);
 // ignores case, so "premium/a.pdf" there IS the file under a sale at
 // "Premium". On a case-sensitive agent this also locks a sibling differing only
 // in case — the safe direction. Grants (bestMatchingRole) stay exact.
-const foldCase = (p) => p.toUpperCase().toLowerCase();
+// lower→upper→lower, then NFC: letters whose case maps change length (ẞ↔ß↔SS,
+// ΐ→Ϊ́) land on one form, matching every pair APFS treats as one name.
+const foldCase = (p) => p.toLowerCase().toUpperCase().toLowerCase().normalize("NFC");
 
 /**
  * The nearest gate covering `targetPath`: the deepest ancestor-or-self priced
@@ -31,7 +33,13 @@ function nearestSale(rows, targetPath) {
   let best = null;
   for (const r of rows) {
     if (!isAncestorOrSelf(foldCase(r.path), target)) continue;
-    if (!best || depth(r.path) > depth(best.path)) best = r;
+    // Deeper wins; at one depth, a sale spelled exactly as the path beats one
+    // matching only by case, so two sales differing in case (distinct folders
+    // on a case-sensitive agent) each judge their own folder.
+    const deeper = !best || depth(r.path) > depth(best.path);
+    const exactTie = best && depth(r.path) === depth(best.path)
+      && isAncestorOrSelf(r.path, targetPath) && !isAncestorOrSelf(best.path, targetPath);
+    if (deeper || exactTie) best = r;
   }
   return best;
 }

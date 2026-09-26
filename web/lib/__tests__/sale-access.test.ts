@@ -38,6 +38,11 @@ beforeAll(() => {
   addShare("s-secret", "premium/secret", 50);         // deeper, separately priced
   addShare("s-expired", "old", 5, { expires_at: "2020-01-01T00:00:00Z" }); // expired sale
   addShare("s-private", "private", 7, { listed: false });  // sold by private link only
+  addShare("s-lessons", "Lessons", 5);                  // "ss": ẞ/ß/SS spellings are one name on APFS
+  addShare("s-greek", "\u0390-notes", 5);              // ΐ: upper-cases to three code points
+  addShare("s-course-lo", "course", 1);                 // two sales differing only in case
+  addShare("s-course-up", "Course", 50);                //   (distinct folders on a case-sensitive agent)
+  addReceipt("r-buyer-course", "course", BUYER);        // BUYER bought the 1 USDC one
   addReceipt("r-buyer-premium", "premium", BUYER);    // BUYER bought /premium only
 });
 
@@ -91,6 +96,17 @@ describe("paidAccessDenial — paid carve-out read gate (DB)", () => {
     expect(paidAccessDenial(DRIVE, "Premium/Secret/x.pdf", "viewer", BUYER)).toMatchObject({ gatePath: "premium/secret" });
     expect(paidAccessDenial(DRIVE, "Premium/a.pdf", "viewer", BUYER)).toBeNull(); // the buyer's receipt covers any spelling
     expect(paidLocksForListing(DRIVE, "", ["Premium"], "viewer", OTHER).Premium).toMatchObject({ shareId: "s-premium" });
+  });
+
+  it("case folding agrees with APFS on letters whose case maps change length (ẞ, ΐ)", () => {
+    expect(paidAccessDenial(DRIVE, "Le\u1E9Eons/a.md", "viewer", OTHER)).toMatchObject({ gatePath: "Lessons" }); // Leẞons
+    expect(paidAccessDenial(DRIVE, "LESSONS/a.md", "viewer", OTHER)).toMatchObject({ gatePath: "Lessons" });
+    expect(paidAccessDenial(DRIVE, "\u0399\u0308\u0301-notes/a.md", "viewer", OTHER)).toMatchObject({ gatePath: "\u0390-notes" });
+  });
+
+  it("two sales differing only in case: each path is judged by its own sale", () => {
+    expect(paidAccessDenial(DRIVE, "course/a.md", "viewer", BUYER)).toBeNull();
+    expect(paidAccessDenial(DRIVE, "Course/a.md", "viewer", BUYER)).toMatchObject({ gatePath: "Course", price: 50 });
   });
 
   it("the denial says whether the gate is listed — the paywall offers Buy only for a listed sale", () => {
