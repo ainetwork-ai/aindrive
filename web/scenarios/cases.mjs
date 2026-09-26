@@ -573,7 +573,11 @@ add(30, "GET /d/[id] for unauthorized wallet shows 'no access'", async () => {
   const sCookie = sr.headers.get("set-cookie")?.split(";")[0];
   const r = await fetch(`${BASE}/d/${state.driveId}`, { headers: { cookie: sCookie } });
   const text = await r.text();
-  assert(text.includes("don") && text.includes("access"));
+  // the no-access card names the drive/folder and the signed-in account (so a
+  // wrong-account browser is obvious), and offers to switch accounts
+  assert(text.includes("No access to this drive"), "no-access heading");
+  assert(text.includes(stranger), "names the signed-in account");
+  assert(text.includes("Switch account"), "offers to switch account");
 });
 
 // ──────────────────────── D. Agent ↔ Server WS ────────────────────────
