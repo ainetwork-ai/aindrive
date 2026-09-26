@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { onAgentConnect, startRotationSweeper } from "./lib/agents.js";
 import { onDocConnect, readUserFromCookie } from "./lib/dochub.js";
 // Built from lib/willow/peer.ts by scripts/build-willow-peer.mjs (predev / prebuild).
-import { onWillowSync } from "./lib/willow/peer.bundle.mjs";
+import { onWillowSync, agentUser } from "./lib/willow/peer.bundle.mjs";
 import { log } from "./lib/logger.js";
 import { runBootChecks } from "./lib/boot-checks.js";
 import { runAllMigrations } from "./lib/migrations/run.js";
@@ -71,7 +71,8 @@ server.on("upgrade", (req, socket, head) => {
   if (pathname === "/api/willow/sync") {
     willowWss.handleUpgrade(req, socket, head, async (ws) => {
       try {
-        const userId = await readUserFromCookie(req.headers["cookie"]);
+        // a browser (session cookie) or the drive's own agent (its agent token)
+        const userId = (await readUserFromCookie(req.headers["cookie"])) ?? (await agentUser(String(query.drive ?? ""), req.headers["authorization"]));
         await onWillowSync(ws, req, query, userId);
       } catch (e) {
         log.error({ err: e?.message || String(e) }, "willow sync error");

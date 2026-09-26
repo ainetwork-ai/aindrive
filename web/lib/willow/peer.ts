@@ -20,6 +20,7 @@ import { dataDir } from "@/lib/env";
 import { openDriveStore } from "./store-node";
 import { trust } from "./attestation";
 import { roleOf, isMember, paywalled } from "./roles";
+export { agentUser } from "./agent-auth";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 

@@ -1,16 +1,18 @@
 // web/app/api/willow/cert/route.ts
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/session";
+import { agentUser } from "@/lib/willow/agent-auth";
 import { attestationKey, certify } from "@/lib/willow/attestation";
 import { toHex } from "@/shared/willow/bytes";
 
 /** POST { deviceKey, label } → an attested certificate binding this browser's device key to the signed-in user. */
 export async function POST(req: Request) {
-  const user = await getUser();
-  if (!user) return NextResponse.json({ error: "sign in" }, { status: 401 });
-  const body = (await req.json().catch(() => ({}))) as { deviceKey?: unknown; label?: unknown };
+  const body = (await req.json().catch(() => ({}))) as { deviceKey?: unknown; label?: unknown; drive?: unknown };
+  // a signed-in browser, or a drive's own agent (its agent token) acting for the owner
+  const userId = (await getUser())?.id ?? (typeof body.drive === "string" ? await agentUser(body.drive, req.headers.get("authorization") ?? undefined) : null);
+  if (!userId) return NextResponse.json({ error: "sign in" }, { status: 401 });
   if (typeof body.deviceKey !== "string" || !/^[0-9a-f]{64}$/.test(body.deviceKey)) return NextResponse.json({ error: "deviceKey" }, { status: 400 });
-  const cert = await certify(user.id, body.deviceKey, typeof body.label === "string" ? body.label : "browser");
+  const cert = await certify(userId, body.deviceKey, typeof body.label === "string" ? body.label : "browser");
   return NextResponse.json({ cert, attestationKey: toHex(attestationKey().publicKey) });
 }
 
