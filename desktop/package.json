@@ -1,7 +1,7 @@
 {
   "name": "aindrive-desktop",
   "productName": "aindrive",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "aindrive for Mac \u2014 the phone app's screens on the Mac, with its folders served from the menu bar.",
   "license": "MIT",

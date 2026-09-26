@@ -3,7 +3,7 @@
  * desktop release — the tag and file names are what desktop/scripts/build-mac.mjs
  * and .github/workflows/desktop.yml produce.
  */
-export const DESKTOP_VERSION = "0.2.0";
+export const DESKTOP_VERSION = "0.2.1";
 /** The one server the app pairs with (desktop/src/main.js DEFAULT_SERVER) — a
  *  self-hosted deployment offers the terminal instead. */
 export const DESKTOP_SERVER = "https://aindrive.ainetwork.ai";
