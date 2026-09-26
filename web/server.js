@@ -6,7 +6,9 @@ import { parse as parseUrl } from "node:url";
 import next from "next";
 import { WebSocketServer } from "ws";
 import { onAgentConnect, startRotationSweeper } from "./lib/agents.js";
-import { onDocConnect } from "./lib/dochub.js";
+import { onDocConnect, readUserFromCookie } from "./lib/dochub.js";
+// Built from lib/willow/peer.ts by scripts/build-willow-peer.mjs (predev / prebuild).
+import { onWillowSync } from "./lib/willow/peer.bundle.mjs";
 import { log } from "./lib/logger.js";
 import { runBootChecks } from "./lib/boot-checks.js";
 import { runAllMigrations } from "./lib/migrations/run.js";
@@ -60,6 +62,18 @@ server.on("upgrade", (req, socket, head) => {
         log.error({ err: e?.message || String(e) }, "doc connect error");
         try { ws.close(1011, "internal error"); } catch {}
       });
+    });
+    return;
+  }
+  if (pathname === "/api/willow/sync") {
+    wss.handleUpgrade(req, socket, head, async (ws) => {
+      try {
+        const userId = await readUserFromCookie(req.headers["cookie"]);
+        await onWillowSync(ws, req, query, userId);
+      } catch (e) {
+        log.error({ err: e?.message || String(e) }, "willow sync error");
+        try { ws.close(1011, "internal error"); } catch {}
+      }
     });
     return;
   }

@@ -48,7 +48,7 @@ export function docIdFor(driveId, path) {
   return createHash("sha1").update(`${driveId}:${path}`).digest("base64url").slice(0, 22);
 }
 
-async function readUserFromCookie(cookieHeader) {
+export async function readUserFromCookie(cookieHeader) {
   const m = /aindrive_session=([^;]+)/.exec(cookieHeader || "");
   if (!m) return null;
   try {
@@ -62,7 +62,7 @@ async function readUserFromCookie(cookieHeader) {
 // next/headers, which is unavailable under raw `node server.js`. drive_members
 // decides the ROLE; the paid carve-out (paidAccessDenial, shared with the HTTP
 // gate) then removes priced subtrees from a bare viewer's reach below.
-function resolveRole(driveId, userId, path) {
+export function resolveRole(driveId, userId, path) {
   if (!userId) return "none";
   const target = normalizePath(path);
   const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId);

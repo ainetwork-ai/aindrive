@@ -2,3 +2,4 @@
 
 # Build artifact: Monaco editor runtime self-hosted into public/ (scripts/copy-monaco.mjs)
 public/monaco
+lib/willow/peer.bundle.mjs
