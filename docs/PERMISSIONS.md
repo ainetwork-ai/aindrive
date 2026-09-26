@@ -92,7 +92,9 @@ viewer inside its folder, or inside the grant listing when the member can't list
 that folder (a file bought on its own). An unreadable `?path` is a uniform hard
 deny — never a redirect to the entry, which would make the response a path
 oracle. Navigation and breadcrumbs stay within what the grants cover; the server
-re-checks every API call regardless of the UI.
+re-checks every API call regardless of the UI. A grant row or `?path` inside a
+sale the member hasn't paid for shows locked, and opening it shows the paywall
+(`PERMISSIONS_MATRIX.md` R-VIS-PAID-002).
 
 ## Identity note
 

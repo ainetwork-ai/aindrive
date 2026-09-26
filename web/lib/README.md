@@ -22,6 +22,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members`.
 - `drive-location.ts` — pure: `?path` + membership + stat kind → the drive page's folder, open file, breadcrumb root and grant listing (`locationPath` is the reverse, for the URL).
 - `require-access.ts` — `requireDriveRole()` auth gate for drive-scoped API routes (getUser→getDrive→resolveAccess→atLeast). With `opts.req` (fs/thumbnail, fs/stream, fs/download) it also takes the session JWT as `Authorization: Bearer` (`session.ts` `getRequestUser`; an invalid bearer is a 401, never a cookie fallback) — for hosts that proxy AINUI assets.
+- `sale-access.js` — the paid carve-out: `paidAccessDenial` (read gate, shared by HTTP and `dochub.js`), `paidLocksForPaths`/`paidLocksForListing` (🔒 rows). `paid-lock.ts` turns a 402 body into the paywall the drive UI shows (client-safe).
 - `member-guard.ts` — `canRemoveMember`: the drive creator's row is unremovable.
 - `invites.js` — `drive_invites` for emails without an account; converts to `drive_members` (upgrade-only) on signup.
 - `showcase.ts` — read-only upsell view of listed paid shares the caller doesn't yet cover. Depends on access, never reverse.
@@ -37,7 +38,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `payment-hooks.ts` — `onPaymentSettled` extension point (Phase 2 stub).
 
 **Agent bridge / RPC**
-- `agents.js` — in-memory registry of connected agent WebSockets; `sendRpc`, `onAgentConnect`, heartbeat, multi-device fan-out.
+- `agents.js` — in-memory registry of connected agent WebSockets; `sendRpc`, `onAgentConnect`, heartbeat, multi-device fan-out. `canonicalAgentResult` puts list/stat names into NFC on the way in.
   `rotateAgentLive` rotates a drive's agent token + secret over the live socket
   without disconnecting it (the CLI half is `cli/src/rotation.js`). Set
   `drives.rotation_pending = 1` to queue a drive: it rotates on its next connect,
@@ -79,7 +80,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 ## Contracts & invariants
 
 - **Single access source**: ownership or a covering `drive_members` row — both free and paid shares write rows there. There is no separate wallet-allowlist or share-cookie path; `access.ts` and `dochub.js`'s `resolveRole` mirror the same rule (the latter is duplicated, not imported, because `next/headers` is unavailable under raw `node server.js`).
-- **Path canonicalization**: every stored/looked-up path goes through `normalizePath` (`zPath` at API boundaries) before any `isAncestorOrSelf` check. The `NormalizedPath` brand asserted in `access.ts` relies on this.
+- **Path canonicalization**: every stored/looked-up path goes through `normalizePath` (`zPath` at API boundaries) before any `isAncestorOrSelf` check — slashes, `.` segments and Unicode NFC (macOS agents report NFD names). A gate judges the same canonical path it then serves: the WS hub canonicalizes its URL path, and a Yjs doc is named by the authorized path (`docIdFor`), never by a client-sent id. The `NormalizedPath` brand asserted in `access.ts` relies on this.
 - **Role merges never downgrade** (`mergeRoleUpgradeOnly`); the creator row is never removable (`member-guard`).
 - **Payment network switch is atomic**: USDC chain+asset flip together; reads rebind stale known-USDC policy rows to the current network. `toAtomicAmount` requires decimals ≥ 2 (scales from cents).
 - **x402 anti-replay**: a settled `tx_hash`/`payment_tx` is UNIQUE; `verify` rejects reused hashes before any network call.

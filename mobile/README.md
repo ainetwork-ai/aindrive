@@ -58,6 +58,11 @@ drive and a laptop drive are the same thing to the server.
 - **Reserved paths match `cli/src/rpc.js`.** `.aindrive/**` is refused over RPC
   except `agents/` and `uploads/` (`SafFs.isReservedPath`, `DriveFs.resolve`).
   This is a second layer behind the web's own gate.
+- **Paths arrive in NFC.** The server names paths in Unicode NFC; a file a Mac
+  wrote keeps its NFD name on the phone's byte-exact storage, so Android picks a
+  child by exact name, else by NFC-equal name (`ChildNameMatch`, mirrors
+  `cli/src/rpc.js matchSpelling`). iOS needs nothing: APFS lookups are
+  normalization-insensitive.
 - **RPC results must match `cli/src/rpc.js`.** The server cannot tell which
   kind of agent it is talking to, so a shape difference surfaces as a broken
   file browser, not an error.

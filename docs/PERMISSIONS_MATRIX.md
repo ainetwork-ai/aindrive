@@ -81,6 +81,7 @@ Gate: `min = viewer` at the target path. Rule (TARGET) =
 | `R-ACC-PAID-004` | Write ops are **never** paywalled — they already require `editor+`, which bypasses (§3). The carve-out applies to *read* only. | CURRENT |
 | `R-ACC-ANON-001` | No logged-out access to any non-public path (`resolveAccess` null→none). | CURRENT (`access.ts:71`) |
 | `R-ACC-NEST-001` | Nested sales: the gate is the **nearest-ancestor** priced share; entitlement must cover **that** path. Buying a parent does not unlock a more-specific (separately priced) child. | CURRENT (`sale-access.js`; e2e #190) |
+| `R-ACC-PATH-001` | Every gate judges the **canonical path it serves** (`normalizePath`: slashes, `.` segments, Unicode NFC). The WS hub canonicalizes its URL path; a Yjs doc is named by the authorized path (`docIdFor`), never a client-sent id; agent-reported names enter the server in NFC. `./paid/a`, `/paid/a` and the NFD spelling are all `paid/a`. | CURRENT (`path.js`, `dochub.js`, `yjs/route.ts`, `agents.js`; `dochub-path`, `yjs-route-doc`, `read-denial` tests) |
 
 > **Implementation note:** the pure rule is `canReadContent` (access-core.js);
 > the DB-backed gate is `sale-access.js` (`paidAccessDenial` = nearest-ancestor
@@ -108,6 +109,7 @@ dropped — except `private`:
 | ID | Requirement | Status |
 |----|-------------|--------|
 | `R-VIS-PAID-001` | **Listed** paid children → shown **locked** + price + ticker to non-entitled viewers (🔒 badge; click → `LockedPreview` with Buy). **Unlisted** paid children → **hidden** entirely (private, link-only sale). `fs/list` annotates + filters per requester (`paidLocksForListing`); editor+ see everything. Owner-side listing dims unlisted sales (eye-off badge) so their private state is legible. | CURRENT (`sale-access.js` + fs/list; e2e #190) |
+| `R-VIS-PAID-002` | A member's **grant-listing rows** carry the same locks (`paidLocksForPaths`, judged by the role at each grant). An unlisted sale's grant row stays visible, locked — the grant is the member's own. A folder or `?path` the viewer hasn't paid for shows the **paywall** (the 402 body carries `gatePath`, `shareId`, price, currency, `listed`), not a load error; Buy only when `listed`. | CURRENT (`page.tsx`, `drive-shell.tsx`, `paid-lock.ts`; `sale-access`, `paid-lock`, `read-denial` tests) |
 | `R-VIS-PRIV-001` | Private children are **hidden** from listings for non-allowlisted users. | DEFERRED (§10) |
 
 ---
