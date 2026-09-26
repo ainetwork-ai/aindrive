@@ -5,6 +5,7 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { safeNextPath } from "@/lib/safe-next";
 import { Wallet } from "lucide-react";
+import GoogleSignInButton from "@/components/google-signin-button";
 
 // The wallet stack (wagmi + RainbowKit, ~300-600KB) is code-split behind this
 // dynamic import (ssr:false — the provider tree is client-only) so it loads
@@ -75,6 +76,7 @@ function LoginForm() {
         <span className="h-px flex-1 bg-drive-border" />
       </div>
 
+      <GoogleSignInButton next={safeNext} />
       <WalletLoginButton next={safeNext} />
 
       <p className="mt-5 text-sm text-drive-muted text-center">
