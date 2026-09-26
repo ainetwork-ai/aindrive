@@ -22,7 +22,7 @@ import { DEVICE, ON_MAC } from "./device";
 import "./ui.css";
 import { I, icon, fileGlyph } from "./icons";
 import { Web } from "./web";
-import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type LinkedFile } from "./a2a";
+import { loadAgents, saveAgents, discover, send as a2aSend, type A2aAgent, type Handed } from "./a2a";
 import type { Ctx, Sheet } from "./kit";
 import { ShareSheet } from "./share-sheet";
 import { ManageSheet } from "./manage-sheet";
@@ -164,19 +164,24 @@ const HANDOFF_MAX = 10;
  * asks first, registers exactly those files on the phone, mints one link per file, and returns them
  * for the A2A message. Bytes go phone → server → agent only when the agent fetches the link.
  */
-async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<{ files: LinkedFile[]; links: HandoffLink[] } | null> {
+async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | null = askResult): Promise<(Handed & { links: HandoffLink[] }) | null> {
   const src = from?.sources ?? [];
   if (!src.length || !REFERS_TO_FILES.test(text)) return { files: [], links: [] };
-  const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ s, folder: localFolderFor(s.driveId) })).filter((x) => x.folder);
+  const picked = src.slice(0, HANDOFF_MAX).map((s) => ({ path: s.path, folderUri: localFolderFor(s.driveId)?.folder.uri })).filter((x) => x.folderUri);
+  return handoffPicked(agent, picked as { folderUri: string; path: string }[]);
+}
+
+/** Asks, then registers exactly these files on the phone and mints one short-lived link each. */
+async function handoffPicked(agent: A2aAgent, picked: { folderUri: string; path: string }[], why = ""): Promise<(Handed & { links: HandoffLink[] }) | null> {
   if (!picked.length) return { files: [], links: [] };
   // The links travel through a drive connected to aindrive (P2P on): any of the owner's will do.
   const carrier = state.shares.find((sh) => sh.drive && driveStatus(sh)?.connected);
   if (!carrier?.drive) { notify("Turn P2P on for a folder first — the files go out through it.", true); return null; }
-  const names = picked.map((x) => x.s.path.split("/").pop()).join(", ");
+  const names = picked.map((x) => x.path.split("/").pop()).join(", ");
   const ok = await confirmAsync(`Send ${picked.length} file${picked.length === 1 ? "" : "s"} to ${agent.name}?`,
-    `${names}\n\n${agent.name} gets a link to each file that works for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this ${DEVICE} until it opens a link, and you can revoke them any time.`, "Send links");
+    `${why}${names}\n\n${agent.name} can read only these files — by link or through MCP — for ${HANDOFF_TTL_SECONDS / 60} minutes. Files stay on this ${DEVICE} until it opens one, and you can revoke them any time.`, "Send links");
   if (!ok) return null;
-  const reg = await AindriveAgent.registerHandoffs({ files: picked.map((x) => ({ folderUri: x.folder!.folder.uri, path: x.s.path })), ttlSeconds: HANDOFF_TTL_SECONDS });
+  const reg = await AindriveAgent.registerHandoffs({ files: picked, ttlSeconds: HANDOFF_TTL_SECONDS });
   const r = await new Web(state.server, state.sessionCookie!).handoffs({
     driveId: carrier.drive.driveId, audience: agent.name, ttlSeconds: HANDOFF_TTL_SECONDS,
     files: reg.files.map((f) => ({ deviceKey: f.key, name: f.name, mime: f.mime, size: f.size })),
@@ -185,7 +190,36 @@ async function handoffFiles(agent: A2aAgent, text: string, from: AskResult | nul
   return {
     files: r.links.map((l) => ({ uri: l.url, name: l.name, mimeType: mime.get(l.deviceKey) ?? "application/octet-stream" })),
     links: r.links.map((l) => ({ id: l.id, name: l.name, expiresAt: l.expiresAt })),
+    ...(r.mcp ? { mcp: r.mcp } : {}),
   };
+}
+
+/** The agent a report's notes go to for better summaries: aindrive-cloud when it was added, else the only added agent. */
+function summaryAgent(): A2aAgent | undefined {
+  const added = fallbackAgents();
+  return added.find((a) => handleOf(a) === "aindrive-cloud") ?? (added.length === 1 ? added[0] : undefined);
+}
+
+/**
+ * The phone summarises calls with a small model under a time budget; the rest get topic words. This
+ * hands the report's markdown notes — text the phone wrote from its own transcripts, never the audio —
+ * to aindrive-cloud for a proper summary, after the owner confirms (handoffPicked).
+ */
+async function cloudCallSummaries() {
+  const a = askResult?.action, to = summaryAgent();
+  if (!a?.files?.length || !a.folderUri || !to) return;
+  const picked = a.files.slice(0, HANDOFF_MAX).map((f) => ({ folderUri: a.folderUri!, path: f.split("/").pop()! }));
+  let handed: Awaited<ReturnType<typeof handoffPicked>> = null;
+  try { handed = await handoffPicked(to, picked, `The call notes this ${DEVICE} wrote (transcript excerpts and counts — no audio).\n\n`); }
+  catch (e) { notify(`Couldn't prepare the notes: ${msgOf(e)}`, true); return; }
+  if (!handed?.files.length) return;
+  const q = "Summarise what I usually talk about with each person in these call notes — a short line per person, in the notes' language.";
+  askBusy = true; render();
+  try {
+    const r = await askA2a([to], q, handed);
+    askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
+    thread.push({ q: `Better call summaries from ${to.name}`, r: askResult, at: Date.now(), via: to.name, handoffs: handed.links, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
+  } finally { askBusy = false; await saveThread(); render(); }
 }
 
 async function revokeHandoff(turn: number, id?: string) {
@@ -207,11 +241,11 @@ function mentioned(q: string): { agent: A2aAgent; text: string } | null {
 }
 
 /** Ask A2A agents in parallel; one line per agent ("Name: reply"). */
-async function askA2a(agents: A2aAgent[], text: string, files: LinkedFile[] = []): Promise<{ answer: string; errors: string[] }> {
+async function askA2a(agents: A2aAgent[], text: string, handed: Handed = { files: [] }): Promise<{ answer: string; errors: string[] }> {
   const parts = await Promise.all(agents.map(async (agent) => {
     try {
       const own = state.server && new URL(agent.url).origin === new URL(state.server).origin ? state.sessionCookie ?? undefined : undefined;
-      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, files);
+      const r = await a2aSend(agent, text, a2aContexts.get(agent.id), own, handed);
       if (r.contextId) a2aContexts.set(agent.id, r.contextId);
       return { ok: true, line: agents.length > 1 ? `${agent.name}: ${r.text}` : r.text };
     } catch (e) { return { ok: false, line: `${agent.name}: ${msgOf(e)}` }; }
@@ -1318,7 +1352,7 @@ async function ask(q = askQuery) {
     if (!handed) return;   // declined, or no connected drive
     askBusy = true; render();
     try {
-      const r = await askA2a([direct.agent], direct.text, handed.files);
+      const r = await askA2a([direct.agent], direct.text, handed);
       askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
       thread.push({ q, r: askResult, at: Date.now(), via: direct.agent.name, ...(handed.links.length ? { handoffs: handed.links } : {}), ...(r.answer ? {} : { error: r.errors.join("\n") }) });
     } finally { askBusy = false; askQuery = ""; await saveThread(); render(); }
@@ -1339,7 +1373,7 @@ async function ask(q = askQuery) {
       let handed: Awaited<ReturnType<typeof handoffFiles>> = null;
       try { handed = await handoffFiles(to, q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); }
       if (handed?.files.length) {
-        const r = await askA2a([to], q, handed.files);
+        const r = await askA2a([to], q, handed);
         askResult = { answer: r.answer || r.errors.join("\n"), sources: [], query: "a2a" };
         thread.push({ q, r: askResult, at: Date.now(), via: to.name, handoffs: handed.links, ...(r.answer ? {} : { error: r.errors.join("\n") }) });
         askQuery = ""; await saveThread();
@@ -1391,7 +1425,7 @@ async function ask(q = askQuery) {
       const to = fallbackAgents();
       let handed: Awaited<ReturnType<typeof handoffFiles>> = { files: [], links: [] };
       if (to.length === 1) { try { handed = await handoffFiles(to[0], q, prevResult); } catch (e) { notify(`Couldn't prepare the files: ${msgOf(e)}`, true); } }
-      const r = await askA2a(to, q, handed?.files ?? []);
+      const r = await askA2a(to, q, handed ?? { files: [] });
       if (r.answer) {
         askResult = { answer: r.answer, sources: [], query: "a2a" };
         thread.push({ q, r: askResult, at: Date.now(), via: to.map((x) => x.name).join(", "), ...(handed?.links.length ? { handoffs: handed.links } : {}) });
@@ -1934,6 +1968,7 @@ function searchSheet(): string {
           ${p2pSwitch(actionFolderShare(a), "action-p2p")}
         </div>
         ${a.needsCallLog ? `<p class="hint" style="margin-top:8px">Without call-log access the ranking counts recordings only. <button class="link" id="action-calllog">Allow call log</button></p>` : ""}
+        ${a.report === "calls" && a.files?.length && a.folderUri && summaryAgent() ? `<p class="hint" style="margin-top:8px">${a.unsummarised ? `${a.unsummarised} ${a.unsummarised === 1 ? "person has" : "people have"} topic words only. ` : ""}Summarised on this ${DEVICE}. <button class="link" id="action-cloud-summary">Better summaries with ${esc(summaryAgent()!.name)}</button> — sends the text notes, not the audio, after you confirm.</p>` : ""}
         ${actionShare?.url ? `<p class="hint mono" style="margin-top:8px;word-break:break-all">${esc(actionShare.url)}</p>` : ""}
         ${actionShare?.error ? `<p class="hint" style="color:var(--err)">${esc(actionShare.error)}</p>` : ""}
       </div>`;
@@ -2138,6 +2173,7 @@ function bindSearch() {
   bind("action-share", shareCollected);
   bind("action-p2p", () => { const x = askResult?.action; if (x) void toggleP2p((x.folderUri ? findShare(x.folderUri) : undefined) ?? shareByDrive(x.driveId)); });
   bind("action-calllog", allowCallLog);
+  bind("action-cloud-summary", cloudCallSummaries);
   bind("action-copy", () => { if (actionShare?.url) void navigator.clipboard?.writeText(actionShare.url).then(() => notify("Link copied")); });
   bind("action-open", () => {
     const a = askResult?.action; if (a?.folder === undefined) return;

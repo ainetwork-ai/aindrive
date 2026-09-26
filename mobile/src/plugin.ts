@@ -113,6 +113,10 @@ export interface AskResult {
     /** "calls": the call-history report; `people` is the ranking. */
     report?: "calls";
     people?: { name: string; calls: number; seconds: number; recordings: number; topics: string[]; gist: string }[];
+    /** Call report: people whose calls got topic words only (the phone's model ran out of time, or isn't there). */
+    unsummarised?: number;
+    /** Drive-relative paths of the files the agent wrote (the call report's markdown notes). */
+    files?: string[];
     /** The report had no call log because READ_CALL_LOG is not granted — offer the permission. */
     needsCallLog?: boolean;
     copied?: number;

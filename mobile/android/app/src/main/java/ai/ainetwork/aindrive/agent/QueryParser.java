@@ -150,7 +150,21 @@ public final class QueryParser {
 
     public static boolean isLikesTask(String question) { return question != null && LIKES_TASK.matcher(question).find(); }
 
-    public static boolean isCallsTask(String question) { return question != null && (CALLS_TASK.matcher(question).find() || isLikesTask(question)); }
+    /**
+     * "엄유준 최신 통화 stt 해줘", "transcribe my last call with Amy": one recording as text. Needs a
+     * call word and a transcription word, and is not the ranking report ("통화 많이 한 순으로 요약").
+     */
+    private static final Pattern CALL_WORD = Pattern.compile("통화|전화|녹음|\\bcalls?\\b|\\brecordings?\\b|\\bphone\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TRANSCRIBE_WORD = Pattern.compile(
+            "(?<![a-z])stt(?![a-z])|받아\\s*(써|쓰|적)|전사|녹취|텍스트로|글로\\s*(써|옮겨|바꿔|적어|변환)|문자로\\s*(바꿔|변환)|스크립트"
+            + "|\\btranscri(be|bed|ption|pt)|speech[- ]to[- ]text", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RANKING = Pattern.compile("많이|순으로|순서|\\b(rank|sort|most|who)\\b", Pattern.CASE_INSENSITIVE);
+
+    public static boolean isTranscribeTask(String question) {
+        return question != null && CALL_WORD.matcher(question).find() && TRANSCRIBE_WORD.matcher(question).find() && !RANKING.matcher(question).find();
+    }
+
+    public static boolean isCallsTask(String question) { return question != null && (CALLS_TASK.matcher(question).find() || isLikesTask(question) || isTranscribeTask(question)); }
 
     /**
      * Follow-up cues: the question refers to the previous turn's results
@@ -278,6 +292,8 @@ public final class QueryParser {
         if (isCallsTask(question)) {
             q.calls = true;
             q.likes = isLikesTask(question);
+            q.transcribe = !q.likes && isTranscribeTask(question);
+            if (q.transcribe) q.asked = question;
             q.share = SHARE_ASK.matcher(question).find();
             return q;
         }

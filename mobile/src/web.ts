@@ -96,7 +96,7 @@ export class Web {
 
   // ---- file handoff links (web/app/api/handoffs, web/lib/handoff.ts)
   handoffs(body: { driveId: string; audience: string; ttlSeconds: number; files: { deviceKey: string; name: string; mime: string; size: number }[] }) {
-    return this.call<{ links: { id: string; url: string; name: string; deviceKey: string; expiresAt: string }[] }>("POST", "/api/handoffs", body);
+    return this.call<{ links: { id: string; url: string; name: string; deviceKey: string; expiresAt: string }[]; mcp?: { url: string; token: string; expiresAt: string } }>("POST", "/api/handoffs", body);
   }
   listHandoffs() { return this.call<{ handoffs: unknown[] }>("GET", "/api/handoffs"); }
   revokeHandoff(id: string) { return this.call<{ revoked: number }>("DELETE", `/api/handoffs/${encodeURIComponent(id)}`); }

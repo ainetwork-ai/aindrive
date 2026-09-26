@@ -1,7 +1,8 @@
 /**
  * File handoff links (lib/handoff.ts) — owner side.
  *   POST { driveId, audience, ttlSeconds?, files: [{ deviceKey, name, mime, size }] }
- *        → { links: [{ id, url, name, deviceKey, expiresAt }] }. Session auth; the caller must own
+ *        → { links: [{ id, url, name, deviceKey, expiresAt }], mcp: { url, token, expiresAt } }: one link per
+ *        file, and one MCP view (`/mcp/h/<grant>`) over exactly those files. Session auth; the caller must own
  *        `driveId` (the carrier: the device's connected drive whose socket serves the bytes).
  *   GET  → the caller's links with fetch counts (the audit list).
  */
@@ -11,7 +12,7 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { env } from "@/lib/env";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
-import { createHandoffs, listHandoffs, DEFAULT_TTL_SECONDS, MAX_FILES } from "@/lib/handoff";
+import { createHandoffGrant, listHandoffs, DEFAULT_TTL_SECONDS, MAX_FILES } from "@/lib/handoff";
 
 const Body = z.object({
   driveId: z.string().min(1).max(64),
@@ -34,10 +35,11 @@ export async function POST(req: Request) {
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const drive = getDrive(body.data.driveId);
   if (!drive || drive.owner_id !== user.id) return NextResponse.json({ error: "not your drive" }, { status: 403 });
-  const links = createHandoffs(user.id, drive.id, body.data.files, body.data.audience, body.data.ttlSeconds ?? DEFAULT_TTL_SECONDS);
+  const { grant, links } = createHandoffGrant(user.id, drive.id, body.data.files, body.data.audience, body.data.ttlSeconds ?? DEFAULT_TTL_SECONDS);
   const base = env.publicUrl.replace(/\/+$/, "");
   return NextResponse.json({
     links: links.map((l) => ({ id: l.id, url: `${base}/api/h/${l.id}?k=${l.secret}`, name: l.name, deviceKey: l.deviceKey, expiresAt: l.expiresAt })),
+    mcp: { url: `${base}/mcp/h/${grant.id}`, token: grant.token, expiresAt: grant.expiresAt },
   });
 }
 

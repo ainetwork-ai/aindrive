@@ -19,21 +19,58 @@ export const MAX_FILES = 20;
 export interface HandoffFile { deviceKey: string; name: string; mime: string; size: number }
 export interface HandoffRow {
   id: string; secret_hash: string; owner_id: string; drive_id: string; device_key: string; name: string; mime: string;
-  size: number; audience: string; created_at: string; expires_at: string; revoked_at: string | null;
+  size: number; audience: string; created_at: string; expires_at: string; revoked_at: string | null; grant_id: string | null;
 }
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
-export function createHandoffs(ownerId: string, driveId: string, files: HandoffFile[], audience: string, ttlSeconds: number) {
-  const ttl = Math.max(30, Math.min(MAX_TTL_SECONDS, Math.floor(ttlSeconds)));
-  const expires = new Date(Date.now() + ttl * 1000).toISOString().replace("T", " ").slice(0, 19);
-  const insert = db.prepare(`INSERT INTO file_handoffs (id, secret_hash, owner_id, drive_id, device_key, name, mime, size, audience, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+const expiryOf = (ttlSeconds: number) =>
+  new Date(Date.now() + Math.max(30, Math.min(MAX_TTL_SECONDS, Math.floor(ttlSeconds))) * 1000).toISOString().replace("T", " ").slice(0, 19);
+
+export function createHandoffs(ownerId: string, driveId: string, files: HandoffFile[], audience: string, ttlSeconds: number, grantId: string | null = null) {
+  const expires = expiryOf(ttlSeconds);
+  const insert = db.prepare(`INSERT INTO file_handoffs (id, secret_hash, owner_id, drive_id, device_key, name, mime, size, audience, expires_at, grant_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   return db.transaction(() => files.map((f) => {
     const id = nanoid(16), secret = randomBytes(24).toString("base64url");
-    insert.run(id, sha256(secret), ownerId, driveId, f.deviceKey, f.name, f.mime, f.size, audience, expires);
+    insert.run(id, sha256(secret), ownerId, driveId, f.deviceKey, f.name, f.mime, f.size, audience, expires, grantId);
     return { id, secret, name: f.name, deviceKey: f.deviceKey, expiresAt: expires.replace(" ", "T") + "Z" };
   }))();
+}
+
+/** Bearer of a handoff grant's MCP view (`/mcp/h/<id>`). */
+export const GRANT_TOKEN_PREFIX = "aind_hg_";
+
+/**
+ * A handoff batch plus its grant: the links (one per file, as before) and one MCP view over
+ * exactly these files, so an agent can list and read what it was given — and nothing else.
+ */
+export function createHandoffGrant(ownerId: string, driveId: string, files: HandoffFile[], audience: string, ttlSeconds: number) {
+  const id = nanoid(16), secret = randomBytes(24).toString("base64url"), expires = expiryOf(ttlSeconds);
+  return db.transaction(() => {
+    db.prepare("INSERT INTO handoff_grants (id, secret_hash, owner_id, audience, expires_at) VALUES (?, ?, ?, ?, ?)").run(id, sha256(secret), ownerId, audience, expires);
+    const links = createHandoffs(ownerId, driveId, files, audience, ttlSeconds, id);
+    return { grant: { id, token: GRANT_TOKEN_PREFIX + secret, expiresAt: expires.replace(" ", "T") + "Z" }, links };
+  })();
+}
+
+export interface GrantRow { id: string; owner_id: string; audience: string; expires_at: string; revoked_at: string | null }
+
+/** The grant if `token` opens it and it is still live; otherwise why not. */
+export function openGrant(id: string, token: string): { grant: GrantRow } | { error: "not_found" | "revoked" | "expired" } {
+  const row = db.prepare("SELECT id, owner_id, audience, expires_at, revoked_at, secret_hash FROM handoff_grants WHERE id = ?").get(id) as (GrantRow & { secret_hash: string }) | undefined;
+  if (!row || !token.startsWith(GRANT_TOKEN_PREFIX)) return { error: "not_found" };
+  const a = Buffer.from(row.secret_hash, "hex"), b = Buffer.from(sha256(token.slice(GRANT_TOKEN_PREFIX.length)), "hex");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return { error: "not_found" };
+  if (row.revoked_at) return { error: "revoked" };
+  if (Date.parse(row.expires_at.replace(" ", "T") + "Z") <= Date.now()) return { error: "expired" };
+  const { secret_hash: _, ...grant } = row;
+  return { grant };
+}
+
+/** The grant's files that are still live — a revoked or expired link drops out of the view too. */
+export function grantFiles(grantId: string): HandoffRow[] {
+  return db.prepare(`SELECT * FROM file_handoffs WHERE grant_id = ? AND revoked_at IS NULL AND expires_at > datetime('now') ORDER BY name`).all(grantId) as HandoffRow[];
 }
 
 /** The link if `secret` opens it and it is still live; otherwise why not. */
@@ -60,6 +97,7 @@ export function listHandoffs(ownerId: string, limit = 100) {
 
 /** Revoke one link (or every live link to an audience); only the owner's. Returns how many. */
 export function revokeHandoffs(ownerId: string, which: { id?: string; audience?: string }): number {
+  if (which.audience) db.prepare("UPDATE handoff_grants SET revoked_at = datetime('now') WHERE audience = ? AND owner_id = ? AND revoked_at IS NULL").run(which.audience, ownerId);
   if (which.id) return db.prepare("UPDATE file_handoffs SET revoked_at = datetime('now') WHERE id = ? AND owner_id = ? AND revoked_at IS NULL").run(which.id, ownerId).changes;
   if (which.audience) return db.prepare("UPDATE file_handoffs SET revoked_at = datetime('now') WHERE audience = ? AND owner_id = ? AND revoked_at IS NULL").run(which.audience, ownerId).changes;
   return 0;

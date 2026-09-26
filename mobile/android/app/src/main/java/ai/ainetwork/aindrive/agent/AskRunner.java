@@ -71,6 +71,10 @@ public final class AskRunner {
 
     public AskRunner withCallIndexes(Supplier<List<FileIndex>> s) { callIndexes = s; return this; }
 
+    private @Nullable CallReport.Opener callOpener;
+
+    public AskRunner withCallOpener(@Nullable CallReport.Opener o) { callOpener = o; return this; }
+
     public AskRunner(FileIndex index, GeoLookup geo, Supplier<ClipEmbedder> clip, @Nullable FileOps ops) {
         this(index, geo, clip, ops, null, () -> null, () -> null, () -> { }, () -> false);
     }
@@ -150,7 +154,7 @@ public final class AskRunner {
         if (routed != null) return routed;
         SearchQuery q = turn.query;
         if (q.calls) {
-            try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
+            try { return new CallReport(index, callLog, speech, ops, summarizer, indexerBusy).withIndexes(callIndexes.get()).withOpener(callOpener).run(q, System.currentTimeMillis()).put("query", "calls").put("context", context == null ? JSONObject.NULL : context); }
             finally { releaseSummarizer.run(); }
         }
         int indexed = index.count();
