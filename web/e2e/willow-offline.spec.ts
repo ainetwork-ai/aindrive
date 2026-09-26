@@ -4,7 +4,7 @@
 // server, owner, drive and CLI agent, like scenarios/global-setup.mjs.
 import { test, expect, type Browser } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, copyFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, copyFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ let server: ChildProcess;
 let agent: ChildProcess;
 let cookie = "";
 let driveId = "";
+let folder = "";
 
 async function until(ok: () => Promise<boolean>, ms: number, what: string) {
   const end = Date.now() + ms;
@@ -40,7 +41,7 @@ test.beforeAll(async () => {
   const drive = await (await fetch(`${BASE}/api/drives`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ name: "willow-e2e" }) })).json();
   driveId = drive.driveId;
 
-  const folder = mkdtempSync(join(tmpdir(), "willow-e2e-folder-"));
+  folder = mkdtempSync(join(tmpdir(), "willow-e2e-folder-"));
   writeFileSync(join(folder, "a.md"), "# Notes\n\nstart\n");
   mkdirSync(join(folder, ".aindrive"), { recursive: true });
   writeFileSync(join(folder, ".aindrive", "config.json"), JSON.stringify({ ...drive, serverUrl: BASE, url: `${BASE}/d/${driveId}`, pairedAt: Date.now() }));
@@ -61,6 +62,9 @@ test("edit offline, reload offline, reconnect: the text stays and reaches a seco
   const url = `${BASE}/d/${driveId}?path=a.md`;
   const a = await context(browser);
   const pa = await a.newPage();
+  // the agent materialises: no browser should write the file
+  let fsWrites = 0;
+  a.on("request", (r) => { if (r.url().includes("/fs/write")) fsWrites++; });
   await pa.goto(url);
   await expect(pa.locator(".ProseMirror")).toContainText("start", { timeout: 60_000 });
   // a second online load, now controlled by the service worker, caches the page
@@ -85,6 +89,10 @@ test("edit offline, reload offline, reconnect: the text stays and reaches a seco
   // exactly once on both sides: no re-seed from disk and no disk reload re-broadcast (review C1/C2)
   await pa.waitForTimeout(7000); // past the 5 s autosave → fs.watch → reload cycle
   for (const p of [pa, pb]) expect(((await p.locator(".ProseMirror").innerText()).match(/offline-edit-1/g) ?? []).length).toBe(1);
+
+  // the file on disk gets the offline edit, written by the agent from the Willow document
+  await expect.poll(() => readFileSync(join(folder, "a.md"), "utf8"), { timeout: 20_000 }).toContain("offline-edit-1");
+  expect(fsWrites).toBe(0);
 
   // who wrote it: the signed device resolves to the owner, vouched by aindrive
   await pb.locator(".ProseMirror").getByText("offline-edit-1").click();

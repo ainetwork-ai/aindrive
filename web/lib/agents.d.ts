@@ -28,3 +28,6 @@ export function startHeartbeat(
   ws: { on(event: "pong", cb: () => void): unknown; ping(): void; terminate(): void; readyState: number; OPEN: number },
   opts?: { intervalMs?: number; onBeat?: () => void; onDead?: () => void },
 ): ReturnType<typeof setInterval>;
+export function recordAgentHello(driveId: string, msg: unknown): void;
+export function forgetAgentCapabilities(driveId: string): void;
+export function agentMaterializes(driveId: string): boolean;

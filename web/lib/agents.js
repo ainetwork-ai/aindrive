@@ -25,6 +25,19 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const ROTATION_GRACE_MS = 60_000;
 const ROTATION_SWEEP_MS = 5 * 60_000;
 
+// Drives whose connected agent writes documents into their files itself (it
+// announced the "willow" capability): browsers then stop saving files.
+if (!globalThis.__aindrive_willow_agents) globalThis.__aindrive_willow_agents = new Set();
+const willowAgents = globalThis.__aindrive_willow_agents;
+
+/** Record what an agent said in its hello (hostname is stored by the caller). */
+export function recordAgentHello(driveId, msg) {
+  if (Array.isArray(msg?.capabilities) && msg.capabilities.includes("willow")) willowAgents.add(driveId);
+  else willowAgents.delete(driveId);
+}
+export function forgetAgentCapabilities(driveId) { willowAgents.delete(driveId); }
+export function agentMaterializes(driveId) { return willowAgents.has(driveId); }
+
 export function isAgentConnected(driveId) {
   return agents.has(driveId);
 }
@@ -187,6 +200,7 @@ export async function onAgentConnect(ws, req, query) {
     // next to the drive name (helpful when the user runs `aindrive` on multiple
     // machines under the same account).
     if (msg?.type === "agent-hello" && typeof msg.hostname === "string") {
+      recordAgentHello(driveId, msg);
       const h = msg.hostname.slice(0, 100);
       try { db.prepare("UPDATE drives SET last_hostname = ? WHERE id = ?").run(h, driveId); } catch {}
       return;
@@ -231,7 +245,7 @@ export async function onAgentConnect(ws, req, query) {
 
   ws.on("close", () => {
     clearInterval(heartbeat);
-    if (agents.get(driveId) === entry) agents.delete(driveId);
+    if (agents.get(driveId) === entry) { agents.delete(driveId); forgetAgentCapabilities(driveId); }
     const peers = globalThis.__aindrive_agents_by_drive?.get(driveId);
     if (peers) {
       peers.delete(ws);

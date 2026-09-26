@@ -34,6 +34,8 @@ export class AindriveProvider {
   willowBound = false;
   /** The first sync with the server completed: only then may an empty doc be seeded from disk. */
   syncComplete = false;
+  /** The drive's agent writes this document into its file itself: the browser does not save it. */
+  agentMaterializes = false;
   /** Resolves once the local Willow store is loaded and the first sync with the server is done (or offline). */
   whenReady: Promise<void>;
   private resolveReady!: () => void;
@@ -52,6 +54,13 @@ export class AindriveProvider {
           if (this.destroyed) { unbind(); return; }
           this.unbindWillow = unbind;
           this.willowBound = true;
+          // does the agent write the file? asked online, remembered per drive for offline
+          const memo = `aindrive-willow-agent-${driveId}`;
+          try { this.agentMaterializes = localStorage.getItem(memo) === "1"; } catch {}
+          void fetch(`/api/willow/agent?drive=${encodeURIComponent(driveId)}`).then((r) => r.json()).then((j) => {
+            this.agentMaterializes = !!j.materializes;
+            try { localStorage.setItem(memo, this.agentMaterializes ? "1" : "0"); } catch {}
+          }).catch(() => {});
           client.status.addEventListener("refused", (ev) => this.emit("refused", (ev as CustomEvent).detail));
           this.syncComplete = await client.initialSync;
         } catch (e) { console.warn("willow store unavailable:", e); }

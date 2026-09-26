@@ -75,6 +75,7 @@ export function Viewer({
     async () => {
       if (!canEdit || !providerRef.current || !docIdRef.current) return;
       const provider = providerRef.current;
+      if (provider.agentMaterializes) return; // the agent writes the file from the Willow document
       const text = provider.doc.getText("content").toString();
       try {
         await Promise.all([

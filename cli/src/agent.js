@@ -166,7 +166,8 @@ function connectOnce({ root, drive, wsUrl }) {
       log.info({ driveId: drive.driveId }, "connected");
       // Tell the server which machine this agent is running on so it can show
       // the hostname next to the drive in the UI.
-      try { ws.send(JSON.stringify({ type: "agent-hello", hostname: osHostname() })); } catch {}
+      // "willow": this agent writes documents into their files itself (browsers stop saving)
+      try { ws.send(JSON.stringify({ type: "agent-hello", hostname: osHostname(), capabilities: willowPeer ? ["willow"] : [] })); } catch {}
       // Start fs watcher — sends {type:'fs-changed', path} frames so the server can
       // broadcast 'reload' to any open editors of that path.
       try {
