@@ -114,6 +114,30 @@ async function ensureDefaultAgent() {
   } catch { /* offline: try again next launch */ }
 }
 
+/**
+ * The aindrive-cloud agent — the on-device agent's counterpart, run by ainize.ai on Qwen3.8-Flash-Next
+ * (https://ainize.ai/models/Qwen3.8-Flash-Next) — offered once so `@aindrive-cloud …` works out of the box.
+ * It reads handed-off files through their links, opening one only when the answer needs it (ainize-node
+ * read_attachment), and its egress is allowed only aindrive's link host.
+ * Not built-in: removing it sticks, because the offer is remembered, not the agent.
+ */
+const CLOUD_AGENT_CARD = "https://ainize.ai/agents/aindrive-cloud/.well-known/agent-card.json";
+const CLOUD_AGENT_OFFERED_KEY = "aindrive.mobile.a2a.cloud-agent-offered.v1";
+async function ensureCloudAgent() {
+  try { if ((await Preferences.get({ key: CLOUD_AGENT_OFFERED_KEY })).value) return; } catch { return; }
+  const home = CLOUD_AGENT_CARD.replace(/\/\.well-known\/.*$/, "");
+  try {
+    if (!a2aAgents.some((a) => a.url.replace(/\/+$/, "") === home)) {
+      // Discover first, then append to the list as it is NOW: ensureDefaultAgent runs beside this one.
+      const agent = await discover(CLOUD_AGENT_CARD);
+      a2aAgents = [...a2aAgents.filter((a) => a.url.replace(/\/+$/, "") !== home), agent];
+      await saveAgents(a2aAgents, "local");
+      render();
+    }
+    await Preferences.set({ key: CLOUD_AGENT_OFFERED_KEY, value: "1" });
+  } catch { /* offline: offered again next launch */ }
+}
+
 /** "these / them / those photos / this file": the message is about the files in the last answer. */
 const REFERS_TO_FILES = /\b(these|those|them|this (photo|picture|file|recording|document)|the (photos?|pictures?|files?|recordings?|documents?|pdfs?|images?))\b|이것|이거|그것|그거|이 사진|그 사진|사진들|파일들/i;
 const HANDOFF_TTL_SECONDS = 15 * 60;
@@ -2457,6 +2481,7 @@ async function boot() {
   await load();
   ({ agents: a2aAgents } = await loadAgents());
   void ensureDefaultAgent();
+  void ensureCloudAgent();
   try {
     const v = (await Preferences.get({ key: "aindrive.mobile.view" })).value;
     if (v === "grid" || v === "list") browseView = v;
