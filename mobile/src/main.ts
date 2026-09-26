@@ -706,6 +706,21 @@ async function openBrowser(share: SharedFolder, path = "") {
 }
 
 /** SAF's ways of saying "that document is gone". */
+/** Mac: folders the earlier Mac app shared join the list, switch on, with their drives. */
+async function adoptMacFolders() {
+  try {
+    const r = await AindriveAgent.adoptable!();
+    let added = 0;
+    for (const a of r.folders) {
+      if (findShare(a.folder.uri)) continue;
+      state.shares.push({ folder: a.folder, drive: { driveId: a.drive.driveId, agentToken: a.drive.agentToken, driveSecret: a.drive.driveSecret, url: a.drive.url }, on: true });
+      if (!state.sessionCookie) state.server = normalizeServer(a.serverUrl);
+      added++;
+    }
+    if (added) { await save(); log(`${added} folder${added === 1 ? "" : "s"} shared before carried over`); }
+  } catch { /* nothing to adopt */ }
+}
+
 function isGone(msg: string): boolean {
   return /FileNotFound|No such file|not found|Missing file|does not exist|ENOENT|is child of/i.test(msg);
 }
@@ -1878,7 +1893,7 @@ function searchSheet(): string {
   const activeName = activeDrive ? (activeDrive.folderLabel || "a folder") : "";
   const recognised = ix.reduce((n, i) => n + (i.recognisedTotal ?? 0), 0);
   const models = status.models;
-  const indexLine = active
+  const indexLine = ON_MAC ? "" : active
     ? (active.phase === "recognising"
       ? `<div class="indexline"><div style="flex:1">${activeDrive?.driveId.startsWith("src-calls") ? "Transcribing calls" : "Recognising photos & recordings"} in ${esc(activeName)}… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
       : `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`)
@@ -2542,6 +2557,7 @@ async function boot() {
   await loadThread();
   await loadHistory();
   await pruneMissing();
+  if (ON_MAC) await adoptMacFolders();
   // Everything that was on comes back by itself: sources, and the shares whose switch was on.
   void (async () => {
     for (const share of state.shares) if (share.on && state.sessionCookie && !p2pOn(share)) await startShare(share);

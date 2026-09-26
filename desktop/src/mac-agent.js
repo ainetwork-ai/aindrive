@@ -19,8 +19,8 @@
  */
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { copyFileSync, mkdirSync, promises as fsp, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { constants, copyFileSync, existsSync, mkdirSync, promises as fsp, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { driveUrlOf, isFolder } from "./agents.js";
 
 const MIME = {
@@ -36,14 +36,40 @@ const MIME = {
 export const mimeOf = (name) => MIME[extname(name).toLowerCase()] ?? "application/octet-stream";
 const MAX_READ_BYTES = 40 * 1024 * 1024;
 
-/** `rel` inside `root`, refusing anything that climbs out (or into .aindrive/). */
+/** The real path of `p`, or of its nearest existing ancestor plus the rest. */
+function realish(p) {
+  let head = p;
+  const tail = [];
+  while (!existsSync(head)) {
+    const up = dirname(head);
+    if (up === head) break;
+    tail.unshift(basename(head));
+    head = up;
+  }
+  return join(realpathSync(head), ...tail);
+}
+
+/**
+ * `rel` inside `root`, refusing anything that climbs out — by `..` or through a
+ * symlink — and any `.aindrive` (a drive's credentials) at any depth.
+ */
 export function inside(root, rel = "") {
-  const clean = String(rel ?? "").replace(/^\/+/, "");
-  const abs = resolve(root, clean);
-  const r = relative(root, abs);
-  if (r.startsWith("..") || r.includes(`..${sep}`) || resolve(root, r) !== abs) throw new Error("path is outside the folder");
-  if (r.split(sep)[0].toLowerCase() === ".aindrive") throw new Error("that path is reserved");
+  const segs = String(rel ?? "").split(/[\\/]+/).filter((x) => x && x !== ".");
+  if (segs.some((x) => x === "..")) throw new Error("path is outside the folder");
+  if (segs.some((x) => x.toLowerCase() === ".aindrive")) throw new Error("that path is reserved");
+  const abs = join(root, ...segs);
+  const realRoot = realpathSync(root);
+  const real = realish(abs);
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) throw new Error("path is outside the folder");
   return abs;
+}
+
+/** `name`, or "name (2).ext", "name (3).ext"… — the first that `dir` does not have. */
+function freeName(dir, name) {
+  if (!existsSync(join(dir, name))) return name;
+  const ext = extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let i = 2; ; i++) if (!existsSync(join(dir, `${stem} (${i})${ext}`))) return `${stem} (${i})${ext}`;
 }
 
 /** What a phone agent returns for a listing, for one directory. */
@@ -51,7 +77,7 @@ export async function listEntries(root, rel = "") {
   const dir = inside(root, rel);
   const out = [];
   for (const d of await fsp.readdir(dir, { withFileTypes: true })) {
-    if (d.name === ".aindrive" || d.name === ".DS_Store") continue;
+    if (d.name.toLowerCase() === ".aindrive" || d.name === ".DS_Store") continue;
     const abs = join(dir, d.name);
     let st;
     try { st = await fsp.stat(abs); } catch { continue; }
@@ -131,7 +157,10 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
   /** Only folders the user picked on this Mac, and never a path outside them. */
   function folderOf(uri) {
     if (typeof uri !== "string" || !picked().has(uri)) throw new Error("That folder was not picked on this Mac");
-    if (!isFolder(uri)) throw new Error("That folder is not available — is its disk connected?");
+    if (!isFolder(uri)) {
+      // gone from a disk that is still here → deleted (the shell offers to remove it); else the disk is away
+      throw new Error(existsSync(dirname(uri)) ? "No such file: the folder does not exist any more" : "That folder is not available — is its disk connected?");
+    }
     return uri;
   }
 
@@ -154,6 +183,15 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
     return { running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out };
   }
   agents.on("change", () => emit(status()));
+
+  /** Take a drive's credentials out of its folder (they would let anyone reading it serve as the drive). */
+  function forgetConfig(folder, driveId) {
+    const file = join(folder, ".aindrive", "config.json");
+    try {
+      const c = JSON.parse(readFileSync(file, "utf8"));
+      if (c.driveId === driveId) rmSync(file, { force: true });
+    } catch { /* already gone */ }
+  }
 
   function remember(entry) {
     store.update((s) => ({ ...s, drives: [...(s.drives ?? []).filter((d) => d.driveId !== entry.driveId), entry] }));
@@ -189,7 +227,9 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
       if (r.canceled) return { added: [], failed: [] };
       const added = [], failed = [];
       for (const src of r.filePaths) {
-        try { copyFileSync(src, join(dest, basename(src))); added.push(basename(src)); } catch { failed.push(basename(src)); }
+        // never over an existing file: a second copy gets "name (2).ext"
+        const name = freeName(dest, basename(src));
+        try { copyFileSync(src, join(dest, name), constants.COPYFILE_EXCL); added.push(name); } catch { failed.push(basename(src)); }
       }
       return { added, failed };
     },
@@ -197,7 +237,10 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
     async mkdir({ folderUri, path }) { await fsp.mkdir(inside(folderOf(folderUri), path), { recursive: true }); },
     async rename({ folderUri, from, to }) {
       const root = folderOf(folderUri);
-      await fsp.rename(inside(root, from), inside(root, to));
+      const src = inside(root, from), dst = inside(root, to);
+      // a rename or move never replaces another file (only a change of letter case of itself)
+      if (existsSync(dst) && realpathSync(dst) !== realpathSync(src)) throw new Error(`"${basename(dst)}" already exists there`);
+      await fsp.rename(src, dst);
     },
     async writeText({ folderUri, path, text }) { await fsp.writeFile(inside(folderOf(folderUri), path), String(text ?? ""), "utf8"); },
     async delete({ folderUri, path }) {
@@ -287,6 +330,8 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
         if (!d) continue;
         agents.remove(d.folder);
         store.update((s) => ({ ...s, drives: (s.drives ?? []).filter((x) => x.driveId !== id) }));
+        // the shell keeps the credentials it needs to turn it on again; the folder should not
+        if (!d.localOnly) forgetConfig(d.folder, id);
       }
       const s = status();
       emit(s);
@@ -309,22 +354,35 @@ export function createMacAgent({ agents, store, electron, thumbsDir, emit }) {
       return { answer, query: "name", context: null, sources };
     },
 
-    /** v0.1 kept folders it shared by path; serve them the same way under the shell's registry. */
+    /**
+     * v0.1 kept folders it shared by path. They are handed to the shell once
+     * (`adoptable`), which lists and serves them like any folder it paired —
+     * nothing is served behind its back.
+     */
     migrate() {
       const old = store.get().folders ?? [];
       if (!old.length) return;
-      store.update((s) => {
-        const next = { ...s, drives: [...(s.drives ?? [])], picked: [...new Set([...(s.picked ?? []), ...old.map((f) => f.path)])] };
-        for (const f of old) {
-          if (f.paused || !driveUrlOf(f.path)) continue;
-          try {
-            const c = JSON.parse(readFileSync(join(f.path, ".aindrive", "config.json"), "utf8"));
-            if (c.driveId && !next.drives.some((d) => d.driveId === c.driveId)) next.drives.push({ driveId: c.driveId, folder: f.path, label: basename(f.path), localOnly: false });
-          } catch { /* unpaired: nothing to serve */ }
-        }
-        delete next.folders;
-        return next;
-      });
+      store.update((s) => ({
+        ...s,
+        folders: [],
+        picked: [...new Set([...(s.picked ?? []), ...old.map((f) => f.path)])],
+        adopt: [...new Set([...(s.adopt ?? []), ...old.filter((f) => driveUrlOf(f.path)).map((f) => f.path)])],
+      }));
+    },
+
+    /** Folders paired before this shell existed, with their drive — once; the shell saves them. */
+    async adoptable() {
+      const out = [];
+      for (const folder of store.get().adopt ?? []) {
+        try {
+          const c = JSON.parse(readFileSync(join(folder, ".aindrive", "config.json"), "utf8"));
+          if (c.driveId && c.agentToken && c.driveSecret && c.serverUrl) {
+            out.push({ folder: { uri: folder, label: basename(folder) }, drive: { driveId: c.driveId, agentToken: c.agentToken, driveSecret: c.driveSecret, url: c.url }, serverUrl: c.serverUrl });
+          }
+        } catch { /* gone or unpaired */ }
+      }
+      store.update((s) => ({ ...s, adopt: [] }));
+      return { folders: out };
     },
   };
 }

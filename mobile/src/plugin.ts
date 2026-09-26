@@ -193,6 +193,8 @@ export interface AindriveAgentPlugin {
   /** Ask the on-device agent — fully offline (gazetteer + local index). `context` is the previous answer's `context` so follow-ups ("…and share them") apply to the same files. */
   /** `driveId`: answer from that one folder only (the folder chat). */
   ask(opts: { query: string; context?: Record<string, unknown>; driveId?: string }): Promise<AskResult>;
+  /** Mac only (desktop/): folders the Mac app shared before it ran this shell, with their drives — handed over once. */
+  adoptable?(): Promise<{ folders: { folder: PickedFolder; drive: { driveId: string; agentToken: string; driveSecret: string; url?: string }; serverUrl: string }[] }>;
   addListener(
     event: "statusChanged",
     cb: (s: AgentStatus) => void,

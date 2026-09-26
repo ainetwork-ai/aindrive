@@ -13,7 +13,10 @@ export function createStore(file) {
   let data = { folders: [] };
   try {
     const raw = JSON.parse(readFileSync(file, "utf8"));
-    if (raw && Array.isArray(raw.folders)) data = { ...raw, folders: raw.folders.filter((f) => f && typeof f.path === "string") };
+    // any saved object is ours — newer versions keep other keys (drives, picked) and no `folders`
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      data = { ...raw, folders: Array.isArray(raw.folders) ? raw.folders.filter((f) => f && typeof f.path === "string") : [] };
+    }
   } catch { /* first launch */ }
   return {
     get: () => data,
