@@ -8,6 +8,7 @@ is no separate CHANGELOG file.
 |-------|----------|----------------|-----|--------|
 | **cli** | `aindrive` on npm | semver | `vX.Y.Z` | [`cli/NPM_PUBLISH_GUIDE.md`](../cli/NPM_PUBLISH_GUIDE.md) |
 | **web** | `aindrive.ainetwork.ai` container | calver (deploy date) | `web-YYYY.MM.DD` | [`DEPLOY.md`](DEPLOY.md) + [`DOCKER_PUBLISH_GUIDE.md`](DOCKER_PUBLISH_GUIDE.md) |
+| **desktop** | `aindrive-X.Y.Z-mac-{arm64,x64}.dmg` on the GitHub Release | semver (`desktop/package.json`) | `desktop-vX.Y.Z` | [`desktop/README.md`](../desktop/README.md) |
 
 ## CLI — semver, `vX.Y.Z`
 
@@ -51,3 +52,13 @@ One Release per tag on **both** tracks, `--generate-notes` for the change list.
 GitHub's "Latest" badge auto-resolves to the most recent tag across both tracks
 (so it may sit on a `web-*` or a `v*` tag — that's expected; the two tracks are
 peers, not a single version line).
+
+## desktop — the Mac app, `desktop-vX.Y.Z`
+
+1. Bump `desktop/package.json` `version` and `web/shared/desktop.ts` `DESKTOP_VERSION` together.
+2. `git tag -a desktop-vX.Y.Z -m "aindrive for Mac X.Y.Z"` and push the tag —
+   `.github/workflows/desktop.yml` builds both DMGs and attaches them to the release.
+3. Deploy web so `/download/mac` points at the new files.
+
+- The app bundles the CLI from the same commit, so a CLI fix reaches Mac users
+  only with a new desktop release.

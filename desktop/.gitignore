@@ -1,0 +1,7 @@
+node_modules/
+dist/
+cli/
+.cache/
+
+# the app icon and menu-bar icons are source (scripts/icons.py); the root ignores *.png
+!assets/*.png

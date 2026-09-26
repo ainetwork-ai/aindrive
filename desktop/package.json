@@ -1,0 +1,72 @@
+{
+  "name": "aindrive-desktop",
+  "productName": "aindrive",
+  "version": "0.1.0",
+  "private": true,
+  "description": "aindrive for Mac \u2014 share folders with aindrive from the menu bar, no terminal needed.",
+  "license": "MIT",
+  "author": "AI Network",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "prepare-cli": "node scripts/prepare-cli.mjs",
+    "start": "node scripts/prepare-cli.mjs && electron .",
+    "dist:mac": "node scripts/build-mac.mjs",
+    "test": "node --test \"src/__tests__/*.test.js\""
+  },
+  "dependencies": {
+    "better-sqlite3": "12.11.1"
+  },
+  "devDependencies": {
+    "@electron/fuses": "^2.1.3",
+    "electron": "42.11.8",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "ai.ainetwork.aindrive",
+    "productName": "aindrive",
+    "copyright": "\u00a9 AI Network",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**",
+      "assets/**",
+      "cli/**",
+      "package.json",
+      "!src/__tests__/**",
+      "!node_modules/better-sqlite3/{src,deps,docs}/**"
+    ],
+    "asar": false,
+    "npmRebuild": false,
+    "electronLanguages": [
+      "en",
+      "ko"
+    ],
+    "protocols": [
+      {
+        "name": "aindrive",
+        "schemes": [
+          "aindrive"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dir"
+      ],
+      "minimumSystemVersion": "12.0",
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "aindrive serves the folders you choose to share from here.",
+        "NSDesktopFolderUsageDescription": "aindrive serves the folders you choose to share from here.",
+        "NSDownloadsFolderUsageDescription": "aindrive serves the folders you choose to share from here.",
+        "NSRemovableVolumesUsageDescription": "aindrive serves the folders you choose to share from this drive.",
+        "NSNetworkVolumesUsageDescription": "aindrive serves the folders you choose to share from this volume."
+      }
+    },
+    "afterPack": "scripts/after-pack.cjs"
+  }
+}

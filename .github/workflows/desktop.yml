@@ -1,0 +1,39 @@
+name: desktop
+
+# The Mac app (desktop/): on a `desktop-vX.Y.Z` tag, build both DMGs on Linux
+# (desktop/scripts/build-mac.mjs — Docker DMG toolchain + rcodesign ad-hoc
+# signature) and attach them to that tag's GitHub Release. web/shared/desktop.ts
+# points the website's download link at those files.
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci --prefix ../cli
+      - run: ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --ignore-scripts
+      - run: npm test
+      - name: The tag is the app's version
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: test "$GITHUB_REF_NAME" = "desktop-v$(node -p "require('./package.json').version")"
+      - run: node scripts/build-mac.mjs arm64 x64
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "aindrive for Mac ${GITHUB_REF_NAME#desktop-v}" --notes "Download the .dmg for your Mac: arm64 = Apple silicon (M1 or later), x64 = Intel."
+          gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber

@@ -2,10 +2,13 @@ import Link from "next/link";
 import { getUser } from "@/lib/session";
 import { listUserDrives } from "@/lib/drives";
 import { isOnline } from "@/lib/rpc";
-import { HardDrive, Terminal } from "lucide-react";
+import { HardDrive } from "lucide-react";
 import { LeaveDriveButton } from "@/components/leave-drive-button";
 import { AddEmailForm } from "@/components/add-email-form";
 import { isWalletOnlyEmail, walletDisplayLabel } from "@/shared/wallet-display";
+import { GetMacApp } from "@/components/get-mac-app";
+import { env } from "@/lib/env";
+import { desktopAppServes } from "@/shared/desktop";
 
 export default async function Home() {
   const user = await getUser();
@@ -22,8 +25,13 @@ export default async function Home() {
             <Link className="rounded-full bg-drive-accent text-white px-5 py-2.5 hover:bg-drive-accentHover" href="/signup">Create account</Link>
             <Link className="rounded-full border border-drive-border px-5 py-2.5 hover:bg-drive-hover" href="/login">Sign in</Link>
           </div>
-          <pre className="mt-10 rounded-xl bg-white border border-drive-border p-4 text-sm overflow-x-auto">
-{`# install once
+          {desktopAppServes(env.publicUrl) && (
+            <p className="mt-10 text-sm text-drive-muted">
+              On a Mac? <a href="/download/mac" className="text-drive-accent hover:underline">Download the aindrive app</a> — share a folder in two clicks, no terminal.
+            </p>
+          )}
+          <pre className="mt-3 rounded-xl bg-white border border-drive-border p-4 text-sm overflow-x-auto">
+{`# or, from a terminal: install once
 npm i -g aindrive
 
 # in any folder
@@ -41,6 +49,7 @@ aindrive`}
       <header className="flex items-center justify-between mb-8">
         <h1 className="text-2xl font-semibold">My drives</h1>
         <div className="flex items-center gap-4">
+          {drives.length > 0 && <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} compact />}
           {!isWalletOnlyEmail(user.email) && (
             <Link href="/account/wallet" className="text-sm text-drive-muted hover:text-drive-accent hover:underline">
               Add wallet sign-in
@@ -64,13 +73,7 @@ aindrive`}
       )}
 
       {drives.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-drive-border p-10 text-center bg-white">
-          <Terminal className="mx-auto w-10 h-10 text-drive-muted" />
-          <p className="mt-3 font-medium">No drives yet</p>
-          <p className="text-drive-muted text-sm mt-1">
-            Run <code className="px-1.5 py-0.5 bg-drive-hover rounded">aindrive</code> in any folder.
-          </p>
-        </div>
+        <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} />
       ) : (
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {drives.map((d) => (
