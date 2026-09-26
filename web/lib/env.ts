@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 
-function dataDir(): string {
+export function dataDir(): string {
   const dir = process.env.AINDRIVE_DATA_DIR || join(homedir(), ".aindrive");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return dir;
