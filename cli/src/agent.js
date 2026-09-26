@@ -5,7 +5,7 @@ import { join, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite } from "./rpc.js";
 import { signPayload, verifyPayload } from "./sig.js";
 import { startWillowPeer } from "./willow-peer.js";
-import { startMaterializer } from "./willow-materializer.js";
+import { startMaterializer, reconcileFile, knownDocs } from "./willow-materializer.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
 
@@ -83,7 +83,16 @@ export async function runAgent({ root, drive, server }) {
   // Documents as signed Willow entries, synced with the server on their own socket
   // (replaces the old yjs_entries gossip on this one).
   try {
-    willowPeer = await startWillowPeer({ root, drive, server, log });
+    willowPeer = await startWillowPeer({
+      root, drive, server, log,
+      // before syncing: take any edit made on disk while the agent was off, so the
+      // materializer can never overwrite it with what the server has
+      beforeSync: async (store, key) => {
+        for (const docPath of await knownDocs(store)) {
+          await reconcileFile(root, store, key, docPath.join("/")).catch((e) => log.warn({ err: e.message }, "willow: startup reconcile"));
+        }
+      },
+    });
     // …and writes each document into its file here, the folder's own copy
     startMaterializer({ root, store: willowPeer.store, log });
   } catch (e) { log.warn({ err: e.message || String(e) }, "willow peer unavailable"); }
@@ -175,6 +184,8 @@ function connectOnce({ root, drive, wsUrl }) {
               return;
             }
             try { cliTrace(root, docIdFor(root, rel), "fs-changed", { extra: { path: rel } }); } catch {}
+            // an edit made on disk becomes a signed update of that document
+            if (willowPeer) reconcileFile(root, willowPeer.store, willowPeer.key, rel).catch((e) => log.warn({ path: rel, err: e.message }, "willow: disk edit not taken"));
             try { ws.send(JSON.stringify({ type: "fs-changed", path: rel })); }
             catch (e) { log.warn({ err: e.message }, "fs-changed send failed"); }
           }, FS_DEBOUNCE_MS);

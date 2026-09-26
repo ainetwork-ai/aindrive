@@ -13,6 +13,12 @@ function docToFile(doc, kind) {
   const { schema, mm } = md();
   return mm.serialize(yXmlFragmentToProseMirrorRootNode(doc.getXmlFragment("prosemirror"), schema).toJSON());
 }
+function sameContent(kind, a, b) {
+  if (kind === "text") return a === b;
+  const { mm } = md();
+  const norm = (x) => mm.serialize(mm.parse(x)).trimEnd();
+  return a === b || norm(a) === norm(b);
+}
 function fileToUpdate(doc, kind, text) {
   const before = Y.encodeStateVector(doc);
   if (kind === "text") {
@@ -41,5 +47,6 @@ function fileToUpdate(doc, kind, text) {
 export {
   docToFile,
   fileToUpdate,
-  kindFor
+  kindFor,
+  sameContent
 };

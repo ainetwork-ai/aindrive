@@ -107,6 +107,7 @@ export async function startWillowPeer(o) {
   };
 
   try { await ensureCert(); } catch (e) { log.warn({ err: e.message }, "willow certificate unavailable; retrying on next start"); }
+  if (o.beforeSync) { try { await o.beforeSync(store, key); } catch (e) { log.warn({ err: e.message }, "willow beforeSync failed"); } }
   open();
 
   return {

@@ -22,6 +22,15 @@ export function docToFile(doc: Y.Doc, kind: Kind): string {
   return mm.serialize(yXmlFragmentToProseMirrorRootNode(doc.getXmlFragment("prosemirror"), schema).toJSON());
 }
 
+/** Same content: plain text byte for byte; markdown when both render the same through
+ *  the editor's schema ("*" and "-" bullets are one list). */
+export function sameContent(kind: Kind, a: string, b: string): boolean {
+  if (kind === "text") return a === b;
+  const { mm } = md();
+  const norm = (x: string) => mm.serialize(mm.parse(x)).trimEnd();
+  return a === b || norm(a) === norm(b);
+}
+
 export function fileToUpdate(doc: Y.Doc, kind: Kind, text: string): Uint8Array | null {
   const before = Y.encodeStateVector(doc);
   if (kind === "text") {
