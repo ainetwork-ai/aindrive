@@ -631,9 +631,13 @@ async function refreshRemotes(force = false) {
   try {
     const all = await listDrives(state.server, state.sessionCookie);
     const mine = localDriveIds();
-    remotes = all.filter((d) => !mine.has(d.id));
+    const next = all.filter((d) => !mine.has(d.id));
+    // Only what the list shows: lastSeenAt ticks on every heartbeat, and a redraw would close an open menu.
+    const shown = (xs: RemoteDrive[]) => JSON.stringify(xs.map((d) => [d.id, d.name, d.online, d.hostname, d.owned, d.online ? "" : d.lastSeenAt]));
+    const changed = shown(next) !== shown(remotes);
+    remotes = next;
     remotesAt = Date.now();
-    render();
+    if (changed) render();
   } catch (e) {
     log(`Could not list other devices: ${msgOf(e)}`);
   }
@@ -1639,11 +1643,13 @@ function homeScreen(): string {
 
     ${others.length ? `
       <div class="section"><h2>My drives on other devices</h2><button class="link" id="refresh-remotes">${icon("refresh", 16)} Refresh</button></div>
-      ${others.map(remoteCard).join("")}` : ""}
+      ${byDevice(others).map(([device, ds]) => `
+        <div class="device-head"><span class="name">${esc(device)}</span><span class="count"><span class="dot ${ds.some((d) => d.online) ? "on" : "off"}"></span>${ds.filter((d) => d.online).length} of ${ds.length} online</span></div>
+        ${ds.map((d) => remoteCard(d, false)).join("")}`).join("")}` : ""}
 
     ${sharedWithMe.length ? `
       <div class="section"><h2>Shared with me</h2></div>
-      ${sharedWithMe.map(remoteCard).join("")}` : ""}
+      ${sharedWithMe.map((d) => remoteCard(d)).join("")}` : ""}
 
     <div class="section"><h2>Recent activity</h2>${activity.length > 4 ? `<button class="link" id="more-activity">${showAllActivity ? "Show less" : "Show all"}</button>` : ""}</div>
     <div class="card">
@@ -1659,8 +1665,23 @@ function homeScreen(): string {
     </button>`;
 }
 
+/** What the agent reported as its device: a phone's own name ("Galaxy S21+ 5G"), older phone apps a model code, a Mac its hostname. */
+function deviceName(d: RemoteDrive): string {
+  const h = (d.hostname ?? "").trim().replace(/\.local$/i, "");
+  return h || "Unknown device";
+}
+
+/** Other devices' drives under one heading per device (the one with something online first), online drives first. */
+function byDevice(ds: RemoteDrive[]): [string, RemoteDrive[]][] {
+  const groups = new Map<string, RemoteDrive[]>();
+  for (const d of ds) { const k = deviceName(d); groups.set(k, [...(groups.get(k) ?? []), d]); }
+  const online = (xs: RemoteDrive[]) => xs.filter((d) => d.online).length;
+  for (const xs of groups.values()) xs.sort((a, b) => Number(b.online) - Number(a.online));
+  return [...groups.entries()].sort((a, b) => Number(online(b[1]) > 0) - Number(online(a[1]) > 0));
+}
+
 /** A drive this account can reach that another device serves (or that someone shared with you). */
-function remoteCard(d: RemoteDrive): string {
+function remoteCard(d: RemoteDrive, withDevice = true): string {
   // The server stores "YYYY-MM-DD HH:MM:SS" in UTC with no zone marker.
   const seenAt = d.lastSeenAt ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(d.lastSeenAt) ? d.lastSeenAt : d.lastSeenAt.replace(" ", "T") + "Z") : null;
   const seen = d.online ? "Online" : seenAt && !isNaN(seenAt.getTime()) ? `Last seen ${seenAt.toLocaleString()}` : "Offline";
@@ -1679,7 +1700,7 @@ function remoteCard(d: RemoteDrive): string {
         <div class="glyph" data-act="browse">${d.owned === false ? I.users : I.drive}</div>
         <div style="min-width:0" data-act="browse" role="button">
           <div class="name">${esc(d.name)}</div>
-          <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${esc(seen)}${d.hostname ? ` · ${esc(d.hostname)}` : ""}</div>
+          <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${esc(seen)}${withDevice && d.hostname ? ` · ${esc(deviceName(d))}` : ""}</div>
         </div>
         <div class="controls"><div class="menu-wrap"><button class="iconbtn ghost" data-act="menu" aria-label="More">${I.more}</button>${menu}</div></div>
       </div>
@@ -2632,6 +2653,11 @@ async function boot() {
     void refreshRemotes();
   });
   void refreshRemotes();
+  // A folder shared from another device should show up here without a Refresh: re-list when the window
+  // comes back (the Mac window never fires "resume") and every 20 s while it is on screen.
+  window.addEventListener("focus", () => void refreshRemotes(true));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshRemotes(true); });
+  setInterval(() => { if (!document.hidden && !searchOpen) void refreshRemotes(true); }, 20_000);
   App.addListener("backButton", () => {
     if (confirmSheet) confirmSheet.resolve(false);
     else if (sheet) closeSheet();
