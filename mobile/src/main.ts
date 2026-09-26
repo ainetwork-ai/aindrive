@@ -428,8 +428,25 @@ function log(msg: string) {
 function notify(msg: string, error = false) {
   if (toast?.timer) clearTimeout(toast.timer);
   toast = { msg, error };
-  if (!error) toast.timer = window.setTimeout(() => { toast = null; render(); }, 3200);
-  render();
+  if (!error) toast.timer = window.setTimeout(() => { toast = null; paintToast(); }, 3200);
+  paintToast();
+}
+
+/**
+ * Show or clear the toast on its own: a full render() rebuilds the screen (images reload, a switch
+ * that was just flipped redraws), so a notice alone made the page blink twice — in and out.
+ */
+function paintToast() {
+  const app = document.getElementById("app");
+  if (!app) return;
+  app.querySelectorAll(".toast").forEach((el) => el.remove());
+  if (!toast) return;
+  app.insertAdjacentHTML("beforeend", toastHtml());
+  bind("toast-close", () => { toast = null; paintToast(); });
+}
+
+function toastHtml(): string {
+  return toast ? `<div class="toast ${toast.error ? "error" : ""}" role="status">${esc(toast.msg)}${toast.error ? `<button id="toast-close">OK</button>` : ""}</div>` : "";
 }
 
 function fail(e: unknown) {
@@ -2532,7 +2549,7 @@ async function saveViewer() {
 }
 
 function overlays(): string {
-  const t = toast ? `<div class="toast ${toast.error ? "error" : ""}" role="status">${esc(toast.msg)}${toast.error ? `<button id="toast-close">OK</button>` : ""}</div>` : "";
+  const t = toastHtml();
   const c = confirmSheet ? `
     <div class="scrim" id="scrim">
       <div class="confirm" id="confirm">
@@ -2549,7 +2566,7 @@ function overlays(): string {
 
 function bindOverlays() {
   bindViewer();
-  bind("toast-close", () => { toast = null; render(); });
+  bind("toast-close", () => { toast = null; paintToast(); });
   bind("confirm-no", () => confirmSheet?.resolve(false));
   bind("confirm-yes", () => confirmSheet?.resolve(true));
   document.getElementById("scrim")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) confirmSheet?.resolve(false); });
