@@ -38,7 +38,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `payment-hooks.ts` — `onPaymentSettled` extension point (Phase 2 stub).
 
 **Agent bridge / RPC**
-- `agents.js` — in-memory registry of connected agent WebSockets; `sendRpc`, `onAgentConnect`, heartbeat, multi-device fan-out. `canonicalAgentResult` puts list/stat names into NFC on the way in.
+- `agents.js` — in-memory registry of connected agent WebSockets; `sendRpc`, `onAgentConnect`, heartbeat, multi-device fan-out. `canonicalAgentResult` puts list/stat names into NFC on the way in. `startHeartbeat` drops a socket that misses a pong (the CLI mirrors it with `watchServerSilence`).
   `rotateAgentLive` rotates a drive's agent token + secret over the live socket
   without disconnecting it (the CLI half is `cli/src/rotation.js`). Set
   `drives.rotation_pending = 1` to queue a drive: it rotates on its next connect,
