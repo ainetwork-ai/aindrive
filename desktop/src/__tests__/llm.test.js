@@ -230,3 +230,24 @@ test("model store: download to a .part, verify sha256, rename; a bad checksum le
   assert.match(bad.status().error, /checksum/);
   assert.equal(bad.status().ready, false);
 });
+
+test("llmInWorker: forks once per model path, forwards understand by id, and answers null if the worker dies", async () => {
+  const { llmInWorker } = await import("../mac-agent.js");
+  const { EventEmitter } = await import("node:events");
+  let forks = 0;
+  const children = [];
+  const forkLlm = () => { forks++; const c = new EventEmitter(); c.sent = []; c.kill = () => c.emit("exit"); c.postMessage = (m) => { c.sent.push(m); if (m.type === "init") setTimeout(() => c.emit("message", { data: { type: "ready" } }), 0); if (m.type === "understand") setTimeout(() => c.emit("message", { data: { type: "result", id: m.id, result: { route: "FILES", from: m.text, ...(m.text === "with query" ? { query: { kind: "photo", keywords: ["tree"] } } : {}) } } }), 0); }; children.push(c); return c; };
+  let path = "/m/a.gguf";
+  const llm = llmInWorker({ modelPath: () => path, budgetMs: 100, forkLlm });
+  const r = await llm.understand({ text: "photos of trees", context: null, nowMs: 0 });
+  assert.equal(r.route, "FILES"); assert.equal(r.from, "photos of trees");
+  const q = await llm.understand({ text: "with query", context: null, nowMs: 0 });
+  assert.equal(typeof q.query?.hasFilters, "function", "a plain query from the worker is a SearchQuery again");
+  assert.equal(forks, 1);
+  assert.equal(children[0].sent[0].type, "init");
+  path = "/m/b.gguf"; llm.warm();
+  assert.equal(forks, 2);   // a new model file → a new worker
+  const dying = llm.understand({ text: "y", context: null, nowMs: 0 });
+  children[1].kill();
+  assert.equal(await dying, null);
+});

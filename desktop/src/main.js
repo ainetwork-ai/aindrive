@@ -80,6 +80,8 @@ let tray = null;
 let quitting = false;
 
 const mac = createMacAgent({
+  // the local model runs in its own utility process (src/llm-worker.js): the main thread is too busy for it
+  forkLlm: () => utilityProcess.fork(join(root, "src", "llm-worker.js"), [], { serviceName: "aindrive model", env: { ...process.env, NODE_ENV: "production" } }),
   agents,
   store,
   electron: { dialog, nativeImage, shell, getWindow: () => win },

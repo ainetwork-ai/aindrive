@@ -29,6 +29,7 @@ import { driveUrlOf, isFolder } from "./agents.js";
 import { createDeviceAgent } from "./agent/device-agent.js";
 import { GeoLookup } from "./agent/geo-lookup.js";
 import { createLlm, createModelStore } from "./agent/llm.js";
+import { SearchQuery } from "./agent/search-query.js";
 import { createClip } from "./agent/clip.js";
 
 /**
@@ -159,12 +160,74 @@ export function writeHandoffs(add, file = HANDOFFS_FILE, now = Date.now()) {
   renameSync(tmp, file);
 }
 
-export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = join(thumbsDir, "..", "index"), modelsDir = join(thumbsDir, "..", "models"), llmId = DEFAULT_LLM, emit }) {
+/**
+ * The model in a utility process (src/llm-worker.js), behind the same surface as createLlm: ready /
+ * warm / understand / unload / loaded. In the main process a warm generation took ~8 s where the same
+ * call takes ~2.5 s alone — the model's JS side shared the thread with the window, IPC and indexing.
+ * The worker is forked on first need and told the model path; a call whose reply never comes resolves
+ * null (the rules' answer), never hangs.
+ * @param {{ modelPath: () => string | null, budgetMs?: number, forkLlm: () => { postMessage(m: unknown): void, on(ev: string, cb: (x: any) => void): void, kill(): void } }} o
+ */
+/** A turn back from the worker: structured clone turned its SearchQuery into a plain object; make it one again. */
+function rehydrate(result) {
+  if (result?.query && !(result.query instanceof SearchQuery)) result.query = Object.assign(new SearchQuery(), result.query);
+  return result;
+}
+
+export function llmInWorker({ modelPath, budgetMs = 3000, forkLlm }) {
+  let child = null, initFor = null, isReady = false, seq = 0;
+  const pending = new Map();
+  const ready = () => !!modelPath();
+  function ensure() {
+    const path = modelPath();
+    if (!path) return null;
+    if (child && initFor === path) return child;
+    if (child) { try { child.kill(); } catch { /* gone */ } }
+    child = forkLlm(); initFor = path; isReady = false;
+    child.on("message", (ev) => {
+      const m = ev?.data ?? ev;
+      if (m?.type === "log") console.log(m.message);
+      else if (m?.type === "ready") isReady = true;
+      else if ((m?.type === "result" || m?.type === "error") && pending.has(m.id)) {
+        const p = pending.get(m.id); pending.delete(m.id); clearTimeout(p.timer);
+        p.resolve(m.type === "result" ? rehydrate(m.result) : null);
+        if (m.type === "error") console.log(`llm worker: ${m.message}`);
+      }
+    });
+    child.on("exit", () => { child = null; isReady = false; for (const p of pending.values()) { clearTimeout(p.timer); p.resolve(null); } pending.clear(); });
+    child.postMessage({ type: "init", modelPath: path, budgetMs });
+    return child;
+  }
+  return {
+    ready,
+    warm() { ensure()?.postMessage({ type: "warm" }); },
+    loaded: () => isReady,
+    async unload() { if (child) { try { child.kill(); } catch { /* gone */ } child = null; } },
+    understand({ text, context, nowMs }) {
+      const c = ensure();
+      if (!c) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        const id = ++seq;
+        // the worker enforces the budget; this is the safety net if the process itself is stuck
+        const timer = setTimeout(() => { pending.delete(id); resolve(null); }, budgetMs + 15_000);
+        pending.set(id, { resolve, timer });
+        c.postMessage({ type: "understand", id, text, context, nowMs });
+      });
+    },
+  };
+}
+
+export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = join(thumbsDir, "..", "index"), modelsDir = join(thumbsDir, "..", "models"), llmId = DEFAULT_LLM, emit, forkLlm = null }) {
   const { dialog, nativeImage, shell, getWindow } = electron;
   // The model is opt-in (the shell's "Download models" button) and never bundled; without it `ask` is rules-only.
   const manifest = llmId ? JSON.parse(readFileSync(join(LLM_MANIFESTS, `${llmId}.json`), "utf8")) : null;
-  const models = manifest ? createModelStore({ dir: modelsDir, manifest, onChange: () => emit(status()) }) : null;
-  const llm = models ? createLlm({ modelPath: () => (models.ready() ? models.modelPath() : null), geo: GeoLookup.loadDefault(), budgetMs: manifest.budgetMs, log: (m) => console.log(m) }) : null;
+  // The model stays loaded while the app runs (≈2.5 GB): a cold call (load + first generation, ~14 s)
+  // always loses to the 3 s budget, so an unloaded model is a model that never answers. It is warmed at
+  // launch and again the moment its download completes — that first-ever call must not be the cold one.
+  const models = manifest ? createModelStore({ dir: modelsDir, manifest, onChange: () => { emit(status()); if (models.ready()) llm?.warm(); } }) : null;
+  const llm = !models ? null
+    : forkLlm ? llmInWorker({ modelPath: () => (models.ready() ? models.modelPath() : null), budgetMs: manifest.budgetMs, forkLlm })
+    : createLlm({ modelPath: () => (models.ready() ? models.modelPath() : null), geo: GeoLookup.loadDefault(), budgetMs: manifest.budgetMs, idleMs: Infinity, log: (m) => console.log(m) });
   /** driveId → { folder, label, localOnly } for everything started here */
   const drives = () => store.get().drives ?? [];
   const picked = () => new Set(store.get().picked ?? []);
