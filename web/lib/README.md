@@ -20,6 +20,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 **Permissions / access**
 - `access-core.js` — pure role algebra: `ROLE_RANK`, `bestMatchingRole`, `computeEntry`, `mergeRoleUpgradeOnly`. No DB, no session.
 - `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members`.
+- `drive-location.ts` — pure: `?path` + membership + stat kind → the drive page's folder, open file, breadcrumb root and grant listing (`locationPath` is the reverse, for the URL).
 - `require-access.ts` — `requireDriveRole()` auth gate for drive-scoped API routes (getUser→getDrive→resolveAccess→atLeast).
 - `member-guard.ts` — `canRemoveMember`: the drive creator's row is unremovable.
 - `invites.js` — `drive_invites` for emails without an account; converts to `drive_members` (upgrade-only) on signup.

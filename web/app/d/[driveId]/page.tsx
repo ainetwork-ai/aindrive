@@ -2,22 +2,32 @@ import { redirect } from "next/navigation";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast, entryView } from "@/lib/access";
+import { readDenial } from "@/lib/require-access";
+import { normalizePath } from "@/lib/path";
+import { resolveDriveLocation, type PathKind } from "@/lib/drive-location";
 import { callAgent } from "@/lib/rpc";
 import type { DriveEntry } from "@/lib/protocol";
 import { DriveShell } from "@/components/drive-shell";
 
-// Synthetic-root rows for a multi-grant member: stat each grant so files render
-// as files (click → Viewer) and dirs as dirs (click → navigate). The agent may
-// be offline — fall back to an extension heuristic; the row stays visible and
-// the server still gates every subsequent call.
-async function loadEntryItems(driveId: string, driveSecret: string, paths: string[]): Promise<DriveEntry[]> {
+// The agent's view of one path, or null when it can't answer. Short timeout: a
+// half-open agent socket would otherwise hold the RSC render for the 25s default.
+async function statEntry(driveId: string, driveSecret: string, path: string): Promise<DriveEntry | null> {
+  try {
+    const r = await callAgent(driveId, driveSecret, { method: "stat", path }, { timeoutMs: 3000 });
+    if (r && r.method === "stat" && r.entry) return { ...r.entry, path };
+  } catch {}
+  return null;
+}
+const kindOf = (e: DriveEntry | null): PathKind => (e ? (e.isDir ? "dir" : "file") : "unknown");
+
+// Grant-listing rows: files render as files (click → Viewer), dirs as dirs
+// (click → navigate). No stat (offline agent, or a row the user can't read
+// yet) → extension heuristic; the row stays visible and the server still
+// gates every subsequent call.
+async function loadEntryItems(stat: (p: string) => Promise<DriveEntry | null>, paths: string[]): Promise<DriveEntry[]> {
   return Promise.all(paths.map(async (p) => {
-    try {
-      // Short timeout: a half-open agent socket would otherwise hold the RSC
-      // render for the 25s default — these rows are cosmetic and have a fallback.
-      const r = await callAgent(driveId, driveSecret, { method: "stat", path: p }, { timeoutMs: 3000 });
-      if (r && r.method === "stat" && r.entry) return { ...r.entry, name: p, path: p };
-    } catch {}
+    const e = await stat(p);
+    if (e) return { ...e, name: p };
     const looksFile = /\.[A-Za-z0-9]+$/.test(p);
     return { name: p, path: p, isDir: !looksFile, size: 0, mtimeMs: 0, ext: looksFile ? p.split(".").pop()!.toLowerCase() : "", mime: looksFile ? "application/octet-stream" : "inode/directory" };
   }));
@@ -30,40 +40,59 @@ export default async function DrivePage({ params, searchParams }: {
   const { driveId } = await params;
   const sp = await searchParams;
   const rawPath = Array.isArray(sp.path) ? sp.path[0] : sp.path;
-  const pathProvided = rawPath !== undefined;
 
   const user = await getUser();
   if (!user) redirect(`/login?next=/d/${driveId}`);
   const drive = getDrive(driveId);
   if (!drive) return <main className="p-10">Drive not found.</main>;
 
-  let renderPath = rawPath ?? "";
-  let role = resolveRole(driveId, user.id, renderPath);
-  // The member's entry shape is a property of the member, not of this render's
-  // ?path — compute it for every non-owner outcome so the synthetic root
-  // survives reloads at ?path and Back-navigation to "" (review fix #4).
+  let requested: string | null = null;
+  if (rawPath !== undefined) {
+    try { requested = normalizePath(rawPath); }
+    catch { return <main className="p-10">You don’t have access to this path. Ask the owner to invite you.</main>; }
+  }
+  const roleAt = (p: string) => resolveRole(driveId, user.id, p);
   const entry = entryView(driveId, user.id);
+  // Stat only what the user may READ — role, reserved subtree and paywall alike
+  // (readDenial, the fs/* gate's own decision) — so the page reveals nothing by
+  // stat that the API withholds. Anything else stays "unknown" and lists as a
+  // folder, where the listing reports the 402/403. One stat per path per render.
+  const stats = new Map<string, Promise<DriveEntry | null>>();
+  const statReadable = (p: string): Promise<DriveEntry | null> => {
+    const role = roleAt(p);
+    if (!atLeast(role, "viewer") || readDenial(driveId, p, role, user.id)) return Promise.resolve(null);
+    if (!stats.has(p)) stats.set(p, statEntry(driveId, drive.drive_secret, p));
+    return stats.get(p)!;
+  };
+  const [requestedEntry, singleEntry] = await Promise.all([
+    requested !== null ? statReadable(requested) : null,
+    entry.kind === "single" && entry.path ? statReadable(entry.path) : null,
+  ]);
 
-  if (!atLeast(role, "viewer")) {
-    if (pathProvided) {
-      // Explicit inaccessible ?path stays a uniform hard deny (oracle guard).
-      return <main className="p-10">You don’t have access to this path. Ask the owner to invite you.</main>;
-    }
-    if (entry.kind === "none") {
-      return <main className="p-10">You don’t have access to this drive. Ask the owner to invite you.</main>;
-    }
-    if (entry.kind === "multi") {
-      const entryItems = await loadEntryItems(driveId, drive.drive_secret, entry.allPaths ?? []);
-      return <DriveShell driveId={drive.id} driveName={drive.name} initialPath="" initialRole="viewer" entryItems={entryItems} />;
-    }
-    renderPath = entry.path ?? "";
-    role = resolveRole(driveId, user.id, renderPath);
+  const loc = resolveDriveLocation({
+    requested, requestedKind: kindOf(requestedEntry),
+    entry, entryKind: kindOf(singleEntry), roleAt,
+  });
+  if (loc.kind === "deny") {
+    return <main className="p-10">{loc.reason === "path"
+      ? "You don’t have access to this path. Ask the owner to invite you."
+      : "You don’t have access to this drive. Ask the owner to invite you."}</main>;
   }
 
-  // Allowed render (owner / root member / covered explicit ?path). Multi
-  // members still get entryItems so "" remains their synthetic root.
-  const entryItems = entry.kind === "multi"
-    ? await loadEntryItems(driveId, drive.drive_secret, entry.allPaths ?? [])
-    : undefined;
-  return <DriveShell driveId={drive.id} driveName={drive.name} initialPath={renderPath} initialRole={role} entryItems={entryItems} />;
+  const grantRoots = entry.allPaths ?? (entry.path ? [entry.path] : []);
+  const entryItems = loc.grantListing ? await loadEntryItems(statReadable, grantRoots) : undefined;
+  const initialOpen = loc.open === null ? null
+    : loc.open === requested ? requestedEntry
+    : singleEntry;
+  // The grant listing is read-only: a role picked up inside a grant must not
+  // lend edit affordances to rows that are other grants' roots.
+  const initialRole = loc.grantListing && loc.folder === "" ? "viewer" : roleAt(loc.folder);
+
+  return (
+    <DriveShell
+      driveId={drive.id} driveName={drive.name}
+      initialFolder={loc.folder} scopeRoot={loc.scopeRoot} initialOpen={initialOpen}
+      initialRole={initialRole} entryItems={entryItems}
+    />
+  );
 }

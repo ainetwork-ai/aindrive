@@ -1,12 +1,29 @@
 import { NextResponse } from "next/server";
 import { getUser } from "@/lib/session";
 import { getDrive, type DriveRow } from "@/lib/drives";
-import { resolveAccess, atLeast, type Role } from "@/lib/access";
-import { paidAccessDenial } from "./sale-access.js";
+import { resolveAccess, atLeast, type Role, type RoleOrNone } from "@/lib/access";
+import { paidAccessDenial, type PaidDenial } from "./sale-access.js";
 import { normalizePath } from "./path";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
 export type DriveGate = { drive: DriveRow; role: Role; userId: string | null };
+
+export type ReadDenial =
+  | { kind: "reserved" }
+  | ({ kind: "payment" } & PaidDenial);
+
+/**
+ * Why a user holding `role` at `canonicalPath` still may not READ it: the
+ * reserved `.aindrive/` subtree, or a paid subtree they haven't bought. null =
+ * readable. The one read decision beyond the role — shared by the fs/* gate
+ * below and the drive page's stat, so the page can't reveal by stat (a file's
+ * existence, size, mtime) what the API withholds by 402/403.
+ */
+export function readDenial(driveId: string, canonicalPath: string, role: RoleOrNone, userId: string | null): ReadDenial | null {
+  if (isSystemPath(canonicalPath)) return { kind: "reserved" };
+  const paid = paidAccessDenial(driveId, canonicalPath, role, userId);
+  return paid ? { kind: "payment", ...paid } : null;
+}
 
 /**
  * Shared authorization gate for drive-scoped API routes (fs/*, yjs).
@@ -53,10 +70,11 @@ export async function requireDriveRole(
   // grant's reach — editor+ (managers) and entitled buyers pass; an unentitled
   // viewer is sent to the paywall. Only viewers can be denied here ("none" was
   // already 401/403 above). See docs/PERMISSIONS_MATRIX.md R-ACC-PAID-*.
-  const denial = paidAccessDenial(driveId, targetPath, role, user?.id ?? null);
-  if (denial) {
+  const denial = readDenial(driveId, canonical, role, user?.id ?? null);
+  if (denial?.kind === "payment") {
+    const { kind: _kind, ...gate } = denial;
     return NextResponse.json(
-      { error: "payment required", reason: "payment_required", ...denial },
+      { error: "payment required", reason: "payment_required", ...gate },
       { status: 402 },
     );
   }
