@@ -75,9 +75,26 @@ export default async function DrivePage({ params, searchParams }: {
     entry, entryKind: kindOf(singleEntry), roleAt,
   });
   if (loc.kind === "deny") {
-    return <main className="p-10">{loc.reason === "path"
-      ? "You don’t have access to this path. Ask the owner to invite you."
-      : "You don’t have access to this drive. Ask the owner to invite you."}</main>;
+    // Say WHO is signed in: the common cause is the right link opened in a browser signed into
+    // another account (the Mac/phone app uses one account, the browser another). The owner is not
+    // named — a non-member must not learn who owns a drive.
+    const here = `/d/${driveId}${requested ? `?path=${encodeURIComponent(requested)}` : ""}`;
+    return (
+      <main className="min-h-screen flex items-center justify-center px-6">
+        <div className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
+          <h1 className="text-lg font-semibold">{loc.reason === "path" ? "No access to this folder" : "No access to this drive"}</h1>
+          <p className="mt-2 text-sm text-drive-muted">
+            You’re signed in as <span className="font-medium text-drive-text">{user.email}</span>, and this account can’t open it.
+            If you shared it from another account — for example in the aindrive app — switch to that account.
+            Otherwise, ask the owner to invite {user.email}.
+          </p>
+          <form method="post" action={`/api/auth/logout?next=${encodeURIComponent(here)}`} className="mt-5">
+            <button className="w-full rounded-lg bg-drive-accent text-white py-2 hover:bg-drive-accentHover">Switch account</button>
+          </form>
+          <a href="/" className="mt-3 block text-center text-sm text-drive-accent hover:underline">Back to your drives</a>
+        </div>
+      </main>
+    );
   }
 
   const grantRoots = entry.allPaths ?? (entry.path ? [entry.path] : []);

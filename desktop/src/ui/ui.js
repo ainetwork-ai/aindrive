@@ -46,7 +46,7 @@ function render(s) {
         el("div", { class: "row" },
           el("span", { class: "dot", title: LABEL[f.state] }),
           el("div", { class: "info" },
-            el("div", { class: "name" }, f.name),
+            el("div", { class: "name", title: "Open in Finder", style: "cursor:pointer", onclick: () => api.open("finder", f.folder) }, f.name),
             el("div", { class: "detail muted", title: f.folder }, detail),
           ),
           el("span", { class: "badge" }, LABEL[f.state]),
@@ -58,8 +58,10 @@ function render(s) {
           f.state === "error" && !f.url
             ? el("button", { class: "small primary", onclick: () => api.share(f.folder) }, "Try again")
             : null,
-          f.url ? el("button", { class: "small", onclick: () => api.open("web", f.folder) }, "Open in aindrive") : null,
-          el("button", { class: "small", onclick: () => api.open("finder", f.folder) }, "Show in Finder"),
+          // The folder is on this Mac: opening it means Finder. The drive's web page is for other devices
+          // (and needs a browser signed into the same account).
+          el("button", { class: "small primary", onclick: () => api.open("finder", f.folder) }, "Open folder"),
+          f.url ? el("button", { class: "small", onclick: () => api.open("web", f.folder) }, "Open on the web") : null,
           busy
             ? el("button", { class: "small", onclick: () => api.resume(f.folder) }, "Resume")
             : f.url ? el("button", { class: "small", onclick: () => api.pause(f.folder) }, "Pause") : null,
