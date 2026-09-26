@@ -117,7 +117,7 @@ function textOf(parts: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
-export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }): Promise<{ text: string; contextId?: string }> {
+export async function send(agent: A2aAgent, text: string, contextId?: string, sessionBearer?: string, handed: Handed = { files: [] }, onDelta?: (text: string) => void): Promise<{ text: string; contextId?: string }> {
   const f = factory(agent.token || sessionBearer);
   const client = agent.card ? await f.createFromAgentCard(agent.card) : await f.createFromUrl(new URL(agent.url).origin);
   const message: Message = {
@@ -125,6 +125,12 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
     parts: handoffParts(text, handed),
     ...(contextId ? { contextId } : {}),
   };
+  // Streaming (message/stream, server-sent events) when the card offers it: the reply shows as it is
+  // written instead of after the whole answer. Any stream failure falls back to one blocking call.
+  if (onDelta && agent.card?.capabilities?.streaming) {
+    try { return await stream(client, message, contextId, onDelta); }
+    catch { /* fall through */ }
+  }
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
   if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? contextId };
   // A Task: its status message, then any artifacts.
@@ -135,4 +141,35 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
   const state = task.status?.state ?? "";
   if (out) return { text: out, contextId: task.contextId ?? contextId };
   return { text: state === "input-required" ? "The agent needs more input." : state ? `Task ${state}.` : "(empty reply)", contextId: task.contextId ?? contextId };
+}
+
+/**
+ * One streamed turn: status messages carry the text most agents write (a fuller draft each time or,
+ * with `append`, a chunk), artifacts carry deliverables; the composed text goes to `onDelta` after
+ * every event and is returned at the end.
+ */
+async function stream(client: { sendMessageStream(p: { message: Message; configuration?: Record<string, unknown> }): AsyncGenerator<unknown> },
+                      message: Message, contextId: string | undefined, onDelta: (text: string) => void): Promise<{ text: string; contextId?: string }> {
+  let said = "", ctx = contextId, last = "";
+  const arts = new Map<string, string>();
+  const compose = () => [said, [...arts.values()].filter(Boolean).join("\n\n")].filter(Boolean).join("\n\n");
+  for await (const raw of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
+    const ev = raw as Record<string, unknown>;
+    if (typeof ev.contextId === "string") ctx = ev.contextId;
+    if (ev.kind === "message") said = textOf(ev.parts);
+    else if (ev.kind === "task") {
+      const t = ev as unknown as Task;
+      if (t.status?.message) said = textOf(t.status.message.parts);
+      for (const a of t.artifacts ?? []) arts.set(a.artifactId ?? String(arts.size), textOf(a.parts));
+    } else if (ev.kind === "status-update") {
+      const m = (ev.status as { message?: { parts?: unknown } } | undefined)?.message;
+      if (m) { const t = textOf(m.parts); said = ev.append ? said + t : t; }
+    } else if (ev.kind === "artifact-update") {
+      const a = ev.artifact as { artifactId?: string; parts?: unknown } | undefined;
+      if (a) { const k = a.artifactId ?? "0"; const t = textOf(a.parts); arts.set(k, ev.append ? (arts.get(k) ?? "") + t : t); }
+    }
+    const now = compose();
+    if (now !== last) { last = now; onDelta(now); }
+  }
+  return { text: compose() || "(empty reply)", contextId: ctx };
 }
