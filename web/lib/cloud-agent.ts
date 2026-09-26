@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ClientFactory, ClientFactoryOptions, DefaultAgentCardResolver, JsonRpcTransportFactory, RestTransportFactory } from "@a2a-js/sdk/client";
-import type { Message, Task } from "@a2a-js/sdk";
+import type { AgentCard, Message, Task } from "@a2a-js/sdk";
 import { callAgent } from "./rpc";
 import { createHandoffGrant, DEFAULT_TTL_SECONDS, MAX_FILES } from "./handoff";
 import { env } from "./env";
@@ -32,6 +32,17 @@ function factory(): ClientFactory {
     transports: [new JsonRpcTransportFactory({}), new RestTransportFactory({})],
     cardResolver: new DefaultAgentCardResolver({}),
   }));
+}
+
+// the card is fetched as given (a path-scoped card URL: resolving it from a base URL
+// drops the agent's path), and kept for a few minutes
+let cached: { card: AgentCard; at: number } | null = null;
+async function agentCard(): Promise<AgentCard> {
+  if (cached && Date.now() - cached.at < 10 * 60_000) return cached.card;
+  const r = await fetch(CLOUD_AGENT.card, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) });
+  if (!r.ok) throw new Error(`agent card ${r.status}`);
+  cached = { card: (await r.json()) as AgentCard, at: Date.now() };
+  return cached.card;
 }
 
 function textOf(parts: unknown): string {
@@ -77,7 +88,7 @@ export async function askCloud(opts: {
     ],
     ...(opts.contextId ? { contextId: opts.contextId } : {}),
   };
-  const client = await factory().createFromUrl(CLOUD_AGENT.card.replace(/\/\.well-known\/agent-card\.json$/, ""));
+  const client = await factory().createFromAgentCard(await agentCard());
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
   if (r.kind === "message") return { text: textOf(r.parts) || "(no text in the reply)", contextId: r.contextId ?? opts.contextId, handed: files.length };
   const task = r as Task;
