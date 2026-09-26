@@ -168,8 +168,8 @@ export async function send(agent: A2aAgent, text: string, contextId?: string, se
   // A Task: its status message, then any artifacts.
   const task = r as Task;
   const said = task.status?.message ? textOf(task.status.message.parts) : "";
-  const arts = (task.artifacts ?? []).map((a) => textOf(a.parts)).filter(Boolean).join("\n\n");
-  const out = [said, arts].filter(Boolean).join("\n\n");
+  // Some agents put the same text in the status message and in an artifact: show it once.
+  const out = uniqueTexts([said, ...(task.artifacts ?? []).map((a) => textOf(a.parts))]).join("\n\n");
   const state = task.status?.state ?? "";
   if (out) return { text: out, contextId: task.contextId ?? contextId };
   return { text: state === "input-required" ? "The agent needs more input." : state ? `Task ${state}.` : "(empty reply)", contextId: task.contextId ?? contextId };
@@ -184,7 +184,7 @@ async function stream(client: { sendMessageStream(p: { message: Message; configu
                       message: Message, contextId: string | undefined, onDelta: (text: string) => void): Promise<{ text: string; contextId?: string }> {
   let said = "", ctx = contextId, last = "";
   const arts = new Map<string, string>();
-  const compose = () => [said, [...arts.values()].filter(Boolean).join("\n\n")].filter(Boolean).join("\n\n");
+  const compose = () => uniqueTexts([said, ...arts.values()]).join("\n\n");
   for await (const raw of client.sendMessageStream({ message, configuration: { acceptedOutputModes: ["text/plain", "application/json"] } })) {
     const ev = raw as Record<string, unknown>;
     if (typeof ev.contextId === "string") ctx = ev.contextId;
@@ -204,4 +204,17 @@ async function stream(client: { sendMessageStream(p: { message: Message; configu
     if (now !== last) { last = now; onDelta(now); }
   }
   return { text: compose() || "(empty reply)", contextId: ctx };
+}
+
+/** Non-empty texts, each once — a text contained in an earlier one is a repeat, not an addition. */
+function uniqueTexts(texts: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of texts) {
+    const t = (raw ?? "").trim();
+    if (!t) continue;
+    if (out.some((o) => o === t || o.includes(t))) continue;
+    const i = out.findIndex((o) => t.includes(o));
+    if (i >= 0) out[i] = t; else out.push(t);
+  }
+  return out;
 }
