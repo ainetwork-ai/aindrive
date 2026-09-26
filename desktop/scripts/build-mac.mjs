@@ -12,6 +12,7 @@
 // 4. wraps it in dist/aindrive-<version>-mac-<arch>.dmg (Docker toolchain in
 //    scripts/dmg/: xorrisofs + libdmg-hfsplus), with an /Applications link.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,21 +26,45 @@ const archs = process.argv.slice(2).length ? process.argv.slice(2) : ["arm64", "
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: "inherit", cwd: desktop, ...opts });
 mkdirSync(cache, { recursive: true });
 
+// Everything downloaded into the shipped app is pinned here. Bumping Electron or
+// better-sqlite3 means adding the new ABI / hashes (the build refuses otherwise).
+/** Electron major → NODE_MODULE_VERSION (nodejs/node doc/abi_version_registry.json) */
+const ELECTRON_ABI = { 42: 146 };
+/** sha256 of each prebuilt better-sqlite3 tarball, by file name */
+const SQLITE_SHA256 = {
+  "better-sqlite3-v12.11.1-electron-v146-darwin-arm64.tar.gz": "5b3b7a2850fb510de1f7c5cfda39dbb165d948f0c820827988c9ed05e93d1ead",
+  "better-sqlite3-v12.11.1-electron-v146-darwin-x64.tar.gz": "59b9b7c23bd3cc23cd8e2ac05eae666a2aa1b19d2ce1f9426ab17525dd162ecb",
+};
+const RCODESIGN = { version: "0.29.0", sha256: "dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002" };
+
+/** Download to a file, refusing it unless its sha256 is the pinned one. */
+function fetchVerified(url, file, sha256) {
+  run("curl", ["-fsSL", "-o", file, url]);
+  const got = createHash("sha256").update(readFileSync(file)).digest("hex");
+  if (got !== sha256) {
+    rmSync(file, { force: true });
+    throw new Error(`checksum mismatch for ${url}: ${got}`);
+  }
+}
+
 /** Electron's NODE_MODULE_VERSION, which picks the prebuilt binary. */
 function electronAbi() {
   const major = Number(electronVersion.split(".")[0]);
-  const reg = JSON.parse(execFileSync("curl", ["-fsSL", "https://raw.githubusercontent.com/nodejs/node/main/doc/abi_version_registry.json"]).toString());
-  const hit = reg.NODE_MODULE_VERSION.find((x) => x.runtime === "electron" && x.versions.split(/[ ,]+/).map(Number).includes(major));
-  if (!hit) throw new Error(`no ABI known for Electron ${major}`);
-  return hit.modules;
+  const abi = ELECTRON_ABI[major];
+  if (!abi) throw new Error(`Electron ${major}: add its ABI to ELECTRON_ABI (and the matching better-sqlite3 hashes)`);
+  return abi;
 }
 
 function sqliteFor(arch, abi) {
   const name = `better-sqlite3-v${sqliteVersion}-electron-v${abi}-darwin-${arch}.tar.gz`;
+  const sha = SQLITE_SHA256[name];
+  if (!sha) throw new Error(`${name}: add its sha256 to SQLITE_SHA256`);
   const dir = join(cache, name.replace(/\.tar\.gz$/, ""));
   if (!existsSync(join(dir, "build/Release/better_sqlite3.node"))) {
     mkdirSync(dir, { recursive: true });
-    run("sh", ["-c", `curl -fsSL "https://github.com/WiseLibs/better-sqlite3/releases/download/v${sqliteVersion}/${name}" | tar -xz -C "${dir}"`]);
+    const tgz = join(cache, name);
+    fetchVerified(`https://github.com/WiseLibs/better-sqlite3/releases/download/v${sqliteVersion}/${name}`, tgz, sha);
+    run("tar", ["-xzf", tgz, "-C", dir]);
   }
   return join(dir, "build/Release/better_sqlite3.node");
 }
@@ -48,9 +73,13 @@ function rcodesign() {
   const bin = join(cache, "rcodesign");
   if (process.platform === "darwin") return "codesign";
   if (!existsSync(bin)) {
-    const v = "0.29.0";
-    const tgz = `apple-codesign-${v}-x86_64-unknown-linux-musl`;
-    run("sh", ["-c", `curl -fsSL "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${v}/${tgz}.tar.gz" | tar -xz -C "${cache}" && mv "${cache}/${tgz}/rcodesign" "${bin}" && rm -rf "${cache}/${tgz}"`]);
+    const v = RCODESIGN.version;
+    const name = `apple-codesign-${v}-x86_64-unknown-linux-musl`;
+    const tgz = join(cache, `${name}.tar.gz`);
+    fetchVerified(`https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign/${v}/${name}.tar.gz`, tgz, RCODESIGN.sha256);
+    run("tar", ["-xzf", tgz, "-C", cache]);
+    run("mv", [join(cache, name, "rcodesign"), bin]);
+    rmSync(join(cache, name), { recursive: true, force: true });
     chmodSync(bin, 0o755);
   }
   return bin;

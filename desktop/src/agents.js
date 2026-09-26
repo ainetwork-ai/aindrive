@@ -1,22 +1,30 @@
 /**
  * One `aindrive <folder>` agent process per shared folder — the same CLI a
- * terminal user runs (cli/, bundled into the app as cli/aindrive.mjs), started
- * with the app's own runtime as Node (ELECTRON_RUN_AS_NODE). The app never
- * talks to the server itself: pairing, sign-in and serving are the CLI's.
+ * terminal user runs (cli/, bundled into the app as cli/aindrive.mjs). The app
+ * never talks to the server itself: pairing, sign-in and serving are the CLI's.
  *
  * Status comes from the CLI's output: its plain lines (pairing, "waiting for
  * approval") and its pino JSON log ("connected", "disconnected", …).
  *
- * No Electron imports here, so tests can drive it with any command.
+ * How a process is started is injected (`spawn`): Electron's utilityProcess in
+ * the app (main.js), plain child_process in tests. No Electron imports here.
  */
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 /** @typedef {"starting"|"approve"|"connecting"|"online"|"stopped"|"error"} State */
+/**
+ * What `spawn` must return — the shape shared by child_process and utilityProcess.
+ * @typedef {{ pid?: number, stdout: NodeJS.ReadableStream|null, stderr: NodeJS.ReadableStream|null,
+ *   on(ev: "exit", fn: (code: number|null) => void): unknown, on(ev: "error", fn: (e: unknown) => void): unknown,
+ *   kill(): unknown }} Proc
+ */
 
 const RESTART_DELAYS_MS = [2_000, 5_000, 15_000, 60_000];
+/** longer than the CLI's own shutdown drain (cli/src/agent.js DRAIN_TIMEOUT_MS = 10 s) */
+const STOP_GRACE_MS = 12_000;
 
 /** What one line of CLI output says about the agent, if anything. */
 export function parseLine(line) {
@@ -53,20 +61,29 @@ export function driveUrlOf(folder) {
   } catch { return null; }
 }
 
+export function isFolder(p) {
+  try { return statSync(p).isDirectory(); } catch { return false; }
+}
+
 export class AgentManager extends EventEmitter {
   /**
-   * @param {{ command: string, args: (folder: string, firstRun: boolean) => string[], env?: Record<string,string> }} opts
+   * @param {{ spawn: (folder: string, firstRun: boolean) => Proc }} opts
    */
   constructor(opts) {
     super();
     this.opts = opts;
-    /** @type {Map<string, { child: import("node:child_process").ChildProcess|null, state: State, detail?: string, url?: string|null, loginUrl?: string, restarts: number, wanted: boolean, timer?: NodeJS.Timeout }>} */
+    /**
+     * `removing`: stopped and forgotten, but its process has not exited yet — kept
+     * so a quick re-share waits for it instead of running two agents on one folder.
+     * @type {Map<string, { child: Proc|null, state: State, detail?: string, url?: string|null, loginUrl?: string,
+     *   restarts: number, wanted: boolean, removing?: boolean, killing?: boolean, firstRun?: boolean, timer?: NodeJS.Timeout, killTimer?: NodeJS.Timeout }>}
+     */
     this.agents = new Map();
   }
 
   /** Snapshot for the UI. */
   list() {
-    return [...this.agents.entries()].map(([folder, a]) => ({
+    return [...this.agents.entries()].filter(([, a]) => !a.removing).map(([folder, a]) => ({
       folder,
       name: basename(folder),
       state: a.state,
@@ -76,71 +93,136 @@ export class AgentManager extends EventEmitter {
     }));
   }
 
+  has(folder) {
+    const a = this.agents.get(folder);
+    return !!a && !a.removing;
+  }
+
   /** Start serving a folder (idempotent). `firstRun` lets the CLI open the browser. */
   start(folder, { firstRun = false } = {}) {
     let a = this.agents.get(folder);
-    if (a?.child) return;
     if (!a) {
       a = { child: null, state: "starting", restarts: 0, wanted: true, url: driveUrlOf(folder) };
       this.agents.set(folder, a);
     }
     a.wanted = true;
+    a.removing = false;
+    a.firstRun = firstRun;
     clearTimeout(a.timer);
-    this.#spawn(folder, a, firstRun);
+    // still running (or still shutting down after a pause/remove): its exit respawns it
+    if (a.child) { this.emit("change"); return; }
+    this.#spawn(folder, a);
   }
 
-  #spawn(folder, a, firstRun) {
+  #spawn(folder, a) {
     a.state = "starting";
     a.detail = undefined;
-    const child = spawn(this.opts.command, this.opts.args(folder, firstRun), {
-      cwd: folder,
-      env: { ...process.env, ...this.opts.env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    a.child = child;
-    const onData = (buf) => {
-      a.pending = (a.pending ?? "") + buf.toString("utf8");
-      const lines = a.pending.split("\n");
-      a.pending = lines.pop();
-      for (const line of lines) {
-        this.emit("log", folder, line);
-        const p = parseLine(line);
-        if (!p) continue;
-        if (p.url) a.url = p.url;
-        if (p.loginUrl) a.loginUrl = p.loginUrl;
-        if (p.state) {
-          a.state = p.state;
-          a.detail = p.detail;
-          if (p.state === "online") a.restarts = 0;
-        }
-        this.emit("change");
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("error", (e) => {
+    if (!isFolder(folder)) {
       a.state = "error";
-      a.detail = e.message;
+      a.detail = "This folder is not available — is its drive connected?";
+      this.#scheduleRestart(folder, a, true);
       this.emit("change");
-    });
-    child.on("exit", (code) => {
-      a.child = null;
-      if (!a.url) a.url = driveUrlOf(folder);
-      if (!a.wanted) {
-        a.state = "stopped";
-      } else if (a.state === "error" && !driveUrlOf(folder)) {
-        // never paired (sign-in declined, link expired…): wait for the user to retry
-      } else {
-        // a paired folder should stay served: come back, slower each time
-        const delay = RESTART_DELAYS_MS[Math.min(a.restarts, RESTART_DELAYS_MS.length - 1)];
-        a.restarts++;
-        a.state = "connecting";
-        a.detail = code ? `agent exited (${code}) — retrying` : undefined;
-        a.timer = setTimeout(() => { if (a.wanted && !a.child) this.#spawn(folder, a, false); }, delay);
+      return;
+    }
+    /** @type {Proc} */
+    let child;
+    try {
+      child = this.opts.spawn(folder, !!a.firstRun);
+    } catch (e) {
+      a.state = "error";
+      a.detail = e instanceof Error ? e.message : String(e);
+      this.emit("change");
+      return;
+    }
+    a.firstRun = false;
+    a.child = child;
+    const onLine = (line) => {
+      this.emit("log", folder, line);
+      const p = parseLine(line);
+      if (!p) return;
+      if (p.url) a.url = p.url;
+      if (p.loginUrl) a.loginUrl = p.loginUrl;
+      if (p.state) {
+        a.state = p.state;
+        a.detail = p.detail;
+        if (p.state === "online") a.restarts = 0;
       }
       this.emit("change");
+    };
+    // one buffer per stream, decoded as a stream: a line split across chunks,
+    // or a "✓" split across bytes, still arrives whole
+    for (const stream of [child.stdout, child.stderr]) {
+      if (!stream) continue;
+      const dec = new StringDecoder("utf8");
+      let pending = "";
+      stream.on("data", (buf) => {
+        const lines = (pending + dec.write(buf)).split("\n");
+        pending = lines.pop() ?? "";
+        lines.forEach(onLine);
+      });
+      stream.on("end", () => { const rest = pending + dec.end(); pending = ""; if (rest) onLine(rest); });
+    }
+    let exited = false;
+    const onExit = (code) => {
+      if (exited || a.child !== child) return;
+      exited = true;
+      clearTimeout(a.killTimer);
+      const killed = a.killing;
+      a.killing = false;
+      a.child = null;
+      a.url = driveUrlOf(folder) ?? a.url;
+      if (a.removing && !a.wanted) {
+        this.agents.delete(folder);
+      } else if (!a.wanted) {
+        a.state = "stopped";
+        a.detail = undefined;
+      } else if (killed) {
+        this.#spawn(folder, a); // paused or removed, then shared again while it was shutting down
+        return;
+      } else if (!driveUrlOf(folder)) {
+        // never paired (sign-in declined, link expired, crashed…): wait for the user to retry,
+        // rather than minting a new sign-in link every minute
+        a.state = "error";
+        a.detail ??= code ? `aindrive stopped (${code}) before the folder was shared` : "Sign-in did not finish";
+      } else {
+        this.#scheduleRestart(folder, a, false, code);
+      }
+      this.emit("change");
+    };
+    child.on("exit", onExit);
+    child.on("error", (e) => {
+      a.detail = e instanceof Error ? e.message : String(e);
+      // a process that never started (no pid) emits no exit — treat the error as one
+      if (child.pid === undefined) { a.state = "error"; onExit(null); }
+      else this.emit("change");
     });
     this.emit("change");
+  }
+
+  /** A paired folder should stay served: come back, slower each time. */
+  #scheduleRestart(folder, a, unavailable, code) {
+    const delay = RESTART_DELAYS_MS[Math.min(a.restarts, RESTART_DELAYS_MS.length - 1)];
+    a.restarts++;
+    if (!unavailable) {
+      a.state = "connecting";
+      a.detail = code ? `agent exited (${code}) — retrying` : undefined;
+    }
+    clearTimeout(a.timer);
+    a.timer = setTimeout(() => {
+      if (a.wanted && !a.child && this.agents.get(folder) === a) this.#spawn(folder, a);
+    }, delay);
+  }
+
+  #kill(a) {
+    const c = a.child;
+    if (!c) return;
+    a.killing = true;
+    c.kill();
+    // the CLI drains in-flight requests first; past that, it is stuck
+    clearTimeout(a.killTimer);
+    a.killTimer = setTimeout(() => {
+      if (a.child === c) { try { process.kill(/** @type {number} */ (c.pid), "SIGKILL"); } catch { /* gone */ } }
+    }, STOP_GRACE_MS);
   }
 
   /** Stop serving (the folder stays in the list, paused). */
@@ -149,15 +231,20 @@ export class AgentManager extends EventEmitter {
     if (!a) return;
     a.wanted = false;
     clearTimeout(a.timer);
-    if (a.child) a.child.kill("SIGTERM");
-    else a.state = "stopped";
+    if (a.child) this.#kill(a);
+    else { a.state = "stopped"; a.detail = undefined; }
     this.emit("change");
   }
 
   /** Stop and forget. */
   remove(folder) {
-    this.stop(folder);
-    this.agents.delete(folder);
+    const a = this.agents.get(folder);
+    if (!a) return;
+    a.wanted = false;
+    a.removing = true;
+    clearTimeout(a.timer);
+    if (a.child) this.#kill(a);
+    else this.agents.delete(folder);
     this.emit("change");
   }
 
@@ -166,13 +253,17 @@ export class AgentManager extends EventEmitter {
     if (!this.agents.has(folder)) this.agents.set(folder, { child: null, state: "stopped", restarts: 0, wanted: false, url: driveUrlOf(folder) });
   }
 
-  /** SIGTERM everything; resolves once all have exited (or after `ms`). */
-  async stopAll(ms = 5_000) {
-    const kids = [...this.agents.values()].filter((a) => a.child).map((a) => {
+  /** Stop everything — pending restarts included — and wait for the processes to exit. */
+  async stopAll(ms = STOP_GRACE_MS + 1_000) {
+    for (const a of this.agents.values()) {
       a.wanted = false;
       clearTimeout(a.timer);
-      const c = a.child;
-      return new Promise((r) => { c.once("exit", r); c.kill("SIGTERM"); });
+    }
+    const kids = [...this.agents.values()].filter((a) => a.child).map((a) => {
+      const c = /** @type {Proc} */ (a.child);
+      const done = new Promise((r) => c.on("exit", r));
+      this.#kill(a);
+      return done;
     });
     await Promise.race([Promise.all(kids), new Promise((r) => setTimeout(r, ms))]);
   }

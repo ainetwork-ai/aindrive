@@ -2,19 +2,19 @@
  * aindrive for Mac: share a folder with aindrive without a terminal.
  *
  * A small window (and a menu-bar icon) lists the shared folders; "Share a
- * folder…" picks one and runs the bundled CLI agent on it (agents.js). The
+ * folder…" picks one and runs the bundled CLI agent on it in a utility process (agents.js). The
  * first share signs in the way `aindrive` does — the browser opens aindrive's
  * approve page — and every later launch serves the same folders again, quietly.
  *
  * The web app links here with `aindrive://share` (register: build config
  * `protocols`), so "Share a folder from this Mac" on the website opens this app.
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray, utilityProcess } from "electron";
+import { readFileSync, rmSync } from "node:fs";
+import { homedir, uptime } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AgentManager, driveUrlOf } from "./agents.js";
+import { AgentManager, driveUrlOf, isFolder } from "./agents.js";
 import { createStore } from "./store.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -22,20 +22,30 @@ const root = join(here, "..");
 const DEFAULT_SERVER = process.env.AINDRIVE_SERVER || "https://aindrive.ainetwork.ai";
 const CREDS = join(homedir(), ".aindrive", "credentials.json");
 
-if (!app.requestSingleInstanceLock()) app.quit();
+// A second copy (say, the one still on the mounted .dmg) hands over to the
+// running one and exits right away — before it can start agents of its own.
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
+  process.exit(0);
+}
 app.setAsDefaultProtocolClient("aindrive");
 
 const store = createStore(join(app.getPath("userData"), "folders.json"));
+// Each agent is a utility process — Electron's Node, without the RunAsNode fuse
+// (turned off at build time, so no other program can borrow this app's folder
+// access by running its binary as plain Node).
 const agents = new AgentManager({
-  command: process.execPath,
-  args: (folder, firstRun) => [
-    join(root, "cli", "aindrive.mjs"),
-    folder,
-    "--server", store.get().server || DEFAULT_SERVER,
-    // the first share opens the browser (sign-in, then the new drive); a relaunch stays quiet
-    ...(firstRun ? [] : ["--no-open"]),
-  ],
-  env: { ELECTRON_RUN_AS_NODE: "1", NODE_ENV: "production" },
+  spawn: (folder, firstRun) =>
+    utilityProcess.fork(
+      join(root, "cli", "aindrive.mjs"),
+      [
+        folder,
+        "--server", store.get().server || DEFAULT_SERVER,
+        // the first share opens the browser (sign-in, then the new drive); a relaunch stays quiet
+        ...(firstRun ? [] : ["--no-open"]),
+      ],
+      { cwd: folder, stdio: "pipe", serviceName: `aindrive agent (${basename(folder)})`, env: { ...process.env, NODE_ENV: "production" } },
+    ),
 });
 
 /** @type {BrowserWindow|null} */
@@ -85,7 +95,7 @@ function rebuildTrayMenu() {
           sublabel: LABEL[f.state],
           submenu: [
             { label: "Open in aindrive", enabled: !!f.url, click: () => f.url && shell.openExternal(f.url) },
-            { label: "Show in Finder", click: () => shell.openPath(f.folder) },
+            { label: "Show in Finder", click: () => reveal(f.folder) },
             f.state === "stopped"
               ? { label: "Resume sharing", click: () => resume(f.folder) }
               : { label: "Pause sharing", click: () => pause(f.folder) },
@@ -156,7 +166,10 @@ async function shareFolder(picked) {
     if (r.canceled || !r.filePaths[0]) return;
     folder = r.filePaths[0];
   }
-  if (!existsSync(folder)) return;
+  if (!isFolder(folder)) {
+    await dialog.showMessageBox(win ?? undefined, { type: "info", message: "Only folders can be shared.", detail: `${basename(folder)} is a file. Drop or choose the folder that holds it.` });
+    return;
+  }
   if (folder === homedir() || folder === "/") {
     const ok = await dialog.showMessageBox(win ?? undefined, {
       type: "warning",
@@ -178,6 +191,12 @@ async function shareFolder(picked) {
   broadcast();
 }
 
+/** Open a shared folder in Finder — never "open" a bundle, which would launch it. */
+function reveal(folder) {
+  if (/\.(app|command|tool|workflow|terminal)\/?$/i.test(folder)) shell.showItemInFolder(folder);
+  else void shell.openPath(folder);
+}
+
 function pause(folder) {
   agents.stop(folder);
   store.update((s) => ({ ...s, folders: s.folders.map((f) => (f.path === folder ? { ...f, paused: true } : f)) }));
@@ -193,6 +212,9 @@ function remove(folder) {
   store.update((s) => ({ ...s, folders: s.folders.filter((f) => f.path !== folder) }));
 }
 
+/** A folder the app shares — what the window may ask to open. */
+const known = (folder) => typeof folder === "string" && agents.has(folder);
+
 /** aindrive://share[?server=https://…] — from the website's "Share from this Mac". */
 function handleUrl(raw) {
   let u;
@@ -200,9 +222,11 @@ function handleUrl(raw) {
   if (u.protocol !== "aindrive:") return;
   const server = u.searchParams.get("server");
   // Any web page can open an aindrive:// link, so a link may only pick the
-  // default server or a local dev one — never send a folder somewhere else.
+  // default server — or, in a development build, a local one. Never send a
+  // folder somewhere else.
   const wanted = server?.replace(/\/$/, "");
-  if (wanted && (wanted === DEFAULT_SERVER || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(wanted))) {
+  const devServer = !app.isPackaged && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(wanted ?? "");
+  if (wanted && (wanted === DEFAULT_SERVER || devServer)) {
     store.update((s) => ({ ...s, server: wanted === DEFAULT_SERVER ? undefined : wanted }));
   }
   const action = u.hostname || u.pathname.replace(/^\/+/, "");
@@ -221,9 +245,10 @@ app.on("second-instance", (_e, argv) => {
 
 ipcMain.handle("state", () => snapshot());
 ipcMain.handle("share", (_e, folder) => shareFolder(typeof folder === "string" ? folder : undefined));
-ipcMain.handle("pause", (_e, folder) => pause(folder));
-ipcMain.handle("resume", (_e, folder) => resume(folder));
+ipcMain.handle("pause", (_e, folder) => known(folder) && pause(folder));
+ipcMain.handle("resume", (_e, folder) => known(folder) && resume(folder));
 ipcMain.handle("remove", async (_e, folder) => {
+  if (!known(folder)) return;
   const r = await dialog.showMessageBox(win ?? undefined, {
     type: "question",
     buttons: ["Cancel", "Stop sharing"],
@@ -234,7 +259,8 @@ ipcMain.handle("remove", async (_e, folder) => {
   if (r.response === 1) remove(folder);
 });
 ipcMain.handle("open", (_e, what, folder) => {
-  if (what === "finder") return shell.openPath(folder);
+  if (!known(folder)) return;
+  if (what === "finder") return reveal(folder);
   const url = agents.list().find((f) => f.folder === folder)?.[what === "login" ? "loginUrl" : "url"];
   if (url && /^https?:\/\//.test(url)) return shell.openExternal(url);
 });
@@ -264,13 +290,21 @@ app.whenReady().then(() => {
   img.setTemplateImage(true);
   tray = new Tray(img);
   for (const f of store.get().folders) {
-    if (!existsSync(f.path)) continue;
-    if (f.paused) agents.addStopped(f.path);
-    else agents.start(f.path);
+    // one bad entry must not keep the others (or the menu) from coming back
+    try {
+      if (f.paused) agents.addStopped(f.path);
+      else agents.start(f.path); // a folder on a drive that is not connected waits and retries
+    } catch (e) {
+      console.error("could not restore", f.path, e);
+    }
   }
   rebuildTrayMenu();
-  // started at login: stay in the menu bar; opened by hand: show the window
-  const atLogin = app.getLoginItemSettings().wasOpenedAsHidden;
+  // Started at login: stay in the menu bar; opened by hand: show the window.
+  // macOS 13+ (SMAppService) no longer reports "opened at login", so a launch
+  // in the first minutes after boot, with folders to serve, counts as one.
+  const s = app.getLoginItemSettings();
+  const atLogin = s.wasOpenedAtLogin || s.wasOpenedAsHidden ||
+    (s.openAtLogin && store.get().folders.length > 0 && uptime() < 180);
   if (!atLogin) showWindow();
   else app.dock?.hide();
   if (pendingShare) void shareFolder();

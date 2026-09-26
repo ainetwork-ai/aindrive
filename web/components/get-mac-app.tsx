@@ -8,15 +8,18 @@ import { useEffect, useState } from "react";
  * `npm i -g aindrive`. The app opens from `aindrive://share` when installed.
  * The terminal route stays one click away, and is what non-Mac visitors see first.
  */
-export function GetMacApp({ server, compact = false }: { server: string; compact?: boolean }) {
+export function GetMacApp({ server, available = true, compact = false }: { server: string; available?: boolean; compact?: boolean }) {
   // decided after mount: the server render cannot know the visitor's OS
   const [mac, setMac] = useState(true);
   useEffect(() => {
     setMac(/Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent));
   }, []);
   const open = `aindrive://share?server=${encodeURIComponent(server)}`;
+  // the app pairs only with the hosted server — elsewhere, the terminal is the way
+  const showApp = mac && available;
 
   if (compact) {
+    if (!available) return null;
     return (
       <a href="/download/mac" className="text-sm text-drive-muted hover:text-drive-accent hover:underline" data-testid="get-mac-app-link">
         Get the Mac app
@@ -30,7 +33,7 @@ export function GetMacApp({ server, compact = false }: { server: string; compact
       <p className="mt-1 text-sm text-drive-muted">
         Its files stay on your computer — aindrive shows them here while it runs.
       </p>
-      {mac ? (
+      {showApp ? (
         <>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <a
@@ -56,7 +59,7 @@ export function GetMacApp({ server, compact = false }: { server: string; compact
           </ol>
         </>
       ) : null}
-      <details className={`mx-auto max-w-sm text-left text-sm ${mac ? "mt-6" : "mt-5"}`} open={!mac}>
+      <details className={`mx-auto max-w-sm text-left text-sm ${showApp ? "mt-6" : "mt-5"}`} open={!showApp}>
         <summary className="flex cursor-pointer items-center justify-center gap-1.5 text-drive-muted">
           <Terminal className="h-4 w-4" /> Use the terminal instead
         </summary>

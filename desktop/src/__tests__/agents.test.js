@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,7 +49,7 @@ test("an agent goes approve → online, pauses, and stops cleanly", async () => 
     setInterval(() => {}, 1000);
   `);
   const folder = mkdtempSync(join(tmpdir(), "aindrive-share-"));
-  const m = new AgentManager({ command: process.execPath, args: () => [cli] });
+  const m = new AgentManager({ spawn: (folder) => spawn(process.execPath, [cli], { cwd: folder, stdio: ["ignore", "pipe", "pipe"] }) });
   m.start(folder, { firstRun: true });
   await until(m, (f) => f?.state === "approve" && f.loginUrl === "https://s.test/cli-login/L1");
   await until(m, (f) => f?.state === "online" && f.url === "https://s.test/d/D1");
@@ -61,7 +62,7 @@ test("an agent goes approve → online, pauses, and stops cleanly", async () => 
 test("a folder that never paired waits for a retry instead of looping", async () => {
   const cli = fakeCli(`console.error("aindrive: link expired or already used"); process.exit(1);`);
   const folder = mkdtempSync(join(tmpdir(), "aindrive-share-"));
-  const m = new AgentManager({ command: process.execPath, args: () => [cli] });
+  const m = new AgentManager({ spawn: (folder) => spawn(process.execPath, [cli], { cwd: folder, stdio: ["ignore", "pipe", "pipe"] }) });
   m.start(folder);
   await until(m, (f) => f?.state === "error");
   await new Promise((r) => setTimeout(r, 300));
@@ -82,8 +83,47 @@ test("a paired folder whose agent dies is restarted", async () => {
     console.log(JSON.stringify({ msg: "connected" }));
     setInterval(() => {}, 1000);
   `);
-  const m = new AgentManager({ command: process.execPath, args: () => [cli] });
+  const m = new AgentManager({ spawn: (folder) => spawn(process.execPath, [cli], { cwd: folder, stdio: ["ignore", "pipe", "pipe"] }) });
   m.start(folder);
   await until(m, (f) => f?.state === "online", 8000);
   await m.stopAll();
+});
+
+test("a file is never started as a folder, and a missing folder waits instead of throwing", async () => {
+  const d = mkdtempSync(join(tmpdir(), "aindrive-share-"));
+  const file = join(d, "notes.txt");
+  writeFileSync(file, "x");
+  let spawned = 0;
+  const m = new AgentManager({ spawn: () => { spawned++; throw new Error("should not spawn"); } });
+  m.start(file);
+  m.start(join(d, "gone"));
+  assert.equal(spawned, 0);
+  assert.deepEqual(m.list().map((f) => f.state), ["error", "error"]);
+  await m.stopAll(100);
+});
+
+test("stopAll cancels pending restarts, and resume during shutdown respawns once", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "aindrive-share-"));
+  mkdirSync(join(folder, ".aindrive"));
+  writeFileSync(join(folder, ".aindrive", "config.json"), JSON.stringify({ url: "https://s.test/d/D3" }));
+  const marker = join(folder, "runs");
+  // serves until SIGTERM, then takes a moment to drain (like the real CLI)
+  const cli = fakeCli(`
+    import { appendFileSync } from "node:fs";
+    appendFileSync(${JSON.stringify(marker)}, "x");
+    console.log(JSON.stringify({ msg: "connected" }));
+    process.on("SIGTERM", () => setTimeout(() => process.exit(0), 300));
+    setInterval(() => {}, 1000);
+  `);
+  const m = new AgentManager({ spawn: (f) => spawn(process.execPath, [cli], { cwd: f, stdio: ["ignore", "pipe", "pipe"] }) });
+  m.start(folder);
+  await until(m, (f) => f?.state === "online");
+  m.stop(folder);
+  m.start(folder); // resumed before the old one exited
+  await new Promise((r) => setTimeout(r, 1000));
+  await until(m, (f) => f?.state === "online");
+  const { readFileSync } = await import("node:fs");
+  assert.equal(readFileSync(marker, "utf8"), "xx"); // exactly one respawn
+  await m.stopAll();
+  assert.equal(m.list()[0].state, "stopped");
 });
