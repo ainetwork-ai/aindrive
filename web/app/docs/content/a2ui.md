@@ -10,7 +10,7 @@ AG-UI — one UI definition, three transports.
 | Version | **v0.9** (messages carry `"version": "v0.9"`) |
 | Catalog | basic catalog `https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json` — no custom components to install |
 | MIME type | `application/a2ui+json` |
-| Renderers | `@a2ui/lit`, `@a2ui/react`, `@a2ui/angular`, Flutter, CopilotKit — or aindrive's tiny dependency-free renderer (`shared/a2ui/renderer.js`) |
+| Renderers | `@a2ui/lit`, `@a2ui/react`, `@a2ui/angular`, Flutter, CopilotKit — or aindrive's tiny dependency-free renderer (`shared/a2ui/renderer.js`, which also draws AINUI, below) |
 
 ## Surfaces
 
@@ -48,6 +48,35 @@ transport you use; aindrive answers with the next surface.
 | MCP | `tools/call` → `a2ui_action` with `{ "action": … }` |
 | A2A | a DataPart `{ "version": "v0.9", "action": … }` |
 | AG-UI | `forwardedProps.a2uiAction = { userAction: … }` |
+
+## AINUI — grids, thumbnails and write actions (opt-in)
+
+The basic catalog has no grid, no thumbnail tile, no way to point at private file
+bytes and no file viewer, so aindrive also speaks **AINUI**: the same A2UI v0.9
+messages with a custom catalog, `https://aindrive.ainetwork.ai/ainui/v1/catalog.json`
+= the basic catalog **plus** `Grid`, `Tile`, `FileView`, `Breadcrumbs` and
+`Segmented`. Clients that don't ask for it see no change.
+
+| Transport | Ask for AINUI with |
+|---|---|
+| MCP | request header `X-AINUI: 1` |
+| AG-UI | `forwardedProps.ainui = true` |
+| A2A | message `metadata.ainui = true` |
+
+- **Folders** are a breadcrumb trail, search, a list/grid switch and a grid of tiles
+  (grid by default when at least half of the files are images or videos).
+- **Files** are a `FileView` over an **asset reference**, not inline bytes:
+  `{"$asset": {"drive_id", "path", "variant": "thumb"|"original", "mime", "v"}}`.
+  Your host turns it into a URL through a route it is allowed to call — aindrive's
+  `/api/drives/{drive_id}/fs/thumbnail|stream?path=…` accept the session cookie or
+  `Authorization: Bearer <session JWT>`.
+- **Write actions** — `aindrive.new_file`, `aindrive.edit`, `aindrive.save`,
+  `aindrive.delete` (plus `aindrive.view` for list/grid) — are offered only to callers
+  that may write, and each one passes the same checks as calling `write_file` /
+  `delete_path` yourself. Multi-step actions answer with the next screen (new file →
+  editor, save → file, delete → the parent folder).
+
+Full spec: [AINUI v1](https://github.com/ainetwork-ai/aindrive/blob/main/docs/AINUI.md). Try it with the **AINUI** switch in the playground below.
 
 ## Rendering it yourself
 

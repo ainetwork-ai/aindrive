@@ -9,9 +9,52 @@
  * (@a2ui/lit, @a2ui/react, CopilotKit); this one exists so aindrive's own
  * surfaces render anywhere without a build step.
  *
+ * AINUI (docs/AINUI.md, catalog AINUI_CATALOG in ./ainui.ts) is understood too:
+ * Grid, Tile, FileView, Breadcrumbs, Segmented, Button `tone`/`confirm`,
+ * Text `mono`, TextField `longText`, and `{$asset}` references, resolved by
+ * `opts.resolveAsset(asset)` or — by default — through aindrive's own routes
+ * (`{assetBase}/api/drives/{drive_id}/fs/thumbnail|stream?path=…`), which only
+ * work where the viewer has aindrive's session. FileView's download link asks
+ * `opts.resolveAsset({...asset, variant: "original"}, { download: true })`
+ * (default: `fs/download`). Unknown components draw their children, else nothing.
+ *
  * Plain ES module, browser-only APIs, no imports. Everything user-supplied is
- * written via textContent / escaped HTML; image URLs are limited to data:/https:.
+ * written via textContent / escaped HTML; media URLs are limited to data:,
+ * https:, blob: and same-origin paths.
  */
+
+const KIND_EMOJI = { folder: "📁", image: "🖼", video: "🎬", audio: "🎵", pdf: "📕", file: "📄" };
+
+/** Media URLs we let into src attributes. */
+function safeMediaUrl(u) {
+  const s = typeof u === "string" ? u : "";
+  return /^(data:(image|video|audio)\/|https:\/\/|blob:)/.test(s) || /^\/(?!\/)/.test(s) ? s : "";
+}
+
+function humanSize(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${i === 0 ? v : v.toFixed(1)} ${u[i]}`;
+}
+
+/** URLs we let into a download link: the media set, plus data: types a browser saves rather than runs. */
+function safeDownloadUrl(u) {
+  const s = typeof u === "string" ? u : "";
+  return /^data:(text\/plain|application\/(pdf|octet-stream))[;,]/.test(s) ? s : safeMediaUrl(s);
+}
+
+/**
+ * aindrive's own byte routes for an AINUI asset (works where the viewer has the session cookie):
+ * thumb → fs/thumbnail, original → fs/stream (inline), or fs/download (attachment) with `{ download: true }`.
+ */
+export function aindriveAssetUrl(asset, base = "", { download = false } = {}) {
+  if (!asset || typeof asset.drive_id !== "string" || typeof asset.path !== "string") return "";
+  const route = download ? "download" : asset.variant === "thumb" ? "thumbnail" : "stream";
+  const v = typeof asset.v === "number" && !download ? `&v=${asset.v}` : "";
+  return `${base}/api/drives/${encodeURIComponent(asset.drive_id)}/fs/${route}?path=${encodeURIComponent(asset.path)}${v}`;
+}
 
 const ICON_EMOJI = { folder: "📁", search: "🔍", arrowBack: "⬅", home: "🏠", delete: "🗑", download: "⬇", share: "🔗", lock: "🔒", info: "ℹ️", warning: "⚠️", check: "✅" };
 
@@ -54,9 +97,42 @@ function pointerSet(obj, pointer, value) {
   return obj;
 }
 
-export function createA2uiRenderer(container, { onAction } = {}) {
+/**
+ * @param {HTMLElement} container
+ * @param {{
+ *   onAction?: (action: any) => unknown,
+ *   resolveAsset?: (asset: { drive_id: string, path: string, variant: string, mime: string, v?: number }, opts?: { download?: boolean }) => string,
+ *   assetBase?: string,
+ * }} [opts]  resolveAsset: AINUI {$asset} → URL (default: aindrive's own fs routes under assetBase);
+ *   `{ download: true }` asks for a URL that saves the original bytes (FileView's download link).
+ */
+export function createA2uiRenderer(container, { onAction, resolveAsset, assetBase = "" } = {}) {
   /** surfaceId → { components: Map, data: object } */
   const surfaces = new Map();
+
+  /** A `Media` value (URL string or {$asset}) → a safe URL, or "". */
+  function mediaUrl(v) {
+    if (v && typeof v === "object" && v.$asset) {
+      return safeMediaUrl(resolveAsset ? resolveAsset(v.$asset) : aindriveAssetUrl(v.$asset, assetBase));
+    }
+    return safeMediaUrl(v);
+  }
+
+  /** A `Media` value → a safe URL that saves the original bytes, or "". */
+  function downloadUrl(v) {
+    if (v && typeof v === "object" && v.$asset) {
+      const a = { ...v.$asset, variant: "original" };
+      return safeDownloadUrl(resolveAsset ? resolveAsset(a, { download: true }) : aindriveAssetUrl(a, assetBase, { download: true }));
+    }
+    return safeDownloadUrl(v);
+  }
+
+  function kindIcon(kind) {
+    const i = document.createElement("span");
+    i.className = "a2ui-kind-icon";
+    i.textContent = KIND_EMOJI[kind] || KIND_EMOJI.file;
+    return i;
+  }
 
   function resolve(v, surf, scope) {
     if (v && typeof v === "object" && typeof v.path === "string") {
@@ -101,7 +177,7 @@ export function createA2uiRenderer(container, { onAction } = {}) {
         const v = c.variant || "body";
         const t = resolve(c.text, surf, scope) ?? "";
         el.className = `a2ui-text a2ui-text-${v}`;
-        if (/^h[1-5]$/.test(v)) el.textContent = String(t);
+        if (/^h[1-5]$/.test(v) || v === "mono") el.textContent = String(t);
         else el.innerHTML = miniMarkdown(t);
         break;
       }
@@ -113,9 +189,9 @@ export function createA2uiRenderer(container, { onAction } = {}) {
         el.className = "a2ui-divider";
         break;
       case "Image": {
-        const src = String(resolve(c.url, surf, scope) ?? "");
         const img = document.createElement("img");
-        if (/^(data:image\/|https:\/\/)/.test(src)) img.src = src;
+        const safe = mediaUrl(resolve(c.url, surf, scope));
+        if (safe && !/^data:(video|audio)/.test(safe)) img.src = safe;
         img.alt = String(resolve(c.description, surf, scope) ?? "");
         img.className = "a2ui-image";
         el.appendChild(img);
@@ -126,7 +202,9 @@ export function createA2uiRenderer(container, { onAction } = {}) {
         label.className = "a2ui-textfield";
         const span = document.createElement("span");
         span.textContent = String(resolve(c.label, surf, scope) ?? "");
-        const input = document.createElement("input");
+        const long = c.variant === "longText";
+        const input = document.createElement(long ? "textarea" : "input");
+        if (long) { input.rows = 14; label.classList.add("a2ui-textfield-long"); }
         input.value = String(resolve(c.value, surf, scope) ?? "");
         input.placeholder = span.textContent;
         if (c.value && typeof c.value.path === "string") {
@@ -136,7 +214,7 @@ export function createA2uiRenderer(container, { onAction } = {}) {
           });
         }
         input.addEventListener("keydown", (e) => {
-          if (e.key !== "Enter") return;
+          if (e.key !== "Enter" || long) return;
           // Enter submits the nearest primary button's action, if any.
           const primary = [...surf.components.values()].find((x) => x.component === "Button" && x.variant === "primary");
           if (primary) fire(surfaceId, primary, scope);
@@ -148,27 +226,188 @@ export function createA2uiRenderer(container, { onAction } = {}) {
       }
       case "Button": {
         const b = document.createElement("button");
-        b.className = `a2ui-button a2ui-button-${c.variant || "default"}`;
+        b.type = "button";
+        b.className = `a2ui-button a2ui-button-${c.variant || "default"}${c.tone === "danger" ? " a2ui-button-danger" : ""}`;
         b.appendChild(renderNode(surfaceId, c.child, scope));
-        b.addEventListener("click", () => fire(surfaceId, c, scope));
+        const question = c.confirm !== undefined ? String(resolve(c.confirm, surf, scope) ?? "") : "";
+        b.addEventListener("click", () => {
+          if (!question) return fire(surfaceId, c, scope);
+          // Inline confirmation: sandboxed iframes (MCP Apps) block window.confirm.
+          const ask = document.createElement("span");
+          ask.className = "a2ui-confirm";
+          const q = document.createElement("span");
+          q.textContent = question;
+          const no = document.createElement("button");
+          no.type = "button"; no.className = "a2ui-button"; no.textContent = "Cancel";
+          const yes = document.createElement("button");
+          yes.type = "button"; yes.className = `a2ui-button${c.tone === "danger" ? " a2ui-button-danger" : " a2ui-button-primary"}`;
+          yes.textContent = "OK";
+          no.addEventListener("click", () => el.replaceChildren(b));
+          yes.addEventListener("click", () => { el.replaceChildren(b); fire(surfaceId, c, scope); });
+          ask.append(q, no, yes);
+          el.replaceChildren(ask);
+          no.focus();
+        });
         el.appendChild(b);
         el.className = "a2ui-button-wrap";
         break;
       }
+      // ── AINUI components ──
+      case "Grid": {
+        el.className = "a2ui-grid";
+        const min = typeof c.minItemWidth === "number" && c.minItemWidth > 0 ? c.minItemWidth : 128;
+        el.style.gridTemplateColumns = `repeat(auto-fill, minmax(min(${min}px, 100%), 1fr))`;
+        el.style.gap = `${typeof c.gap === "number" && c.gap >= 0 ? c.gap : 8}px`;
+        kids(c.children, el);
+        break;
+      }
+      case "Tile": {
+        const kind = String(resolve(c.kind, surf, scope) ?? "file");
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "a2ui-tile";
+        const media = document.createElement("span");
+        media.className = "a2ui-tile-media";
+        const src = mediaUrl(resolve(c.media, surf, scope));
+        if (src && !/^data:(video|audio)/.test(src)) {
+          const img = document.createElement("img");
+          img.loading = "lazy";
+          img.alt = "";
+          img.addEventListener("error", () => media.replaceChildren(kindIcon(kind)));
+          img.src = src;
+          media.appendChild(img);
+        } else media.appendChild(kindIcon(kind));
+        const label = document.createElement("span");
+        label.className = "a2ui-tile-label";
+        label.textContent = String(resolve(c.label, surf, scope) ?? "");
+        b.title = label.textContent;
+        b.append(media, label);
+        const captionText = c.caption !== undefined ? String(resolve(c.caption, surf, scope) ?? "") : "";
+        if (captionText) {
+          const cap = document.createElement("span");
+          cap.className = "a2ui-tile-caption";
+          cap.textContent = captionText;
+          b.appendChild(cap);
+        }
+        b.addEventListener("click", () => fire(surfaceId, c, scope));
+        el.className = "a2ui-tile-wrap";
+        el.appendChild(b);
+        break;
+      }
+      case "FileView": {
+        el.className = "a2ui-fileview";
+        const name = String(resolve(c.name, surf, scope) ?? "");
+        const mime = String(resolve(c.mime, surf, scope) ?? "");
+        const size = resolve(c.size, surf, scope);
+        const rawSrc = resolve(c.src, surf, scope);
+        const src = mediaUrl(rawSrc);
+        const tag = !src ? "" : mime.startsWith("image/") ? "img" : mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "";
+        if (tag) {
+          const m = document.createElement(tag);
+          m.className = `a2ui-fileview-${tag}`;
+          if (tag === "img") m.alt = name;
+          else { m.controls = true; m.preload = "metadata"; }
+          m.src = src;
+          el.appendChild(m);
+        } else {
+          const box = document.createElement("div");
+          box.className = "a2ui-fileview-icon";
+          box.appendChild(kindIcon(mime === "application/pdf" ? "pdf" : "file"));
+          el.appendChild(box);
+        }
+        const info = document.createElement("div");
+        info.className = "a2ui-fileview-info";
+        const n = document.createElement("span");
+        n.className = "a2ui-fileview-name";
+        n.textContent = name;
+        const sz = document.createElement("span");
+        sz.className = "a2ui-text-caption";
+        sz.textContent = humanSize(size);
+        info.append(n, sz);
+        // Download affordance (AINUI §3) for every kind — the only way to reach a PDF's / archive's bytes.
+        const href = downloadUrl(rawSrc);
+        if (href) {
+          const a = document.createElement("a");
+          a.className = "a2ui-button a2ui-fileview-download";
+          a.href = href;
+          a.download = name;
+          // Sandboxed iframes (MCP Apps) may block downloads; a new tab still reaches the bytes.
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.textContent = "⬇ Download";
+          a.setAttribute("aria-label", name ? `Download ${name}` : "Download");
+          info.appendChild(a);
+        }
+        el.appendChild(info);
+        break;
+      }
+      case "Breadcrumbs": {
+        el.className = "a2ui-breadcrumbs";
+        el.setAttribute("role", "navigation");
+        const items = resolve(c.items, surf, scope);
+        (Array.isArray(items) ? items : []).forEach((item, i, all) => {
+          if (i > 0) {
+            const sep = document.createElement("span");
+            sep.className = "a2ui-crumb-sep";
+            sep.textContent = "›";
+            el.appendChild(sep);
+          }
+          const label = String(item && item.label != null ? item.label : "");
+          if (i === all.length - 1) {
+            // The last crumb is where we are: plain text.
+            const cur = document.createElement("span");
+            cur.className = "a2ui-crumb a2ui-crumb-current";
+            cur.textContent = label;
+            el.appendChild(cur);
+            return;
+          }
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "a2ui-crumb";
+          b.textContent = label;
+          b.addEventListener("click", () => fire(surfaceId, c, item, { path: item && item.path }));
+          el.appendChild(b);
+        });
+        break;
+      }
+      case "Segmented": {
+        el.className = "a2ui-segmented";
+        el.setAttribute("role", "group");
+        const current = String(resolve(c.value, surf, scope) ?? "");
+        for (const opt of Array.isArray(c.options) ? c.options : []) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "a2ui-segment";
+          b.textContent = String(opt && opt.label != null ? opt.label : opt && opt.value);
+          b.setAttribute("aria-pressed", String(opt && opt.value === current));
+          b.addEventListener("click", () => {
+            if (c.value && typeof c.value.path === "string") {
+              if (c.value.path.startsWith("/")) pointerSet(surf.data, c.value.path, opt.value);
+              else if (scope) pointerSet(scope, "/" + c.value.path, opt.value);
+            }
+            fire(surfaceId, c, scope, { value: opt.value });
+          });
+          el.appendChild(b);
+        }
+        break;
+      }
       default:
-        el.className = "a2ui-unsupported";
-        el.textContent = `[${c.component}]`;
+        // Unknown component: draw its children if it has any, else nothing (AINUI §3).
+        el.className = "a2ui-unknown";
+        if (c.children) kids(c.children, el);
+        else if (typeof c.child === "string") el.appendChild(renderNode(surfaceId, c.child, scope));
     }
     if (typeof c.weight === "number") el.style.flex = String(c.weight);
     return el;
   }
 
-  function fire(surfaceId, c, scope) {
+  function fire(surfaceId, c, scope, extra) {
     const ev = c.action && c.action.event;
     if (!ev || !onAction) return;
     const surf = surfaces.get(surfaceId);
     const context = {};
     for (const [k, v] of Object.entries(ev.context || {})) context[k] = resolve(v, surf, scope);
+    Object.assign(context, extra || {});
     onAction({ name: ev.name, surfaceId, sourceComponentId: c.id, timestamp: new Date().toISOString(), context });
   }
 
@@ -227,5 +466,32 @@ export const A2UI_RENDERER_CSS = `
 .a2ui-image{max-width:100%;max-height:420px;object-fit:contain}
 .a2ui-divider{border-top:1px solid #dce3ec;margin:4px 0}
 .a2ui-row .a2ui-text-caption{white-space:nowrap}
-@media (prefers-color-scheme:dark){.a2ui-surface{color:#e6e9ef}.a2ui-card,.a2ui-button,.a2ui-textfield input{background:#1b1f27;border-color:#343b48;color:inherit}.a2ui-button:hover,.a2ui-button-borderless:hover{background:#262c36}.a2ui-text pre{background:#262c36}.a2ui-text-caption{color:#9aa4b8}}
+.a2ui-button-danger{color:#b3261e;border-color:#f2b8b5}.a2ui-button-danger.a2ui-button-primary,.a2ui-confirm .a2ui-button-danger{background:#b3261e;border-color:#b3261e;color:#fff}
+.a2ui-confirm{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px}
+.a2ui-text-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+.a2ui-textfield-long{min-width:0}.a2ui-textfield-long textarea{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid #dce3ec;border-radius:12px;padding:8px 12px;resize:vertical;min-height:240px;width:100%;box-sizing:border-box}
+.a2ui-row{flex-wrap:wrap}
+.a2ui-grid{display:grid}
+.a2ui-tile-wrap{min-width:0}
+.a2ui-tile{display:flex;flex-direction:column;gap:4px;width:100%;font:inherit;color:inherit;text-align:left;border:0;background:none;padding:4px;border-radius:12px;cursor:pointer}
+.a2ui-tile:hover,.a2ui-tile:focus-visible{background:#eaeef4}
+.a2ui-tile-media{display:flex;align-items:center;justify-content:center;aspect-ratio:1;width:100%;border-radius:10px;overflow:hidden;background:#f2f5f9}
+.a2ui-tile-media img{width:100%;height:100%;object-fit:cover}
+.a2ui-tile-media .a2ui-kind-icon{font-size:40px}
+.a2ui-tile-label{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.a2ui-tile-caption{font-size:12px;color:#54607a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.a2ui-fileview{display:flex;flex-direction:column;gap:8px}
+.a2ui-fileview-img,.a2ui-fileview-video{max-width:100%;max-height:70vh;object-fit:contain;border-radius:10px;background:#f2f5f9}
+.a2ui-fileview-audio{width:100%}
+.a2ui-fileview-icon{display:flex;align-items:center;justify-content:center;height:160px;border-radius:10px;background:#f2f5f9;font-size:56px}
+.a2ui-fileview-info{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}.a2ui-fileview-name{font-weight:600;word-break:break-all}
+.a2ui-fileview-download{display:inline-flex;align-items:center;min-height:36px;box-sizing:border-box;margin-left:auto;color:inherit;text-decoration:none}
+.a2ui-breadcrumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-size:13px}
+.a2ui-crumb{display:inline-flex;align-items:center;font:inherit;color:#0b57d0;border:0;background:none;padding:0 6px;border-radius:8px;cursor:pointer;min-height:36px;box-sizing:border-box}
+.a2ui-crumb:hover{background:#eaeef4}.a2ui-crumb-current{color:inherit;font-weight:600;cursor:default}
+.a2ui-crumb-sep{color:#54607a}
+.a2ui-segmented{display:inline-flex;border:1px solid #dce3ec;border-radius:999px;overflow:hidden}
+.a2ui-segment{font:inherit;border:0;background:#fff;color:inherit;padding:4px 14px;cursor:pointer;min-height:36px}
+.a2ui-segment[aria-pressed=true]{background:#0b57d0;color:#fff}
+@media (prefers-color-scheme:dark){.a2ui-surface{color:#e6e9ef}.a2ui-card,.a2ui-button,.a2ui-textfield input,.a2ui-textfield textarea,.a2ui-segment{background:#1b1f27;border-color:#343b48;color:inherit}.a2ui-segmented{border-color:#343b48}.a2ui-segment[aria-pressed=true]{background:#0b57d0;color:#fff}.a2ui-button:hover,.a2ui-button-borderless:hover,.a2ui-tile:hover,.a2ui-crumb:hover{background:#262c36}.a2ui-text pre,.a2ui-tile-media,.a2ui-fileview-icon,.a2ui-fileview-img,.a2ui-fileview-video{background:#262c36}.a2ui-text-caption,.a2ui-tile-caption,.a2ui-crumb-sep{color:#9aa4b8}.a2ui-crumb{color:#a8c7fa}.a2ui-button-danger{color:#f2b8b5;border-color:#8c1d18}}
 `;

@@ -13,6 +13,10 @@
  * surface as ACTIVITY_SNAPSHOT (activityType "a2ui-surface", the
  * @ag-ui/a2ui-middleware / CopilotKit shape), STATE_SNAPSHOT {driveId, path,
  * skill}, and an assistant TEXT_MESSAGE summary. Guide: /docs/ag-ui.
+ *
+ * AINUI (docs/AINUI.md): `forwardedProps.ainui = true` makes the surface an
+ * AINUI one and routes A2UI clicks through the AINUI dispatcher (lib/ainui.ts),
+ * where one click may run several skills — each reported as its own TOOL_CALL_*.
  */
 import { EventType, contentToText, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { runSkill, isSkillName, type SkillCtx } from "@/shared/agent-skills";
@@ -20,8 +24,10 @@ import { resolveAgentAuth, skillPermitted, type AgentAuth } from "./agent-auth";
 import { tryConsume, clientKey } from "./rate-limit";
 import {
   AGUI_A2UI_ACTIVITY, AGUI_A2UI_OPERATIONS_KEY, a2uiForSkill, actionToSkill, commandToSkill, parseA2uiAction,
-  type SkillCall,
+  type A2uiMessage, type SkillCall,
 } from "@/shared/a2ui";
+import type { AinuiStep } from "@/shared/a2ui/ainui";
+import { ainuiAction, ainuiSurface, type AinuiHost } from "./ainui";
 
 export function planRun(input: RunAgentInput, ctx: SkillCtx): SkillCall | { error: string } {
   const fp = (input.forwardedProps ?? {}) as Record<string, unknown>;
@@ -44,6 +50,10 @@ export function planRun(input: RunAgentInput, ctx: SkillCtx): SkillCall | { erro
 }
 
 export async function* runEvents(input: RunAgentInput, auth: Extract<AgentAuth, { ok: true }>): AsyncGenerator<BaseEvent> {
+  if ((input.forwardedProps as Record<string, unknown> | undefined)?.ainui === true) {
+    yield* runAinuiEvents(input, auth);
+    return;
+  }
   const { threadId, runId } = input;
   const ctx = auth.ctx;
   yield { type: EventType.RUN_STARTED, threadId, runId } as BaseEvent;
@@ -98,6 +108,94 @@ export async function* runEvents(input: RunAgentInput, auth: Extract<AgentAuth, 
   yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: summary || "(no output)" } as BaseEvent;
   yield { type: EventType.TEXT_MESSAGE_END, messageId } as BaseEvent;
   yield { type: EventType.STEP_FINISHED, stepName: skill } as BaseEvent;
+  yield { type: EventType.RUN_FINISHED, threadId, runId } as BaseEvent;
+}
+
+/**
+ * The AINUI run: same event grammar, but the surface is AINUI and a click goes
+ * through the AINUI dispatcher (possibly several skills, each a TOOL_CALL_*).
+ * Every skill passes skillPermitted (the grant's groups) and runSkill.
+ */
+async function* runAinuiEvents(input: RunAgentInput, auth: Extract<AgentAuth, { ok: true }>): AsyncGenerator<BaseEvent> {
+  const { threadId, runId } = input;
+  const ctx = auth.ctx;
+  const state = (input.state ?? {}) as Record<string, unknown>;
+  const host: AinuiHost = { ctx, allowed: (skill) => skillPermitted(auth, skill) === null };
+  yield { type: EventType.RUN_STARTED, threadId, runId } as BaseEvent;
+
+  const fp = (input.forwardedProps ?? {}) as Record<string, unknown>;
+  const action = fp.a2uiAction ? parseA2uiAction(fp.a2uiAction) : null;
+  let steps: AinuiStep[];
+  let final: AinuiStep;
+  let surface: A2uiMessage[];
+  if (action) {
+    const fallbackDrive = ctx.driveId ?? (typeof state.driveId === "string" ? state.driveId : undefined);
+    const reply = await ainuiAction(host, {
+      ...action,
+      context: { ...(fallbackDrive && !action.context?.drive_id ? { drive_id: fallbackDrive } : {}), ...action.context },
+    });
+    if (reply.kind === "invalid") {
+      yield { type: EventType.RUN_ERROR, message: reply.error, code: "bad_request" } as BaseEvent;
+      return;
+    }
+    if (reply.kind === "refused") {
+      yield { type: EventType.RUN_ERROR, message: skillPermitted(auth, reply.skill) ?? `forbidden: ${reply.skill}`, code: "forbidden" } as BaseEvent;
+      return;
+    }
+    ({ steps, final, surface } = reply);
+  } else {
+    const call = planRun(input, ctx);
+    if ("error" in call) {
+      yield { type: EventType.RUN_ERROR, message: call.error, code: "bad_request" } as BaseEvent;
+      return;
+    }
+    const denied = skillPermitted(auth, call.skill);
+    if (denied) {
+      yield { type: EventType.RUN_ERROR, message: denied, code: "forbidden" } as BaseEvent;
+      return;
+    }
+    final = { ...call, result: await runSkill(ctx, call.skill, call.args) };
+    steps = [final];
+    surface = await ainuiSurface(host, call.skill, call.args, final.result);
+  }
+
+  yield { type: EventType.STEP_STARTED, stepName: final.skill } as BaseEvent;
+  for (const [i, step] of steps.entries()) {
+    const toolCallId = i === 0 ? `call_${runId}` : `call_${runId}_${i}`;
+    yield { type: EventType.TOOL_CALL_START, toolCallId, toolCallName: step.skill } as BaseEvent;
+    yield { type: EventType.TOOL_CALL_ARGS, toolCallId, delta: JSON.stringify(step.args) } as BaseEvent;
+    yield { type: EventType.TOOL_CALL_END, toolCallId } as BaseEvent;
+    const content = step.result.kind === "ok"
+      ? JSON.stringify(step.result.structured ?? {})
+      : JSON.stringify({ error: { code: step.result.code, message: step.result.message } });
+    yield { type: EventType.TOOL_CALL_RESULT, messageId: `tool_${runId}${i ? `_${i}` : ""}`, toolCallId, content, role: "tool" } as BaseEvent;
+  }
+
+  const driveId = (typeof final.args.drive_id === "string" && final.args.drive_id) || ctx.driveId;
+  yield {
+    type: EventType.ACTIVITY_SNAPSHOT,
+    messageId: `a2ui-surface-call_${runId}`,
+    activityType: AGUI_A2UI_ACTIVITY,
+    content: { [AGUI_A2UI_OPERATIONS_KEY]: surface },
+    replace: true,
+  } as BaseEvent;
+  yield {
+    type: EventType.STATE_SNAPSHOT,
+    snapshot: {
+      ...state,
+      driveId: driveId ?? null,
+      path: typeof final.args.path === "string" ? final.args.path : "",
+      skill: final.skill,
+      ok: final.result.kind === "ok",
+    },
+  } as BaseEvent;
+
+  const messageId = `msg_${runId}`;
+  const summary = final.result.kind === "ok" ? final.result.text : `[${final.result.code}] ${final.result.message}`;
+  yield { type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" } as BaseEvent;
+  yield { type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: summary || "(no output)" } as BaseEvent;
+  yield { type: EventType.TEXT_MESSAGE_END, messageId } as BaseEvent;
+  yield { type: EventType.STEP_FINISHED, stepName: final.skill } as BaseEvent;
   yield { type: EventType.RUN_FINISHED, threadId, runId } as BaseEvent;
 }
 

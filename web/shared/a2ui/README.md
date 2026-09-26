@@ -7,7 +7,8 @@ mapping from the user's clicks back to skills. MCP, A2A and AG-UI all send the
 | File | Role |
 |------|------|
 | `index.ts` | `a2uiForSkill(skill, args, result, driveId)` → A2UI messages; `parseA2uiAction` / `actionToSkill` (clicks → skill); `commandToSkill` (text grammar shared by A2A + AG-UI); protocol constants (MIME, catalog, A2A extension URI, AG-UI activity type, MCP `_meta` key). Pure; importable from client code. |
-| `renderer.js` | Dependency-free renderer for the emitted subset (plain ESM, browser). Inlined into the MCP Apps view (`lib/mcp-ui.ts`) and used by the `/docs/a2ui` playground. |
+| `ainui.ts` | AINUI v1 (`docs/AINUI.md`): the same messages with the AINUI catalog — `ainuiForSkill(skill, args, result, driveId, env)` (folder grid/list, file view with `{$asset}` refs, editor) and `dispatchAinuiAction(action, deps)` (open/search/view/edit/new_file/save/delete, multi-step). Pure; IO (runSkill, allow-list, role, lib/mime) is injected by `lib/ainui.ts`. Only sent to clients that opt in. |
+| `renderer.js` | Dependency-free renderer for the emitted subset (plain ESM, browser), basic + AINUI components; `{$asset}` resolves via `opts.resolveAsset` or aindrive's own fs routes, and FileView always adds a download link (`resolveAsset(asset, { download: true })`, default `fs/download`). Inlined into the MCP Apps view (`lib/mcp-ui.ts`) and used by the `/docs/a2ui` playground. |
 
 Where it's used:
 - MCP: `lib/mcp-http.ts`, which adds a result `_meta` field, the embedded resource, and the `a2ui_action` tool
@@ -19,3 +20,4 @@ Contracts and gotchas:
 - Action names (`aindrive.open`, `aindrive.search`, `aindrive.open_drive`) and their `context` keys are public API, documented in `app/docs/content/a2ui.md`. Change them only together with the docs.
 - `Icon.name` can't be data-bound in v0.9, so list rows use emoji labels instead of icons.
 - Images preview inline as data URLs up to about 1.5 MB. Larger ones show a note instead.
+- AINUI surfaces are tested in `lib/__tests__/ainui.test.ts` (basic components against the official schemas with the §3 extension props stripped, AINUI components against the spec's props). Keep `docs/AINUI.md` in sync when changing a builder or an action.

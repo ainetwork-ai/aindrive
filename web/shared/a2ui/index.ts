@@ -13,6 +13,10 @@
  * resulting client→server `action` maps back to a skill via actionToSkill().
  *
  * Pure: no IO, no Node APIs — safe to import from client code (docs playground).
+ *
+ * AINUI (docs/AINUI.md) — the same messages with aindrive's custom catalog
+ * (grid, thumbnail tiles, asset references, file viewer, write actions) — lives
+ * in ./ainui.ts and is only sent to clients that opt in.
  */
 import type { SkillResult } from "../agent-skills";
 
@@ -63,7 +67,7 @@ function surface(prefix: string, components: A2uiComponent[], data: Record<strin
   ];
 }
 
-function humanSize(n: unknown): string {
+export function humanSize(n: unknown): string {
   if (typeof n !== "number" || !Number.isFinite(n)) return "";
   const u = ["B", "KB", "MB", "GB", "TB"];
   let i = 0; let v = n;
@@ -71,8 +75,8 @@ function humanSize(n: unknown): string {
   return `${i === 0 ? v : v.toFixed(1)} ${u[i]}`;
 }
 
-const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
-const baseOf = (p: string) => (p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p);
+export const parentOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+export const baseOf = (p: string) => (p.includes("/") ? p.slice(p.lastIndexOf("/") + 1) : p);
 
 type Item = { label: string; meta: string; path: string; is_dir: boolean; drive_id: string };
 

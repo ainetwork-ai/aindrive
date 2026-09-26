@@ -45,7 +45,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     if (!d) return NextResponse.json({ error: "not found" }, { status: 404 });
     drive = d;
   } else {
-    const gate = await requireDriveRole(driveId, path, { min: "viewer" });
+    // Cookie, or a session JWT as bearer (server-side asset proxies, docs/AINUI.md §2).
+    const gate = await requireDriveRole(driveId, path, { min: "viewer", req });
     if (gate instanceof NextResponse) return gate;
     drive = gate.drive;
   }
