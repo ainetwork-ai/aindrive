@@ -5,15 +5,17 @@ import { dirname, join } from "node:path";
 import { createAskRunner } from "./ask-runner.js";
 import { FileIndex } from "./file-index.js";
 import { GeoLookup } from "./geo-lookup.js";
-import { indexFolder } from "./indexer.js";
+import { indexFolder, recognise, toRecognise } from "./indexer.js";
 import { contentWords, QueryParser } from "./query-parser.js";
 import * as router from "./router.js";
 
 /**
  * @param {{ indexDir: string, folders: () => { driveId: string, folder: string, label: string }[],
- *   inside: (root: string, rel: string) => string, mimeOf: (name: string) => string, onChange?: () => void }} o
+ *   inside: (root: string, rel: string) => string, mimeOf: (name: string) => string, onChange?: () => void,
+ *   clip?: () => Promise<any>, loadImage?: (abs: string) => Promise<any> }} o
+ *   clip: the photo model once it is on this Mac (null before); loadImage: a file decoded for it (mac-agent.js)
  */
-export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange = () => {} }) {
+export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange = () => {}, clip = async () => null, loadImage = null }) {
   let geo = null;
   const geoLookup = () => (geo ??= GeoLookup.loadDefault());
   /** driveId → { index, runner, state } */
@@ -28,8 +30,9 @@ export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange 
         move: async (from, to) => { const dest = inside(d.folder, to); await mkdir(dirname(dest), { recursive: true }); await rename(inside(d.folder, from), dest); },
       };
       const parser = new QueryParser(geoLookup());
-      const runner = createAskRunner({ index, geo: geoLookup(), parser, router, contentWords, ops });
-      e = { index, runner, parser, state: { running: false, done: 0, total: 0, failed: 0, phase: "idle", lastRunMs: 0 }, cancel: false };
+      const runner = createAskRunner({ index, geo: geoLookup(), parser, router, contentWords, ops, clip });
+      e = { index, runner, parser, state: { running: false, done: 0, total: 0, failed: 0, phase: "idle", lastRunMs: 0 }, cancel: false,
+        recognising: false, recognised: 0, toRecognise: 0 };
       byDrive.set(d.driveId, e);
     }
     return e;
@@ -50,12 +53,30 @@ export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange 
     } catch (err) {
       e.state.phase = `error: ${err.message}`;
     } finally { e.state.running = false; onChange(); }
+    void recogniseSoon(d);
+  }
+
+  /** Photo recognition in the background, after the file pass: answers never wait for it (they use what is done). */
+  async function recogniseSoon(d) {
+    const e = entry(d);
+    if (e.recognising || !loadImage) return;
+    const model = await clip().catch(() => null);
+    if (!model) return;
+    e.recognising = true; e.recognised = 0; e.toRecognise = toRecognise(e.index).length; onChange();
+    let last = 0;
+    try {
+      await recognise({ root: d.folder, index: e.index, clip: model, loadImage, cancelled: () => e.cancel,
+        onProgress: (p) => { e.recognised = p.done; if (Date.now() - last > 1000) { last = Date.now(); onChange(); } } });
+    } catch { /* model failed mid-run: the next index run tries again */ }
+    finally { e.recognising = false; onChange(); }
   }
 
   function indexStatus(driveId) {
     const e = byDrive.get(driveId);
     if (!e) return undefined;
-    return { indexed: e.index.count(), ...e.state, recognised: 0, toRecognise: 0, recognisedTotal: 0 };
+    const photos = [...e.index.rows.values()].filter((r) => r.kind === "photo" || r.kind === "screenshot");
+    return { indexed: e.index.count(), ...e.state, ...(e.recognising ? { running: true, phase: "recognising" } : {}),
+      recognised: e.recognised, toRecognise: e.toRecognise, recognisedTotal: photos.filter((r) => r.vec).length };
   }
 
   function forget(driveId) { const e = byDrive.get(driveId); if (e) e.cancel = true; byDrive.delete(driveId); }
@@ -128,7 +149,13 @@ export function createDeviceAgent({ indexDir, folders, inside, mimeOf, onChange 
     return { answer: `Found ${sources.length} file${sources.length === 1 ? "" : "s"} named “${query.trim()}”.`, sources, query: "name", context: null };
   }
 
-  return { ask, reindex, indexStatus, forget };
+  /** The model just arrived: recognise every folder's photos. */
+  function modelReady() { for (const d of folders()) void recogniseSoon(d); }
+
+  /** Quitting: stop every index and recognition run at its next file. */
+  function stopAll() { for (const e of byDrive.values()) e.cancel = true; }
+
+  return { ask, reindex, indexStatus, forget, modelReady, stopAll };
 }
 
 /** The phone's replies, said by the Mac: the router's words are shared (and parity-tested) with the phone. */

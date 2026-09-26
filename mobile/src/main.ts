@@ -2019,7 +2019,8 @@ function searchSheet(): string {
   const activeName = activeDrive ? (activeDrive.folderLabel || "a folder") : "";
   const recognised = ix.reduce((n, i) => n + (i.recognisedTotal ?? 0), 0);
   const models = status.models;
-  const indexLine = ON_MAC ? "" : active
+  // The Mac indexes quietly; only photo recognition, which takes a while, is shown there.
+  const indexLine = ON_MAC && active?.phase !== "recognising" ? "" : active
     ? (active.phase === "recognising"
       ? `<div class="indexline"><div style="flex:1">${activeDrive?.driveId.startsWith("src-calls") ? "Transcribing calls" : "Recognising photos & recordings"} in ${esc(activeName)}… ${active.recognised.toLocaleString()} / ${active.toRecognise.toLocaleString()}<div class="progress"><i style="width:${active.toRecognise ? Math.round(100 * active.recognised / active.toRecognise) : 0}%"></i></div></div></div>`
       : `<div class="indexline"><div style="flex:1">Indexing… ${active.done.toLocaleString()} / ${active.total.toLocaleString()}<div class="progress"><i style="width:${active.total ? Math.round(100 * active.done / active.total) : 0}%"></i></div></div></div>`)
@@ -2029,7 +2030,9 @@ function searchSheet(): string {
     : models.ready ? ""
     : `<div class="card" style="margin:0 0 12px;padding:12px 14px">
         <b style="font-size:14px">Recognise what's inside</b>
-        <p class="note" style="margin:4px 0 10px">Find photos by what they show, recordings by what was said, and get real summaries in the call report — all on this phone, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (photo + speech models, and a small language model for summaries).</p>
+        <p class="note" style="margin:4px 0 10px">${ON_MAC
+          ? `Find photos by what they show — "tree photos", "receipts" — on this Mac, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (the phone's photo model).`
+          : `Find photos by what they show, recordings by what was said, and get real summaries in the call report — all on this phone, offline. One-time download of about ${(models.total / 1e9).toFixed(1)} GB (photo + speech models, and a small language model for summaries).`}</p>
         ${models.error ? `<p class="hint" style="color:var(--err)">${esc(models.error)}</p>` : ""}
         <button class="btn small" id="ensure-models">Download models</button>
       </div>`;
@@ -2162,7 +2165,7 @@ function modelDrawer(): string {
               <span class="hint">${esc(what[x.id] ?? "")} · ${size(x.bytes)} · ${esc((x.license ?? "").replace(/\s*\(.*$/, ""))}</span></span>
             <span class="dot ${x.ready ? "on" : "off"}" title="${x.ready ? `On this ${DEVICE}` : "Not downloaded"}"></span>
           </div>`).join("")}
-        ${m && !(m.ready && m.llm) ? `<p style="margin:8px 0"><button class="btn small secondary" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download models"}</button></p>` : ""}
+        ${m && !(m.ready && (m.llm || ON_MAC)) ? `<p style="margin:8px 0"><button class="btn small secondary" id="models-download" ${m.downloading ? "disabled" : ""}>${m.downloading ? `Downloading… ${Math.round(100 * m.done / Math.max(1, m.total))}%` : "Download models"}</button></p>` : ""}
       </div>`;
   const agents = a2aAgents.map((a) => `
     <div class="card" style="padding:12px 16px;margin-bottom:8px">

@@ -1,5 +1,9 @@
 // Mirrors mobile/android/app/src/main/java/ai/ainetwork/aindrive/agent/AskRunner.java — the file questions and
-// tasks. Not on the Mac yet: call reports, speech transcripts, CLIP photo contents, the on-device LLM.
+// tasks. Photo contents come from CLIP (clip.js) as on the phone. Not on the Mac yet: call reports, speech
+// transcripts, the on-device LLM.
+import { match, prompt } from "./scene-labels.js";
+import { toEnglish } from "./content-words.js";
+import { unpackVec } from "./clip.js";
 import { AUDIO, ARCHIVE, DOCUMENT, PDF, PHOTO, PRESENTATION, SCREENSHOT, SPREADSHEET, VIDEO } from "./file-index.js";
 
 export const LIMIT = 50;
@@ -13,9 +17,9 @@ const ym = (ms) => ymd(ms).slice(0, 7);
  *
  * @param {{ index: import("./file-index.js").FileIndex, geo: any, parser: any, router: { understand: Function },
  *   contentWords: (keywords: string[]) => string[], ops?: { copy(from: string, to: string): Promise<void>, move(from: string, to: string): Promise<void> } | null,
- *   now?: () => number }} deps
+ *   now?: () => number, clip?: () => (Promise<any> | any) }} deps  clip: the loaded CLIP model, or null when this Mac has none
  */
-export function createAskRunner({ index, geo, parser, router, contentWords, ops = null, now = () => Date.now() }) {
+export function createAskRunner({ index, geo, parser, router, contentWords, ops = null, now = () => Date.now(), clip = () => null }) {
   const cityName = (city, ko) => (ko && geo?.cityKo?.(city)) || city;
   const countryName = (c, ko) => geo?.countryName?.(c, ko) ?? c;
 
@@ -40,7 +44,7 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
     if (index.count() === 0) return { ...out, answer: q.korean ? "아직 인덱스가 비어 있어요. 잠시 후 다시 물어봐 주세요." : "This folder isn't indexed yet — ask again in a moment.", sources: [] };
 
     const relaxed = [];
-    let hits = search(q);
+    let hits = await search(q);
     const onlyWords = q.kind == null && q.country == null && q.city == null && q.dateFrom == null && q.dateTo == null
       && q.minSize == null && !q.collect && !q.delete && !q.count && !q.limit && !q.bySize && !q.oldestFirst;
     if (!hits.size && q.keywords.length && onlyWords) {
@@ -50,7 +54,7 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
         : `Nothing here matches “${w}”. Try a place or date ("photos from Tokyo"), a kind of file ("last week's screenshots"), or a word from the file name.` };
     }
     if (!hits.size && q.kind != null && !q.keywords.length && (q.city != null || q.country != null || q.dateFrom != null)) {
-      const kind = q.kind; q.kind = null; relaxed.push("kind"); hits = search(q);
+      const kind = q.kind; q.kind = null; relaxed.push("kind"); hits = await search(q);
       if (!hits.size) { q.kind = kind; relaxed.pop(); }
     }
 
@@ -64,7 +68,7 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
     ranked = ranked.slice(0, cap);
 
     const sources = ranked.map((h) => ({ path: h.row.path, snippet: snippet(h), matchedBy: h.how }));
-    let answer = answerFor(q, ranked, total, relaxed);
+    let answer = answerFor(q, ranked, total, relaxed, ranked.some((h) => h.tier === 2));
     if (q.dateFrom != null && total > 0 && total <= 3 && !relaxed.length) answer += otherYears(q);
     let action;
     if (q.count) {
@@ -107,8 +111,8 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
     return s.replace(/[\\/:*?"<>|]/g, " ").trim();
   }
 
-  /** All rows matching the hard filters, keyed by path. Content words match the file name here (no CLIP / speech yet). */
-  function search(q) {
+  /** All rows matching the hard filters, keyed by path, each with the strongest way its content matched: its name, then what the photo shows. */
+  async function search(q) {
     const out = new Map();
     const base = { kind: q.kind, country: q.country, city: q.city, dateFrom: q.dateFrom, dateTo: q.dateTo, minSize: q.minSize };
     if (!q.keywords.length) {
@@ -121,6 +125,18 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
       const content = contentWords(q.keywords);
       if (content.length && content.length < q.keywords.length) {
         for (const r of index.query({ ...base, keywords: content }, LIMIT)) out.set(r.path, { row: r, tier: 0, how: "name" });
+      }
+    }
+    // What the photo looks like (AskRunner.java step 3): zero-shot against the everyday scenes, not a cosine cut-off.
+    const content = contentWords(q.keywords);
+    const emb = content.length ? await clip() : null;
+    const photoish = q.kind == null || q.kind === PHOTO || q.kind === SCREENSHOT;
+    if (emb && photoish) {
+      const photos = index.query({ ...base, kind: base.kind ?? PHOTO }, 0).filter((r) => r.vec);
+      if (photos.length) {
+        const t = await emb.embedText(prompt(content.map((k) => toEnglish(k)).join(" ")));
+        const p = match(t, await emb.labelVectors(), photos.map((r) => unpackVec(r.vec)));
+        p.forEach((score, i) => { const r = photos[i]; if (score >= 0 && !out.has(r.path)) out.set(r.path, { row: r, tier: 2, score, how: "photo" }); });
       }
     }
     return out;
@@ -157,10 +173,11 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
     if (r.city != null) s += (s ? " · " : "") + r.city;
     if (r.country != null) s += (r.city != null ? ", " : s ? " · " : "") + r.country;
     if (r.city == null && r.country == null) s += (s ? " · " : "") + r.kind + " · " + humanSize(r.size);
+    if (h.tier === 2) s += ` · looks like it (${Math.round(Math.min(99, h.score * 300))}%)`;
     return s;
   }
 
-  function answerFor(q, rows, total, relaxed) {
+  function answerFor(q, rows, total, relaxed, anyContent = false) {
     const ko = q.korean;
     if (!rows.length) {
       const where = q.city != null ? cityName(q.city, ko) : q.country != null ? countryName(q.country, ko) : null;
@@ -206,8 +223,10 @@ export function createAskRunner({ index, geo, parser, router, contentWords, ops 
       if (when) a += when + " ";
       if (photoish && (where || when)) a += "찍은 ";
       a += `${noun} ${total}${countKo(onlyKind)}를 찾았어요.${shown}`;
+      if (anyContent) a += " 사진 내용을 인식해서 찾았어요.";
     } else {
       a += `Found ${total} ${noun}${where ? ` taken in ${where}` : ""}${when ? ` (${when})` : ""}${shown}.`;
+      if (anyContent) a += " Matched by what the photos show.";
     }
     return a;
   }

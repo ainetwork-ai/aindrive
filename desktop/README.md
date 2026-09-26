@@ -14,7 +14,7 @@ Electron utility process, kept running from the menu bar and restored at login.
 | `src/agents.js` | one CLI process per folder (spawner injected); state from its output; restarts, backoff, clean stop. No Electron imports — unit-tested |
 | `src/shell/mac-bridge.js` | loaded first in the shell: Capacitor plugin headers + `nativePromise`/`nativeCallback` (so `AindriveAgent`, `CapacitorCookies` are "native"), and `fetch` → main process with the session cookie (CapacitorHttp's job) |
 | `src/preload.cjs` | the window's only bridge: `native:call`, `native:event`, `native:fetch` |
-| `src/agent/` | **aindrive-on-device** on the Mac: the phone's query understanding ported by hand from `mobile/android/.../agent/` (`router.js`, `query-parser.js`, `social-reply.js`, `geo-lookup.js`; `java-regex.js` pins Java regex semantics), a per-folder file index with EXIF date + GPS → city (`file-index.js`, `indexer.js`), answers and tasks (`ask-runner.js`), and the multi-folder merge (`device-agent.js`). Parity with the phone is tested on the same dialogue benchmark and SGD / Persona-chat guards (`src/__tests__/`) |
+| `src/agent/` | **aindrive-on-device** on the Mac: the phone's query understanding ported by hand from `mobile/android/.../agent/` (`router.js`, `query-parser.js`, `social-reply.js`, `geo-lookup.js`; `java-regex.js` pins Java regex semantics), a per-folder file index with EXIF date + GPS → city (`file-index.js`, `indexer.js`), answers and tasks (`ask-runner.js`), and the multi-folder merge (`device-agent.js`). **Photos by what they show**: the phone's MobileCLIP2-S2 on `onnxruntime-node` (`clip.js`, `clip-tokenizer.js`, `scene-labels.js` — same preprocessing, tokenizer ids and zero-shot scene match as the phone; `model-store.js` downloads the ~400 MB model on "Download models", sha256-checked; vocab/merges/manifest copied into `assets/clip/`). Recognition runs after the file pass, in the background (`indexer.js` `recognise`). Parity with the phone is tested on the same dialogue benchmark and SGD / Persona-chat guards (`src/__tests__/`) |
 | `src/store.js` | `folders.json` in the app's data dir: drives served here, folders picked here |
 | `scripts/prepare-shell.mjs`, `prepare-cli.mjs` | build `../mobile` into `shell/` (+ bridge, CSP) and `../cli` into `cli/` |
 | `scripts/build-mac.mjs`, `after-pack.cjs`, `dmg/` | `.app` + `.dmg` per arch from Linux or macOS; fuses off; pinned downloads |
@@ -43,10 +43,15 @@ Releases: `docs/RELEASING.md` (desktop track; tag `desktop-vX.Y.Z` → `.github/
 - **Same screens, wide layout.** A window ≥ 1024 px wide shows home, the open
   folder and the agent side by side (`mobile/src/main.ts` `renderScreens`,
   `#app.wide` in `ui.css`) — the phone's screens as panes, not a second UI.
-- **Not on the Mac (yet):** call-log / camera-roll agent sources, recognition
-  models (photo contents, transcripts) and the on-device LLM — `ask` understands
-  like the phone but matches by kind, date, place and name only — and Google's
-  account picker (sign-in goes through the browser).
+- **Not on the Mac (yet):** call-log / camera-roll agent sources, speech
+  transcripts and the on-device LLM, and Google's account picker (sign-in goes
+  through the browser). Photo recognition needs Apple silicon: `onnxruntime-node`
+  ships no Intel-Mac build, so the x64 app leaves it out (`after-pack.cjs`).
+- **Photos are decoded by QuickLook** (HEIC, RAW…). Its thumbnail's 1× bitmap is
+  the photo squeezed into the requested square — read pixels from its PNG
+  (`mac-agent.js` `loadImage`), or CLIP sees a distorted photo.
+- **Release ONNX sessions before quitting** (`mac.shutdown()` in `before-quit`):
+  live sessions abort the process on exit (`recursive_mutex lock failed`).
 - **Handoff links** (files handed to aindrive-cloud): `registerHandoffs` writes
   random keys to `~/.aindrive/handoffs.json` (0600); the bundled CLI serves only
   those keys over `handoff-read` (`cli/src/handoffs.js`).

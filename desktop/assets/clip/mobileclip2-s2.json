@@ -1,0 +1,39 @@
+{
+ "model": "MobileCLIP2-S2 (Apple, 2025) — OpenCLIP ONNX export by RuteNL",
+ "license": "Apple ML Research Model License (apple-amlr: research use only — same licence as MobileCLIP v1)",
+ "embedDim": 512,
+ "imageSize": 256,
+ "contextLength": 77,
+ "minScore": 0.23,
+ "margin": 0.05,
+ "files": [
+  {
+   "id": "vision",
+   "name": "mobileclip2-s2/visual.onnx",
+   "url": "https://huggingface.co/RuteNL/MobileCLIP2-S2-OpenCLIP-ONNX/resolve/main/visual.onnx",
+   "sha256": "8bb691c4085f8767c8237e324816a430f8264b5c2d4542ec2d9f88d701faa823",
+   "bytes": 2310022
+  },
+  {
+   "id": "visionData",
+   "name": "mobileclip2-s2/visual.onnx.data",
+   "url": "https://huggingface.co/RuteNL/MobileCLIP2-S2-OpenCLIP-ONNX/resolve/main/visual.onnx.data",
+   "sha256": "365f1b95476a0852aaf5b136432383ff9405eedc3deb5347c2b8398a3838f50c",
+   "bytes": 143589376
+  },
+  {
+   "id": "text",
+   "name": "mobileclip2-s2/text.onnx",
+   "url": "https://huggingface.co/RuteNL/MobileCLIP2-S2-OpenCLIP-ONNX/resolve/main/text.onnx",
+   "sha256": "c7046e2a3c4078fd0b10865f3063bfa8e89c0808de3bd2fcaf89ba0d0a2fe90f",
+   "bytes": 1517435
+  },
+  {
+   "id": "textData",
+   "name": "mobileclip2-s2/text.onnx.data",
+   "url": "https://huggingface.co/RuteNL/MobileCLIP2-S2-OpenCLIP-ONNX/resolve/main/text.onnx.data",
+   "sha256": "b0e6225b1a9e8b15b1abedcc430ebb369c9695831c9b0922acf9e83906e03e47",
+   "bytes": 253755392
+  }
+ ]
+}

@@ -9,7 +9,8 @@
  *   thumbnail           macOS thumbnails, served as app://thumb/…
  *   ask                 aindrive-on-device: the phone's agent over this Mac's folders (agent/)
  *
- * What only the phone has — call log, on-device recognition models, Google's
+ * Photos are recognised like on the phone (MobileCLIP2-S2, agent/clip.js; Apple silicon —
+ * onnxruntime-node ships no Intel-Mac build). What only the phone has — call log, speech models, Google's
  * account picker, handoff links (served by the phone agent's `handoff-read`) —
  * answers with a clear "not on the Mac" instead of pretending.
  *
@@ -22,8 +23,11 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, promises as fsp, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { driveUrlOf, isFolder } from "./agents.js";
 import { createDeviceAgent } from "./agent/device-agent.js";
+import { createClip } from "./agent/clip.js";
+import { createModelStore } from "./agent/model-store.js";
 
 const MIME = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic", ".svg": "image/svg+xml",
@@ -170,9 +174,47 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
     try { return statSync(dirname(uri)).dev === dev; } catch { return false; }
   }
 
+  // ── the photo model (the phone's MobileCLIP2-S2), downloaded on request into the app's data folder ──
+  const clipAssets = fileURLToPath(new URL("../assets/clip/", import.meta.url));
+  const clipManifest = JSON.parse(readFileSync(join(clipAssets, "mobileclip2-s2.json"), "utf8"));
+  const photosSupported = process.platform === "darwin" && process.arch === "arm64";
+  const models = createModelStore({ dir: join(indexDir, "..", "models"), manifest: clipManifest });
+  let clipLoad = null, clipError = null;
+  /** The model once it is here (loaded once); null before the download, or on an Intel Mac. */
+  const loadClip = () => {
+    if (!photosSupported || !models.ready()) return Promise.resolve(null);
+    return (clipLoad ??= createClip({ files: { vision: models.file("vision"), text: models.file("text") }, assetsDir: clipAssets, manifest: clipManifest })
+      .catch((e) => { clipError = `Couldn't load the photo model: ${e.message}`; clipLoad = null; return null; }));
+  };
+  /**
+   * A photo decoded by macOS (QuickLook: HEIC, RAW, JPEG…) at about 512–1024 px — all CLIP needs. The
+   * thumbnail's 1× bitmap is the photo squeezed into the requested square; its PNG is the real aspect,
+   * so the pixels come from that (CLIP crops the centre, as on the phone — a squeezed photo reads worse).
+   */
+  const loadImage = async (abs) => {
+    let img = null;
+    try {
+      const t = await nativeImage.createThumbnailFromPath(abs, { width: 512, height: 512 });
+      if (!t.isEmpty()) img = nativeImage.createFromBuffer(t.toPNG());
+    } catch { /* no preview */ }
+    if (!img || img.isEmpty()) img = nativeImage.createFromPath(abs);
+    if (!img || img.isEmpty()) return null;
+    const { width, height } = img.getSize();
+    return { width, height, data: img.toBitmap(), order: "bgra" };
+  };
+  function modelsStatus() {
+    const s = models.status();
+    const ready = photosSupported && models.ready();
+    return {
+      list: [{ id: "image", role: "Photos", name: "MobileCLIP2-S2", license: clipManifest.license, engine: "ONNX Runtime", bytes: s.total, ready }],
+      photos: ready, speech: false, llm: false, ready, downloading: s.downloading, done: s.done, total: s.total,
+      error: !photosSupported ? "Recognising photos needs a Mac with Apple silicon." : s.error ?? clipError,
+    };
+  }
+
   /** aindrive-on-device: the phone's agent over the folders this Mac holds (agent/device-agent.js). */
   const device = createDeviceAgent({
-    indexDir, inside, mimeOf,
+    indexDir, inside, mimeOf, clip: loadClip, loadImage,
     folders: () => drives().filter((d) => isFolder(d.folder)).map((d) => ({ driveId: d.driveId, folder: d.folder, label: d.label ?? basename(d.folder) })),
     onChange: () => emit(status()),
   });
@@ -197,7 +239,7 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
         index: device.indexStatus(d.driveId),
       };
     });
-    return { running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out };
+    return { running: out.some((d) => d.running), connected: out.some((d) => d.connected), drives: out, models: modelsStatus() };
   }
   agents.on("change", () => emit(status()));
 
@@ -384,7 +426,23 @@ export function createMacAgent({ agents, store, electron, thumbsDir, indexDir = 
       for (const d of drives()) if (!opts?.driveId || d.driveId === opts.driveId) indexSoon(d);
       return status();
     },
-    async ensureModels() { return status(); },
+    /** Before quitting: stop recognition and release the photo model (live ONNX sessions abort the process on exit). */
+    async shutdown() {
+      device.stopAll();
+      const c = clipLoad && (await clipLoad.catch(() => null));
+      await c?.close().catch(() => {});
+    },
+
+    /** Download the photo model (about 400 MB, checksummed), then recognise every folder's photos. */
+    async ensureModels() {
+      if (photosSupported && !models.ready()) {
+        let last = 0;
+        void models.ensure(() => { if (Date.now() - last > 500) { last = Date.now(); emit(status()); } })
+          .then(() => { emit(status()); device.modelReady(); })
+          .catch(() => emit(status()));
+      }
+      return status();
+    },
 
     /** The phone's on-device agent, on this Mac's folders: small talk, dates, places (EXIF GPS), kinds, names, tasks. */
     async ask({ query, context, driveId }) {
