@@ -11,6 +11,10 @@ export interface FolderContext {
   recursive: boolean;
   /** how many levels below the chosen folder were listed (0 = only its direct children) */
   depth: number;
+  /** The device it lives on, when that is not this one (a folder on another device, listed by the server). */
+  device?: string;
+  /** What that device's own agent says about these files (it has looked at the photos; the listing hasn't). */
+  note?: string;
   totalEntries: number;
   truncated: boolean;
   entries: Pick<FileEntry, "name" | "path" | "isDir" | "size" | "mime">[];
