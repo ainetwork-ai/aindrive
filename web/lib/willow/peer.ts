@@ -54,8 +54,8 @@ function cacheOf(store: AnyStore): Cache {
   }
   return c;
 }
-const certsCached = async (store: AnyStore) => (cacheOf(store).certs ??= await certsIn(store));
-const revsCached = async (store: AnyStore) => (cacheOf(store).revs ??= await revocationsIn(store));
+export const certsCached = async (store: AnyStore) => (cacheOf(store).certs ??= await certsIn(store));
+export const revsCached = async (store: AnyStore) => (cacheOf(store).revs ??= await revocationsIn(store));
 async function authorsCached(store: AnyStore, docPath: string[]) {
   const c = cacheOf(store), k = docPath.join("/");
   let m = c.authors.get(k);
@@ -133,7 +133,9 @@ export function allowFor(driveId: string, userId: string | null) {
   return (e: Pick<Entry<Uint8Array, Uint8Array, Uint8Array>, "path">): boolean => {
     const parts = partsOf(e.path);
     if (parts[0] === "_id") return true;
-    if (parts[0] === "ainmem") return (RANK[roleOf(driveId, userId, "")] ?? 0) >= RANK.viewer;
+    // ainmem transactions carry page content, which ainmem shows to its teamspace's
+    // members, not to everyone who can view the drive: editors only (review I6)
+    if (parts[0] === "ainmem") return !!userId && writes(driveId, userId);
     if (parts[0] !== "doc") return false;
     const u = parts.indexOf("~u");
     const path = parts.slice(1, u < 0 ? parts.length : u).join("/");

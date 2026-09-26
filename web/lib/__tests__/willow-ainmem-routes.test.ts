@@ -41,6 +41,8 @@ describe("ainmem routes", () => {
     expect(await res.json()).toEqual({ results: ["malformed"] });
     const big = await ingest.POST(new Request("http://x", { method: "POST", headers: await bearer("u-ed"), body: JSON.stringify({ drive: "dR", entries: new Array(201).fill({}) }) }));
     expect(big.status).toBe(413);
+    const huge = await ingest.POST(new Request("http://x", { method: "POST", headers: { ...(await bearer("u-ed")), "content-length": String(9 * 1024 * 1024) }, body: JSON.stringify({ drive: "dR", entries: [] }) }));
+    expect(huge.status).toBe(413); // review I9: refused before the body is read
   });
   it("authors: readers of the drive only", async () => {
     const url = "http://x/api/willow/ainmem-authors?drive=dR&teamspace=t&page=p";

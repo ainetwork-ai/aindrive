@@ -5,7 +5,11 @@ import { ingestEntries, INGEST_MAX } from "@/lib/willow/ainmem";
 
 /** POST { drive, entries } → { results } — ainmem's signed transactions (and the
  *  signing devices' certificates) handed in by an editor of the drive, one verdict each. */
+const MAX_BODY = 8 * 1024 * 1024;
+
 export async function POST(req: Request) {
+  // refuse an oversized body before reading it (review I9)
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY) return NextResponse.json({ error: "too large" }, { status: 413 });
   const user = await getRequestUser(req);
   if (!user || user === "invalid") return NextResponse.json({ error: "sign in" }, { status: 401 });
   const body = (await req.json().catch(() => null)) as { drive?: unknown; entries?: unknown } | null;

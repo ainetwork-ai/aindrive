@@ -8,12 +8,11 @@
 import { db } from "@/lib/db.js";
 import { partsOf, toHex, utf8 } from "@/shared/willow/bytes";
 import { resolvePerson } from "@/shared/willow/cert";
-import { certsIn, revocationsIn } from "@/shared/willow/doc";
 import { namespaceOf } from "@/shared/willow/schemes";
 import { decodeEntry, type WireEntry } from "@/shared/willow/wire";
 import { ANY_SUBSPACE, OPEN_END, type Area } from "@jsr/earthstar__willow-utils";
 import { openDriveStore } from "./store-node";
-import { acceptFor, storeDir } from "./peer";
+import { acceptFor, certsCached, revsCached, storeDir } from "./peer";
 import { roleOf } from "./roles";
 import { trust } from "./attestation";
 
@@ -63,24 +62,33 @@ export async function ingestEntries(driveId: string, callerId: string, entries: 
 export type AinmemAuthor = { tx: string; userId: string; name: string | null; strength: "wallet" | "attested"; device: string; at: number };
 
 /** Who signed each transaction of a page, as the store's certificates and revocations
- *  say now; entries from devices that no longer resolve are left out. */
+ *  say now; entries from devices that no longer resolve are left out. A transaction id
+ *  belongs to its first signer: a later entry at the same path from another device
+ *  (someone claiming an edit they saw go by) is ignored (review I3). */
 export async function ainmemAuthors(driveId: string, teamspaceId: string, pageId: string): Promise<AinmemAuthor[]> {
   const store = openDriveStore(driveId, storeDir());
-  const certs = await certsIn(store), revs = await revocationsIn(store);
+  const certs = await certsCached(store), revs = await revsCached(store);
   const area = { includedSubspaceId: ANY_SUBSPACE, pathPrefix: [utf8("ainmem"), utf8(teamspaceId), utf8(pageId)], timeRange: { start: 0n, end: OPEN_END } } as Area<Uint8Array>;
   const names = new Map<string, string | null>();
   const nameOf = (id: string) => {
     if (!names.has(id)) names.set(id, (db.prepare("SELECT name FROM users WHERE id = ?").get(id) as { name?: string } | undefined)?.name ?? null);
     return names.get(id)!;
   };
-  const out: AinmemAuthor[] = [];
+  const first = new Map<string, { device: string; timestamp: bigint }>();
   for await (const [entry] of store.query({ area, maxCount: 0, maxSize: 0n }, "timestamp")) {
     const parts = partsOf(entry.path);
     if (parts.length !== 4) continue;
-    const device = toHex(entry.subspaceId);
-    const p = await resolvePerson(device, certs, revs, trust(), entry.timestamp);
+    const seen = first.get(parts[3]);
+    if (!seen || entry.timestamp < seen.timestamp) first.set(parts[3], { device: toHex(entry.subspaceId), timestamp: entry.timestamp });
+  }
+  const people = new Map<string, Awaited<ReturnType<typeof resolvePerson>>>();
+  const out: AinmemAuthor[] = [];
+  for (const [tx, { device, timestamp }] of first) {
+    const key = `${device}@${timestamp}`;
+    if (!people.has(key)) people.set(key, await resolvePerson(device, certs, revs, trust(), timestamp));
+    const p = people.get(key);
     if (!p) continue;
-    out.push({ tx: parts[3], userId: p.userId, name: nameOf(p.userId), strength: p.strength, device, at: Number(entry.timestamp / 1000n) });
+    out.push({ tx, userId: p.userId, name: nameOf(p.userId), strength: p.strength, device, at: Number(timestamp / 1000n) });
   }
   return out;
 }

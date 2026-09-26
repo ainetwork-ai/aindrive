@@ -85,10 +85,22 @@ describe("ainmem entries in a drive's store", () => {
     expect(await ingestEntries("dA", "u-ed", [{ nope: 1 }])).toEqual(["malformed"]);
   });
 
-  it("sends ainmem entries to viewers of the drive, not to strangers", () => {
+  it("sends ainmem entries (page content) to editors of the drive only (review I6)", () => {
     const e = { path: pathOf(TX("t6")) };
-    expect(allowFor("dA", "u-view")(e)).toBe(true);
+    expect(allowFor("dA", "u-ed")(e)).toBe(true);
+    expect(allowFor("dA", "u-view")(e)).toBe(false);
     expect(allowFor("dA", "u-none")(e)).toBe(false);
+  });
+
+  it("credits a transaction to its first signer, not a later claim on the same id (review I3)", async () => {
+    const a = await device("u-first");
+    const m = await device("u-later");
+    const first = await txEntry(a.kp, ["ainmem", "ts-7", "page-7", "tx-7"]);
+    await new Promise((r) => setTimeout(r, 5));
+    const later = await txEntry(m.kp, ["ainmem", "ts-7", "page-7", "tx-7"]);
+    expect(await ingestEntries("dA", "u-ed", [a.certWire, m.certWire, later.wire, first.wire])).toEqual([null, null, null, null]);
+    const authors = await ainmemAuthors("dA", "ts-7", "page-7");
+    expect(authors.map((x) => x.userId)).toEqual(["u-first"]);
   });
 
   it("names the signer of each transaction of a page", async () => {
