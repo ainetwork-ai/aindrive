@@ -31,3 +31,4 @@ export function startHeartbeat(
 export function recordAgentHello(driveId: string, msg: unknown): void;
 export function forgetAgentCapabilities(driveId: string): void;
 export function agentMaterializes(driveId: string): boolean;
+export function sendToAgent(driveId: string, frame: Record<string, unknown>): boolean;

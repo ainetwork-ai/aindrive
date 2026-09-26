@@ -38,6 +38,13 @@ export function recordAgentHello(driveId, msg) {
 export function forgetAgentCapabilities(driveId) { willowAgents.delete(driveId); }
 export function agentMaterializes(driveId) { return willowAgents.has(driveId); }
 
+/** Send a non-RPC frame (P2P signalling) to the drive's primary agent; false when none is connected. */
+export function sendToAgent(driveId, frame) {
+  const entry = agents.get(driveId);
+  if (!entry || entry.ws.readyState !== entry.ws.OPEN) return false;
+  try { entry.ws.send(JSON.stringify(frame)); return true; } catch { return false; }
+}
+
 export function isAgentConnected(driveId) {
   return agents.has(driveId);
 }
@@ -199,6 +206,8 @@ export async function onAgentConnect(ws, req, query) {
     // Agent → server hello: record the device hostname so the UI can show it
     // next to the drive name (helpful when the user runs `aindrive` on multiple
     // machines under the same account).
+    // P2P signalling from the agent: to the browser session it belongs to (lib/media/rtc-signal.ts)
+    if (msg?.type === "rtc") { try { globalThis.__aindrive_rtc_route?.(driveId, msg); } catch {} return; }
     if (msg?.type === "agent-hello" && typeof msg.hostname === "string") {
       recordAgentHello(driveId, msg);
       const h = msg.hostname.slice(0, 100);

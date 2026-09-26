@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { onAgentConnect, startRotationSweeper } from "./lib/agents.js";
 import { onDocConnect, readUserFromCookie } from "./lib/dochub.js";
 // Built from lib/willow/peer.ts by scripts/build-willow-peer.mjs (predev / prebuild).
-import { onWillowSync, agentUser } from "./lib/willow/peer.bundle.mjs";
+import { onWillowSync, agentUser, onRtcSignal } from "./lib/willow/peer.bundle.mjs";
 import { log } from "./lib/logger.js";
 import { runBootChecks } from "./lib/boot-checks.js";
 import { runAllMigrations } from "./lib/migrations/run.js";
@@ -78,6 +78,14 @@ server.on("upgrade", (req, socket, head) => {
         log.error({ err: e?.message || String(e) }, "willow sync error");
         try { ws.close(1011, "internal error"); } catch {}
       }
+    });
+    return;
+  }
+  if (pathname === "/api/media/rtc") {
+    // P2P media: signalling between a browser and the drive's agent (lib/media/rtc-signal.ts)
+    willowWss.handleUpgrade(req, socket, head, async (ws) => {
+      try { await onRtcSignal(ws, req, query, await readUserFromCookie(req.headers["cookie"])); }
+      catch (e) { log.error({ err: e?.message || String(e) }, "rtc signal error"); try { ws.close(1011, "internal error"); } catch {} }
     });
     return;
   }
