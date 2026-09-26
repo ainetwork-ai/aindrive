@@ -66,7 +66,7 @@ export function foldA2aEvent(r: A2aReply, event: unknown): A2aReply {
     const arts = ((e.artifacts as { parts?: unknown }[] | undefined) ?? []).map((a) => a2aTextOf(a.parts)).filter(Boolean).join("\n\n");
     const state = status?.state;
     const done = !!state && FINAL_STATES.has(state);
-    const text = [said, arts].filter(Boolean).join("\n\n");
+    const text = arts === said ? said : [said, arts].filter(Boolean).join("\n\n");   // an agent that repeats its answer as an artifact shows it once
     return { ...r, contextId, state, done, ...(done ? { text: text || r.text } : {}) };
   }
   return r;

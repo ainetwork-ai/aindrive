@@ -45,6 +45,8 @@ test('an agent without streaming answers with one Message or one Task, folded th
   assert.deepEqual([m.done, m.text, m.contextId], [true, 'Plain reply', 'c9']);
   const t = fold([{ kind: 'task', id: 't', contextId: 'c2', status: { state: 'completed', message: { parts: text('Said') } }, artifacts: [{ parts: text('Made') }] }]).r;
   assert.equal(a2aReplyText(t), 'Said\n\nMade');
+  const twice = fold([{ kind: 'task', id: 't', status: { state: 'completed', message: { parts: text('Same') } }, artifacts: [{ parts: text('Same') }] }]).r;
+  assert.equal(a2aReplyText(twice), 'Same', 'a reply repeated as an artifact shows once');
 });
 
 test('a turn that ends without text says how it ended', () => {
