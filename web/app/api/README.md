@@ -20,6 +20,7 @@ Auth / identity:
 | `wallet/{nonce,verify}` | SIWE login challenge + verify → sets wallet cookie (payment instrument only, never a login — see CLAUDE.md). |
 | `wallet/link` | bind a wallet to the logged-in account (origin+nonce bound; reclaims past receipts). Login required. |
 | `wallet/me` | current wallet address from cookie. |
+| `apps` (GET/POST), `apps/[appId]` (DELETE) | connected apps (`lib/connected-apps.ts`): another app (e.g. ainmem) registers itself on the signed-in account with `{name, url, key}` — its spaces URL (https, public address; re-checked on every call) and the Bearer key this server sends it. One row per app origin. Login required. |
 | `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
@@ -32,6 +33,7 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |
 | `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path; `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. Gates live in `lib/sales.ts`, shared with the MCP sale tools. |
+| `apps` (GET `?path`), `apps/[appId]/spaces/[spaceId]` (PUT `{path, shared}`) | the share sheet's "Shared in apps": the creator's connected apps' spaces and whether this folder is shared into each; PUT relays the toggle to the app. Creator only (GET answers `{apps: []}` to anyone else). |
 | `payout` (GET/PUT/DELETE) | path-scoped payout wallets. Creator only. PUT validation shared with MCP `set_payout_wallet`. |
 | `receipts` | payment ledger, newest first. Owner only. (Paged over MCP: `list_receipts`.) |
 | `showcase` (GET), `showcase/[shareId]` (GET) | upsell list / purchase entry (302 → `/s/<token>`). Gated to accounts related to the drive (owner or any member row). |

@@ -378,6 +378,22 @@ function open() {
       FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_account_tokens_prev_refresh ON account_tokens(prev_refresh_hash);
+    -- Connected apps (lib/connected-apps.ts): another app (e.g. ainmem) that a
+    -- person's folders can be shared into, per folder, from the share sheet.
+    -- The app registers itself on the account with its spaces URL and a key
+    -- this server sends back as a Bearer when it lists or toggles spaces.
+    CREATE TABLE IF NOT EXISTS connected_apps (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      spaces_url TEXT NOT NULL,
+      app_key TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(user_id, origin),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
   `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the

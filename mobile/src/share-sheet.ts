@@ -5,13 +5,14 @@
 // and ledger live on the Manage sheet.
 import { I, icon } from "./icons";
 import { esc, msgOf, on, val, when, ROLE_HELP, type Ctx, type Sheet } from "./kit";
-import type { Member, Invite, Share, Role } from "./web";
+import type { Member, Invite, Share, Role, AppSpaces } from "./web";
 
 export class ShareSheet implements Sheet {
   kind = "drawer" as const;
   private members: Member[] = [];
   private pending: Invite[] = [];
   private shares: Share[] = [];
+  private apps: AppSpaces[] = [];
   private tokens: string[] = ["USDC"];
   private loading = true;
   private error: string | null = null;
@@ -30,12 +31,13 @@ export class ShareSheet implements Sheet {
     const first = !this.members.length && !this.shares.length && this.loading;
     if (first) this.ctx.rerender();
     try {
-      const [m, s, st] = await Promise.all([
+      const [m, s, st, apps] = await Promise.all([
         this.ctx.web.members(this.driveId),
         this.ctx.web.shares(this.driveId),
         this.ctx.web.settings(this.driveId).catch(() => ({ allowed_tokens: null })),
+        this.ctx.web.appSpaces(this.driveId, this.path).catch(() => []),
       ]);
-      this.members = m.members; this.pending = m.pending; this.myRole = m.myRole; this.shares = s;
+      this.members = m.members; this.pending = m.pending; this.myRole = m.myRole; this.shares = s; this.apps = apps;
       this.tokens = tokenSymbols(st.allowed_tokens);
       this.error = null;
     } catch (e) { this.error = msgOf(e); }
@@ -101,6 +103,23 @@ export class ShareSheet implements Sheet {
             </li>`).join("")}
         </ul>
       </div>
+
+      ${owner && this.apps.length ? `
+      <div class="scard" id="sh-apps-card">
+        <div class="scard-h">${I.users} Shared in apps</div>
+        <div class="scard-s">Workspaces in apps you connected. Turn this folder on or off in each.</div>
+        ${this.apps.map(({ app, spaces, error }) => `
+          <p class="note group" style="margin:10px 0 4px">${esc(app.name)} · ${esc(app.origin.replace(/^https?:\/\//, ""))}</p>
+          ${error ? `<p class="hint" style="color:var(--err)">${esc(error)}</p>` : !spaces.length ? `<p class="hint">No workspaces there yet.</p>` : `
+          <ul class="list">
+            ${spaces.map((sp) => `
+              <li data-app="${esc(app.id)}" data-space="${esc(sp.id)}">
+                <div class="avatar">${esc(sp.icon || "👥")}</div>
+                <div class="grow"><div class="t">${esc(sp.name)}</div><div class="s">${esc([sp.group, sp.members ? `${sp.members} people` : ""].filter(Boolean).join(" · "))}</div></div>
+                <button class="switch" role="switch" aria-checked="${sp.shared}" aria-label="Share into ${esc(sp.name)}" data-app-toggle ${this.busy ? "disabled" : ""}></button>
+              </li>`).join("")}
+          </ul>`}`).join("")}
+      </div>` : ""}
 
       ${owner ? `
       <div class="scard" id="sh-sell-card">
@@ -170,6 +189,13 @@ export class ShareSheet implements Sheet {
       const sid = el.closest<HTMLElement>("[data-sid]")!.dataset.sid!;
       const s = this.shares.find((x) => x.id === sid);
       await this.ctx.web.editShare(this.driveId, sid, { listed: !s?.listed });
+    }));
+    on(root, "[data-space] [data-app-toggle]", "click", (el) => this.act(async () => {
+      const li = el.closest<HTMLElement>("[data-space]")!;
+      const shared = el.getAttribute("aria-checked") !== "true";
+      const name = this.apps.flatMap((a) => a.spaces).find((s) => s.id === li.dataset.space)?.name ?? "the workspace";
+      await this.ctx.web.setAppShared(this.driveId, li.dataset.app!, li.dataset.space!, this.path, shared);
+      this.ctx.notify(shared ? `Shared into ${name}` : `No longer shared into ${name}`);
     }));
     on(root, "#sh-sell", "click", () => this.act(async () => {
       const price = Number(val(root, "sh-price"));

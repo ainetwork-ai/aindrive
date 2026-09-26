@@ -58,7 +58,7 @@ export type PendingInvite = {
 
 /** One flat section of the Share drawer: title row (+ optional right-aligned
  *  action) over the body. The shell separates sections with divide-y. */
-function DrawerSection({
+export function DrawerSection({
   title, description, action, children, sectionRef,
 }: {
   title: ReactNode;

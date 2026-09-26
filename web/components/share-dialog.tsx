@@ -12,6 +12,7 @@ import {
   SellSection, PeopleSection, FreeLinkSection,
   type Share, type Member,
 } from "./share-dialog-sections";
+import { AppsSection } from "./share-apps-section";
 
 type FocusSection = "sell" | "share" | undefined;
 
@@ -336,6 +337,8 @@ export function ShareDialog({
           setEditingSell={setEditingSell}
           copyLink={copyLink}
         />
+
+        {isOwner && <AppsSection driveId={driveId} path={defaultPath} />}
 
         {/* Audit lives in Settings — the drawer only points there ("create in
             context, audit in settings"). */}

@@ -17,6 +17,9 @@ export interface DriveSettings { payout_wallet?: string | null; payout_wallets?:
 export interface Agent { id: string; name: string; description?: string; folder?: string; persona?: string; llm?: { provider: string; model: string } }
 export interface McpToken { id: string; name: string; scope: "read" | "write"; created_at?: string; expires_at?: string | null; last_used_at?: string | null; mine?: boolean }
 export interface Me { id: string; email?: string | null; name?: string | null; wallet?: string | null }
+/** A connected app's workspace a folder can be shared into (web/lib/connected-apps.ts). */
+export interface AppSpace { id: string; name: string; group?: string; icon?: string | null; members?: number; shared: boolean }
+export interface AppSpaces { app: { id: string; name: string; origin: string }; spaces: AppSpace[]; error?: string }
 export interface DriveInfo { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null; owned?: boolean }
 
 export class Web {
@@ -52,6 +55,12 @@ export class Web {
   receipts(driveId: string) { return this.call<{ receipts: Receipt[] }>("GET", this.d(driveId, "/receipts")).then((r) => r.receipts); }
   setPayout(driveId: string, path: string, wallet: string) { return this.call<unknown>("PUT", this.d(driveId, "/payout"), { path, wallet }); }
   clearPayout(driveId: string, path: string) { return this.call<unknown>("DELETE", this.d(driveId, "/payout"), { path }); }
+
+  // connected apps (e.g. ainmem): share this folder into their workspaces
+  appSpaces(driveId: string, path: string) { return this.call<{ apps: AppSpaces[] }>("GET", this.d(driveId, `/apps?${new URLSearchParams({ path })}`)).then((r) => r.apps); }
+  setAppShared(driveId: string, appId: string, spaceId: string, path: string, shared: boolean) {
+    return this.call<unknown>("PUT", this.d(driveId, `/apps/${encodeURIComponent(appId)}/spaces/${encodeURIComponent(spaceId)}`), { path, shared });
+  }
 
   tokenLookup(chain: string, address: string) {
     return this.call<{ ok: boolean; token: { symbol: string; decimals: number; name: string | null; version: string | null; chain: string; asset: string }; eip3009: boolean }>("POST", "/api/token-lookup", { chain, address });
