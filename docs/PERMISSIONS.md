@@ -91,7 +91,7 @@ grants cover; the server re-checks every API call regardless of the UI.
 
 Identity is an **account** (`users` row); its id is the root that every drive,
 grant, and receipt hangs off. An account is reached by **either** an
-email+password credential **or** a wallet via SIWE (`POST /api/wallet/login`).
+email+password credential, **a Google account** (`POST /api/auth/google`: a Google-verified email reaches the account with that email, linked by Google `sub` in `account_google`), **or** a wallet via SIWE (`POST /api/wallet/login`).
 
 A **wallet-provisioned account** — minted for a wallet that paid or signed in
 (`resolveAccountForWallet`) — is **self-custodial**: losing the wallet loses the

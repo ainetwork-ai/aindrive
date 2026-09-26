@@ -195,6 +195,125 @@ public class AindriveAgentPlugin extends Plugin {
         }, "aindrive-read").start();
     }
 
+    private static final java.util.concurrent.ExecutorService THUMBS = java.util.concurrent.Executors.newFixedThreadPool(6);
+    private final java.util.Map<String, SafFs> thumbFs = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * A small JPEG of a photo or video as a file in the app cache (pass its path to
+     * Capacitor.convertFileSrc): the phone's own cached thumbnail when it has one — what the
+     * gallery shows — else a streamed downsample. Cached on disk, so a second look is instant,
+     * and nothing crosses the bridge as base64.
+     */
+    @PluginMethod
+    public void thumbnail(PluginCall call) {
+        String folderUri = call.getString("folderUri");
+        String path = call.getString("path");
+        int px = call.getInt("px", 256);
+        if (folderUri == null || path == null) { call.reject("missing folderUri/path"); return; }
+        THUMBS.execute(() -> {
+            try {
+                java.io.File dir = new java.io.File(getContext().getCacheDir(), "thumbs");
+                java.io.File f = new java.io.File(dir, sha1(folderUri + "|" + path + "|" + px) + ".jpg");
+                if (!(f.isFile() && f.length() > 0)) {
+                    SafFs fs = thumbFs.computeIfAbsent(folderUri, u -> new SafFs(getContext(), Uri.parse(u)));
+                    String docId = fs.resolve(path);
+                    if (docId == null) throw new java.io.FileNotFoundException("no such file");
+                    android.graphics.Bitmap bmp = null;
+                    try { bmp = android.provider.DocumentsContract.getDocumentThumbnail(getContext().getContentResolver(), fs.uriOf(docId), new android.graphics.Point(px, px), null); }
+                    catch (Exception ignored) { }
+                    if (bmp == null) bmp = decodeSmall(fs, docId, px);
+                    if (bmp == null) throw new java.io.IOException("no preview");
+                    dir.mkdirs();
+                    java.io.File tmp = new java.io.File(dir, f.getName() + ".tmp");
+                    try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out); }
+                    bmp.recycle();
+                    if (!tmp.renameTo(f)) throw new java.io.IOException("cache write failed");
+                }
+                JSObject ret = new JSObject();
+                ret.put("path", f.getAbsolutePath());
+                call.resolve(ret);
+            } catch (Exception ex) {
+                call.reject("No thumbnail: " + ex.getMessage());
+            }
+        });
+    }
+
+    /** Decode at ~px from the file descriptor (no full read into memory), EXIF-rotated. */
+    private static @androidx.annotation.Nullable android.graphics.Bitmap decodeSmall(SafFs fs, String docId, int px) throws java.io.IOException {
+        try (android.os.ParcelFileDescriptor pfd = fs.openFd(docId)) {
+            java.io.FileDescriptor fd = pfd.getFileDescriptor();
+            android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+            o.inJustDecodeBounds = true;
+            android.graphics.BitmapFactory.decodeFileDescriptor(fd, null, o);
+            if (o.outWidth <= 0) return null;
+            int sample = 1;
+            while (Math.min(o.outWidth, o.outHeight) / (sample * 2) >= px) sample *= 2;
+            android.system.Os.lseek(fd, 0, android.system.OsConstants.SEEK_SET);
+            android.graphics.BitmapFactory.Options o2 = new android.graphics.BitmapFactory.Options();
+            o2.inSampleSize = sample;
+            android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFileDescriptor(fd, null, o2);
+            if (bmp == null) return null;
+            try {
+                android.system.Os.lseek(fd, 0, android.system.OsConstants.SEEK_SET);
+                int rot = new androidx.exifinterface.media.ExifInterface(fd).getRotationDegrees();
+                if (rot != 0) {
+                    android.graphics.Matrix m = new android.graphics.Matrix(); m.postRotate(rot);
+                    android.graphics.Bitmap r = android.graphics.Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
+                    if (r != bmp) { bmp.recycle(); bmp = r; }
+                }
+            } catch (Exception ignored) { }
+            return bmp;
+        } catch (android.system.ErrnoException e) {
+            throw new java.io.IOException(e);
+        }
+    }
+
+    private static String sha1(String s) {
+        try {
+            byte[] d = java.security.MessageDigest.getInstance("SHA-1").digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder h = new StringBuilder();
+            for (byte b : d) h.append(String.format("%02x", b));
+            return h.toString();
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
+    }
+
+    /**
+     * Sign in with Google (Credential Manager): the account picker, then a Google ID token for
+     * `serverClientId` (the server's web OAuth client, from GET /api/auth/google). The shell sends
+     * the token to POST /api/auth/google, which verifies it and returns the session.
+     */
+    @PluginMethod
+    public void googleSignIn(PluginCall call) {
+        String clientId = call.getString("serverClientId");
+        if (clientId == null || clientId.isEmpty()) { call.reject("missing serverClientId"); return; }
+        androidx.credentials.CredentialManager cm = androidx.credentials.CredentialManager.create(getContext());
+        com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption option =
+                new com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(clientId).build();
+        androidx.credentials.GetCredentialRequest request = new androidx.credentials.GetCredentialRequest.Builder().addCredentialOption(option).build();
+        cm.getCredentialAsync(getActivity(), request, null, java.util.concurrent.Executors.newSingleThreadExecutor(),
+                new androidx.credentials.CredentialManagerCallback<androidx.credentials.GetCredentialResponse, androidx.credentials.exceptions.GetCredentialException>() {
+                    @Override public void onResult(androidx.credentials.GetCredentialResponse result) {
+                        androidx.credentials.Credential c = result.getCredential();
+                        if (c instanceof androidx.credentials.CustomCredential
+                                && com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(c.getType())) {
+                            try {
+                                com.google.android.libraries.identity.googleid.GoogleIdTokenCredential g =
+                                        com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.createFrom(c.getData());
+                                JSObject ret = new JSObject();
+                                ret.put("idToken", g.getIdToken());
+                                ret.put("email", g.getId());
+                                ret.put("name", g.getDisplayName());
+                                call.resolve(ret);
+                            } catch (Exception e) { call.reject("Google sign-in failed: " + e.getMessage()); }
+                        } else call.reject("Google sign-in returned no Google account");
+                    }
+                    @Override public void onError(androidx.credentials.exceptions.GetCredentialException e) {
+                        boolean cancelled = e instanceof androidx.credentials.exceptions.GetCredentialCancellationException;
+                        call.reject(cancelled ? "cancelled" : "Google sign-in failed: " + e.getMessage(), cancelled ? "CANCELLED" : null);
+                    }
+                });
+    }
+
     /** Hand a file to whatever app handles its type (the phone's "open"). */
     @PluginMethod
     public void openFile(PluginCall call) {
@@ -348,7 +467,7 @@ public class AindriveAgentPlugin extends Plugin {
 
     @PluginMethod
     public void start(PluginCall call) {
-        boolean source = Boolean.TRUE.equals(call.getBoolean("source", false));
+        boolean source = Boolean.TRUE.equals(call.getBoolean("source", false)) || Boolean.TRUE.equals(call.getBoolean("localOnly", false));
         String[] required = source ? new String[]{"driveId", "folderUri"} : new String[]{"serverUrl", "driveId", "agentToken", "driveSecret", "folderUri"};
         for (String k : required) {
             if (call.getString(k) == null) {
@@ -382,7 +501,8 @@ public class AindriveAgentPlugin extends Plugin {
                 .putExtra("folderUri", call.getString("folderUri"))
                 .putExtra("folderLabel", call.getString("folderLabel", ""))
                 .putExtra("indexOnStart", Boolean.TRUE.equals(call.getBoolean("indexOnStart", false)))
-                .putExtra("source", Boolean.TRUE.equals(call.getBoolean("source", false)));
+                .putExtra("source", Boolean.TRUE.equals(call.getBoolean("source", false)))
+                .putExtra("localOnly", Boolean.TRUE.equals(call.getBoolean("localOnly", false)));
         java.util.ArrayList<String> exclude = new java.util.ArrayList<>();
         com.getcapacitor.JSArray ex = call.getArray("excludeUris");
         if (ex != null) for (int i = 0; i < ex.length(); i++) { try { exclude.add(ex.getString(i)); } catch (Exception ignored) { } }
@@ -474,7 +594,7 @@ public class AindriveAgentPlugin extends Plugin {
         if (svc == null) { call.reject("Turn a drive on first"); return; }
         // SQLite + parse: fast, but keep it off the WebView thread regardless.
         new Thread(() -> {
-            try { call.resolve(toJs(svc.ask(query, context))); }
+            try { call.resolve(toJs(svc.ask(query, context, call.getString("driveId")))); }
             catch (Exception e) { call.reject(e.getMessage() == null ? "ask failed" : e.getMessage()); }
         }, "aindrive-ask").start();
     }

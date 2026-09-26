@@ -42,6 +42,8 @@ export interface AgentConfig {
    * driveId is "src-calls" or "src-photos"; no credentials needed.
    */
   source?: boolean;
+  /** Run the folder for the on-device agent only (indexed, searchable) without connecting it to aindrive. */
+  localOnly?: boolean;
 }
 
 /** Photo-index state for one drive; drives `Index photos` progress in the UI. */
@@ -89,6 +91,8 @@ export interface FileEntry {
 
 export interface AskResult {
   answer: string;
+  /** How the agent read the turn: "chat" (small talk), "out" (not about files), "calls", or the parsed filters. */
+  query?: string;
   /** The effective filters of this turn — pass back as `context` on the next ask. */
   context?: Record<string, unknown> | null;
   /** Filters were inherited from the previous turn. */
@@ -126,6 +130,8 @@ export interface DriveStatus {
   source?: boolean;
   folderLabel: string | null;
   running: boolean;
+  /** False while the folder runs only for the on-device agent (P2P off: indexed here, not on aindrive). */
+  p2p?: boolean;
   connected: boolean;
   rpcCount: number;
   lastError: string | null;
@@ -165,6 +171,10 @@ export interface AindriveAgentPlugin {
   openFile(opts: { folderUri: string; path: string }): Promise<void>;
   /** File bytes for the in-app viewer; images come back downscaled to `maxPx` (default 1600) as JPEG. */
   readFile(opts: { folderUri: string; path: string; maxPx?: number }): Promise<{ mime: string; name: string; base64: string }>;
+  /** A cached JPEG thumbnail (the phone's own, like the gallery's) as a file path: show it via Capacitor.convertFileSrc. */
+  /** Sign in with Google (account picker) → an ID token for the server's OAuth client. */
+  googleSignIn(opts: { serverClientId: string }): Promise<{ idToken: string; email?: string; name?: string }>;
+  thumbnail(opts: { folderUri: string; path: string; px?: number }): Promise<{ path: string }>;
   /**
    * Adds a drive to the running agent (starting the foreground service on
    * Android if needed) and connects it. Calling again with the same driveId
@@ -179,7 +189,8 @@ export interface AindriveAgentPlugin {
   /** Download the recognition models (≈230 MB, checksum-verified) and recognise indexed files. Progress via statusChanged. */
   ensureModels(): Promise<AgentStatus>;
   /** Ask the on-device agent — fully offline (gazetteer + local index). `context` is the previous answer's `context` so follow-ups ("…and share them") apply to the same files. */
-  ask(opts: { query: string; context?: Record<string, unknown> }): Promise<AskResult>;
+  /** `driveId`: answer from that one folder only (the folder chat). */
+  ask(opts: { query: string; context?: Record<string, unknown>; driveId?: string }): Promise<AskResult>;
   addListener(
     event: "statusChanged",
     cb: (s: AgentStatus) => void,

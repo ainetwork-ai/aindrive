@@ -166,6 +166,8 @@ public final class SafFs {
         return i < 0 ? rel : rel.substring(i + 1);
     }
 
+    public Uri uriOf(String docId) { return docUri(docId); }
+
     private Uri docUri(String docId) {
         return DocumentsContract.buildDocumentUriUsingTree(treeUri, docId);
     }
@@ -181,6 +183,14 @@ public final class SafFs {
         String cached = pathToDocId.get(norm);
         if (cached != null) return cached;
 
+        // Phone storage names documents by path ("primary:DCIM/Camera/x.jpg"): build the id and check
+        // it with one row, instead of listing every folder on the way (Camera holds thousands of files).
+        if (!segs.isEmpty() && "com.android.externalstorage.documents".equals(treeUri.getAuthority())) {
+            String guess = rootDocId + (rootDocId.endsWith(":") ? "" : "/") + norm;
+            try (Cursor c = cr.query(docUri(guess), new String[]{DocumentsContract.Document.COLUMN_DOCUMENT_ID}, null, null, null)) {
+                if (c != null && c.moveToFirst()) { pathToDocId.put(norm, guess); return guess; }
+            } catch (Exception ignored) { /* fall back to walking */ }
+        }
         String docId = rootDocId;
         StringBuilder walked = new StringBuilder();
         for (String seg : segs) {

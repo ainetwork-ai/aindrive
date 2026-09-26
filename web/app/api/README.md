@@ -13,6 +13,7 @@ Auth / identity:
 | Route | Role / gate |
 |-------|-------------|
 | `auth/login`, `auth/signup`, `auth/logout` | email+password session cookie; rate-limited. First-ever signup → `admin`. |
+| `auth/google` | GET → `{clientId}` (404 unless `AINDRIVE_GOOGLE_CLIENT_IDS`); POST `{idToken}` → verifies a Google ID token (`lib/google-auth.ts`: JWKS, issuer, our audience, verified email), links/creates the account, sets the cookie and returns `{token, user}` for native apps. |
 | `auth/cli/{start,approve,poll}` | device-link flow: CLI starts, browser (logged-in) approves a `linkId`, CLI polls with its device secret to get a session token. |
 | `auth/me`, `whoami` | current user (+ wallet, for whoami). |
 | `wallet/{nonce,verify}` | SIWE login challenge + verify → sets wallet cookie (payment instrument only, never a login — see CLAUDE.md). |

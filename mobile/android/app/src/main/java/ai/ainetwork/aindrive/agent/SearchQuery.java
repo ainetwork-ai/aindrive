@@ -45,8 +45,12 @@ public final class SearchQuery {
     public boolean bySize;
     /** "통화내역 많이 통화한 순으로 / sort my calls by who I talk to most": the call-history report, not a file search. */
     public boolean calls;
+    /** "who likes me the most": rank contacts by signs of affection in calls, with proof. */
+    public boolean likes;
     /** Filters were inherited from the previous turn ("…and share them"). */
     public boolean followUp;
+    /** Words that were neither a filter nor content ("check", "weather"): a search box doesn't get those. */
+    public int ignoredWords;
 
     /** Any hard filter or content word — i.e. the question said WHAT to look for. */
     public boolean hasFilters() {
@@ -61,13 +65,14 @@ public final class SearchQuery {
     /**
      * The filters as JSON — the "context" the shell keeps between turns so
      * "…and share them" knows what "them" is. Task flags are not carried: each
-     * turn says what to do.
+     * turn says what to do. How many and in what order ("the 5 oldest") are.
      */
     public JSONObject toJson() {
         try {
             return new JSONObject().putOpt("kind", kind).putOpt("country", country).putOpt("city", city)
                     .putOpt("dateFrom", dateFrom).putOpt("dateTo", dateTo).putOpt("minSize", minSize)
-                    .put("keywords", new JSONArray(keywords)).put("korean", korean);
+                    .put("keywords", new JSONArray(keywords)).put("korean", korean)
+                    .put("limit", limit).put("oldestFirst", oldestFirst).put("bySize", bySize);
         } catch (Exception e) { return new JSONObject(); }
     }
 
@@ -83,6 +88,9 @@ public final class SearchQuery {
         JSONArray k = o.optJSONArray("keywords");
         if (k != null) for (int i = 0; i < k.length(); i++) q.keywords.add(k.optString(i));
         q.korean = o.optBoolean("korean");
+        q.limit = o.optInt("limit");
+        q.oldestFirst = o.optBoolean("oldestFirst");
+        q.bySize = o.optBoolean("bySize");
         return q.hasFilters() ? q : null;
     }
 

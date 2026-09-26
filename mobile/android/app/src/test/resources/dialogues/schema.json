@@ -1,0 +1,112 @@
+{
+ "service_name": "aindrive_files",
+ "description": "Find, organise and share the files on this phone, and report on its call history",
+ "slots": [
+  {
+   "name": "kind",
+   "description": "File kind",
+   "is_categorical": true,
+   "possible_values": [
+    "photo",
+    "video",
+    "audio",
+    "screenshot",
+    "pdf",
+    "document",
+    "spreadsheet",
+    "presentation",
+    "archive"
+   ]
+  },
+  {
+   "name": "city",
+   "description": "Where a photo was taken (GeoNames name)",
+   "is_categorical": false
+  },
+  {
+   "name": "country",
+   "description": "Where a photo was taken (ISO-3166 alpha-2)",
+   "is_categorical": false
+  },
+  {
+   "name": "date_from",
+   "description": "Taken/created on or after (YYYY-MM-DD)",
+   "is_categorical": false
+  },
+  {
+   "name": "date_to",
+   "description": "Taken/created before (YYYY-MM-DD, exclusive)",
+   "is_categorical": false
+  },
+  {
+   "name": "content",
+   "description": "What the photo shows / the recording or document is about",
+   "is_categorical": false
+  },
+  {
+   "name": "limit",
+   "description": "How many files to return",
+   "is_categorical": false
+  },
+  {
+   "name": "oldest",
+   "description": "Oldest first",
+   "is_categorical": true,
+   "possible_values": [
+    true,
+    false
+   ]
+  },
+  {
+   "name": "largest",
+   "description": "Largest first",
+   "is_categorical": true,
+   "possible_values": [
+    true,
+    false
+   ]
+  }
+ ],
+ "intents": [
+  {
+   "name": "FindFiles",
+   "description": "List files matching the state"
+  },
+  {
+   "name": "CollectFiles",
+   "description": "Copy the matching files into a new folder"
+  },
+  {
+   "name": "ShareFiles",
+   "description": "Collect the matching files (or the last report) and share a link"
+  },
+  {
+   "name": "MoveFiles",
+   "description": "Move the matching files into a new folder"
+  },
+  {
+   "name": "DeleteFiles",
+   "description": "Delete the matching files"
+  },
+  {
+   "name": "CountFiles",
+   "description": "Say how many files match"
+  },
+  {
+   "name": "CallReport",
+   "description": "Rank contacts by calls and summarise what was talked about"
+  },
+  {
+   "name": "WhoLikesMe",
+   "description": "Rank contacts by warmth, with evidence from calls"
+  },
+  {
+   "name": "Chat",
+   "description": "Greeting, thanks, goodbye \u2014 no file access"
+  },
+  {
+   "name": "OutOfScope",
+   "description": "A request aindrive cannot serve (booking, weather\u2026) \u2014 no file access"
+  }
+ ]
+}

@@ -107,6 +107,7 @@ public final class FileIndex extends SQLiteOpenHelper {
      * redone by the current one (a better engine must not leave old text behind).
      */
     public void adoptSpeechEngine(String engine) {
+        // Transcripts take hours to redo, so only a real engine change drops them.
         String prev = getMeta("speechEngine");
         if (engine.equals(prev)) return;
         if (prev != null) getWritableDatabase().execSQL("UPDATE files SET transcript = NULL WHERE transcript IS NOT NULL");
@@ -115,10 +116,11 @@ public final class FileIndex extends SQLiteOpenHelper {
 
     /** Photo vectors from a different image model are meaningless to the new one: drop them so they get recomputed. */
     public void adoptImageModel(String model) {
-        String prev = getMeta("imageModel");
+        // ".v2": vectors from before the model was recorded came from an unknown (older) model — recompute them.
+        String prev = getMeta("imageModel.v2");
         if (model.equals(prev)) return;
-        if (prev != null) getWritableDatabase().execSQL("UPDATE files SET vec = NULL WHERE vec IS NOT NULL");
-        setMeta("imageModel", model);
+        getWritableDatabase().execSQL("UPDATE files SET vec = NULL WHERE vec IS NOT NULL");
+        setMeta("imageModel.v2", model);
     }
 
     /** True when the file is unknown or changed since it was indexed. */

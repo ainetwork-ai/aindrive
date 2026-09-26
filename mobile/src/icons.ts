@@ -3,8 +3,8 @@
 // here end up in the bundle.
 import {
   ArrowDown, ArrowLeft, ArrowRightLeft, ArrowUp, Bot, Check, ChevronRight, CircleDollarSign, Copy, Download, EllipsisVertical,
-  ExternalLink, File, FileAudio, FileCode, FileImage, FileText, FileVideo, Folder, FolderInput, FolderPlus, HardDrive, House,
-  Info, LayoutGrid, Link, List, Lock, LogOut, Mail, Menu, MessageSquare, Pencil, Phone, Plug, Plus, RefreshCw, Save, Search,
+  ExternalLink, File, History, FileAudio, FileCode, FileImage, FileText, FileVideo, Folder, FolderInput, FolderPlus, HardDrive, House,
+  Info, Cpu, Globe, LayoutGrid, Link, List, Lock, LogOut, Mail, Menu, MessageSquare, Pencil, Phone, Plug, Plus, RefreshCw, Save, Search,
   Settings, Share2, Smartphone, Sparkles, Trash2, TrendingUp, Upload, UserMinus, Users, Wallet, X,
   type IconNode,
 } from "lucide";
@@ -18,7 +18,7 @@ const nodes = {
   agent: Bot, back: ArrowLeft, check: Check, chevron: ChevronRight, close: X, copy: Copy, dollar: CircleDollarSign,
   download: Download, drive: HardDrive, edit: Pencil, external: ExternalLink, file: File, fileAudio: FileAudio, fileCode: FileCode,
   fileImage: FileImage, fileText: FileText, fileVideo: FileVideo, folder: Folder, folderPlus: FolderPlus, grid: LayoutGrid,
-  home: House, info: Info, link: Link, list: List, lock: Lock, logout: LogOut, mail: Mail, menu: Menu, chat: MessageSquare,
+  home: House, history: History, info: Info, cpu: Cpu, globe: Globe, link: Link, list: List, lock: Lock, logout: LogOut, mail: Mail, menu: Menu, chat: MessageSquare,
   more: EllipsisVertical, move: FolderInput, phone: Smartphone, call: Phone, plug: Plug, plus: Plus, refresh: RefreshCw,
   save: Save, search: Search, settings: Settings, share: Share2, sparkle: Sparkles, trash: Trash2, sales: TrendingUp,
   upload: Upload, userMinus: UserMinus, users: Users, wallet: Wallet, swap: ArrowRightLeft, up: ArrowUp, down: ArrowDown,

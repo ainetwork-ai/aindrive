@@ -94,6 +94,8 @@ public class AgentService extends Service {
     private final ExecutorService rpcPool = Executors.newFixedThreadPool(4);
     /** One indexing run at a time across all drives — it is I/O bound on the same storage anyway. */
     private final ExecutorService indexPool = Executors.newSingleThreadExecutor();
+    /** Call archives transcribe for hours: their own worker, so photo recognition elsewhere isn't stuck behind them. */
+    private final ExecutorService callPool = Executors.newSingleThreadExecutor();
     private volatile GeoLookup geo;
     /** driveId → live connection. Insertion order = the order the user started them. */
     private final Map<String, Conn> conns = new LinkedHashMap<>();
@@ -191,6 +193,7 @@ public class AgentService extends Service {
                 intent.getStringExtra("driveSecret"),
                 intent.getStringExtra("folderLabel"));
         conn.source = intent.getBooleanExtra("source", false);
+        conn.localOnly = intent.getBooleanExtra("localOnly", false);
         try {
             Uri tree = Uri.parse(intent.getStringExtra("folderUri"));
             conn.fs = new SafFs(this, tree, intent.getStringArrayListExtra("excludeUris"));
@@ -208,7 +211,7 @@ public class AgentService extends Service {
         Conn previous;
         synchronized (conns) { previous = conns.put(driveId, conn); }
         if (previous != null) previous.close();
-        if (!conn.source) conn.connect();
+        if (!conn.source && !conn.localOnly) conn.connect();
         if (intent.getBooleanExtra("indexOnStart", false)) reindex(driveId);
         // START_STICKY: if Android reclaims us under memory pressure, come back
         // and reconnect rather than leaving the drive silently offline.
@@ -228,6 +231,11 @@ public class AgentService extends Service {
          * shared drive ({@link #outputConn()}).
          */
         boolean source;
+        /**
+         * A folder the on-device agent answers about while it is NOT connected to aindrive (P2P off):
+         * indexed and searchable here, no socket. Turning P2P on replaces it with a connected Conn.
+         */
+        boolean localOnly;
         SafFs fs;
         RpcHandler rpc;
         FileIndex index;
@@ -406,6 +414,7 @@ public class AgentService extends Service {
             try {
                 o.put("driveId", driveId);
                 o.put("source", source);
+                o.put("p2p", !source && !localOnly);
                 o.put("folderLabel", folderLabel == null ? JSONObject.NULL : folderLabel);
                 o.put("running", !closed && !stopping);
                 o.put("connected", connected);
@@ -485,7 +494,15 @@ public class AgentService extends Service {
         if (c != null) return c;
         synchronized (this) {
             if (clip == null) {
-                try { ModelStore s = clipStore(); if (s.ready()) clip = new ClipEmbedder(this, s); }
+                try {
+                    ModelStore s = clipStore();
+                    if (s.ready()) {
+                        ClipEmbedder made = new ClipEmbedder(this, s);
+                        clip = made;
+                        // The scene vocabulary costs ~90 text passes: pay it now, not on the first question.
+                        new Thread(() -> { try { made.labelVectors(); } catch (Exception e) { Log.w(TAG, "scene labels: " + e.getMessage()); } }, "clip-labels").start();
+                    }
+                }
                 catch (Exception e) { Log.w(TAG, "clip unavailable: " + e.getMessage()); }
             }
             return clip;
@@ -583,7 +600,7 @@ public class AgentService extends Service {
             for (Conn c : conns.values()) if ((driveId == null || driveId.equals(c.driveId)) && c.fs != null) targets.add(c);
         }
         for (Conn c : targets) {
-            indexPool.execute(() -> {
+            (isCallSource(c.driveId) ? callPool : indexPool).execute(() -> {
                 try { c.indexer().runOnce((done, total, phase) -> notifyStatus()); }
                 catch (RuntimeException e) { c.lastError = e.getMessage(); Log.w(TAG, "index failed", e); notifyStatus(); }
             });
@@ -626,6 +643,7 @@ public class AgentService extends Service {
     /** The shared drive that receives what the agent makes out of a source. */
     @Nullable Conn outputConn() {
         synchronized (conns) {
+            for (Conn c : conns.values()) if (!c.source && !c.localOnly && c.fs != null && !c.closed) return c;
             for (Conn c : conns.values()) if (!c.source && c.fs != null && !c.closed) return c;
         }
         return null;
@@ -634,10 +652,10 @@ public class AgentService extends Service {
     /** The phone's call log, newest first; null when READ_CALL_LOG was not granted. */
     @Nullable java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> callLog() {
         java.util.List<ai.ainetwork.aindrive.agent.CallReport.Call> out = new java.util.ArrayList<>();
-        String[] cols = {android.provider.CallLog.Calls.NUMBER, android.provider.CallLog.Calls.CACHED_NAME, android.provider.CallLog.Calls.DURATION, android.provider.CallLog.Calls.DATE};
+        String[] cols = {android.provider.CallLog.Calls.NUMBER, android.provider.CallLog.Calls.CACHED_NAME, android.provider.CallLog.Calls.DURATION, android.provider.CallLog.Calls.DATE, android.provider.CallLog.Calls.TYPE};
         try (android.database.Cursor c = getContentResolver().query(android.provider.CallLog.Calls.CONTENT_URI, cols, null, null, android.provider.CallLog.Calls.DATE + " DESC")) {
             if (c == null) return null;
-            while (c.moveToNext()) out.add(new ai.ainetwork.aindrive.agent.CallReport.Call(c.getString(0) == null ? "" : c.getString(0), c.getString(1), c.getLong(2), c.getLong(3)));
+            while (c.moveToNext()) out.add(new ai.ainetwork.aindrive.agent.CallReport.Call(c.getString(0) == null ? "" : c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4)));
         } catch (SecurityException e) {
             return null;
         }
@@ -646,10 +664,22 @@ public class AgentService extends Service {
 
     JSONObject ask(String query) throws Exception { return ask(query, null); }
 
-    JSONObject ask(String query, @Nullable JSONObject context) throws Exception {
+    JSONObject ask(String query, @Nullable JSONObject context) throws Exception { return ask(query, context, null); }
+
+    /** @param onlyDrive answer from this one folder (the folder chat); null = every folder on the phone. */
+    JSONObject ask(String query, @Nullable JSONObject context, @Nullable String onlyDrive) throws Exception {
         java.util.List<Conn> targets;
-        synchronized (conns) { targets = new java.util.ArrayList<>(conns.values()); }
+        synchronized (conns) {
+            targets = new java.util.ArrayList<>(conns.values());
+            if (onlyDrive != null) {
+                Conn c = conns.get(onlyDrive);
+                if (c == null || c.fs == null) throw new IllegalStateException("that folder isn't open on this phone");
+                targets = new java.util.ArrayList<>(java.util.Collections.singletonList(c));
+            }
+        }
         if (targets.isEmpty()) throw new IllegalStateException("no drive is running");
+        // Small talk and out-of-scope turns are answered once, before any folder is searched.
+        for (Conn t : targets) if (t.fs != null) { JSONObject r = t.askRunner().route(query, context); if (r != null) return r; break; }
         if (ai.ainetwork.aindrive.agent.QueryParser.isCallsTask(query)) {
             // One report, over the call-recordings source when there is one (else the first drive: it may hold recordings).
             Conn c = null;
@@ -686,11 +716,22 @@ public class AgentService extends Service {
             results.put(c, r);
             if (r.getJSONArray("sources").length() > 0 && !r.optBoolean("relaxed")) anyExact = true;
         }
-        for (java.util.Map.Entry<Conn, JSONObject> e : results.entrySet()) {
+        // Originals first: a folder the agent collected ("food photos 2026-09") holds copies of
+        // camera-roll photos, and the same photo must not be listed once per folder.
+        java.util.List<java.util.Map.Entry<Conn, JSONObject>> ordered = new java.util.ArrayList<>(results.entrySet());
+        ordered.sort((x, y) -> Boolean.compare(!x.getKey().source, !y.getKey().source));
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (java.util.Map.Entry<Conn, JSONObject> e : ordered) {
             Conn c = e.getKey();
             JSONObject r = e.getValue();
             if (anyExact && r.optBoolean("relaxed")) continue;
-            JSONArray s = r.getJSONArray("sources");
+            JSONArray all = r.getJSONArray("sources"), s = new JSONArray();
+            for (int i = 0; i < all.length(); i++) {
+                JSONObject src = all.getJSONObject(i);
+                String p = src.optString("path");
+                if (seen.add(p.substring(p.lastIndexOf('/') + 1) + "|" + src.optString("snippet"))) s.put(src);
+            }
+            if (all.length() > 0 && s.length() == 0) continue;   // every hit was a copy already listed
             for (int i = 0; i < s.length(); i++) {
                 JSONObject src = s.getJSONObject(i);
                 // Keep `path` drive-relative (the web deep-link needs it); the
@@ -705,15 +746,22 @@ public class AgentService extends Service {
             }
         }
         if (answer.length() == 0) {
-            // Nobody matched: prefer a folder whose reply says where its photos ARE from over one with no locations.
+            // Nobody matched: prefer a reply that says where photos ARE from, and among those the
+            // biggest folder's (a small collected folder's "only Seoul" would mislead about the camera roll).
+            // "There are 69 photos taken in Tokyo, but none show food" beats a list of other places.
             String best = null;
-            for (JSONObject r : results.values()) {
-                String a = r.getString("answer");   // reuse: asking again could repeat a task
-                if (best == null || (a.contains(" are from ") || a.contains("이런 곳에서")) && !(best.contains(" are from ") || best.contains("이런 곳에서"))) best = a;
+            int bestSize = -1, bestRank = -1;
+            for (java.util.Map.Entry<Conn, JSONObject> e : results.entrySet()) {
+                String a = e.getValue().getString("answer");   // reuse: asking again could repeat a task
+                int rank = a.contains("but none of them show") || a.contains("해당하는 건 없어요") ? 2 : a.contains(" are from ") || a.contains("이런 곳에서") ? 1 : 0;
+                int size = e.getKey().index == null ? 0 : e.getKey().index.count();
+                if (rank > bestRank || rank == bestRank && size > bestSize) { best = a; bestSize = size; bestRank = rank; }
             }
             answer.append(best == null ? "" : best);
         }
         JSONObject merged = new JSONObject().put("answer", answer.toString()).put("sources", sources);
+        // The effective filters are the same in every folder: carry them so "and share them" works next turn.
+        for (JSONObject r : results.values()) if (r.has("context")) { merged.put("context", r.get("context")); break; }
         if (actionOut.has("folder")) merged.put("action", actionOut);
         return merged;
     }

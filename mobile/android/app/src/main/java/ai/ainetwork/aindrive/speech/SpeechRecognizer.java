@@ -114,7 +114,8 @@ public final class SpeechRecognizer implements AutoCloseable {
     public Transcript transcribe(FileDescriptor fd) throws IOException { return transcribe(fd, MAX_SECONDS); }
 
     /** Same, hearing at most `maxSeconds` — a quick look at a long call. */
-    public Transcript transcribe(FileDescriptor fd, int maxSeconds) throws IOException {
+    /** Synchronized: the call archive and other folders may share this recogniser from two workers. */
+    public synchronized Transcript transcribe(FileDescriptor fd, int maxSeconds) throws IOException {
         AudioDecoder.Pcm pcm = AudioDecoder.decode(fd, Math.min(maxSeconds, MAX_SECONDS));
         if (pcm == null) return null;
         StringBuilder sb = new StringBuilder();

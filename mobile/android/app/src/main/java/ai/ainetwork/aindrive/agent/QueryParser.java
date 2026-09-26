@@ -54,21 +54,30 @@ public final class QueryParser {
             "먹은", "먹었던", "마신", "본", "봤던", "샀던", "갔다온", "다녀온",
             // English
             "find", "show", "search", "get", "open", "list", "me", "the", "a", "an", "of", "from", "in", "at", "on", "my", "our", "all", "any", "some", "with", "for", "that", "which",
-            "taken", "took", "trip", "travel", "travelled", "traveled", "vacation", "holiday", "please", "i", "we", "were", "was", "named", "called", "about", "best", "good",
+            "taken", "took", "please", "i", "we", "were", "was", "named", "called", "about", "best", "good",
             "downloaded", "saved", "received", "sent", "shared", "as", "them", "these", "those",
-            "mentioned", "mentions", "mentioning", "talked", "talking", "talks", "discussed", "discussing", "discussion", "said", "says", "where", "when", "who", "someone", "they", "he", "she"
+            "mentioned", "mentions", "mentioning", "talked", "talking", "talks", "discussed", "discussing", "discussion", "said", "says", "where", "when", "who", "someone", "they", "he", "she",
+            // request scaffolding: "can you find…", "I'm looking for…", "what about…", "OK, then show…"
+            "can", "could", "would", "will", "you", "your", "i'm", "im", "m", "i've", "i'd", "am", "is", "are", "be", "been", "do", "does", "did", "have", "has", "had",
+            "want", "need", "like", "looking", "look", "see", "pull", "up", "bring", "give", "display", "view", "check", "where's", "whats", "what's",
+            "what", "how", "about", "and", "or", "but", "so", "then", "ok", "okay", "alright", "actually", "never", "mind", "hey", "oh", "well", "also", "too", "again",
+            "only", "just", "same", "instead", "narrow", "down", "it", "its", "to", "into", "there", "here", "this", "one", "ones", "every", "each", "other", "else", "own", "their",
+            "somewhere", "stuff", "things", "thing", "shot", "shoot", "captured", "recorded", "stored", "kept", "made", "created", "have", "got", "phone", "gallery", "camera", "roll",
+            "where", "which", "whose", "that", "show", "shows", "showing", "contain", "contains", "containing", "featuring", "includes", "including", "picture", "photo", "any",
+            "back", "past", "around", "during", "since", "before", "after", "between", "recording", "file", "files", "mine", "us", "we", "our", "ours", "discuss", "talk"
     ));
+    private static final Set<String> TRIP_WORDS = new HashSet<>(Arrays.asList("trip", "travel", "travelled", "traveled", "vacation", "holiday", "holidays", "trips"));
     /** Kind words, per category. "사진" alone means photos; "파일" means any kind. */
     private static final Map<String, String> KIND_WORDS = new HashMap<>();
     static {
-        kinds(FileIndex.PHOTO, "사진", "사진들", "이미지", "포토", "photo", "photos", "picture", "pictures", "pic", "pics", "image", "images", "jpg", "jpeg", "heic");
+        kinds(FileIndex.PHOTO, "사진", "사진들", "이미지", "포토", "photo", "photos", "picture", "pictures", "pic", "pics", "image", "images", "jpg", "jpeg", "heic", "snaps", "snapshots", "shots");
         kinds(FileIndex.SCREENSHOT, "스크린샷", "스샷", "캡처", "캡쳐", "화면캡처", "screenshot", "screenshots", "screencap", "screencaps", "capture", "captures");
         kinds(FileIndex.VIDEO, "영상", "동영상", "비디오", "영상들", "video", "videos", "movie", "movies", "clip", "clips", "mp4", "mov");
         kinds(FileIndex.AUDIO, "음악", "녹음", "녹음파일", "오디오", "노래", "audio", "music", "song", "songs", "recording", "recordings", "voice", "mp3", "m4a");
         kinds(FileIndex.PDF, "pdf", "pdfs", "pdf들", "피디에프");
         kinds(FileIndex.DOCUMENT, "문서", "문서들", "워드", "한글", "텍스트", "메모", "document", "documents", "doc", "docs", "word", "text", "txt", "hwp", "docx", "notes", "note", "markdown", "md");
         kinds(FileIndex.SPREADSHEET, "엑셀", "스프레드시트", "시트", "excel", "spreadsheet", "spreadsheets", "sheet", "sheets", "xlsx", "xls", "csv");
-        kinds(FileIndex.PRESENTATION, "발표자료", "피피티", "프레젠테이션", "슬라이드", "ppt", "pptx", "presentation", "presentations", "slides", "slide", "deck", "keynote");
+        kinds(FileIndex.PRESENTATION, "발표자료", "피피티", "프레젠테이션", "슬라이드", "ppt", "pptx", "presentation", "presentations", "slides", "slide", "deck", "keynote", "powerpoint", "powerpoints", "decks");
         kinds(FileIndex.ARCHIVE, "압축", "압축파일", "zip", "archive", "archives", "rar");
         kinds("*", "파일", "파일들", "file", "files", "자료", "것들");
     }
@@ -98,10 +107,10 @@ public final class QueryParser {
         return out;
     }
     /** Verbs that turn a question into a task. Matched as prefixes of a token ("모아서", "모아", "만들어줘"). */
-    private static final String[] COLLECT_WORDS = {"모아", "모아서", "모아줘", "모으", "묶어", "정리", "폴더", "앨범", "collect", "gather", "folder", "album", "organize", "organise", "copy", "복사"};
+    private static final String[] COLLECT_WORDS = {"모아", "모아서", "모아줘", "모으", "묶어", "정리", "폴더", "앨범", "collect", "gather", "folder", "album", "organize", "organise", "copy", "복사", "save", "group", "bundle", "throw"};
     private static final String[] MOVE_WORDS = {"옮겨", "옮기", "이동", "move"};
     private static final String[] SHARE_WORDS = {"공유", "링크", "share", "link"};
-    private static final String[] DELETE_WORDS = {"삭제", "지워", "지우", "없애", "delete", "remove", "trash", "rid"};
+    private static final String[] DELETE_WORDS = {"삭제", "지워", "지우", "없애", "delete", "remove", "trash", "rid", "wipe", "erase"};
     private static final String[] COUNT_WORDS = {"몇", "개수", "갯수", "count", "number", "how many"};
     private static final String[] OLDEST_WORDS = {"오래된", "옛날", "가장오래된", "oldest", "earliest"};
     private static final String[] TASK_FILLER = {"만들어", "만들고", "만들어서", "만들어줘", "만든", "새", "넣어", "넣고", "해줘", "해서", "하고", "줘", "그리고", "다음", "개야", "개나", "개", "있어", "있니", "있나", "있는지", "알려줘", "알려", "골라", "골라줘", "뽑아", "뽑아줘", "보여줘",
@@ -129,17 +138,26 @@ public final class QueryParser {
 
     /** "통화 내역 / call history / who I call most": a report over the call log, not a file search. */
     private static final Pattern CALLS_TASK = Pattern.compile(
-            "통화\\s*(내역|기록|녹음|목록|요약|많이)|통화한|통화했|(call|phone)\\s*(history|logs?|records?|recordings?)|\\bcalls\\b|who\\s+(do\\s+)?i\\s+(call|talk|phone)", Pattern.CASE_INSENSITIVE);
+            "통화\\s*(내역|기록|녹음|목록|요약|많이)|통화한|통화했|(call|phone)\\s*(history|logs?|records?|recordings?)|\\b(show|list|check|summari[sz]e|rank|sort|analy[sz]e|report (on|of)|review|give me)\\b.{0,24}\\b(my )?(phone |missed |recent )?calls\\b|\\bwho (called|calls) me\\b|who\\s+(do\\s+|did\\s+)?i\\s+(call|talk|phone|speak)"
+            + "|\\b(talk|talked|speak|spoke|chat)\\s+(to|with)?\\s*(\\w+\\s+)?(the most|most)\\s+on the phone|\\bwho\\b.*\\bon the phone\\b.*\\bmost|\\b(rank|sort)\\s+my\\s+contacts\\b|\\bpeople i (call|phone|talk to)\\b|who (have|had) i been (calling|phoning|talking to)|\\bcalling the most\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern SHARE_ASK = Pattern.compile("공유|링크|\\bshare|\\blink", Pattern.CASE_INSENSITIVE);
 
-    public static boolean isCallsTask(String question) { return question != null && CALLS_TASK.matcher(question).find(); }
+    /** "who likes me the most?", "누가 나를 제일 좋아해?": an affection ranking over calls, not a file search. */
+    private static final Pattern LIKES_TASK = Pattern.compile(
+            "(^|[.!?]\\s*|\\b(tell me|show me|find out|guess|know)\\s+)who\\s+(likes|loves|cares\\s+about|misses|adores)\\s+me|who('s| is)\\s+(closest|fond)|"
+            + "(나를|날|저를|절)\\s*(제일|가장|젤)?\\s*(좋아|사랑|아끼|챙기|그리워)|나\\s*(좋아하는|사랑하는)\\s*사람|누가\\s*(나|날)\\s*(제일|가장)?\\s*(좋아|사랑)",
+            Pattern.CASE_INSENSITIVE);
+
+    public static boolean isLikesTask(String question) { return question != null && LIKES_TASK.matcher(question).find(); }
+
+    public static boolean isCallsTask(String question) { return question != null && (CALLS_TASK.matcher(question).find() || isLikesTask(question)); }
 
     /**
      * Follow-up cues: the question refers to the previous turn's results
      * ("and share them", "only the ones from Paris", "그중 파리 사진만").
      */
     private static final Pattern FOLLOWUP = Pattern.compile(
-            "\\b(those|them|these|the ones|of those|of them|among them|the same|that one|this one|the rest|also|too)\\b|^(and|now|then|only|just|but)\\b"
+            "\\b(those|them|these|the ones|of those|of them|among them|the same|that one|this one|the rest|also|too|instead|same but|narrow|now|switch to|change (it )?to|limit it)\\b|^(and|now|then|only|just|but|what about|how about|what if|switch|limit)\\b"
             + "|그중|그 중|그것|그거|그걸|이것들|그것들|얘네|걔네|나머지|거기서|거기에서|그리고|또|만$|중에서|중에", Pattern.CASE_INSENSITIVE);
 
     public static boolean isFollowUp(String question) { return question != null && FOLLOWUP.matcher(question.trim()).find(); }
@@ -156,33 +174,124 @@ public final class QueryParser {
         SearchQuery q = parseOne(question, nowMs);
         if (prev == null || q.calls) return q;
         boolean refers = isFollowUp(question);
-        if (!q.isTaskOnly() && !refers) return q;
+        // "just Seattle", "2023 instead": only a place or a date, nothing else — a refinement of the last question.
+        boolean refines = q.kind == null && contentWords(q.keywords).isEmpty() && (q.city != null || q.country != null || q.dateFrom != null);
+        if (!q.isTaskOnly() && !refers && !refines) return q;
         if (q.kind == null) q.kind = prev.kind;
         if (q.city == null && q.country == null) { q.city = prev.city; q.country = prev.country; }
         if (q.dateFrom == null && q.dateTo == null) { q.dateFrom = prev.dateFrom; q.dateTo = prev.dateTo; }
         if (q.minSize == null) q.minSize = prev.minSize;
+        if (q.limit == 0) q.limit = prev.limit;
+        q.oldestFirst |= prev.oldestFirst;
+        q.bySize |= prev.bySize;
         for (String k : prev.keywords) if (!q.keywords.contains(k)) q.keywords.add(0, k);
         q.followUp = true;
         return q;
     }
 
+    /**
+     * Multi-word kinds and self-corrections, rewritten before tokenising:
+     * "screen captures" → "screenshots", "voice memos" → "recordings",
+     * "move... no, collect X" → "collect X".
+     */
+    private static final String[][] PHRASES = {
+            {"screen ?captures?|screen ?grabs?|screen ?caps?", "screenshots"},
+            {"voice ?memos?|voice recordings?|audio (files?|recordings?)|sound recordings?", "recordings"},
+            {"video ?clips?|movies i (shot|took|made|filmed|recorded)|films i (shot|took)|home videos", "videos"},
+            {"pdf files?|pdf documents?", "pdfs"},
+            {"word (files?|documents?|docs)|text files?", "documents"},
+            {"excel (files?|sheets?|spreadsheets?)|google sheets", "spreadsheets"},
+            {"slide ?decks?|powerpoint (files?|decks?|presentations?)|keynote files?", "presentations"},
+            {"zip (files?|archives?)|compressed files?", "archives"},
+            {"(camera )?photographs?", "photos"},
+            {"video ?games?|videogames?", "videogames"},
+            {"(?<=\\b(the|my|any|all|some) )audio(?! (quality|system|book|books))", "recordings"},
+    };
+    private static final Pattern[] PHRASE_PATTERNS = new Pattern[PHRASES.length];
+    static { for (int i = 0; i < PHRASES.length; i++) PHRASE_PATTERNS[i] = Pattern.compile("\\b(" + PHRASES[i][0] + ")\\b", Pattern.CASE_INSENSITIVE); }
+    private static final Pattern SELF_CORRECTION = Pattern.compile("^.*?(\\.\\.\\.|…|—| - )\\s*(no|sorry|i mean|actually|wait)[,.!]?\\s+", Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern THE_US = Pattern.compile("\\b(the )?(US|U\\.S\\.?|U\\.S\\.A\\.?|States)\\b");
+    private static final Pattern CALL_ABOUT = Pattern.compile("\\b(the |a |that )?(phone )?call (where|when|in which|about)\\b", Pattern.CASE_INSENSITIVE);
+
+    static String normalise(String question) {
+        String s = SELF_CORRECTION.matcher(question).replaceFirst("");
+        s = THE_US.matcher(s).replaceAll("USA");
+        // "the call where we discussed pricing" is a recording to find, not the call-log report.
+        s = CALL_ABOUT.matcher(s).replaceAll("the recording $3");
+        for (int i = 0; i < PHRASES.length; i++) s = PHRASE_PATTERNS[i].matcher(s).replaceAll(PHRASES[i][1]);
+        return s;
+    }
+
+    private static final String NUM = "(\\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|a couple of|a few)";
+    private static final Pattern AGO = Pattern.compile("\\b" + NUM + "\\s+(day|days|week|weeks|month|months|year|years)\\s+ago\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PAST_N = Pattern.compile("\\b(?:in |from |over |during )?(?:the )?(?:past|last)\\s+(?:" + NUM + "\\s+)?(days?|weeks?|months?)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern WEEKEND = Pattern.compile("\\b(last|this|past)\\s+weekend\\b|\\bover the weekend\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern EARLIER_THIS_YEAR = Pattern.compile("\\b(earlier|so far) this year\\b|\\b(from|since) the (start|beginning) of (the|this) year\\b", Pattern.CASE_INSENSITIVE);
+
+    private static int number(String w) {
+        switch (w.toLowerCase(Locale.ROOT)) {
+            case "a": case "an": case "one": return 1;
+            case "two": case "a couple of": return 2;
+            case "three": case "a few": return 3;
+            case "four": return 4; case "five": return 5; case "six": return 6; case "seven": return 7;
+            case "eight": return 8; case "nine": return 9; case "ten": return 10;
+            default: return Integer.parseInt(w);
+        }
+    }
+
+    /** Relative-date phrases the token loop can't see ("3 days ago", "the past week"): [from, to), and the phrase is removed from `sb`. */
+    private static @Nullable long[] phraseWindow(StringBuilder sb, Calendar now) {
+        Matcher m;
+        long[] w = null;
+        if ((m = AGO.matcher(sb)).find()) {
+            int n = number(m.group(1));
+            String unit = m.group(2).toLowerCase(Locale.ROOT);
+            if (unit.startsWith("day")) w = days(now, -n, -n + 1);
+            else if (unit.startsWith("week")) w = week(now, -n);
+            else if (unit.startsWith("month")) { Calendar c = (Calendar) now.clone(); c.add(Calendar.MONTH, -n); w = new long[]{startOfMonth(c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1), 0}; w[1] = startOfMonth(c.get(Calendar.YEAR) + (c.get(Calendar.MONTH) == 11 ? 1 : 0), c.get(Calendar.MONTH) == 11 ? 1 : c.get(Calendar.MONTH) + 2); }
+            else { int y = now.get(Calendar.YEAR) - n; w = new long[]{startOfMonth(y, 1), startOfMonth(y + 1, 1)}; }
+        } else if ((m = PAST_N.matcher(sb)).find()) {
+            int n = m.group(1) == null ? 1 : number(m.group(1));
+            String unit = m.group(2).toLowerCase(Locale.ROOT);
+            int d = unit.startsWith("day") ? n : unit.startsWith("week") ? 7 * n : 30 * n;
+            // "the past week" = the last 7 days up to today; but "last week" alone is the calendar week (token loop).
+            if (m.group(1) == null && !m.group(0).toLowerCase(Locale.ROOT).contains("past") && !m.group(0).toLowerCase(Locale.ROOT).contains("the")) return null;
+            w = days(now, -d, 1);
+        } else if ((m = WEEKEND.matcher(sb)).find()) {
+            long[] thisWeek = week(now, 0);
+            boolean past = !m.group(0).toLowerCase(Locale.ROOT).startsWith("this") || now.get(Calendar.DAY_OF_WEEK) == Calendar.MONDAY;
+            long mon = past ? thisWeek[0] : thisWeek[1];
+            w = new long[]{mon - 2L * 86400000, mon};
+        } else if ((m = EARLIER_THIS_YEAR.matcher(sb)).find()) {
+            int y = now.get(Calendar.YEAR);
+            w = new long[]{startOfMonth(y, 1), startOfMonth(y + 1, 1)};
+        }
+        if (w != null) sb.replace(m.start(), m.end(), " ");
+        return w;
+    }
+
     private SearchQuery parseOne(String question, long nowMs) {
+        question = normalise(question);
         SearchQuery q = new SearchQuery();
         q.korean = question.codePoints().anyMatch(cp -> cp >= 0xAC00 && cp <= 0xD7A3);
         if (isCallsTask(question)) {
             q.calls = true;
+            q.likes = isLikesTask(question);
             q.share = SHARE_ASK.matcher(question).find();
             return q;
         }
-        List<String> tokens = tokenize(question);
         Calendar now = Calendar.getInstance(TimeZone.getDefault());
         now.setTimeInMillis(nowMs);
         int year = now.get(Calendar.YEAR);
+        StringBuilder text = new StringBuilder(question);
+        long[] window = phraseWindow(text, now);   // explicit [from, to) from day/week/recent words
+        List<String> tokens = tokenize(text.toString());
 
         Integer y = null, m = null;          // absolute year / month
         String season = null;
-        long[] window = null;                // explicit [from, to) from day/week/recent words
         boolean[] used = new boolean[tokens.size()];
+        boolean[] kindTok = new boolean[tokens.size()];
 
         // 1. Places: try 3-, 2-, then 1-token spans so multi-word names win.
         for (int span = 3; span >= 1; span--) {
@@ -210,7 +319,7 @@ public final class QueryParser {
             if (kind != null) {
                 // "PDF 파일": the specific word wins over the generic one.
                 if (q.kind == null || "*".equals(q.kind)) q.kind = kind;
-                used[i] = true; continue;
+                used[i] = true; kindTok[i] = true; continue;
             }
             // "음식사진", "회의영상": a content word glued to a kind word.
             for (String kw : new String[]{"사진", "영상", "동영상", "문서", "녹음", "스크린샷"}) {
@@ -243,7 +352,9 @@ public final class QueryParser {
             else if (lower.equals("이번주") || lower.equals("this") && next(tokens, i).equals("week")) { window = week(now, 0); used[i] = true; if (lower.equals("this")) used[i + 1] = true; }
             else if (lower.equals("지난주") || lower.equals("last") && next(tokens, i).equals("week")) { window = week(now, -1); used[i] = true; if (lower.equals("last")) used[i + 1] = true; }
             else if (lower.equals("최근") || lower.equals("최근에") || lower.equals("요즘") || lower.equals("recent") || lower.equals("recently") || lower.equals("latest") || lower.equals("newest")) {
-                window = days(now, -RECENT_DAYS, 1); used[i] = true;
+                // "the latest 10 PDFs" is a count in date order, not "from the last 30 days".
+                if (!hasCount(tokens)) window = days(now, -RECENT_DAYS, 1);
+                used[i] = true;
             }
             else if (isSeason(lower) != null) {
                 season = isSeason(lower); used[i] = true;
@@ -255,14 +366,22 @@ public final class QueryParser {
             }
             else {
                 int mi = monthIndex(lower);
-                if (mi > 0) { m = mi; used[i] = true; }
+                if (mi > 0) {
+                    m = mi; used[i] = true;
+                    // "last April" = the most recent April that's over: this year's if it has passed, else last year's.
+                    if (i > 0 && !used[i - 1] && tokens.get(i - 1).equalsIgnoreCase("last")) {
+                        used[i - 1] = true;
+                        y = mi < now.get(Calendar.MONTH) + 1 ? year : year - 1;
+                    }
+                }
             }
         }
         if ("*".equals(q.kind)) q.kind = null;
         if (window != null) { q.dateFrom = window[0]; q.dateTo = window[1]; }
         else {
             if (season != null && y == null) y = year;      // "여름" alone = this year's summer
-            if (m != null && y == null) y = year;            // "5월" alone = this year's May
+            // "5월" alone = this year's May — unless May is still ahead: "photos from December" in September means last December.
+            if (m != null && y == null) y = m > now.get(Calendar.MONTH) + 1 ? year - 1 : year;
             if (y != null) applyDate(q, y, m, season);
         }
 
@@ -296,11 +415,25 @@ public final class QueryParser {
         if (q.bySize && q.limit > 0) q.minSize = null;   // "biggest 5" is a ranking, not a floor
 
         // 4. Whatever is left is a keyword for the file name (and, later, CLIP).
+        //    "Japan vacation pictures": the trip is the occasion, not what the photo shows — but a
+        //    recording or document ABOUT the vacation is about it.
+        boolean media = q.kind == null || FileIndex.PHOTO.equals(q.kind) || FileIndex.VIDEO.equals(q.kind) || FileIndex.SCREENSHOT.equals(q.kind);
+        // English: a word is WHAT the file is about only where grammar says so — a thing a photo can show,
+        // a modifier right before the kind ("invoice sheets"), or after a topic marker ("about the budget",
+        // "of a horse", "with my receipt"). Anything else ("dig up", "bundle", "switch to") is how it was asked.
+        boolean bare = q.kind == null && q.city == null && q.country == null && q.dateFrom == null && window == null && y == null && m == null
+                && !q.collect && !q.share && !q.delete && !q.count && q.limit == 0;
+        boolean grammar = !q.korean && !bare;
+        boolean prevKept = false;
         for (int i = 0; i < tokens.size(); i++) {
-            if (used[i]) continue;
+            if (used[i]) { prevKept = false; continue; }
             String t = stripParticles(tokens.get(i));
-            if (t.isEmpty() || STOP.contains(t.toLowerCase(Locale.ROOT)) || STOP.contains(tokens.get(i).toLowerCase(Locale.ROOT))) continue;
+            String lower = t.toLowerCase(Locale.ROOT);
+            if (t.isEmpty() || STOP.contains(lower) || STOP.contains(tokens.get(i).toLowerCase(Locale.ROOT))) { prevKept = prevKept && DETERMINERS.contains(lower); continue; }
+            if (media && TRIP_WORDS.contains(lower)) { prevKept = false; continue; }
+            if (grammar && !(ContentWords.isVisual(lower) || beforeKind(tokens, kindTok, i) || afterMarker(tokens, i) || prevKept)) { prevKept = false; q.ignoredWords++; continue; }
             q.keywords.add(t);
+            prevKept = true;
         }
         return q;
     }
@@ -348,8 +481,23 @@ public final class QueryParser {
             String t = stripParticles(raw).toLowerCase(Locale.ROOT);
             if (DATE_WORDS.contains(t) || KIND_WORDS.containsKey(t) || SIZE_WORDS.contains(t)) return true;
             if (n == 1 && NEEDS_CAPITAL.contains(t) && !Character.isUpperCase(raw.charAt(0))) return true;
+            // "sunrise snaps" is not Sunrise, Florida: a lowercase word for something a photo shows is that thing.
+            if (n == 1 && !Character.isUpperCase(raw.charAt(0)) && ContentWords.isVisual(t)) return true;
         }
         return false;
+    }
+
+    /** The file-kind words a question uses ("photos", "사진을" → "사진", "음식사진" → "사진"), lowercased. */
+    public static List<String> kindWords(String question) {
+        List<String> out = new ArrayList<>();
+        for (String raw : tokenize(normalise(question))) {
+            String lower = raw.toLowerCase(Locale.ROOT), stripped = stripParticles(raw).toLowerCase(Locale.ROOT);
+            if (KIND_WORDS.containsKey(stripped)) { out.add(stripped); continue; }
+            if (KIND_WORDS.containsKey(lower)) { out.add(lower); continue; }
+            for (String kw : new String[]{"사진", "영상", "동영상", "문서", "녹음", "스크린샷"})
+                if (stripped.length() > kw.length() && stripped.endsWith(kw)) { out.add(kw); break; }
+        }
+        return out;
     }
 
     private static List<String> tokenize(String s) {
@@ -360,6 +508,31 @@ public final class QueryParser {
             if (!t.isEmpty()) out.add(t);
         }
         return out;
+    }
+
+    private static final Set<String> DETERMINERS = new HashSet<>(Arrays.asList("a", "an", "the", "my", "our", "his", "her", "their", "some", "any", "s", "this", "that", "those", "these"));
+    private static final Set<String> MARKERS = new HashSet<>(Arrays.asList(
+            "about", "of", "with", "mentions", "mentioning", "mentioned", "regarding", "re", "for", "on", "featuring", "showing", "show", "shows",
+            "there", "called", "named", "titled", "discussed", "discussing", "discuss", "talked", "talking", "talk", "said", "says", "containing", "contains", "include", "includes", "including"));
+
+    /** "invoice sheets", "certificate notes": the word right before a kind word (determiners aside) names what the files are. */
+    private static boolean beforeKind(List<String> tokens, boolean[] kindTok, int i) {
+        return i + 1 < tokens.size() && kindTok[i + 1];
+    }
+
+    /** "about the budget", "of a horse", "with my receipt", "where there's a boat". */
+    private static boolean afterMarker(List<String> tokens, int i) {
+        for (int j = i - 1; j >= 0; j--) {
+            String w = tokens.get(j).toLowerCase(Locale.ROOT);
+            if (DETERMINERS.contains(w)) continue;
+            return MARKERS.contains(w);
+        }
+        return false;
+    }
+
+    private static boolean hasCount(List<String> tokens) {
+        for (String t : tokens) if (EN_COUNT.matcher(t).matches() || KO_COUNT.matcher(t).matches()) return true;
+        return false;
     }
 
     private static boolean anyUsed(boolean[] used, int from, int n) {

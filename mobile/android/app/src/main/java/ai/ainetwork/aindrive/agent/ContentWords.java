@@ -42,6 +42,29 @@ public final class ContentWords {
     }
 
     /** English phrase for a content word; the word itself when unknown. */
+    private static volatile java.util.Set<String> visual;
+
+    /**
+     * A word for what a photo can SHOW ("dog", "sunset", "강아지", "에펠탑"), as opposed to
+     * "salons", "forecast", "attractions": a bare word is a photo search only when it is one of these.
+     */
+    public static boolean isVisual(String word) {
+        java.util.Set<String> v = visual;
+        if (v == null) {
+            v = new java.util.HashSet<>();
+            for (Map.Entry<String, String> e : KO.entrySet()) {
+                v.add(e.getKey());
+                for (String w : e.getValue().toLowerCase(Locale.ROOT).split("\\s+")) v.add(w);
+            }
+            for (String l : ai.ainetwork.aindrive.clip.SceneLabels.VOCAB) for (String w : l.split("\\s+")) v.add(w);
+            v.removeAll(java.util.Arrays.asList("a", "an", "the", "of", "in", "at", "and", "on", "with"));
+            visual = v;
+        }
+        String w = word.toLowerCase(Locale.ROOT);
+        return v.contains(w) || w.endsWith("s") && v.contains(w.substring(0, w.length() - 1))
+                || w.endsWith("es") && v.contains(w.substring(0, w.length() - 2));
+    }
+
     public static String toEnglish(String word) {
         String w = word.trim();
         String hit = KO.get(w);
