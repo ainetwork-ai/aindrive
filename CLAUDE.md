@@ -15,7 +15,7 @@ filesystem; the **web** app brokers between browsers and agents over WebSocket.
   sales/earnings, payment settings — lives on the Manage page (`/d/[id]/manage`).
   Rule: *create in context, audit in settings* — never split one concept
   (e.g. "links") across both a create surface and a separate list surface.
-- **Identity = an account, reached by email+password OR a wallet (SIWE).**
+- **Identity = an account, reached by email+password, Google, OR a wallet (SIWE).**
   A wallet-provisioned account is self-custodial (lose the wallet, lose the
   account; aindrive never custodies/recovers keys). A wallet linked to an
   existing email account is a login credential only after the owner opts in

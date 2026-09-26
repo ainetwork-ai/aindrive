@@ -373,3 +373,7 @@ input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; dis
 /* Past chats: where each conversation happened. */
 .list .s .where { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 6px; background: var(--panel-2); color: var(--muted); font-size: 12px; }
 .list .s .where.folder { background: #d3e3fd; color: #0b2e6b; font-weight: 600; }
+/* "Continue with Google": Google's neutral button with the multicolor G. */
+.btn.google { background: #fff; color: #1f1f1f; border: 1px solid #747775; gap: 10px; font-weight: 600; }
+.btn.google:active { background: #f2f2f2; }
+.card > .link.small { display: block; margin: 10px auto 0; }

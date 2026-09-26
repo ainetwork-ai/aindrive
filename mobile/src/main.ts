@@ -1379,8 +1379,9 @@ function loginScreen(): string {
       <li><span class="ic">${I.sparkle}</span><div><b>Ask, don't browse</b><span>"photos taken in Paris", "last week's screenshots", "the contract pdf" — answered on-device, offline.</span></div></li>
     </ul>
     <div class="card">
-      <button class="btn" id="login" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : "Continue in browser"}</button>
-      <p class="hint">Sign in opens in your browser. Approve it there and come back — this app never sees your password.</p>
+      <button class="btn google" id="login-google" ${busy ? "disabled" : ""}>${busy ? `<span class="spinner"></span> ${esc(busy)}` : `${GOOGLE_G} Continue with Google`}</button>
+      <p class="hint">Pick your Google account — no password to type. aindrive only gets your name and email.</p>
+      <button class="link small" id="login" ${busy ? "disabled" : ""}>Other ways to sign in (email, wallet)</button>
       <details class="adv">
         <summary>Advanced · server</summary>
         <label for="server">Server</label>
@@ -1390,7 +1391,35 @@ function loginScreen(): string {
     ${overlays()}`;
 }
 
+/** Google's "G" mark (brand guidelines: the multicolor logo on a neutral button). */
+const GOOGLE_G = `<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.7 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.2-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>`;
+
+/** First screen: Google account picker → ID token → POST /api/auth/google → session. */
+async function loginWithGoogle() {
+  try {
+    state.server = normalizeServer(state.server);
+    await save();
+    busy = "Signing in with Google…"; render();
+    const cfg = await fetch(`${state.server}/api/auth/google`).then(async (r) => r.ok ? r.json() as Promise<{ clientId: string }> : Promise.reject(new Error(r.status === 404 ? "Google sign-in isn't set up on this server yet — use “Other ways to sign in”." : `server ${r.status}`)));
+    const g = await AindriveAgent.googleSignIn({ serverClientId: cfg.clientId });
+    const res = await fetch(`${state.server}/api/auth/google`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ idToken: g.idToken }) });
+    const out = await res.json().catch(() => ({})) as { token?: string; user?: { email?: string }; error?: string };
+    if (!res.ok || !out.token) throw new Error(out.error === "email_not_verified" ? "That Google account's email isn't verified." : out.error ?? `sign-in failed (${res.status})`);
+    state.sessionCookie = out.token;
+    state.email = out.user?.email ?? g.email;
+    await save();
+    log(`Logged in with Google${state.email ? ` (${state.email})` : ""}`);
+    void ensureDefaultAgent();
+  } catch (e) {
+    if (!/cancel/i.test(msgOf(e))) fail(e);
+  } finally {
+    busy = null;
+    render();
+  }
+}
+
 function bindLogin() {
+  bind("login-google", () => void loginWithGoogle());
   bind("login", login);
   const serverInput = document.getElementById("server") as HTMLInputElement | null;
   serverInput?.addEventListener("change", () => { state.server = serverInput.value; void save(); });

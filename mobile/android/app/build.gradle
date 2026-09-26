@@ -69,6 +69,10 @@ dependencies {
     implementation "com.google.ai.edge.litertlm:litertlm-android:0.17.1"
     // Speech models ship as tar.bz2 bundles on sherpa-onnx's GitHub releases; unpack them on the phone.
     implementation "org.apache.commons:commons-compress:1.27.1"
+    // Google sign-in on the first screen: Credential Manager + Sign in with Google (ID token → /api/auth/google).
+    implementation "androidx.credentials:credentials:1.3.0"
+    implementation "androidx.credentials:credentials-play-services-auth:1.3.0"
+    implementation "com.google.android.libraries.identity.googleid:googleid:1.1.1"
     // On-device speech recognition (see sherpa-onnx.gradle for how the AAR gets here).
     implementation fileTree(include: ['sherpa-onnx-*.aar'], dir: 'libs')
     testImplementation "junit:junit:$junitVersion"

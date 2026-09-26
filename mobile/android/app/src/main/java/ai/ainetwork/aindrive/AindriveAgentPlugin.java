@@ -277,6 +277,43 @@ public class AindriveAgentPlugin extends Plugin {
         } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
     }
 
+    /**
+     * Sign in with Google (Credential Manager): the account picker, then a Google ID token for
+     * `serverClientId` (the server's web OAuth client, from GET /api/auth/google). The shell sends
+     * the token to POST /api/auth/google, which verifies it and returns the session.
+     */
+    @PluginMethod
+    public void googleSignIn(PluginCall call) {
+        String clientId = call.getString("serverClientId");
+        if (clientId == null || clientId.isEmpty()) { call.reject("missing serverClientId"); return; }
+        androidx.credentials.CredentialManager cm = androidx.credentials.CredentialManager.create(getContext());
+        com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption option =
+                new com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(clientId).build();
+        androidx.credentials.GetCredentialRequest request = new androidx.credentials.GetCredentialRequest.Builder().addCredentialOption(option).build();
+        cm.getCredentialAsync(getActivity(), request, null, java.util.concurrent.Executors.newSingleThreadExecutor(),
+                new androidx.credentials.CredentialManagerCallback<androidx.credentials.GetCredentialResponse, androidx.credentials.exceptions.GetCredentialException>() {
+                    @Override public void onResult(androidx.credentials.GetCredentialResponse result) {
+                        androidx.credentials.Credential c = result.getCredential();
+                        if (c instanceof androidx.credentials.CustomCredential
+                                && com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL.equals(c.getType())) {
+                            try {
+                                com.google.android.libraries.identity.googleid.GoogleIdTokenCredential g =
+                                        com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.createFrom(c.getData());
+                                JSObject ret = new JSObject();
+                                ret.put("idToken", g.getIdToken());
+                                ret.put("email", g.getId());
+                                ret.put("name", g.getDisplayName());
+                                call.resolve(ret);
+                            } catch (Exception e) { call.reject("Google sign-in failed: " + e.getMessage()); }
+                        } else call.reject("Google sign-in returned no Google account");
+                    }
+                    @Override public void onError(androidx.credentials.exceptions.GetCredentialException e) {
+                        boolean cancelled = e instanceof androidx.credentials.exceptions.GetCredentialCancellationException;
+                        call.reject(cancelled ? "cancelled" : "Google sign-in failed: " + e.getMessage(), cancelled ? "CANCELLED" : null);
+                    }
+                });
+    }
+
     /** Hand a file to whatever app handles its type (the phone's "open"). */
     @PluginMethod
     public void openFile(PluginCall call) {

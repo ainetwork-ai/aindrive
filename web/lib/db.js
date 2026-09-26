@@ -106,6 +106,15 @@ function open() {
       FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_account_wallets_account ON account_wallets(account_id);
+    -- Google sign-in: the Google account (sub) that reaches an aindrive account.
+    CREATE TABLE IF NOT EXISTS account_google (
+      sub TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      linked_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(account_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_account_google_account ON account_google(account_id);
     -- Invites for emails that don't have an account yet. On signup these convert
     -- to drive_members (upgrade-only) and are deleted; a registered invitee is
     -- granted immediately and never lands here. UNIQUE keeps one pending grant

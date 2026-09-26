@@ -172,6 +172,8 @@ export interface AindriveAgentPlugin {
   /** File bytes for the in-app viewer; images come back downscaled to `maxPx` (default 1600) as JPEG. */
   readFile(opts: { folderUri: string; path: string; maxPx?: number }): Promise<{ mime: string; name: string; base64: string }>;
   /** A cached JPEG thumbnail (the phone's own, like the gallery's) as a file path: show it via Capacitor.convertFileSrc. */
+  /** Sign in with Google (account picker) → an ID token for the server's OAuth client. */
+  googleSignIn(opts: { serverClientId: string }): Promise<{ idToken: string; email?: string; name?: string }>;
   thumbnail(opts: { folderUri: string; path: string; px?: number }): Promise<{ path: string }>;
   /**
    * Adds a drive to the running agent (starting the foreground service on
