@@ -26,7 +26,13 @@ export async function mirror({ write = true } = {}) {
     const file = `cli/src/willow-shared/${name}`;
     out[file] = `// GENERATED from ${src} by web/scripts/mirror-willow-to-cli.mjs — do not edit.\n${js}`;
   }
+  // mobile/ (TypeScript, built by vite): the P2P wire and its byte helpers, copied as TS
+  for (const [src, name] of [["web/shared/willow/bytes.ts", "bytes.ts"], ["web/shared/media/p2p.ts", "p2p.ts"]]) {
+    const ts = readFileSync(join(repo, src), "utf8").replace(/from "\.\.\/willow\/([\w-]+)"/g, 'from "./$1"');
+    out[`mobile/src/willow-shared/${name}`] = `// GENERATED from ${src} by web/scripts/mirror-willow-to-cli.mjs — do not edit.\n${ts}`;
+  }
   if (write) {
+    mkdirSync(join(repo, "mobile/src/willow-shared"), { recursive: true });
     mkdirSync(join(repo, "cli/src/willow-shared"), { recursive: true });
     for (const [file, text] of Object.entries(out)) writeFileSync(join(repo, file), text);
   }
