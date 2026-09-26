@@ -25,21 +25,28 @@ const foldCase = (p) => p.toLowerCase().toUpperCase().toLowerCase().normalize("N
  * share among `rows`, or null. Same inheritance as bestMatchingRole /
  * resolvePayoutWallet — "price this folder" guards everything under it until a
  * deeper sale carves out a more-specific gate.
- * @param {Array<{id:string,path:string,price_usdc:number,currency:string|null,expires_at:string|null}>} rows
+ * @param {Array<{id:string,path:string,price_usdc:number,currency:string|null,expires_at:string|null,listed?:number,created_at?:string}>} rows
  * @param {string} targetPath
  */
 function nearestSale(rows, targetPath) {
   const target = foldCase(targetPath);
+  const exact = (r) => isAncestorOrSelf(r.path, targetPath);
+  // Is `a` a better gate than `b`? Deeper wins. At one depth: a sale spelled
+  // exactly as the path beats one matching only by case (case-twin folders on
+  // a case-sensitive agent each judge their own); then a listed sale beats an
+  // unlisted one, so the paywall offers a Buy whenever any sale here is listed;
+  // then the newest offer. Entitlement doesn't depend on which one wins — a
+  // receipt covers its path (hasPaidEntitlement).
+  const better = (a, b) => {
+    if (depth(a.path) !== depth(b.path)) return depth(a.path) > depth(b.path);
+    if (exact(a) !== exact(b)) return exact(a);
+    if (!!a.listed !== !!b.listed) return !!a.listed;
+    return String(a.created_at ?? "") > String(b.created_at ?? "");
+  };
   let best = null;
   for (const r of rows) {
     if (!isAncestorOrSelf(foldCase(r.path), target)) continue;
-    // Deeper wins; at one depth, a sale spelled exactly as the path beats one
-    // matching only by case, so two sales differing in case (distinct folders
-    // on a case-sensitive agent) each judge their own folder.
-    const deeper = !best || depth(r.path) > depth(best.path);
-    const exactTie = best && depth(r.path) === depth(best.path)
-      && isAncestorOrSelf(r.path, targetPath) && !isAncestorOrSelf(best.path, targetPath);
-    if (deeper || exactTie) best = r;
+    if (!best || better(r, best)) best = r;
   }
   return best;
 }
@@ -52,7 +59,7 @@ function nearestSale(rows, targetPath) {
  */
 export function classifyPath(driveId, targetPath) {
   const rows = db
-    .prepare("SELECT id, path, price_usdc, currency, expires_at, listed FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
+    .prepare("SELECT id, path, price_usdc, currency, expires_at, listed, created_at FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
     .all(driveId);
   // Expiry filtered in JS: expires_at is ISO text, so a SQL string compare vs
   // datetime('now') is unsafe at boundaries (same reasoning as showcase.ts). An
@@ -137,7 +144,7 @@ export function paidLocksForPaths(driveId, paths, roleAt, accountId) {
   const judged = paths.filter((p) => !atLeast(roleAt(p), "editor"));
   if (judged.length === 0) return locks;
   const rows = db
-    .prepare("SELECT id, path, price_usdc, currency, expires_at, listed FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
+    .prepare("SELECT id, path, price_usdc, currency, expires_at, listed, created_at FROM shares WHERE drive_id = ? AND price_usdc IS NOT NULL")
     .all(driveId);
   const active = rows.filter((r) => !r.expires_at || new Date(r.expires_at) >= new Date());
   if (active.length === 0) return locks;

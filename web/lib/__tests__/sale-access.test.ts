@@ -43,6 +43,11 @@ beforeAll(() => {
   addShare("s-course-lo", "course", 1);                 // two sales differing only in case
   addShare("s-course-up", "Course", 50);                //   (distinct folders on a case-sensitive agent)
   addReceipt("r-buyer-course", "course", BUYER);        // BUYER bought the 1 USDC one
+  // Two offers on one folder: an old private-link sale, then a newer listed one.
+  db.prepare("INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency, listed, created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    .run("s-dup-old", DRIVE, "album", "viewer", "tok-dup-old", 7, "USDC", 0, "2026-01-01 00:00:00");
+  db.prepare("INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency, listed, created_at) VALUES (?,?,?,?,?,?,?,?,?)")
+    .run("s-dup-new", DRIVE, "album", "viewer", "tok-dup-new", 5, "USDC", 1, "2026-02-01 00:00:00");
   addReceipt("r-buyer-premium", "premium", BUYER);    // BUYER bought /premium only
 });
 
@@ -107,6 +112,11 @@ describe("paidAccessDenial — paid carve-out read gate (DB)", () => {
   it("two sales differing only in case: each path is judged by its own sale", () => {
     expect(paidAccessDenial(DRIVE, "course/a.md", "viewer", BUYER)).toBeNull();
     expect(paidAccessDenial(DRIVE, "Course/a.md", "viewer", BUYER)).toMatchObject({ gatePath: "Course", price: 50 });
+  });
+
+  it("two sales on one folder: the paywall offers the listed one, so there is a Buy button", () => {
+    expect(paidAccessDenial(DRIVE, "album/a.jpg", "viewer", OTHER)).toMatchObject({ shareId: "s-dup-new", listed: true, price: 5 });
+    expect(paidLocksForListing(DRIVE, "", ["album"], "viewer", OTHER).album).toMatchObject({ shareId: "s-dup-new", listed: true });
   });
 
   it("the denial says whether the gate is listed — the paywall offers Buy only for a listed sale", () => {
