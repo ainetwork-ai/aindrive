@@ -8,7 +8,8 @@ import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
 import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "@/lib/account-tokens";
 import { bearerFrom } from "@/lib/mcp-http";
-import { resolveRoleByUser, atLeast, type Role } from "@/lib/access";
+import { resolveRoleByUser, type Role } from "@/lib/access";
+import { holdsPaidShare } from "@/lib/sale-access.js";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace, payoutWalletFor } from "@/lib/drives";
 import { issueShareCap } from "@/lib/willow/cap-issue";
@@ -84,14 +85,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     return NextResponse.json(okBody);
   }
 
-  // Already-entitled member: a covering drive_members grant (from a prior
-  // payment that settled, or an owner invite) means there's nothing to pay
-  // for. Compare against share.role (not a viewer floor) so a cheaper/free
-  // grant at this path can't satisfy a higher-tier paid share — mirrors the
-  // CONSUME accept gate.
+  // Already-entitled member: nothing to pay for when the account already holds
+  // what this link sells (holdsPaidShare) — share.role, not a viewer floor, so
+  // a cheaper grant can't satisfy a higher tier; and past the paid read gate,
+  // so a bare viewer of a parent folder still pays. Mirrors the accept gate.
   if (buyerId) {
     const role = resolveRoleByUser(share.drive_id, buyerId, share.path);
-    if (atLeast(role, share.role)) return NextResponse.json({ ...okBody, role });
+    if (holdsPaidShare(share.drive_id, share, role, buyerId)) return NextResponse.json({ ...okBody, role });
   }
 
   // Resolve the share's payment token against the drive's policy.

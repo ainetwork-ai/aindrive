@@ -144,9 +144,9 @@ dropped — except `private`:
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| `R-PAY-RESOLVE-001` | `GET /s/:token` is public + login-aware: returns free metadata; the link owner and already-covered members bypass; paid + uncovered → `402`. | CURRENT (`s/[token]/route.ts:75`) |
+| `R-PAY-RESOLVE-001` | `GET /s/:token` is public + login-aware: returns free metadata; the link owner and members who already hold what the link sells bypass (`holdsPaidShare`: role ≥ `share.role` **and** past the paid read gate — a bare viewer of a parent folder still pays); paid + uncovered → `402`. | CURRENT (`s/[token]/route.ts:75`) |
 | `R-PAY-SETTLE-001` | A verified x402 payment settles, writes an **upgrade-only** `drive_members` grant at `share.path`/`share.role` **and** an append-only `payment_receipts` row; binds to the resolved account. | CURRENT (`s/[token]/route.ts:179`) |
-| `R-PAY-ACCEPT-001` | `POST /s/:token/accept` needs login; free → grant; paid → only if already covered (settled), else `402`; upgrade-only. | CURRENT (`s/[token]/accept/route.ts:22`) |
+| `R-PAY-ACCEPT-001` | `POST /s/:token/accept` needs login; free → grant; paid → only if already covered (`holdsPaidShare`, as R-PAY-RESOLVE-001), else `402`; upgrade-only. | CURRENT (`s/[token]/accept/route.ts:22`) |
 | `R-PAY-ENT-001` | The **receipt** (not the auto-written member row) is the access proof for a paid path; the member row remains for navigation/entry. | CURRENT (`sale-access.js` `hasPaidEntitlement`) |
 
 ---
