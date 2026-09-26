@@ -51,8 +51,14 @@ has the server turn questions away. A host that sent no hello, or no `caps`, has
   one (never the phone's `folderUri`).
 - Sources are paths in the asked drive. A call report (`act`, whole drive) also counts
   the phone's call-recordings folders, which are not drives, but lists as sources only
-  recordings inside the asked drive. The server still filters every returned path as
-  untrusted input (inside `root`, not a system path, readable at the caller's role).
+  recordings inside the asked drive. One call transcribed (`act`, whole drive; its words
+  are in the answer) is only ever of a recording inside the asked drive, and a name
+  recorded only in another folder is answered "none in this drive". Neither runs in
+  `read` mode or inside a `root`. If the host's own last check still drops a source, the
+  answer is replaced by a neutral count ("in this folder" / "in this drive") that keeps
+  the "only looked" sentence of a read-only skip. The server still filters every
+  returned path as untrusted input (inside `root`, not a system path, readable at the
+  caller's role).
 
 Android advertises `ask.v2` (`mobile/android/…/agent/AskScope.java`). iOS (it refuses
 `agent-ask`) and the desktop CLI (its LLM agent has no read-only mode yet) send
@@ -69,8 +75,15 @@ Android advertises `ask.v2` (`mobile/android/…/agent/AskScope.java`). iOS (it 
   Android admits a response only until the server's timeout for that method, counted
   from when the request arrived, less 2 s — 25 s by default, 120 s for `upload-chunk`,
   `rename` and `download-chunk`, 90 s for `agent-ask` (`mobile/android/…/RpcBudget.java`).
-  A new or longer server timeout must be added there too. `RpcBudgetTest` reads every
-  `callAgent(` / `sendRpc(` call in `web/` and fails when one gives its method (a string
-  literal) more than the phone's budget for that method, when its `timeoutMs` is neither
-  a number nor a numeric constant, or when a call whose method is not a literal gets more
-  than the default. A timeout passed in through a variable options object is not seen.
+  A new or longer server timeout must be added there too. A read-only request or a
+  question still queued for a worker at its deadline is skipped, never answered late.
+  Android answers at most 2 questions per drive at once, on workers of their own, so a
+  burst of questions neither holds that drive's `list`/`stat` nor runs past 2 at a time;
+  under load a question can therefore time out on the server while the phone is busy.
+  `RpcBudgetTest` reads every `callAgent(` / `sendRpc(` call in `web/` and fails when one
+  gives its method (a string literal) more than the phone's budget for that method, when
+  its `timeoutMs` is neither a number nor a numeric constant, or when a call whose method
+  is not a literal gets more than the default. A timeout passed in through a variable
+  options object is not seen. Every method the Android host answers must also have a
+  lane and a skip rule in `RpcBudget` (`thumbnail`: the bulk lane, skipped when expired),
+  or `RpcBudgetTest` fails.

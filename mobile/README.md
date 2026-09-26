@@ -39,7 +39,7 @@ drive and a laptop drive are the same thing to the server.
 | `android/…/index/{PhotoIndex,Indexer,ExifMeta,GeoLookup}.java` | on-device photo index: app-private SQLite, EXIF date/GPS, offline GeoNames gazetteer (`assets/geo/cities.tsv.gz`, built by `scripts/build-gazetteer.py`) |
 | `android/…/agent/{QueryParser,AskRunner,SearchQuery,ContentWords}.java` | the on-device agent: question → kind/place/date/size filters + content words → name, transcript and photo matching → `{answer, sources}`; answers `agent-ask` and the in-app search |
 | `android/…/agent/AskScope.java` | what one `agent-ask` may touch: `mode` read/act and the `root` folder (v2) — read-only gating, the root prefix filter and the last-line `confine` of the reply |
-| `android/…/agent/{Router,SocialReply}.java` | decides what a turn is before the index is touched — small talk, social chit-chat (answered by the on-device LLM, else `SocialReply`), out of scope ("book a table for 4"), call report, one call transcribed ("엄유준 최신 통화 stt 해줘" → that person's newest recording, heard in full, from whichever call folder holds it), or a file question — and carries the dialogue state (`understand`). Guards: `RouterTest` replays every SGD user turn (none may reach the index) and one speaker of every Synthetic-Persona-Chat conversation (`persona-chat-turns.tsv.gz`, CC BY 4.0; none searched, ≥97% answered socially) |
+| `android/…/agent/{Router,SocialReply}.java` | decides what a turn is before the index is touched — small talk, social chit-chat (answered by the on-device LLM, else `SocialReply`), out of scope ("book a table for 4"), call report, one call transcribed ("엄유준 최신 통화 stt 해줘" → that person's newest recording, heard in full, from whichever call folder holds it; asked over a drive's socket, only a recording in that drive), or a file question — and carries the dialogue state (`understand`). Guards: `RouterTest` replays every SGD user turn (none may reach the index) and one speaker of every Synthetic-Persona-Chat conversation (`persona-chat-turns.tsv.gz`, CC BY 4.0; none searched, ≥97% answered socially) |
 | `scripts/make-dialogues.py` → `test/resources/dialogues/` | the aindrive dialogue benchmark: DSTC8-style multi-turn dialogues about the phone's files (find/refine/collect/share/count/delete, calls, chat, out of scope) with the full dialogue state per turn; `dev`/`test` splits use disjoint phrasings and values, `holdout` was written after tuning. `DialogueDatasetTest` reports route/intent/slot accuracy and joint goal accuracy and fails below its floors |
 | `android/…/clip/{ClipEmbedder,ClipTokenizer,ModelStore,SceneLabels}.java` | photo recognition: **MobileCLIP2-S2** on ONNX Runtime (`assets/clip/mobileclip2-s2.json`, fp32, external-data weights, 400 MB; on the real corpus P@4 0.93 vs MobileCLIP-S0 0.88 vs SigLIP2-B/16 0.85 — see `scripts/` calibration; a photo matches a concept by zero-shot classification against ~90 everyday scenes (`SceneLabels`), not a cosine cut-off (the manifest's `minScore`/`margin` are unused legacy); licence apple-amlr = research use, SigLIP 2 is the Apache-2.0 alternative), CLIP BPE tokenizer port, checksum-verified model store (single files or tar.bz2 bundles). Changing the image model drops old vectors (`FileIndex.adoptImageModel`) |
 | `android/…/speech/{SpeechRecognizer,AudioDecoder}.java` | speech recognition via sherpa-onnx: **Qwen3-ASR 0.6B int8** by default (`assets/speech/qwen3-asr.json`; best Korean of the exportable models — a 75 s call: Qwen3-ASR near-verbatim, SenseVoice usable, Whisper-base garbled; ~0.35× realtime on an S26), `sense-voice.json` / `whisper-base.json` kept for the `TRANSCRIBE` benchmark hook; any container → 16 kHz PCM through MediaCodec. Changing engine drops old transcripts (`FileIndex.adoptSpeechEngine`) |
@@ -183,7 +183,12 @@ drive and a laptop drive are the same thing to the server.
   the ~1.6 GB LLM is not loaded for a turn any allowed caller can send. Over the
   socket (`AskScope.remote`) every source is a file of the asked drive: a call
   report still counts the call-recordings sources but lists only recordings in
-  the drive (their paths would mean other files there).
+  the drive (their paths would mean other files there), and one call transcribed
+  is only ever of a recording in the drive (its words are in the answer; a name
+  recorded only in another folder gets "none in this drive"). If the last-line
+  `confine` still has to drop a source, the answer becomes a neutral count ("in
+  this folder" for a root, "in this drive" otherwise) that keeps the read-only
+  "I only looked" when an act was skipped.
 - **Every RPC response goes through `SendGate`.** OkHttp's `send()` never
   blocks: it queues, and closes the socket when the queue would pass 16 MiB. So
   a big response is admitted only while the queue stays under 12 MiB, a small
@@ -196,19 +201,31 @@ drive and a laptop drive are the same thing to the server.
   reads `web/` and checks each call site's method). Once the gate has timed how
   fast the socket drains, it also drops a reply that would still be leaving after
   the deadline even at 1.5× that rate (the measurement can come out low, and a
-  wrong drop costs a reply the server still wants); a read-only request still
-  waiting for a worker at its deadline is skipped. The one frame
+  wrong drop costs a reply the server still wants), and on an idle socket it uses
+  only a rate from the last 10 s — otherwise a rate timed in a slow patch could
+  never be re-timed (a LATE reply is not sent) and would drop big replies for its
+  whole minute; a read-only request or a question still waiting for a worker at
+  its deadline is skipped. The one frame
   sent around the gate is the agent-hello: the first frame on a fresh socket,
   whose queue is empty.
-- **Each drive has its own RPC workers**, in two lanes: `read`,
-  `download-chunk`, `handoff-read` and `yjs-read` (replies up to ≈ 11 MB of
-  base64) on 2 threads, everything else on 4. A drive pulling whole photos for a
-  thumbnail grid over a slow uplink holds neither another drive's requests nor
-  its own list/stat (which still leave after the bytes already queued: the
-  socket is one FIFO, up to 12 MiB ahead). Across all drives at most 4 bulk
-  replies (tens of MB each at peak, no large heap) are in memory at once
-  (`RpcBudget.MAX_BULK_IN_FLIGHT`, the old process-wide pool's ceiling); a bulk
-  request with no slot by its deadline is skipped.
+- **Each drive has its own RPC workers**, in three lanes (`RpcBudget.laneOf`):
+  `read`, `download-chunk`, `handoff-read`, `yjs-read` (replies up to ≈ 11 MB of
+  base64) and `thumbnail` (decodes a photo) on 2 threads; `agent-ask` on 2
+  threads of its own (a question can run for a minute and anyone with read
+  access may send one); everything else on 4. A drive pulling photos for a
+  thumbnail grid over a slow uplink, or answering a burst of questions, holds
+  neither another drive's requests nor its own list/stat (which still leave
+  after the bytes already queued: the socket is one FIFO, up to 12 MiB ahead).
+  Across all drives at most 4 bulk replies (tens of MB each at peak, no large
+  heap) are in memory at once (`RpcBudget.MAX_BULK_IN_FLIGHT`, the old
+  process-wide pool's ceiling); a bulk request with no slot by its deadline is
+  skipped. Likewise at most 4 big incoming frames (≥ 1 Mi chars: an upload
+  chunk, a `write`, a `yjs-write`) are parsed and applied at once
+  (`RpcBudget.MAX_BIG_FRAMES_IN_FLIGHT`); those wait for a slot, never skipped.
+  A method added to `RpcHandler` fails `RpcBudgetTest` until it is given a lane.
+- **A frame that fails to parse is logged by length and exception class
+  only**: org.json puts the whole input in its message, and a frame can carry
+  credentials or file content.
 - iOS sets `maximumMessageSize` to 16 MiB: the 1 MiB default refused the first
   4 MiB upload chunk.
 - **Uploads are indexed as they land.** After a `write`, an upload's publish
