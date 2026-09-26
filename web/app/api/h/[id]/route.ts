@@ -9,6 +9,7 @@ import { callAgent, AgentError } from "@/lib/rpc";
 import { DOWNLOAD_CHUNK_BYTES } from "@/lib/agent-stream";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { openHandoff, logFetch } from "@/lib/handoff";
+import { servedBytesHeaders } from "@/lib/served-bytes";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -57,9 +58,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   });
   return new Response(stream, {
     headers: {
-      "content-type": h.mime,
+      // The link's creator chose h.mime; it must not run on our origin.
+      ...servedBytesHeaders(h.mime, h.name),
       "content-length": String(size),
-      "content-disposition": `inline; filename="${encodeURIComponent(h.name)}"; filename*=UTF-8''${encodeURIComponent(h.name)}`,
       "cache-control": "private, no-store",
       "x-content-type-options": "nosniff",
     },
