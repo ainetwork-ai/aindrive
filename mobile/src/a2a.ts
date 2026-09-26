@@ -98,7 +98,7 @@ export async function askDevice(server: string, sessionBearer: string, drive: { 
   const r = await client.sendMessage({ message, configuration: { blocking: true, acceptedOutputModes: ["text/plain", "application/json"] } });
   const parts = (r.kind === "message" ? r.parts : (r as Task).status?.message?.parts) ?? [];
   const data = parts.find((p) => p.kind === "data" && (p.metadata as Record<string, unknown> | undefined)?.type === "ai.aindrive/ask-result") as { data: Record<string, unknown> } | undefined;
-  const text = textOf(parts);
+  const text = textOf(parts.filter((p) => p.kind === "text"));   // the answer; the data part is not prose
   if (!data || data.data.error) throw new Error(text.replace(/^\[\w+\]\s*/, "") || "no answer");
   return { answer: String(data.data.answer ?? text), sources: (data.data.sources as DeviceAnswer["sources"]) ?? [], ...(data.data.action ? { action: data.data.action as DeviceAnswer["action"] } : {}) };
 }

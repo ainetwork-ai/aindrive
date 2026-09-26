@@ -27,6 +27,8 @@ playwright-report/
 test-results/
 *.png
 !docs/**/*.png
+# app icons are source, not test artifacts (a clean clone must build: 203f2ba pointed the launcher at them)
+!mobile/android/app/src/main/res/**/*.png
 .worktrees/
 .gstack/
 
