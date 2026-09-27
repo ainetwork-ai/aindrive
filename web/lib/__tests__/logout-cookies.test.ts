@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const clearCookie = vi.fn(async () => {});
 const clearWalletCookie = vi.fn(async () => {});
 
-vi.mock("@/lib/session", () => ({ clearCookie }));
+vi.mock("@/lib/session", () => ({ clearCookie, endCurrentSsoSession: async () => null }));
 vi.mock("@/lib/wallet", () => ({ clearWalletCookie }));
 
 const { POST } = await import("../../app/api/auth/logout/route.js");
