@@ -73,7 +73,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 **Infra**
 - Config/boot: `env.ts`, `load-env.js`, `boot-checks.js`, `cookie-config.ts`.
-- Identity: `session.ts` (session JWT cookie).
+- Identity: `session.ts` (session JWT cookie; verified through the AIN SSO gate — epoch, SSO session row, suspension), `sso/` (AIN SSO sign-in, provisioning adapter, back-channel logout — `sso/README.md`), `google-auth.ts` (Google ID token; never links by email).
 - Observability: `logger.js`, `trace.js` (stdout + ring buffer).
 - Guards/limits: `rate-limit.js`, `limits.ts` (drives-per-account cap, `AINDRIVE_UNLIMITED_OWNERS` storage-cap exemption).
 - Helpers: `path.js`, `mime.ts`, `served-bytes.ts` (the only way a route serves user-typed bytes inline — fs/stream, /api/h), `zod-helpers.ts` (`zPath`), `sort-entries.ts`, `api-client.ts`, `wagmi-config.ts`, `eip6963-uuid-guard.ts` (stabilises misbehaving wallet-extension announces so the picker lists each wallet once).

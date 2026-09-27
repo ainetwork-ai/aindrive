@@ -100,7 +100,12 @@ sale the member hasn't paid for shows locked, and opening it shows the paywall
 
 Identity is an **account** (`users` row); its id is the root that every drive,
 grant, and receipt hangs off. An account is reached by **either** an
-email+password credential, **a Google account** (`POST /api/auth/google`: a Google-verified email reaches the account with that email, linked by Google `sub` in `account_google`), **or** a wallet via SIWE (`POST /api/wallet/login`).
+email+password credential, **a Google account** (`POST /api/auth/google`: the account linked to that Google `sub` in `account_google`, or a new account; an existing account is **never** linked because its email matches — email addresses get reassigned — so that case is refused with `email_in_use`), **a wallet** via SIWE (`POST /api/wallet/login`), **or**, where configured, an **AIN account** via AIN SSO ("Continue with AIN": the account linked to the AIN `(issuer, sub)`, never matched by email; an existing account is connected once with a proof of it — `web/lib/sso/README.md`).
+
+An account that AIN SSO suspends (or offboards) from every organization it
+belongs to cannot sign in on any path and its sessions end; its drives,
+grants and personal tokens are kept. An AIN-linked account cannot reset its
+password by email.
 
 A **wallet-provisioned account** — minted for a wallet that paid or signed in
 (`resolveAccountForWallet`) — is **self-custodial**: losing the wallet loses the
