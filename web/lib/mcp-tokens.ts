@@ -96,15 +96,17 @@ export function issuePat(opts: {
   name: string;
   scope: McpScope;
   ttlDays: number | null;
+  /** AIN organization this token belongs to (created in an SSO session of that org); null = personal. */
+  ssoOrgId?: string | null;
 }): { token: string; row: McpTokenRow } {
   const token = mint("aind_pat");
   const now = Date.now();
   const id = nanoid(12);
   const expiresAt = opts.ttlDays ? now + opts.ttlDays * 24 * 60 * 60 * 1000 : null;
   db.prepare(
-    `INSERT INTO mcp_tokens (id, user_id, drive_id, name, scope, kind, token_hash, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, 'pat', ?, ?, ?)`,
-  ).run(id, opts.userId, opts.driveId, opts.name, opts.scope, hashToken(token), expiresAt, now);
+    `INSERT INTO mcp_tokens (id, user_id, drive_id, name, scope, kind, token_hash, expires_at, created_at, sso_org_id)
+     VALUES (?, ?, ?, ?, ?, 'pat', ?, ?, ?, ?)`,
+  ).run(id, opts.userId, opts.driveId, opts.name, opts.scope, hashToken(token), expiresAt, now, opts.ssoOrgId ?? null);
   return { token, row: getToken(id)! };
 }
 
@@ -121,17 +123,19 @@ export function issueOAuthTokens(opts: {
   clientId: string;
   clientName: string;
   scope: McpScope;
+  /** From the authorization code: the AIN org whose SSO session consented (null = personal). */
+  ssoOrgId?: string | null;
 }): OAuthTokenPair {
   const access = mint("aind_oat");
   const refresh = mint("aind_ort");
   const now = Date.now();
   db.prepare(
     `INSERT INTO mcp_tokens (id, user_id, drive_id, name, scope, kind, client_id, token_hash, refresh_hash,
-                             expires_at, refresh_expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, 'oauth', ?, ?, ?, ?, ?, ?)`,
+                             expires_at, refresh_expires_at, created_at, sso_org_id)
+     VALUES (?, ?, ?, ?, ?, 'oauth', ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     nanoid(12), opts.userId, opts.driveId, opts.clientName, opts.scope, opts.clientId,
-    hashToken(access), hashToken(refresh), now + ACCESS_TTL_MS, now + REFRESH_TTL_MS, now,
+    hashToken(access), hashToken(refresh), now + ACCESS_TTL_MS, now + REFRESH_TTL_MS, now, opts.ssoOrgId ?? null,
   );
   return { access_token: access, refresh_token: refresh, expires_in: ACCESS_TTL_MS / 1000, scope: opts.scope };
 }

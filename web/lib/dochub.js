@@ -8,6 +8,7 @@ import { trace } from "./trace.js";
 import { log } from "./logger.js";
 import { ROLE_RANK, bestMatchingRole, normalizePath } from "./access-core.js";
 import { paidAccessDenial } from "./sale-access.js";
+import { liveSessionUserId } from "./sso/store.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -48,14 +49,41 @@ export function docIdFor(driveId, path) {
   return createHash("sha1").update(`${driveId}:${path}`).digest("base64url").slice(0, 22);
 }
 
-async function readUserFromCookie(cookieHeader) {
+// Mirrors lib/session.ts verify(): signature + expiry, then the same server-side
+// gate (lib/sso/store.js) — a revoked epoch, an ended AIN SSO session or a
+// suspended account gets no socket. `ses` names the SSO session, if any, so a
+// back-channel logout can close exactly its sockets.
+async function readSessionFromCookie(cookieHeader) {
   const m = /aindrive_session=([^;]+)/.exec(cookieHeader || "");
-  if (!m) return null;
+  if (!m) return { userId: null, ses: null };
   try {
     const { payload } = await jwtVerify(m[1], enc.encode(getSessionSecret()));
-    return (payload.sub) || null;
-  } catch { return null; }
+    const userId = liveSessionUserId(payload);
+    return { userId, ses: userId && typeof payload.ses === "string" ? payload.ses : null };
+  } catch { return { userId: null, ses: null }; }
 }
+
+/**
+ * Closes live doc sockets of an account (`userId`) or of specific AIN SSO
+ * sessions (`sessionIds`) — suspension and back-channel logout end sessions
+ * server-side; this makes already-open editors notice. Registered on
+ * globalThis so lib/sso/store.js (and the Next.js routes) reach this module's
+ * hub map without importing the WebSocket server.
+ */
+export function disconnectPeers({ userId, sessionIds } = {}) {
+  const ids = new Set(sessionIds ?? []);
+  let closed = 0;
+  for (const bucket of hubs.values()) {
+    for (const peer of bucket) {
+      if ((userId && peer.userId === userId) || (peer.ses && ids.has(peer.ses))) {
+        try { peer.ws.close(4401, "session ended"); } catch {}
+        closed++;
+      }
+    }
+  }
+  return closed;
+}
+globalThis.__aindrive_dochub_disconnect = disconnectPeers;
 
 // Mirrors lib/access.ts resolveRoleByUser: drive owner, else best-matching
 // drive_members row. Kept here (not imported) because access.ts depends on
@@ -85,7 +113,7 @@ export async function onDocConnect(ws, req, query) {
   catch { ws.close(4400, "invalid path"); return; }
 
   const cookie = req.headers["cookie"];
-  const userId = await readUserFromCookie(cookie);
+  const { userId, ses } = await readSessionFromCookie(cookie);
   const role = resolveRole(driveId, userId, path);
   if (ROLE_RANK[role] < ROLE_RANK.viewer) { ws.close(4401, "no access"); return; }
   // Paid carve-out: a bare viewer must not siphon a priced doc's live frames over
@@ -94,7 +122,7 @@ export async function onDocConnect(ws, req, query) {
   if (paidAccessDenial(driveId, path, role, userId)) { ws.close(4402, "payment required"); return; }
 
   const docId = docIdFor(driveId, path);
-  const peer = { ws, role, userId, docId };
+  const peer = { ws, role, userId, ses, docId };
   let bucket = hubs.get(docId);
   if (!bucket) { bucket = new Set(); hubs.set(docId, bucket); }
   bucket.add(peer);

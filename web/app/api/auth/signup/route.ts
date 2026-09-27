@@ -7,15 +7,15 @@ import { setCookie } from "@/lib/session";
 import { claimInvitesForEmail } from "@/lib/invites.js";
 import { verifyOtpCode, type OtpVerifyResult } from "@/lib/otp";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { legacyLoginRefusal } from "@/lib/sso/policy";
+import { isReservedEmail } from "@/lib/sso/store.js";
 
 const Body = z.object({
   // Reject the reserved wallet-placeholder domain (resolveAccountForWallet
   // mints <wallet>@wallet.aindrive.local) so an attacker can't pre-register a
   // victim wallet's account through human signup.
-  email: z.string().email().refine(
-    (v) => !v.toLowerCase().endsWith("@wallet.aindrive.local"),
-    "reserved address",
-  ),
+  // (…and the AIN SSO placeholder domain, lib/sso/store.js)
+  email: z.string().email().refine((v) => !isReservedEmail(v), "reserved address"),
   // Verify-before-create: the 6-digit code emailed by /signup/request-code
   // proves the visitor controls this inbox, so every account has a real email.
   // Optional so the dev/e2e OTP bypass (AINDRIVE_DEV_BYPASS_OTP) can omit it;
@@ -31,6 +31,9 @@ export async function POST(req: Request) {
     const retryAfter = Math.ceil(rl.retryAfterMs / 1000);
     return NextResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": String(retryAfter) } });
   }
+  // A new password account is a legacy sign-in: off with AINDRIVE_LEGACY_LOGIN=false.
+  const off = legacyLoginRefusal(null);
+  if (off) return NextResponse.json({ error: off.error }, { status: off.status });
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const { code, name, password } = body.data;

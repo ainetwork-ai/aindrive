@@ -6,9 +6,12 @@
  * Trust: the token must be signed by Google (JWKS), issued by accounts.google.com,
  * addressed to one of OUR OAuth client ids (AINDRIVE_GOOGLE_CLIENT_IDS), unexpired,
  * and carry a Google-verified email. Resolution: a Google account already linked
- * (by `sub`) → that account; else an account with the same verified email → link
- * and use it (Google proved the address, the same proof a reset link gives);
- * else a new account. See docs/PERMISSIONS.md § Identity.
+ * (by `sub`) → that account; else, when no account uses that email, a new
+ * account. An existing account is NEVER linked because its email matches: an
+ * email address can be reassigned to another person (a company mailbox), and
+ * matching on it would hand them the previous holder's account. That case is
+ * refused with `email_in_use` — the owner signs in the way they signed up.
+ * See docs/PERMISSIONS.md § Identity.
  */
 import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 import bcrypt from "bcryptjs";
@@ -41,20 +44,28 @@ export async function verifyGoogleIdToken(idToken: string, keys: JWTVerifyGetKey
   return { sub: payload.sub, email, name };
 }
 
-/** The account a verified Google identity reaches (linking or creating as above). */
+/** An account already uses the Google email, but no Google account is linked to it. */
+export class GoogleEmailInUseError extends Error {
+  constructor() {
+    super("email_in_use");
+    this.name = "GoogleEmailInUseError";
+  }
+}
+
+/**
+ * The account a verified Google identity reaches: the one linked to its `sub`,
+ * or a new one. Throws GoogleEmailInUseError instead of linking by email.
+ */
 export function resolveAccountForGoogle(g: GoogleIdentity): { id: string; created: boolean } {
   return db.transaction(() => {
     const linked = db.prepare("SELECT account_id FROM account_google WHERE sub = ?").get(g.sub) as { account_id: string } | undefined;
     if (linked) return { id: linked.account_id, created: false };
-    const byEmail = db.prepare("SELECT id FROM users WHERE lower(email) = ?").get(g.email) as { id: string } | undefined;
-    let id = byEmail?.id, created = false;
-    if (!id) {
-      id = nanoid(10); created = true;
-      // No password: a random hash no login attempt can reproduce (reset-password can set one later).
-      db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)")
-        .run(id, g.email, g.name, bcrypt.hashSync(nanoid(24), 10));
-    }
+    if (db.prepare("SELECT 1 FROM users WHERE lower(email) = ?").get(g.email)) throw new GoogleEmailInUseError();
+    const id = nanoid(10);
+    // No password: a random hash no login attempt can reproduce (reset-password can set one later).
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)")
+      .run(id, g.email, g.name, bcrypt.hashSync(nanoid(24), 10));
     db.prepare("INSERT INTO account_google (sub, account_id, email) VALUES (?, ?, ?)").run(g.sub, id, g.email);
-    return { id, created };
+    return { id, created: true };
   })();
 }

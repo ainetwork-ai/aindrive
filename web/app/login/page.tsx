@@ -6,6 +6,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { safeNextPath } from "@/lib/safe-next";
 import { Wallet } from "lucide-react";
 import GoogleSignInButton from "@/components/google-signin-button";
+import SsoSignInButton from "@/components/sso-signin-button";
+
+// Refusals from the AIN SSO rollout switches (lib/sso/policy.ts).
+const LOGIN_ERRORS: Record<string, string> = {
+  account_suspended: "This account is suspended by your organization.",
+  sso_required: "This account signs in with AIN. Use \u201cContinue with AIN\u201d.",
+  legacy_login_disabled: "Sign in with AIN. Other sign-in methods are turned off on this server.",
+};
 
 // The wallet stack (wagmi + RainbowKit, ~300-600KB) is code-split behind this
 // dynamic import (ssr:false — the provider tree is client-only) so it loads
@@ -47,7 +55,7 @@ function LoginForm() {
       body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
     });
     setLoading(false);
-    if (!res.ok) { setErr((await res.json()).error || "login failed"); return; }
+    if (!res.ok) { const code = (await res.json()).error; setErr(LOGIN_ERRORS[code] ?? (code || "login failed")); return; }
     router.push(safeNext);
   }
   return (
@@ -76,6 +84,7 @@ function LoginForm() {
         <span className="h-px flex-1 bg-drive-border" />
       </div>
 
+      <SsoSignInButton next={safeNext} />
       <GoogleSignInButton next={safeNext} />
       <WalletLoginButton next={safeNext} />
 

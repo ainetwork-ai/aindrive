@@ -48,6 +48,11 @@ export function runBootChecks() {
   // Payout wallet is per-drive (Settings → Payments), enforced when a paid
   // share is created — not a deployment-wide env var. No boot check here.
 
+  // 4. AIN SSO (lib/sso/config.ts). Unset = off, nothing to check. Only a
+  //    value the operator set but got wrong fails the boot, so a typo never
+  //    silently leaves legacy login on or SSO half-configured.
+  errors.push(...ssoConfigErrors(process.env));
+
   if (errors.length > 0) {
     console.error("\n[aindrive] BOOT FAILED — production environment is misconfigured:\n");
     for (const msg of errors) {
@@ -56,4 +61,38 @@ export function runBootChecks() {
     console.error("");
     process.exit(1);
   }
+}
+
+/**
+ * Misconfiguration of the AIN SSO variables (production rules; see
+ * lib/sso/config.ts). Returns [] when none of them is set.
+ * @param {Record<string, string | undefined>} env
+ * @returns {string[]}
+ */
+export function ssoConfigErrors(env) {
+  const v = (k) => (env[k] ?? "").trim();
+  const errors = [];
+  const legacy = v("AINDRIVE_LEGACY_LOGIN");
+  if (legacy && !["true", "unlinked_only", "false"].includes(legacy.toLowerCase())) {
+    errors.push(`AINDRIVE_LEGACY_LOGIN must be true, unlinked_only or false (got: ${legacy}).`);
+  }
+  const enabled = v("AINDRIVE_SSO_ENABLED");
+  if (enabled && !/^(true|false|1|0)$/i.test(enabled)) {
+    errors.push(`AINDRIVE_SSO_ENABLED must be true or false (got: ${enabled}).`);
+  }
+  const issuer = v("AINDRIVE_SSO_ISSUER");
+  const clientId = v("AINDRIVE_SSO_CLIENT_ID");
+  const secret = v("AINDRIVE_SSO_CLIENT_SECRET");
+  if (issuer || clientId || secret) {
+    if (!issuer || !clientId) errors.push("AINDRIVE_SSO_ISSUER and AINDRIVE_SSO_CLIENT_ID must be set together.");
+    if (issuer) {
+      let ok = false;
+      try { const u = new URL(issuer); ok = u.protocol === "https:" && !u.search && !u.hash; } catch {}
+      if (!ok) errors.push(`AINDRIVE_SSO_ISSUER must be an https:// URL without query or fragment (got: ${issuer}).`);
+    }
+  }
+  if (/^(true|1)$/i.test(enabled) && (!issuer || !clientId || !secret)) {
+    errors.push("AINDRIVE_SSO_ENABLED=true needs AINDRIVE_SSO_ISSUER, AINDRIVE_SSO_CLIENT_ID and AINDRIVE_SSO_CLIENT_SECRET.");
+  }
+  return errors;
 }

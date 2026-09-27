@@ -2,7 +2,8 @@
  * IdentityResolver that reads the existing aindrive session cookie
  * (`aindrive_session`, JWT signed with the server session secret).
  *
- * Mirrors the verification done in web/lib/dochub.js#readUserFromCookie.
+ * Mirrors the verification done in web/lib/dochub.js#readSessionFromCookie
+ * (both go through lib/session.ts verify / lib/sso/store.js liveSessionUserId).
  * On any failure (no cookie / bad sig / no `sub` claim) returns
  * { kind: "anonymous" } so the next resolver in the composite chain
  * gets to try.

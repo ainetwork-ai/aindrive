@@ -412,6 +412,123 @@ function open() {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
+  // AIN SSO (lib/sso/README.md). Additive only: new tables + nullable/defaulted
+  // columns, safe to run on every boot. With no AINDRIVE_SSO_* configuration
+  // these stay empty and nothing reads them to a different result.
+  //   sso_identities   — the AIN account (issuer, subject) that reaches an aindrive
+  //                      account. Linked by a verified sub only, never by email.
+  //   sso_memberships  — per-(org, sub) state pushed by the provisioning adapter;
+  //                      an account with rows here and none `active` is blocked on
+  //                      every sign-in path (survives every LEGACY_LOGIN setting).
+  //   sso_sessions     — server-side rows for SSO sign-ins, keyed by the OIDC sid
+  //                      so back-channel logout can end them.
+  //   sso_login_requests / sso_pending_links — short-lived sign-in state (state,
+  //                      nonce, PKCE verifier; a verified login awaiting "connect
+  //                      or create"). Times are epoch ms.
+  //   sso_replay       — single-use jti of adapter and logout tokens.
+  //   sso_audit        — every applied SSO change (actor `ain-sso` for the adapter).
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS sso_identities (
+      issuer TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      link_method TEXT NOT NULL,
+      link_proof TEXT,
+      linked_at INTEGER NOT NULL,
+      last_login_at INTEGER,
+      PRIMARY KEY (issuer, subject),
+      UNIQUE (issuer, user_id),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sso_identities_user ON sso_identities(user_id);
+    CREATE TABLE IF NOT EXISTS sso_memberships (
+      issuer TEXT NOT NULL,
+      org_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      org_slug TEXT,
+      org_name TEXT,
+      status TEXT NOT NULL,
+      app_role TEXT,
+      groups_json TEXT NOT NULL DEFAULT '[]',
+      applied_version INTEGER NOT NULL,
+      legacy_user_id TEXT,
+      ownership_transfer_to TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (issuer, org_id, subject)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sso_memberships_user ON sso_memberships(user_id);
+    CREATE TABLE IF NOT EXISTS sso_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      issuer TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      oidc_sid TEXT,
+      org_id TEXT,
+      org_ids TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      end_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sso_sessions_sid ON sso_sessions(issuer, oidc_sid);
+    CREATE INDEX IF NOT EXISTS idx_sso_sessions_user ON sso_sessions(user_id);
+    CREATE TABLE IF NOT EXISTS sso_login_requests (
+      id TEXT PRIMARY KEY,
+      state TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      code_verifier TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      next_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sso_pending_links (
+      id TEXT PRIMARY KEY,
+      issuer TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      name TEXT,
+      email TEXT,
+      email_verified INTEGER NOT NULL DEFAULT 0,
+      oidc_sid TEXT,
+      org_id TEXT,
+      org_ids TEXT NOT NULL DEFAULT '[]',
+      next_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sso_replay (
+      key TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sso_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at INTEGER NOT NULL,
+      actor TEXT NOT NULL,
+      action TEXT NOT NULL,
+      issuer TEXT,
+      subject TEXT,
+      org_id TEXT,
+      user_id TEXT,
+      details TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sso_audit_subject ON sso_audit(subject, at);
+  `);
+  for (const stmt of [
+    // Per-account session epoch: session JWTs carry `ep`; one older than this is
+    // dead. Bumped only by SSO suspension / back-channel logout (0 = never).
+    "ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0",
+    // The AIN organization a credential was created for (from the SSO session's
+    // org context); NULL = personal. Suspension/offboarding revokes that org's.
+    "ALTER TABLE mcp_tokens ADD COLUMN sso_org_id TEXT",
+    "ALTER TABLE account_tokens ADD COLUMN sso_org_id TEXT",
+    "ALTER TABLE oauth_codes ADD COLUMN sso_org_id TEXT",
+    "ALTER TABLE account_oauth_codes ADD COLUMN sso_org_id TEXT",
+  ]) {
+    try { handle.exec(stmt); } catch (e) {
+      if (!/duplicate column/i.test(e.message)) throw e;
+    }
+  }
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

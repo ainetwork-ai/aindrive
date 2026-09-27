@@ -11,7 +11,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getUser } from "@/lib/session";
+import { currentSsoSession, getUser } from "@/lib/session";
 import { isSameOrigin } from "@/lib/oauth";
 import { getDrive } from "@/lib/drives";
 import { clampScope, issuePat, listActiveTokens, mcpUrlFor } from "@/lib/mcp-tokens";
@@ -70,6 +70,8 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     name: parsed.data.name,
     scope,
     ttlDays: parsed.data.ttlDays,
+    // Issued in an AIN SSO session of an organization → that org's (lib/sso).
+    ssoOrgId: (await currentSsoSession())?.org_id ?? null,
   });
   return NextResponse.json({ token, row, mcpUrl: mcpUrlFor(driveId) }, { status: 201 });
 }

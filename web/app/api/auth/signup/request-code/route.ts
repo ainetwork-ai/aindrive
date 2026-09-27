@@ -5,12 +5,12 @@ import { issueOtpCode, OTP_EXPIRES_MINUTES } from "@/lib/otp";
 import { sendMail } from "@/lib/email";
 import { renderOtpEmail } from "@/lib/email/templates/otp-code";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { legacyLoginRefusal } from "@/lib/sso/policy";
+import { isReservedEmail } from "@/lib/sso/store.js";
 
 const Body = z.object({
-  email: z.string().email().refine(
-    (v) => !v.toLowerCase().endsWith("@wallet.aindrive.local"),
-    "reserved address",
-  ),
+  // wallet + AIN SSO placeholder domains (lib/sso/store.js)
+  email: z.string().email().refine((v) => !isReservedEmail(v), "reserved address"),
 });
 
 // Step 1 of verify-before-create signup: email a 6-digit code proving the
@@ -23,6 +23,8 @@ export async function POST(req: Request) {
     const retryAfter = Math.ceil(ipRl.retryAfterMs / 1000);
     return NextResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": String(retryAfter) } });
   }
+  const off = legacyLoginRefusal(null); // AINDRIVE_LEGACY_LOGIN=false: no new password accounts
+  if (off) return NextResponse.json({ error: off.error }, { status: off.status });
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const email = body.data.email;

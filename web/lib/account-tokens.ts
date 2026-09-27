@@ -52,6 +52,8 @@ export function issueAccountTokens(opts: {
   clientId: string;
   clientName: string;
   scopes: readonly AccountScope[];
+  /** From the authorization code: the AIN org whose SSO session consented (null = personal). */
+  ssoOrgId?: string | null;
 }): AccountTokenPair {
   const access = mint("aind_aat");
   const refresh = mint("aind_art");
@@ -59,11 +61,11 @@ export function issueAccountTokens(opts: {
   const now = Date.now();
   db.prepare(
     `INSERT INTO account_tokens (id, user_id, client_id, name, scope, token_hash, refresh_hash,
-                                 expires_at, refresh_expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                 expires_at, refresh_expires_at, created_at, sso_org_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     nanoid(12), opts.userId, opts.clientId, opts.clientName, scope,
-    hashToken(access), hashToken(refresh), now + ACCESS_TTL_MS, now + REFRESH_TTL_MS, now,
+    hashToken(access), hashToken(refresh), now + ACCESS_TTL_MS, now + REFRESH_TTL_MS, now, opts.ssoOrgId ?? null,
   );
   return { access_token: access, refresh_token: refresh, expires_in: ACCESS_TTL_MS / 1000, scope };
 }

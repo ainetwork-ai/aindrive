@@ -62,6 +62,7 @@ export async function POST(req: Request) {
         clientId: client.client_id,
         clientName: client.client_name,
         scopes: account.scopes,
+        ssoOrgId: account.ssoOrgId,
       });
       return Response.json({ ...pair, token_type: "Bearer" }, { headers: { ...CORS, ...NO_STORE } });
     }
@@ -72,6 +73,7 @@ export async function POST(req: Request) {
       clientId: client.client_id,
       clientName: client.client_name,
       scope: redeemed.scope,
+      ssoOrgId: redeemed.ssoOrgId,
     });
     return Response.json({ ...pair, token_type: "Bearer", scope: scopeString(pair.scope) }, { headers: { ...CORS, ...NO_STORE } });
   }

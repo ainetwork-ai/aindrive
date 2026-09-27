@@ -5,6 +5,7 @@ import { issueOtpCode, OTP_EXPIRES_MINUTES } from "@/lib/otp";
 import { sendMail } from "@/lib/email";
 import { renderOtpEmail } from "@/lib/email/templates/otp-code";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { passwordResetRefusal } from "@/lib/sso/policy";
 
 const Body = z.object({ email: z.string().email() });
 
@@ -20,13 +21,18 @@ export async function POST(req: Request) {
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const email = body.data.email;
+  // Server-wide switch only (no per-account signal): AINDRIVE_LEGACY_LOGIN=false.
+  const off = passwordResetRefusal(null);
+  if (off) return NextResponse.json({ error: off.error }, { status: off.status });
 
   const emailRl = tryConsume({ name: "forgot-pw-email", key: email.toLowerCase(), limit: 3, windowMs: 300_000 });
   const user = db.prepare("SELECT id FROM users WHERE lower(email) = lower(?)").get(email) as { id: string } | undefined;
 
   // Only issue + send when the account exists AND this email isn't over its own
-  // rate limit. Either way the response is identical (anti-enumeration).
-  if (user && emailRl.ok) {
+  // rate limit — and never for an AIN-linked or suspended account: email alone
+  // must not reset those (lib/sso/policy). Either way the response is identical
+  // (anti-enumeration).
+  if (user && emailRl.ok && !passwordResetRefusal(user.id)) {
     try {
       const code = issueOtpCode(email, "reset_password");
       const mail = renderOtpEmail({ code, expiresInMinutes: OTP_EXPIRES_MINUTES, kind: "reset" });

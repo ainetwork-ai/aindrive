@@ -57,6 +57,12 @@ const ERRORS: Record<string, string> = {
   email_not_verified: "Your Google account's email isn't verified yet.",
   no_email: "Google didn't share an email address for this account.",
   rate_limited: "Too many attempts — try again in a minute.",
+  // An account already uses this email but has no Google account linked: it is
+  // never linked by email match (lib/google-auth). Sign in the way it was created.
+  email_in_use: "An aindrive account already uses this email. Sign in with your password or wallet instead.",
+  account_suspended: "This account is suspended by your organization.",
+  sso_required: "This account signs in with AIN. Use \u201cContinue with AIN\u201d.",
+  legacy_login_disabled: "Sign in with AIN. Other sign-in methods are turned off on this server.",
 };
 
 export default function GoogleSignInButton({ next, text = "continue_with" }: { next: string; text?: "continue_with" | "signup_with" | "signin_with" }) {

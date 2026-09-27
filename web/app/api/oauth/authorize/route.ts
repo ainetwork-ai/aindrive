@@ -7,7 +7,7 @@
  * client's redirect_uri with `code` or `error`.
  */
 import { NextResponse } from "next/server";
-import { getUser } from "@/lib/session";
+import { currentSsoSession, getUser } from "@/lib/session";
 import { isSameOrigin, issueAccountCode, issueCode, redirectWith, validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
 import { clampScope, isMcpScope } from "@/lib/mcp-tokens";
 
@@ -25,8 +25,11 @@ export async function POST(req: Request) {
   if (body.decision !== "approve") {
     return NextResponse.json({ redirect: redirectWith(redirectUri, { error: "access_denied", state }) });
   }
+  // Consented in an AIN SSO session of an organization → the grant is that
+  // org's and is revoked when the org suspends/offboards the person (lib/sso).
+  const ssoOrgId = (await currentSsoSession())?.org_id ?? null;
   if (v.value.driveId === null) {
-    const code = issueAccountCode({ clientId: client.client_id, userId: user.id, scopes: v.value.accountScopes, redirectUri, codeChallenge });
+    const code = issueAccountCode({ clientId: client.client_id, userId: user.id, scopes: v.value.accountScopes, redirectUri, codeChallenge, ssoOrgId });
     return NextResponse.json({ redirect: redirectWith(redirectUri, { code, state }) });
   }
   const { driveId } = v.value;
@@ -34,6 +37,6 @@ export async function POST(req: Request) {
   const scope = clampScope(driveId, user.id, wanted);
   if (!scope) return NextResponse.json({ error: "You don't have access to this drive." }, { status: 403 });
 
-  const code = issueCode({ clientId: client.client_id, userId: user.id, driveId, scope, redirectUri, codeChallenge });
+  const code = issueCode({ clientId: client.client_id, userId: user.id, driveId, scope, redirectUri, codeChallenge, ssoOrgId });
   return NextResponse.json({ redirect: redirectWith(redirectUri, { code, state }) });
 }
