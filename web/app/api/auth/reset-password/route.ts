@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { verifyOtpCode } from "@/lib/otp";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
+import { passwordResetRefusal } from "@/lib/sso/policy";
 
 // Same password rule as signup (min 8).
 const Body = z.object({
@@ -25,6 +26,8 @@ export async function POST(req: Request) {
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const { email, code, newPassword } = body.data;
+  const off = passwordResetRefusal(null);
+  if (off) return NextResponse.json({ error: off.error }, { status: off.status });
 
   const verdict = verifyOtpCode(email, code, "reset_password");
   if (!verdict.ok) {
@@ -35,6 +38,12 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+
+  // A code issued before the account was linked to AIN (or suspended) must not
+  // reset it: email alone is not enough for those accounts (lib/sso/policy).
+  const target = db.prepare("SELECT id FROM users WHERE lower(email) = lower(?)").get(email) as { id: string } | undefined;
+  const refusal = target ? passwordResetRefusal(target.id) : null;
+  if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
 
   const hash = await bcrypt.hash(newPassword, 10);
   const res = db.prepare("UPDATE users SET password_hash = ? WHERE lower(email) = lower(?)").run(hash, email);

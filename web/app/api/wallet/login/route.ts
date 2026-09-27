@@ -8,6 +8,7 @@ import { adoptOwnerPayoutWallet } from "@/lib/drives";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
 import { activeChainId } from "@/lib/payment-tokens";
+import { legacyLoginRefusal } from "@/lib/sso/policy";
 
 // The SIWE message must be signed FOR this origin; binding verify() to our
 // canonical host rejects a signature phished on another site.
@@ -73,6 +74,9 @@ export async function POST(req: Request) {
   if (existing && !existing.loginEnabled) {
     return NextResponse.json({ error: "wallet_login_not_enabled" }, { status: 403 });
   }
+  // SIWE sign-in is a legacy method once AIN SSO is on; a suspended account never signs in.
+  const refusal = legacyLoginRefusal(existing?.accountId ?? null);
+  if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
   const accountId = existing?.accountId ?? resolveAccountForWallet(address);
 
   await setCookie(accountId);

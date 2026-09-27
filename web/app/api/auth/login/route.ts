@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { setCookie } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { adoptSignInPayoutWallet } from "@/lib/drives";
+import { legacyLoginRefusal } from "@/lib/sso/policy";
 
 const Body = z.object({ email: z.string().email(), password: z.string().min(1) });
 
@@ -23,6 +24,9 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
+  // After the password check, so the refusal reveals nothing to a guesser.
+  const refusal = legacyLoginRefusal(user.id);
+  if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
   adoptSignInPayoutWallet(user.id);
   await setCookie(user.id);
   return NextResponse.json({ ok: true });
