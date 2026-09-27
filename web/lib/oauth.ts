@@ -248,13 +248,15 @@ export function issueCode(opts: {
   scope: McpScope;
   redirectUri: string;
   codeChallenge: string;
+  /** The AIN org of the SSO session that consented (lib/sso); carried onto the tokens. */
+  ssoOrgId?: string | null;
 }): string {
   const code = randomBytes(32).toString("base64url");
   const now = Date.now();
   db.prepare(
-    `INSERT INTO oauth_codes (code_hash, client_id, user_id, drive_id, scope, redirect_uri, code_challenge, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(hashToken(code), opts.clientId, opts.userId, opts.driveId, opts.scope, opts.redirectUri, opts.codeChallenge, now + CODE_TTL_MS, now);
+    `INSERT INTO oauth_codes (code_hash, client_id, user_id, drive_id, scope, redirect_uri, code_challenge, expires_at, created_at, sso_org_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(hashToken(code), opts.clientId, opts.userId, opts.driveId, opts.scope, opts.redirectUri, opts.codeChallenge, now + CODE_TTL_MS, now, opts.ssoOrgId ?? null);
   return code;
 }
 
@@ -262,7 +264,8 @@ export function pkceS256(verifier: string): string {
   return createHash("sha256").update(verifier).digest("base64url");
 }
 
-export type RedeemedCode = { userId: string; driveId: string; scope: McpScope };
+/** `ssoOrgId` only when the consent came from an AIN SSO session of an organization (lib/sso). */
+export type RedeemedCode = { userId: string; driveId: string; scope: McpScope; ssoOrgId?: string };
 
 type RedeemOpts = { code: string; clientId: string; redirectUri: string; codeVerifier: string };
 
@@ -286,13 +289,13 @@ export function redeemCode(opts: RedeemOpts): RedeemedCode | null {
   const burned = db.prepare("UPDATE oauth_codes SET consumed = 1 WHERE code_hash = ? AND consumed = 0").run(hash);
   if (burned.changes !== 1) return null;
   const row = db
-    .prepare("SELECT client_id, user_id, drive_id, scope, redirect_uri, code_challenge, expires_at FROM oauth_codes WHERE code_hash = ?")
+    .prepare("SELECT client_id, user_id, drive_id, scope, redirect_uri, code_challenge, expires_at, sso_org_id FROM oauth_codes WHERE code_hash = ?")
     .get(hash) as {
       client_id: string; user_id: string; drive_id: string; scope: McpScope;
-      redirect_uri: string; code_challenge: string; expires_at: number;
+      redirect_uri: string; code_challenge: string; expires_at: number; sso_org_id: string | null;
     };
   if (!codeMatches(row, opts)) return null;
-  return { userId: row.user_id, driveId: row.drive_id, scope: row.scope };
+  return { userId: row.user_id, driveId: row.drive_id, scope: row.scope, ...(row.sso_org_id ? { ssoOrgId: row.sso_org_id } : {}) };
 }
 
 // ── Account-grant codes (no drive; see lib/account-tokens.ts) ────────────
@@ -303,17 +306,18 @@ export function issueAccountCode(opts: {
   scopes: readonly AccountScope[];
   redirectUri: string;
   codeChallenge: string;
+  ssoOrgId?: string | null;
 }): string {
   const code = randomBytes(32).toString("base64url");
   const now = Date.now();
   db.prepare(
-    `INSERT INTO account_oauth_codes (code_hash, client_id, user_id, scope, redirect_uri, code_challenge, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(hashToken(code), opts.clientId, opts.userId, accountScopeString(opts.scopes), opts.redirectUri, opts.codeChallenge, now + CODE_TTL_MS, now);
+    `INSERT INTO account_oauth_codes (code_hash, client_id, user_id, scope, redirect_uri, code_challenge, expires_at, created_at, sso_org_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(hashToken(code), opts.clientId, opts.userId, accountScopeString(opts.scopes), opts.redirectUri, opts.codeChallenge, now + CODE_TTL_MS, now, opts.ssoOrgId ?? null);
   return code;
 }
 
-export type RedeemedAccountCode = { userId: string; scopes: AccountScope[] };
+export type RedeemedAccountCode = { userId: string; scopes: AccountScope[]; ssoOrgId?: string };
 
 /** redeemCode for account codes: same burn-first one-time exchange. */
 export function redeemAccountCode(opts: RedeemOpts): RedeemedAccountCode | null {
@@ -321,11 +325,11 @@ export function redeemAccountCode(opts: RedeemOpts): RedeemedAccountCode | null 
   const burned = db.prepare("UPDATE account_oauth_codes SET consumed = 1 WHERE code_hash = ? AND consumed = 0").run(hash);
   if (burned.changes !== 1) return null;
   const row = db
-    .prepare("SELECT client_id, user_id, scope, redirect_uri, code_challenge, expires_at FROM account_oauth_codes WHERE code_hash = ?")
+    .prepare("SELECT client_id, user_id, scope, redirect_uri, code_challenge, expires_at, sso_org_id FROM account_oauth_codes WHERE code_hash = ?")
     .get(hash) as {
       client_id: string; user_id: string; scope: string;
-      redirect_uri: string; code_challenge: string; expires_at: number;
+      redirect_uri: string; code_challenge: string; expires_at: number; sso_org_id: string | null;
     };
   if (!codeMatches(row, opts)) return null;
-  return { userId: row.user_id, scopes: parseAccountScopes(row.scope) };
+  return { userId: row.user_id, scopes: parseAccountScopes(row.scope), ...(row.sso_org_id ? { ssoOrgId: row.sso_org_id } : {}) };
 }
