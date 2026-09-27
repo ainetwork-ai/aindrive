@@ -3,24 +3,42 @@ import { cookies } from "next/headers";
 import { env } from "./env";
 import { db } from "./db";
 import { cookieOptions } from "./cookie-config";
+import { endSsoSession, getSsoSession, isAccountBlocked, liveSessionUserId, sessionEpoch } from "./sso/store.js";
 
 const COOKIE = "aindrive_session";
 const enc = new TextEncoder();
 
 function key() { return enc.encode(env.sessionSecret); }
 
-export async function sign(userId: string) {
-  return new SignJWT({ sub: userId })
+/**
+ * The session JWT: `{sub}` (+ `ep` once the account's session epoch was
+ * bumped, + `ses` for an AIN SSO sign-in's server-side session row). Tokens
+ * minted before AIN SSO existed carry only `{sub}` and stay valid as before.
+ */
+export async function sign(userId: string, opts: { ssoSessionId?: string } = {}) {
+  // Last line of defence: every sign-in path checks this first and answers 403.
+  if (isAccountBlocked(userId)) throw new Error("account_blocked");
+  const claims: Record<string, unknown> = { sub: userId };
+  const ep = sessionEpoch(userId);
+  if (ep > 0) claims.ep = ep;
+  if (opts.ssoSessionId) claims.ses = opts.ssoSessionId;
+  return new SignJWT(claims)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("30d")
     .sign(key());
 }
 
+/**
+ * Signature + expiry, then the server-side gate (lib/sso/store.js
+ * liveSessionUserId): a revoked epoch, an ended SSO session or an account
+ * suspended through AIN SSO no longer verifies — for the cookie, the bearer
+ * uses (/mcp, A2A, AG-UI, file bytes) and the CLI/mobile pairing token alike.
+ */
 export async function verify(token: string): Promise<string | null> {
   try {
     const { payload } = await jwtVerify(token, key());
-    return (payload.sub as string) || null;
+    return liveSessionUserId(payload);
   } catch { return null; }
 }
 
@@ -55,11 +73,33 @@ export async function getRequestUser(req: Request): Promise<SessionUser | null |
   return row ?? "invalid";
 }
 
-export async function setCookie(userId: string) {
-  const token = await sign(userId);
+export async function setCookie(userId: string, opts: { ssoSessionId?: string } = {}) {
+  const token = await sign(userId, opts);
   (await cookies()).set(COOKIE, token, cookieOptions());
 }
 
 export async function clearCookie() {
   (await cookies()).delete(COOKIE);
+}
+
+/**
+ * The AIN SSO session behind the current cookie, if it is one and still live
+ * (null for legacy sessions). Its `org_id` scopes credentials created in it.
+ */
+export async function currentSsoSession() {
+  const token = (await cookies()).get(COOKIE)?.value;
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, key());
+    if (typeof payload.ses !== "string" || !liveSessionUserId(payload)) return null;
+    const row = getSsoSession(payload.ses);
+    return row && row.ended_at === null ? row : null;
+  } catch { return null; }
+}
+
+/** Sign-out: ends the AIN SSO session row behind the cookie (if any) and returns it. */
+export async function endCurrentSsoSession() {
+  const s = await currentSsoSession();
+  if (s) endSsoSession(s.id, "logout");
+  return s;
 }
