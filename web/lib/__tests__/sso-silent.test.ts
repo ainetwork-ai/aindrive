@@ -270,10 +270,30 @@ describe("callback of a silent check", () => {
     },
   );
 
-  it("any other failure of a silent check is anonymous too (e.g. not assigned to aindrive)", async () => {
-    const auth = await startSilent("/s/tok");
-    const res = await callback({ error: "access_denied", state: auth.searchParams.get("state")!, iss: ISSUER });
-    expect(where(res)).toBe("/s/tok");
+  it("access_denied (not assigned to aindrive) is an anonymous visit too, and not logged as a failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const auth = await startSilent("/s/tok");
+      const res = await callback({ error: "access_denied", state: auth.searchParams.get("state")!, iss: ISSUER });
+      expect(where(res)).toBe("/s/tok");
+      expect(warn).not.toHaveBeenCalled();
+      const other = await startSilent("/s/tok2");
+      expect(where(await callback({ error: "server_error", state: other.searchParams.get("state")!, iss: ISSUER }))).toBe("/s/tok2");
+      expect(warn).toHaveBeenCalledOnce(); // unexpected answers are logged, still anonymous
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a sign-up (prompt=create) that ends in an existing AIN account is an ordinary sign-in", async () => {
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES ('u_existing', 'existing@example.com', 'E', 'x')").run();
+    db.prepare("INSERT INTO sso_identities (issuer, subject, user_id, link_method, linked_at, last_login_at) VALUES (?, 'acc_existing', 'u_existing', 'jit', ?, ?)").run(ISSUER, Date.now(), Date.now());
+    idTokenFor = claims("acc_existing");
+    const res = await startRoute.GET(new Request(`${PUBLIC_URL}/api/auth/sso/start?prompt=create&next=%2Fd%2Fnew`));
+    const auth = new URL(where(res)!);
+    lastNonce = auth.searchParams.get("nonce")!;
+    expect(where(await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER }))).toBe("/d/new");
+    expect((await session.getUser())?.id).toBe("u_existing");
   });
 
   it("a login_required answer without this browser's pending request still shows no error", async () => {

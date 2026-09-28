@@ -28,6 +28,13 @@ export const SILENT_ERRORS: ReadonlySet<string> = new Set([
   "account_selection_required",
 ]);
 
+/**
+ * Normal answers to a silent check, not logged: the above, and access_denied
+ * (AIN SSO's answer for an account that aindrive is not assigned to).
+ * Every failure of a silent check is an anonymous visit; others are logged.
+ */
+export const SILENT_QUIET_ERRORS: ReadonlySet<string> = new Set([...SILENT_ERRORS, "access_denied"]);
+
 type Env = Record<string, string | undefined>;
 const val = (env: Env, k: string) => (env[k] ?? "").trim();
 

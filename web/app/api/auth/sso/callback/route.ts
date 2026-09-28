@@ -12,12 +12,14 @@
  *   adapter made)       so the account is created directly.
  *
  * Errors come back to /login?sso_error=<code> — except for the silent check
- * (prompt=none, lib/sso/silent.ts): `login_required` & co. (and any other
- * failure) return to the requested page as an anonymous visitor.
+ * (prompt=none, lib/sso/silent.ts): `login_required`, `access_denied` & co.
+ * (and any other failure) return to the requested page as an anonymous
+ * visitor. A `prompt=create` sign-up that ends in an existing AIN account is
+ * an ordinary sign-in.
  */
 import { legacyLoginMode, ssoLoginConfig } from "@/lib/sso/config";
 import { completeAuthorization, discover, sessionOrg, SsoError } from "@/lib/sso/oidc";
-import { SILENT_ERRORS } from "@/lib/sso/silent";
+import { SILENT_ERRORS, SILENT_QUIET_ERRORS } from "@/lib/sso/silent";
 import { createPendingLink, identityFor, isAccountBlocked, isPlaceholderIdentity, resolveOrCreateUserForSubject, takeLoginRequest } from "@/lib/sso/store.js";
 import { beginSsoSession, clearTxCookie, loginError, readTxCookie, redirectTo, setLinkCookie } from "@/lib/sso/signin";
 
@@ -35,7 +37,7 @@ export async function GET(req: Request) {
   const silent = pending.prompt === "none" || silentAnswer;
   /** The silent check failed or the person must interact: back to the page, anonymous. */
   const anonymous = (code: string) => {
-    if (!SILENT_ERRORS.has(code)) console.warn("[sso] silent sign-in ended:", code);
+    if (!SILENT_QUIET_ERRORS.has(code)) console.warn("[sso] silent sign-in ended:", code);
     return redirectTo(pending.next_path);
   };
 
