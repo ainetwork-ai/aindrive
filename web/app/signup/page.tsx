@@ -4,11 +4,16 @@ import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { safeNextPath } from "@/lib/safe-next";
 import GoogleSignInButton from "@/components/google-signin-button";
+import SsoSignUpLink from "@/components/sso-signup-link";
+import { useSsoStatus } from "@/components/use-sso-status";
 
 // Verify-before-create: (1) enter email → a 6-digit code is emailed; (2) enter
 // the code + name + password to create the account. Every account therefore has
 // a verified email. An already-registered email short-circuits step 1 to a
 // "sign in instead" hint.
+//
+// With AIN SSO on: "Sign up with AIN" (prompt=create) sits next to this form
+// while AINDRIVE_LEGACY_LOGIN=true, and replaces it otherwise.
 function SignupForm() {
   const router = useRouter();
   const search = useSearchParams();
@@ -21,6 +26,7 @@ function SignupForm() {
   const [alreadyRegistered, setAlreadyRegistered] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const sso = useSsoStatus();
 
   async function requestCode(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -59,6 +65,21 @@ function SignupForm() {
       return;
     }
     router.push(safeNext);
+  }
+
+  if (sso && sso.legacyLogin !== "true") {
+    return (
+      <div className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
+        <h1 className="text-xl font-semibold">Create your aindrive</h1>
+        <p className="mt-2 text-sm text-drive-muted">aindrive accounts are AIN accounts — one account for every AIN app.</p>
+        <SsoSignUpLink next={safeNext} />
+        {sso.legacyLogin === "false" && <GoogleSignInButton next={safeNext} text="signup_with" />}
+        <p className="mt-4 text-sm text-drive-muted text-center">
+          Already have an account?{" "}
+          <Link className="text-drive-accent hover:underline" href={loginHref}>Sign in</Link>
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -114,6 +135,7 @@ function SignupForm() {
             <span className="h-px flex-1 bg-drive-border" />
           </div>
           <GoogleSignInButton next={safeNext} text="signup_with" />
+          <SsoSignUpLink next={safeNext} />
         </>
       )}
 

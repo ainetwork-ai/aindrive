@@ -9,6 +9,7 @@ import { verifyOtpCode, type OtpVerifyResult } from "@/lib/otp";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
 import { isReservedEmail } from "@/lib/sso/store.js";
+import { attestLegacyLogin } from "@/lib/sso/app-attest";
 
 const Body = z.object({
   // Reject the reserved wallet-placeholder domain (resolveAccountForWallet
@@ -69,5 +70,7 @@ export async function POST(req: Request) {
   // they were invited to show up immediately after signup.
   claimInvitesForEmail(id, email);
   await setCookie(id);
+  // A new password account is signed in: same attestation as a password login.
+  void attestLegacyLogin({ userId: id, method: "password" });
   return NextResponse.json({ ok: true });
 }

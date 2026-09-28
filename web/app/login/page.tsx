@@ -7,6 +7,8 @@ import { safeNextPath } from "@/lib/safe-next";
 import { Wallet } from "lucide-react";
 import GoogleSignInButton from "@/components/google-signin-button";
 import SsoSignInButton from "@/components/sso-signin-button";
+import SsoSignUpLink from "@/components/sso-signup-link";
+import { ssoStartHref, useSsoStatus } from "@/components/use-sso-status";
 
 // Refusals from the AIN SSO rollout switches (lib/sso/policy.ts).
 const LOGIN_ERRORS: Record<string, string> = {
@@ -44,6 +46,9 @@ function LoginForm() {
   const safeNext = safeNextPath(next);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // AIN SSO on and AINDRIVE_LEGACY_LOGIN ≠ true: new accounts are AIN accounts.
+  const sso = useSsoStatus();
+  const legacySignup = !sso || sso.legacyLogin === "true";
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -90,12 +95,21 @@ function LoginForm() {
 
       <p className="mt-5 text-sm text-drive-muted text-center">
         New here?{" "}
-        <Link
-          className="text-drive-accent hover:underline"
-          href={next ? `/signup?next=${encodeURIComponent(next)}` : "/signup"}
-        >
-          Create an account
-        </Link>
+        {legacySignup ? (
+          <>
+            <Link
+              className="text-drive-accent hover:underline"
+              href={next ? `/signup?next=${encodeURIComponent(next)}` : "/signup"}
+            >
+              Create an account
+            </Link>
+            {sso && <> or <SsoSignUpLink next={safeNext} variant="link" /></>}
+          </>
+        ) : (
+          <a className="text-drive-accent hover:underline" href={ssoStartHref(safeNext, { prompt: "create" })} data-testid="sso-signup">
+            Create an account
+          </a>
+        )}
       </p>
     </form>
   );

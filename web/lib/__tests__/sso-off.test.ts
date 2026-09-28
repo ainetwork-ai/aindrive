@@ -13,7 +13,7 @@ import { cookieJar, PUBLIC_URL } from "./sso-test-issuer";
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-sso-off-"));
 process.env.AINDRIVE_PUBLIC_URL = PUBLIC_URL;
 process.env.AINDRIVE_SESSION_SECRET = "sso-off-test-secret-0123456789abcdef";
-for (const k of ["AINDRIVE_SSO_ISSUER", "AINDRIVE_SSO_CLIENT_ID", "AINDRIVE_SSO_CLIENT_SECRET", "AINDRIVE_SSO_ENABLED", "AINDRIVE_LEGACY_LOGIN"]) delete process.env[k];
+for (const k of ["AINDRIVE_SSO_ISSUER", "AINDRIVE_SSO_CLIENT_ID", "AINDRIVE_SSO_CLIENT_SECRET", "AINDRIVE_SSO_ENABLED", "AINDRIVE_LEGACY_LOGIN", "AINDRIVE_SSO_SILENT", "AINDRIVE_SSO_ATTEST", "AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS"]) delete process.env[k];
 
 const { jar, cookies } = cookieJar();
 vi.mock("next/headers", () => ({ cookies }));
@@ -33,6 +33,9 @@ const healthRoute = await import("../../app/api/sso/v1/health/route.js");
 const userRoute = await import("../../app/api/sso/v1/orgs/[orgId]/users/[sub]/route.js");
 const loginRoute = await import("../../app/api/auth/login/route.js");
 const forgotRoute = await import("../../app/api/auth/forgot-password/route.js");
+const logoutRoute = await import("../../app/api/auth/logout/route.js");
+const { default: middleware } = await import("../../middleware");
+const { NextRequest } = await import("next/server");
 
 const json = (url: string, body: unknown, method = "POST") =>
   new Request(url, { method, headers: { "content-type": "application/json", origin: PUBLIC_URL }, body: JSON.stringify(body) });
@@ -67,6 +70,42 @@ describe("AIN SSO unconfigured — nothing new is reachable", () => {
     expect(bc.status).toBe(404);
     expect((db.prepare("SELECT count(*) c FROM sso_memberships").get() as { c: number }).c).toBe(0);
     expect((db.prepare("SELECT count(*) c FROM sso_identities").get() as { c: number }).c).toBe(0);
+  });
+
+  it("no automatic sign-in: an anonymous browser opening any page is served the page", async () => {
+    const nav = {
+      "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+      accept: "text/html,application/xhtml+xml",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
+    };
+    for (const path of ["/", "/d/abc", "/s/tok", "/login", "/docs"]) {
+      const res = await middleware(new NextRequest(`${PUBLIC_URL}${path}`, { headers: nav }));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("location")).toBeNull();
+      expect(res.cookies.get("ain_sso_checked")).toBeUndefined();
+      expect(res.headers.get("content-security-policy")).toBeTruthy();
+    }
+    // A hand-made silent / sign-up / Google start answers 404 like every other SSO endpoint.
+    for (const q of ["prompt=none", "prompt=create", "ain_idp=google"]) {
+      expect((await startRoute.GET(new Request(`${PUBLIC_URL}/api/auth/sso/start?${q}&next=%2Fd%2Fabc`))).status).toBe(404);
+    }
+  });
+
+  it("no attestation call and no new cookie on sign-in / sign-out", async () => {
+    const fetchSpy = vi.fn(async () => new Response("unexpected", { status: 599 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const res = await loginRoute.POST(json(`${PUBLIC_URL}/api/auth/login`, { email: "alice@example.com", password: "password-1" }));
+      expect(res.status).toBe(200);
+      const out = await logoutRoute.POST(new Request(`${PUBLIC_URL}/api/auth/logout`, { method: "POST" }));
+      expect(out.headers.get("location")).toBe("/");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(jar.get("ain_sso_checked")).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("boot checks have nothing to say about SSO when none of its variables is set", () => {

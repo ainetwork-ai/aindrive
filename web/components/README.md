@@ -61,6 +61,13 @@ Sharing / payments:
 - `use-wallet-login` — SIWE re-login for a wallet that already has access
   (re-issues `aindrive_wallet` cookie; not a payment).
 
+Sign-in (`/login`, `/signup`):
+- `google-signin-button` — Google Identity Services → POST /api/auth/google; goes
+  through AIN SSO (`ain_idp=google`) when AIN SSO is on with legacy login off.
+- `sso-signin-button` / `sso-signup-link` — "Continue with AIN" / "Sign up with
+  AIN" (`prompt=create`); render nothing unless AIN SSO is on.
+- `use-sso-status` — one shared GET /api/auth/sso per page (`lib/sso/README.md`).
+
 Agents:
 - `folder-chat(.tsx/-parts)` — picks a drive agent and asks it over the folder.
 - `create-agent-modal(.tsx/-parts)` — owner-only RAG-agent registration.

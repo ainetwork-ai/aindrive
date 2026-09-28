@@ -208,7 +208,7 @@ describe("versions (adapter-protocol §4.2)", () => {
 
 describe("legacy mapping (adapter-protocol §4.4)", () => {
   beforeAll(() => {
-    for (const id of ["legacy_a", "legacy_b", "legacy_c"]) {
+    for (const id of ["legacy_a", "legacy_b", "legacy_c", "legacy_p", "legacy_q"]) {
       db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run(id, `${id}@example.com`, id, "x");
     }
   });
@@ -243,6 +243,39 @@ describe("legacy mapping (adapter-protocol §4.4)", () => {
     expect(store.getSsoSession(ses)!.end_reason).toBe("legacy_mapping_rolled_back");
     expect(store.ssoAccountState("legacy_c")).toBe("unmanaged"); // an ordinary account again
     expect(db.prepare("SELECT id FROM users WHERE id = 'legacy_c'").get()).toBeTruthy(); // never deleted
+  });
+});
+
+describe("a placeholder the adapter made gives way to the legacy account (app attestation linked later)", () => {
+  it("never signed in: the next push with legacyUserId re-points the link and the organization state", async () => {
+    const first = await (await put(desired("acc_ph", { version: 1 }))).json();
+    const placeholder = first.localUserId as string;
+    expect(store.identityFor(ISSUER, "acc_ph")).toMatchObject({ user_id: placeholder, link_method: "provisioned", last_login_at: null });
+    const res = await put(desired("acc_ph", { version: 2, legacyUserId: "legacy_p" }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).localUserId).toBe("legacy_p");
+    expect(store.identityFor(ISSUER, "acc_ph")).toMatchObject({ user_id: "legacy_p", link_method: "legacy_mapping" });
+    expect(db.prepare("SELECT user_id FROM sso_memberships WHERE subject = 'acc_ph'").all()).toEqual([{ user_id: "legacy_p" }]);
+    expect(db.prepare("SELECT id FROM users WHERE id = ?").get(placeholder)).toBeTruthy(); // never deleted
+    expect(store.ssoAccountState(placeholder)).toBe("unmanaged");
+    const ev = db.prepare("SELECT details FROM sso_audit WHERE subject = 'acc_ph' AND action = 'placeholder_replaced'").get() as { details: string };
+    expect(JSON.parse(ev.details)).toMatchObject({ placeholderUserId: placeholder, method: "legacy_mapping" });
+  });
+
+  it("once someone signed in to it, it is the person's account: a later legacyUserId does not move it", async () => {
+    const { localUserId } = await (await put(desired("acc_used", { version: 1 }))).json();
+    store.createSsoSession({ userId: localUserId, issuer: ISSUER, subject: "acc_used", oidcSid: "s-used", orgId: ORG.id, orgIds: [ORG.id] });
+    const res = await put(desired("acc_used", { version: 2, legacyUserId: "legacy_q" }));
+    expect((await res.json()).localUserId).toBe(localUserId);
+    expect(store.identityFor(ISSUER, "acc_used")!.user_id).toBe(localUserId);
+    expect(store.isSsoLinked("legacy_q")).toBe(false);
+  });
+
+  it("the legacy account must exist and be free, as for a first push", async () => {
+    await put(desired("acc_ph3", { version: 1 }));
+    expect((await (await put(desired("acc_ph3", { version: 2, legacyUserId: "nobody" }))).json()).error).toBe("legacy_user_not_found");
+    expect((await (await put(desired("acc_ph3", { version: 3, legacyUserId: "legacy_a" }))).json()).error).toBe("legacy_conflict");
+    expect(store.identityFor(ISSUER, "acc_ph3")!.link_method).toBe("provisioned");
   });
 });
 

@@ -9,9 +9,15 @@
  * (GET /api/auth/google → 404) or Google's script can't load — the email and
  * wallet paths stay as they are. The web OAuth client must list this site's
  * origin under "Authorized JavaScript origins" in Google Cloud.
+ *
+ * With AIN SSO on and AINDRIVE_LEGACY_LOGIN=false (aindrive's own Google
+ * sign-in refused), the button goes through AIN SSO instead:
+ * /api/auth/sso/start?ain_idp=google → AIN SSO sends the browser straight to
+ * Google (no AIN sign-in page) and back here signed in.
  */
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { loadSsoStatus, ssoStartHref, useSsoStatus } from "./use-sso-status";
 
 type Gis = {
   accounts: {
@@ -67,6 +73,7 @@ const ERRORS: Record<string, string> = {
 
 export default function GoogleSignInButton({ next, text = "continue_with" }: { next: string; text?: "continue_with" | "signup_with" | "signin_with" }) {
   const router = useRouter();
+  const sso = useSsoStatus();
   const wrap = useRef<HTMLDivElement>(null);
   const slot = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
@@ -77,7 +84,8 @@ export default function GoogleSignInButton({ next, text = "continue_with" }: { n
     let alive = true;
     let ro: ResizeObserver | null = null;
     (async () => {
-      const res = await fetch("/api/auth/google").catch(() => null);
+      const [res, status] = await Promise.all([fetch("/api/auth/google").catch(() => null), loadSsoStatus()]);
+      if (status?.legacyLogin === "false") return; // Google goes through AIN SSO (below)
       if (!res?.ok) return; // not configured here
       const { clientId } = (await res.json()) as { clientId?: string };
       if (!clientId || !alive) return;
@@ -132,6 +140,18 @@ export default function GoogleSignInButton({ next, text = "continue_with" }: { n
     };
   }, [next, router, text]);
 
+  if (sso?.legacyLogin === "false") {
+    return (
+      <div className="mt-4" data-testid="google-signin" data-via="ain-sso">
+        <a
+          href={ssoStartHref(next, { ain_idp: "google" })}
+          className="w-full flex items-center justify-center gap-2 rounded-lg border border-drive-border py-2 font-medium hover:bg-drive-hover"
+        >
+          {text === "signup_with" ? "Sign up with Google" : "Continue with Google"}
+        </a>
+      </div>
+    );
+  }
   return (
     // collapsed (not display:none) until the button is drawn, so its width is
     // measurable before it shows

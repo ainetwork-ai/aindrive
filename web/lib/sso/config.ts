@@ -8,6 +8,13 @@
  *   AINDRIVE_SSO_CLIENT_SECRET  confidential-client secret (client_secret_basic)
  *   AINDRIVE_SSO_ENABLED        true → show "Continue with AIN" (needs all three above)
  *   AINDRIVE_LEGACY_LOGIN       true (default) | unlinked_only | false
+ *   AINDRIVE_SSO_SILENT         false → no automatic sign-in check (lib/sso/silent.ts);
+ *                               on by default while SSO login is enabled
+ *   AINDRIVE_SSO_ATTEST         false → no app attestations (lib/sso/app-attest.ts);
+ *                               on by default once issuer + client id + secret are set
+ *   AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS  comma-separated company domains whose
+ *                               verified addresses are attested (default comcom.ai;
+ *                               `none` → only Google-sub attestations)
  *
  * Issuer + client id alone make the provisioning adapter and back-channel
  * logout live (runbook step 1: adapter deployed, SSO login hidden). The legacy
@@ -54,6 +61,28 @@ export function ssoLoginConfig(): SsoLoginConfig | null {
 
 export function ssoLoginEnabled(): boolean {
   return ssoLoginConfig() !== null;
+}
+
+/**
+ * The client credentials for aindrive's calls to AIN SSO (app-attest), which
+ * need no sign-in button: issuer + client id + secret. Null when any is
+ * missing or AINDRIVE_SSO_ATTEST=false.
+ */
+export function attestConfig(): SsoLoginConfig | null {
+  if (/^(false|0|off)$/i.test(val("AINDRIVE_SSO_ATTEST"))) return null;
+  const base = adapterConfig();
+  const clientSecret = val("AINDRIVE_SSO_CLIENT_SECRET");
+  return base && clientSecret ? { ...base, clientSecret } : null;
+}
+
+export const DEFAULT_ATTEST_EMAIL_DOMAINS = ["comcom.ai"];
+
+/** Company domains whose verified addresses aindrive attests (lower-case, exact match). */
+export function attestEmailDomains(): string[] {
+  const raw = val("AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS").toLowerCase();
+  if (!raw) return DEFAULT_ATTEST_EMAIL_DOMAINS;
+  if (raw === "none") return [];
+  return raw.split(",").map((d) => d.trim().replace(/^@/, "")).filter(Boolean);
 }
 
 /** The configured legacy switch (unknown values fall back to the default; boot-checks refuse them in production). */

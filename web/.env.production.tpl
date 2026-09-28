@@ -42,3 +42,14 @@ EMAIL_FROM=dev@ainetwork.ai
 # ── Optional ────────────────────────────────────────────────────────────────
 # Public-by-design (baked into the client bundle); keep literal if used.
 # NEXT_PUBLIC_WC_PROJECT_ID=
+
+# ── AIN SSO (off until uncommented — web/lib/sso/README.md) ─────────────────
+# Registered at https://auth.comcom.ai as client `aindrive`: redirect_uri
+# https://aindrive.ainetwork.ai/api/auth/sso/callback, back-channel logout
+# …/api/auth/sso/backchannel-logout, adapter …/api/sso. Add field
+# `sso_client_secret` to the 1Password item before uncommenting the secret.
+# AINDRIVE_SSO_ISSUER=https://auth.comcom.ai
+# AINDRIVE_SSO_CLIENT_ID=aindrive
+# AINDRIVE_SSO_CLIENT_SECRET=op://ainetwork/aindrive-prod/sso_client_secret
+# AINDRIVE_SSO_ENABLED=true
+# AINDRIVE_LEGACY_LOGIN=true
