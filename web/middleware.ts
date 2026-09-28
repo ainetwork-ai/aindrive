@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { checkedCookieSecure, silentSsoStartPath, SSO_CHECKED_COOKIE, SSO_CHECKED_MAX_AGE } from "@/lib/sso/silent";
 
 const CSP = [
   "default-src 'self'",
@@ -22,9 +23,42 @@ const CSP = [
   "base-uri 'self'",
 ].join("; ");
 
+/**
+ * Silent AIN SSO (lib/sso/silent.ts): a browser opening a page without an
+ * aindrive session goes once to /api/auth/sso/start?prompt=none and comes back
+ * signed in, or anonymous. Off unless AIN SSO sign-in is configured and enabled.
+ * The `ain_sso_checked` cookie is set on this redirect, so the next page view
+ * (and every one for 30 minutes) is served normally.
+ */
+function silentSsoRedirect(req: NextRequest): NextResponse | null {
+  const start = silentSsoStartPath({
+    method: req.method,
+    pathname: req.nextUrl.pathname,
+    search: req.nextUrl.search,
+    headers: req.headers,
+    cookies: req.cookies,
+  });
+  if (!start) return null;
+  // Absolute (middleware requires it), on the public origin: behind the TLS
+  // proxy req.url may carry the container's bind address.
+  const base = (process.env.AINDRIVE_PUBLIC_URL || req.nextUrl.origin).replace(/\/+$/, "");
+  const res = new NextResponse(null, { status: 302, headers: { Location: `${base}${start}`, "Cache-Control": "no-store" } });
+  res.cookies.set(SSO_CHECKED_COOKIE, "1", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: checkedCookieSecure(),
+    path: "/",
+    maxAge: SSO_CHECKED_MAX_AGE,
+  });
+  return res;
+}
+
 export default async function middleware(
   req: NextRequest
 ): Promise<NextResponse> {
+  const silent = silentSsoRedirect(req);
+  if (silent) return silent;
+
   const res = NextResponse.next();
   const h = res.headers;
 

@@ -524,6 +524,9 @@ function open() {
     "ALTER TABLE account_tokens ADD COLUMN sso_org_id TEXT",
     "ALTER TABLE oauth_codes ADD COLUMN sso_org_id TEXT",
     "ALTER TABLE account_oauth_codes ADD COLUMN sso_org_id TEXT",
+    // The OIDC prompt of a pending sign-in: 'none' = silent check (the callback
+    // turns login_required & co. into an anonymous visit), 'create' = sign-up.
+    "ALTER TABLE sso_login_requests ADD COLUMN prompt TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;

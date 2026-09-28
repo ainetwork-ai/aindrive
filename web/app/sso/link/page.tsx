@@ -3,7 +3,9 @@
  * account yet (app/api/auth/sso/callback). The person either proves an
  * existing aindrive account once (the session this browser already has, or
  * its password; a wallet or Google account: sign in with it first and come
- * back) or creates a new account. Never decided by email.
+ * back) or creates a new account. Never decided by email. "Not now" returns
+ * to the page the sign-in started from without signing in (the automatic
+ * check of lib/sso/silent.ts lands here too).
  */
 import { cookies } from "next/headers";
 import Link from "next/link";
@@ -39,6 +41,7 @@ export default async function SsoLinkPage() {
         ain={{ name: pending.name, email: pending.email }}
         current={current}
         allowLegacy={legacyLoginMode() !== "false"}
+        skipHref={pending.next_path}
       />
     </main>
   );

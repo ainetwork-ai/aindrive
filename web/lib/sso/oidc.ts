@@ -109,7 +109,27 @@ export const pkceChallenge = (verifier: string) => b64url(createHash("sha256").u
 
 export type PendingAuthorization = { state: string; nonce: string; codeVerifier: string; redirectUri: string };
 
-export function buildAuthorizationUrl(meta: IssuerMetadata, clientId: string, redirectUri: string): { url: string; pending: PendingAuthorization } {
+/**
+ * `none` — silent check (lib/sso/silent.ts): AIN SSO answers at once, signed
+ * in or `login_required`. `create` — OIDC Prompt Create: AIN SSO's sign-up page.
+ */
+export type SsoPrompt = "none" | "create";
+/** `google` — AIN SSO skips its own sign-in page and goes straight to Google. */
+export type SsoIdpHint = "google";
+
+export function parsePrompt(raw: string | null | undefined): SsoPrompt | null {
+  return raw === "none" || raw === "create" ? raw : null;
+}
+export function parseIdpHint(raw: string | null | undefined): SsoIdpHint | null {
+  return raw === "google" ? raw : null;
+}
+
+export function buildAuthorizationUrl(
+  meta: IssuerMetadata,
+  clientId: string,
+  redirectUri: string,
+  opts: { prompt?: SsoPrompt | null; idp?: SsoIdpHint | null } = {},
+): { url: string; pending: PendingAuthorization } {
   const pending = { state: randomToken(), nonce: randomToken(), codeVerifier: randomToken(48), redirectUri };
   const u = new URL(meta.authorization_endpoint);
   u.searchParams.set("response_type", "code");
@@ -120,6 +140,8 @@ export function buildAuthorizationUrl(meta: IssuerMetadata, clientId: string, re
   u.searchParams.set("nonce", pending.nonce);
   u.searchParams.set("code_challenge", pkceChallenge(pending.codeVerifier));
   u.searchParams.set("code_challenge_method", "S256");
+  if (opts.prompt) u.searchParams.set("prompt", opts.prompt);
+  if (opts.idp) u.searchParams.set("ain_idp", opts.idp);
   return { url: u.toString(), pending };
 }
 

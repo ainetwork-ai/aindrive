@@ -2,7 +2,8 @@ import { clearCookie, endCurrentSsoSession } from "@/lib/session";
 import { clearWalletCookie } from "@/lib/wallet";
 import { safeNextPath } from "@/lib/safe-next";
 import { ssoLoginConfig, ssoPostLogoutRedirectUri } from "@/lib/sso/config";
-import { cachedMetadata, endSessionUrl } from "@/lib/sso/oidc";
+import { cachedMetadata, discover, endSessionUrl } from "@/lib/sso/oidc";
+import { clearSilentChecked, markSilentChecked } from "@/lib/sso/signin";
 
 /** POST [?next=/d/…] — sign out; with `next`, go to sign-in and come back there ("switch account"). */
 export async function POST(req: Request) {
@@ -21,13 +22,24 @@ export async function POST(req: Request) {
   // absolute URL construction when behind a reverse proxy).
   const raw = new URL(req.url).searchParams.get("next");
   const next = raw ? safeNextPath(raw) : "/";   // unsafe or missing → "/" (plain sign-out)
+  const cfg = ssoLoginConfig();
   if (next === "/" && sso) {
     // Plain sign-out of an AIN session: RP-initiated logout at AIN SSO, which
     // ends the central session and signs the other apps out (back-channel).
-    const cfg = ssoLoginConfig();
-    const url = cfg && cfg.issuer === sso.issuer ? endSessionUrl(cachedMetadata(cfg.issuer), cfg.clientId, ssoPostLogoutRedirectUri()) : null;
-    if (url) return new Response(null, { status: 303, headers: { Location: url } });
+    let url: string | null = null;
+    if (cfg && cfg.issuer === sso.issuer) {
+      const meta = cachedMetadata(cfg.issuer) ?? (await discover(cfg.issuer).catch(() => null));
+      url = endSessionUrl(meta, cfg.clientId, ssoPostLogoutRedirectUri());
+    }
+    if (url) {
+      await clearSilentChecked(); // no AIN session left: the next visit may check again
+      return new Response(null, { status: 303, headers: { Location: url } });
+    }
   }
+  // Only aindrive's session ended (a legacy sign-in, or "switch account"): the
+  // silent check (lib/sso/silent.ts) must not sign this browser straight back
+  // in with an AIN session it may still have. Nothing changes while SSO is off.
+  if (cfg) await markSilentChecked();
   return new Response(null, {
     status: 303,
     headers: { Location: next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/" },

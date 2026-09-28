@@ -16,9 +16,11 @@ type Props = {
   ain: { name: string | null; email: string | null };
   current: { label: string; email: string } | null;
   allowLegacy: boolean;
+  /** Where "Not now" goes: the page the sign-in started from (same-origin, validated). */
+  skipHref: string;
 };
 
-export default function SsoLinkForm({ ain, current, allowLegacy }: Props) {
+export default function SsoLinkForm({ ain, current, allowLegacy, skipHref }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -84,6 +86,9 @@ export default function SsoLinkForm({ ain, current, allowLegacy }: Props) {
         Create a new aindrive account
       </button>
       {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
+      <p className="mt-4 text-center text-xs text-drive-muted">
+        <a className="hover:text-drive-accent hover:underline" href={skipHref} data-testid="sso-link-skip">Not now</a>
+      </p>
     </div>
   );
 }

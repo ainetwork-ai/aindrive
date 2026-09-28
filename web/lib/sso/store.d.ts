@@ -17,7 +17,10 @@ export type SsoAccountState = "unmanaged" | "active" | "blocked";
 export declare function ssoAccountState(userId: string): SsoAccountState;
 export declare function isAccountBlocked(userId: string): boolean;
 export declare function isSsoLinked(userId: string): boolean;
-export declare function identityFor(issuer: string, subject: string): { user_id: string; link_method: string } | undefined;
+export type IdentityRow = { user_id: string; link_method: string; last_login_at: number | null };
+export declare function identityFor(issuer: string, subject: string): IdentityRow | undefined;
+/** Made by the provisioning adapter and never signed in to: a verified legacy link replaces it. */
+export declare function isPlaceholderIdentity(ident: IdentityRow | null | undefined): boolean;
 export declare function sessionEpoch(userId: string): number;
 export declare function liveSessionUserId(payload: Record<string, unknown> | null | undefined): string | null;
 
@@ -55,6 +58,8 @@ export type LoginRequestRow = {
   code_verifier: string;
   redirect_uri: string;
   next_path: string;
+  /** 'none' (silent check) | 'create' (sign-up) | null. */
+  prompt: string | null;
   created_at: number;
   expires_at: number;
 };
@@ -64,6 +69,7 @@ export declare function createLoginRequest(opts: {
   codeVerifier: string;
   redirectUri: string;
   nextPath: string;
+  prompt?: string | null;
 }): string;
 export declare function takeLoginRequest(id: string | null | undefined): LoginRequestRow | null;
 

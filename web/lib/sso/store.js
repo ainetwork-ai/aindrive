@@ -58,8 +58,32 @@ export function isSsoLinked(userId) {
 
 export function identityFor(issuer, subject) {
   return db
-    .prepare("SELECT user_id, link_method FROM sso_identities WHERE issuer = ? AND subject = ?")
+    .prepare("SELECT user_id, link_method, last_login_at FROM sso_identities WHERE issuer = ? AND subject = ?")
     .get(issuer, subject);
+}
+
+/**
+ * An account the provisioning adapter created before anyone signed in through
+ * it (no SSO session was ever made for it: last_login_at is set by
+ * createSsoSession). It holds nothing of the person's yet, so a verified
+ * legacy link — the adapter's legacyUserId or an in-app proof — replaces it.
+ */
+export function isPlaceholderIdentity(ident) {
+  return !!ident && ident.link_method === "provisioned" && (ident.last_login_at === null || ident.last_login_at === undefined);
+}
+
+/**
+ * Re-points a placeholder link to the verified legacy account; the
+ * organization state recorded for the subject moves with it. The placeholder
+ * users row stays (users are never deleted).
+ */
+function replacePlaceholder({ issuer, subject, placeholderUserId, userId, method, proof, actor, orgId = null }) {
+  db.prepare(
+    `UPDATE sso_identities SET user_id = ?, link_method = ?, link_proof = ?, linked_at = ?, last_login_at = NULL
+     WHERE issuer = ? AND subject = ? AND user_id = ?`,
+  ).run(userId, method, proof === undefined ? null : json(proof), now(), issuer, subject, placeholderUserId);
+  db.prepare("UPDATE sso_memberships SET user_id = ? WHERE issuer = ? AND subject = ? AND user_id = ?").run(userId, issuer, subject, placeholderUserId);
+  audit({ actor, action: "placeholder_replaced", issuer, subject, orgId, userId, details: { placeholderUserId, method } });
 }
 
 export function sessionEpoch(userId) {
@@ -164,14 +188,14 @@ function sweepSignInState(t) {
   db.prepare("DELETE FROM sso_pending_links WHERE expires_at < ?").run(t);
 }
 
-export function createLoginRequest({ state, nonce, codeVerifier, redirectUri, nextPath }) {
+export function createLoginRequest({ state, nonce, codeVerifier, redirectUri, nextPath, prompt = null }) {
   const t = now();
   sweepSignInState(t);
   const id = randomBytes(24).toString("base64url");
   db.prepare(
-    `INSERT INTO sso_login_requests (id, state, nonce, code_verifier, redirect_uri, next_path, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, state, nonce, codeVerifier, redirectUri, nextPath, t, t + LOGIN_REQUEST_TTL_MS);
+    `INSERT INTO sso_login_requests (id, state, nonce, code_verifier, redirect_uri, next_path, prompt, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, state, nonce, codeVerifier, redirectUri, nextPath, prompt ?? null, t, t + LOGIN_REQUEST_TTL_MS);
   return id;
 }
 
@@ -280,12 +304,14 @@ export function resolveOrCreateUserForSubject({ issuer, subject, name, email, em
 export function linkExistingUser({ issuer, subject, userId, method, proof, actor }) {
   const run = db.transaction(() => {
     const hit = identityFor(issuer, subject);
-    if (hit) return hit.user_id === userId ? { ok: true, userId } : { ok: false, error: "sub_already_linked" };
+    if (hit && hit.user_id === userId) return { ok: true, userId };
+    if (hit && !isPlaceholderIdentity(hit)) return { ok: false, error: "sub_already_linked" };
     if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(userId)) return { ok: false, error: "user_not_found" };
     const other = db.prepare("SELECT subject FROM sso_identities WHERE issuer = ? AND user_id = ?").get(issuer, userId);
     if (other) return { ok: false, error: "account_already_linked" };
     if (isAccountBlocked(userId)) return { ok: false, error: "account_suspended" };
-    insertIdentity({ issuer, subject, userId, method, proof });
+    if (hit) replacePlaceholder({ issuer, subject, placeholderUserId: hit.user_id, userId, method, proof, actor });
+    else insertIdentity({ issuer, subject, userId, method, proof });
     audit({ actor, action: "legacy_linked", issuer, subject, userId, details: { method } });
     return { ok: true, userId };
   });
@@ -363,14 +389,20 @@ function resolveUserForState(issuer, s, passwordHash) {
     ev("legacy_unlinked", ident.user_id, { legacyUserId: ident.user_id });
     ident = undefined;
   }
-  if (ident) return ident.user_id;
+  // A placeholder made by an earlier push (nobody signed in to it yet) gives
+  // way to the legacy account once AIN SSO knows it (e.g. an app attestation
+  // linked after the account was provisioned).
+  const replacing = ident && s.legacyUserId && s.legacyUserId !== ident.user_id && isPlaceholderIdentity(ident);
+  if (ident && !replacing) return ident.user_id;
 
   if (s.legacyUserId) {
     const legacy = db.prepare("SELECT id FROM users WHERE id = ?").get(s.legacyUserId);
     if (!legacy) throw new AdapterError("legacy_user_not_found", 409, "The legacy user in legacyUserId does not exist.", false);
     const other = db.prepare("SELECT subject FROM sso_identities WHERE issuer = ? AND user_id = ?").get(issuer, legacy.id);
     if (other && other.subject !== s.sub) throw new AdapterError("legacy_conflict", 409, "The legacy user is linked to another account.", false);
-    insertIdentity({ issuer, subject: s.sub, userId: legacy.id, method: "legacy_mapping", proof: { orgId: s.org.id, version: s.version } });
+    const proof = { orgId: s.org.id, version: s.version };
+    if (replacing) replacePlaceholder({ issuer, subject: s.sub, placeholderUserId: ident.user_id, userId: legacy.id, method: "legacy_mapping", proof, actor: "ain-sso", orgId: s.org.id });
+    else insertIdentity({ issuer, subject: s.sub, userId: legacy.id, method: "legacy_mapping", proof });
     ev("legacy_linked", legacy.id, { method: "legacy_mapping" });
     return legacy.id;
   }
