@@ -12,6 +12,7 @@ import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { googleClientIds, verifyGoogleIdToken, resolveAccountForGoogle, GoogleEmailInUseError } from "@/lib/google-auth";
 import { adoptSignInPayoutWallet } from "@/lib/drives";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
+import { attestLegacyLogin } from "@/lib/sso/app-attest";
 
 const Body = z.object({ idToken: z.string().min(20).max(8192) });
 
@@ -48,5 +49,8 @@ export async function POST(req: Request) {
   const user = db.prepare("SELECT id, email, name FROM users WHERE id = ?").get(id) as { id: string; email: string; name: string };
   adoptSignInPayoutWallet(id);
   await setCookie(id);
+  // Best effort, not awaited: the verified Google sub links the account to
+  // the AIN account with that Google identity (lib/sso/app-attest.ts).
+  void attestLegacyLogin({ userId: id, method: "google", googleSub: identity.sub });
   return NextResponse.json({ token: await sign(id), user, created });
 }

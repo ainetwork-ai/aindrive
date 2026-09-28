@@ -6,6 +6,7 @@ import { setCookie } from "@/lib/session";
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { adoptSignInPayoutWallet } from "@/lib/drives";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
+import { attestLegacyLogin } from "@/lib/sso/app-attest";
 
 const Body = z.object({ email: z.string().email(), password: z.string().min(1) });
 
@@ -29,5 +30,8 @@ export async function POST(req: Request) {
   if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
   adoptSignInPayoutWallet(user.id);
   await setCookie(user.id);
+  // Best effort, not awaited: a company address aindrive verified links the
+  // account to its AIN account (lib/sso/app-attest.ts).
+  void attestLegacyLogin({ userId: user.id, method: "password" });
   return NextResponse.json({ ok: true });
 }

@@ -80,6 +80,15 @@ export function ssoConfigErrors(env) {
   if (enabled && !/^(true|false|1|0)$/i.test(enabled)) {
     errors.push(`AINDRIVE_SSO_ENABLED must be true or false (got: ${enabled}).`);
   }
+  for (const k of ["AINDRIVE_SSO_SILENT", "AINDRIVE_SSO_ATTEST"]) {
+    const x = v(k);
+    if (x && !/^(true|false|1|0|on|off)$/i.test(x)) errors.push(`${k} must be true or false (got: ${x}).`);
+  }
+  const domains = v("AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS");
+  if (domains && domains.toLowerCase() !== "none") {
+    const bad = domains.split(",").map((d) => d.trim().replace(/^@/, "")).filter(Boolean).filter((d) => !/^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(d));
+    if (bad.length) errors.push(`AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS must be comma-separated domains or none (bad: ${bad.join(", ")}).`);
+  }
   const issuer = v("AINDRIVE_SSO_ISSUER");
   const clientId = v("AINDRIVE_SSO_CLIENT_ID");
   const secret = v("AINDRIVE_SSO_CLIENT_SECRET");

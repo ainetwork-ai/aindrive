@@ -18,6 +18,7 @@ process.env.AINDRIVE_SSO_CLIENT_ID = CLIENT_ID;
 process.env.AINDRIVE_SSO_CLIENT_SECRET = CLIENT_SECRET;
 process.env.AINDRIVE_SSO_ENABLED = "true";
 process.env.AINDRIVE_GOOGLE_CLIENT_IDS = "web-client.apps.googleusercontent.com";
+process.env.AINDRIVE_SSO_ATTEST = "false"; // attestations: sso-attest.test.ts
 
 const { jar, cookies } = cookieJar();
 vi.mock("next/headers", () => ({ cookies }));
@@ -185,6 +186,14 @@ describe("boot checks refuse a mistyped switch (production only)", () => {
     expect(ssoConfigErrors({ AINDRIVE_SSO_ISSUER: "http://auth.example", AINDRIVE_SSO_CLIENT_ID: "c" }).join()).toMatch(/https/);
     expect(ssoConfigErrors({ AINDRIVE_SSO_ENABLED: "true", AINDRIVE_SSO_ISSUER: "https://auth.example", AINDRIVE_SSO_CLIENT_ID: "c" }).join()).toMatch(/CLIENT_SECRET/);
     expect(ssoConfigErrors({ AINDRIVE_SSO_ENABLED: "true", AINDRIVE_SSO_ISSUER: "https://auth.example", AINDRIVE_SSO_CLIENT_ID: "c", AINDRIVE_SSO_CLIENT_SECRET: "s", AINDRIVE_LEGACY_LOGIN: "unlinked_only" })).toEqual([]);
+  });
+
+  it("the silent-check / attestation switches and the attested domains", () => {
+    expect(ssoConfigErrors({ AINDRIVE_SSO_SILENT: "nope" })[0]).toMatch(/AINDRIVE_SSO_SILENT/);
+    expect(ssoConfigErrors({ AINDRIVE_SSO_ATTEST: "maybe" })[0]).toMatch(/AINDRIVE_SSO_ATTEST/);
+    expect(ssoConfigErrors({ AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS: "comcom.ai, not a domain" })[0]).toMatch(/not a domain/);
+    expect(ssoConfigErrors({ AINDRIVE_SSO_SILENT: "false", AINDRIVE_SSO_ATTEST: "true", AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS: "comcom.ai,@example.org," })).toEqual([]);
+    expect(ssoConfigErrors({ AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS: "none" })).toEqual([]);
   });
 
   it("the placeholder domains are reserved for signup", () => {
