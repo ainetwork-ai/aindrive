@@ -25,6 +25,7 @@ Auth / identity:
 | `wallet/me` | current wallet address from cookie. |
 | `apps` (GET/POST), `apps/[appId]` (DELETE) | connected apps (`lib/connected-apps.ts`): another app (e.g. ainmem) registers itself on the signed-in account with `{name, url, key}` — its spaces URL (https, public address; re-checked on every call) and the Bearer key this server sends it. One row per app origin. Login required. |
 | `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
+| `me/shared` | the caller's reachable files in the cross-product list contract (`lib/shared-items.ts`: `scope=mine\|shared_with_me\|shared_with_org\|recent`, `q`, `cursor`, `limit`); contract error bodies; R-SHARE-LIST-002. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
 
@@ -82,6 +83,7 @@ Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md
 | `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. Approves through `lib/oauth-authorize.ts` `approve`, as a trusted client's visit does without this POST. |
 | `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
 | `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). `drives:write` / `drives:sell` unlock tools on `/mcp/d/[id]` only. |
+| `oauth/shared` (GET, CORS) | the same list as `me/shared` for an account grant with `drives:read` — contract error bodies (401/403/429/415/503). |
 | `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |
 
 Ops / dev:
