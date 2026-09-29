@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
+import { orgRoleInDrive } from "@/lib/orgs.js";
 
 /**
  * POST /api/drives/:driveId/leave — remove MYSELF from a drive.
@@ -33,6 +34,15 @@ export async function POST(_req: Request, { params }: { params: Promise<{ driveI
     .prepare("DELETE FROM drive_members WHERE drive_id = ? AND user_id = ?")
     .run(driveId, user.id);
   if (res.changes === 0) {
+    // Access through an organization is the organization's, not a grant to
+    // give back: it ends when the drive's creator unshares it or the person
+    // leaves the organization (lib/orgs.js).
+    if (orgRoleInDrive(driveId, user.id) !== "none") {
+      return NextResponse.json(
+        { error: "you have this drive through your organization — only its owner can stop sharing it with the organization" },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: "not a member of this drive" }, { status: 404 });
   }
   return NextResponse.json({ ok: true });

@@ -18,6 +18,7 @@ import { TOKEN_PRESETS, resolveDriveTokens, type PaymentToken } from "@/lib/paym
 import { type PayoutRow } from "@/lib/payout";
 import { sumByCurrency, formatCurrencyTotals } from "@/lib/receipt-totals";
 import { PaymentTokensEditor, type Member, type Share, type Receipt, type PendingInvite } from "./share-dialog-sections";
+import { DriveOrgAccess } from "./drive-org-access";
 
 type Section = "members" | "links" | "sales" | "payments";
 type Role = "viewer" | "editor" | "owner";
@@ -114,7 +115,10 @@ export function DriveManage({ driveId, driveName }: { driveId: string; driveName
 
         <div className="min-w-0 flex-1 space-y-5">
           {section === "members" && (
-            <MembersSection driveId={driveId} members={members} pending={pending} busy={busy} setBusy={setBusy} reload={load} />
+            <>
+              <DriveOrgAccess driveId={driveId} busy={busy} setBusy={setBusy} />
+              <MembersSection driveId={driveId} members={members} pending={pending} busy={busy} setBusy={setBusy} reload={load} />
+            </>
           )}
           {section === "links" && (
             <LinksSection driveId={driveId} shares={shares} busy={busy} setBusy={setBusy} reload={load} />

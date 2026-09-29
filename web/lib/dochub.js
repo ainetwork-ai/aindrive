@@ -9,6 +9,7 @@ import { log } from "./logger.js";
 import { ROLE_RANK, bestMatchingRole, normalizePath } from "./access-core.js";
 import { paidAccessDenial } from "./sale-access.js";
 import { liveSessionUserId } from "./sso/store.js";
+import { orgRoleInDrive } from "./orgs.js";
 
 function getSessionSecret() {
   if (process.env.AINDRIVE_SESSION_SECRET) return process.env.AINDRIVE_SESSION_SECRET;
@@ -85,11 +86,13 @@ export function disconnectPeers({ userId, sessionIds } = {}) {
 }
 globalThis.__aindrive_dochub_disconnect = disconnectPeers;
 
-// Mirrors lib/access.ts resolveRoleByUser: drive owner, else best-matching
-// drive_members row. Kept here (not imported) because access.ts depends on
-// next/headers, which is unavailable under raw `node server.js`. drive_members
-// decides the ROLE; the paid carve-out (paidAccessDenial, shared with the HTTP
-// gate) then removes priced subtrees from a bare viewer's reach below.
+// Mirrors lib/access.ts resolveRoleByUser: drive owner, else the best grant —
+// drive_members rows plus the whole-drive role of an organization the drive is
+// shared with (lib/orgs.js, the same function access.ts calls). Kept here (not
+// imported) because access.ts depends on next/headers, which is unavailable
+// under raw `node server.js`. The grants decide the ROLE; the paid carve-out
+// (paidAccessDenial, shared with the HTTP gate) then removes priced subtrees
+// from a bare viewer's reach below.
 function resolveRole(driveId, userId, path) {
   if (!userId) return "none";
   const target = normalizePath(path);
@@ -99,8 +102,35 @@ function resolveRole(driveId, userId, path) {
   const rows = db
     .prepare("SELECT path, role FROM drive_members WHERE drive_id = ? AND user_id = ?")
     .all(driveId, userId);
+  const orgRole = orgRoleInDrive(driveId, userId);
+  if (orgRole !== "none") rows.push({ path: "", role: orgRole });
   return bestMatchingRole(rows, target);
 }
+
+/**
+ * Re-checks every open doc socket on a drive after its grants changed in a
+ * way that can take access away from people who are not signed out (an
+ * organization share removed or lowered, or its creator's membership
+ * suspended). A socket whose role changed closes; the provider reconnects
+ * and gets the new role or "no access". Registered on globalThis for
+ * lib/orgs.js, like disconnectPeers.
+ */
+export function revalidateDrivePeers(driveId) {
+  let closed = 0;
+  for (const bucket of hubs.values()) {
+    for (const peer of bucket) {
+      if (peer.driveId !== driveId) continue;
+      let role = "none";
+      try { role = resolveRole(driveId, peer.userId, peer.path); } catch {}
+      if (role !== peer.role) {
+        try { peer.ws.close(4401, "access changed"); } catch {}
+        closed++;
+      }
+    }
+  }
+  return closed;
+}
+globalThis.__aindrive_dochub_revalidate = revalidateDrivePeers;
 
 export async function onDocConnect(ws, req, query) {
   const driveId = String(query?.drive || "");
@@ -122,7 +152,7 @@ export async function onDocConnect(ws, req, query) {
   if (paidAccessDenial(driveId, path, role, userId)) { ws.close(4402, "payment required"); return; }
 
   const docId = docIdFor(driveId, path);
-  const peer = { ws, role, userId, ses, docId };
+  const peer = { ws, role, userId, ses, docId, driveId, path };
   let bucket = hubs.get(docId);
   if (!bucket) { bucket = new Set(); hubs.set(docId, bucket); }
   bucket.add(peer);

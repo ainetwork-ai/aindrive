@@ -3,8 +3,9 @@ import { redirect } from "next/navigation";
 import { getUser } from "@/lib/session";
 import { staleSessionCheck } from "@/lib/sso/stale-session";
 import { listUserDrives } from "@/lib/drives";
+import { listOrgDrivesForUser } from "@/lib/orgs.js";
 import { isOnline } from "@/lib/rpc";
-import { Globe, HardDrive, Share2 } from "lucide-react";
+import { Building2, Globe, HardDrive, Share2 } from "lucide-react";
 import { LeaveDriveButton } from "@/components/leave-drive-button";
 import { AddEmailForm } from "@/components/add-email-form";
 import { isWalletOnlyEmail, walletDisplayLabel } from "@/shared/wallet-display";
@@ -65,13 +66,20 @@ aindrive              # this folder is now in aindrive`}
     );
   }
 
-  const drives = listUserDrives(user.id);
+  // Organization drives first (docs/PERMISSIONS.md "Organizations"): each
+  // organization the person is an active member of, with the drives shared
+  // with it — or an empty state saying who sets one up. Every drive is listed
+  // once: a personal drive shared with an organization shows in its section.
+  const orgs = listOrgDrivesForUser(user.id);
+  const inOrgSection = new Set(orgs.flatMap((o) => o.drives.map((d) => d.id)));
+  const drives = listUserDrives(user.id).filter((d) => !inOrgSection.has(d.id));
+  const hasAnyDrive = drives.length > 0 || inOrgSection.size > 0;
   return (
-    <main className="min-h-screen min-h-[100dvh] max-w-5xl mx-auto px-6 py-10">
-      <header className="flex items-center justify-between mb-8">
+    <main className="min-h-screen min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-10">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-8">
         <h1 className="text-2xl font-semibold">My drives</h1>
-        <div className="flex items-center gap-4">
-          {drives.length > 0 && <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} compact />}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          {hasAnyDrive && <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} compact />}
           {!isWalletOnlyEmail(user.email) && (
             <Link href="/account/wallet" className="text-sm text-drive-muted hover:text-drive-accent hover:underline">
               Add wallet sign-in
@@ -94,35 +102,58 @@ aindrive              # this folder is now in aindrive`}
         </div>
       )}
 
-      {drives.length === 0 ? (
-        <>
-          <div className="mb-6 rounded-2xl border border-dashed border-drive-border px-6 py-8 text-center" data-testid="no-drives">
-            <HardDrive className="mx-auto h-7 w-7 text-drive-muted" />
-            <p className="mt-2 text-lg font-medium">Your drives show up here</p>
-            <p className="mx-auto mt-1 max-w-md text-sm text-drive-muted">
-              Open them from any browser, anywhere — nothing to install. A drive appears when you share a folder from
-              one of your devices, or when someone shares theirs with you.
-            </p>
+      {orgs.map((o) => (
+        <section key={`${o.issuer} ${o.orgId}`} className="mb-8" data-testid="org-section" aria-labelledby={`org-${o.orgId}`}>
+          <div className="mb-3 flex items-center gap-2">
+            <Building2 className="h-5 w-5 shrink-0 text-drive-accent" />
+            <h2 id={`org-${o.orgId}`} className="text-lg font-semibold truncate">{o.name}</h2>
+            <span className="shrink-0 rounded-full bg-drive-sidebar px-2 py-0.5 text-xs text-drive-muted">Organization</span>
           </div>
-          <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} />
-        </>
+          {o.drives.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-drive-border px-5 py-6 text-sm" data-testid="org-empty">
+              <p className="font-medium text-drive-text">No {o.name} drive yet</p>
+              <p className="mt-1 text-drive-muted">
+                Your organization’s shared folders appear here once an admin shares a drive with it. Ask your {o.name} admin
+                to set it up.
+              </p>
+            </div>
+          ) : (
+            <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {o.drives.map((d) => (
+                <li key={d.id}>
+                  <DriveCard
+                    id={d.id}
+                    name={d.name}
+                    lastSeenAt={d.last_seen_at}
+                    badge={d.owner_id === user.id ? "Owner" : d.org_role === "editor" ? "Editor" : "Viewer"}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))}
+
+      {orgs.length > 0 && drives.length > 0 && <h2 className="mb-3 text-lg font-semibold">Personal</h2>}
+      {drives.length === 0 ? (
+        inOrgSection.size > 0 ? null : (
+          <>
+            <div className="mb-6 rounded-2xl border border-dashed border-drive-border px-6 py-8 text-center" data-testid="no-drives">
+              <HardDrive className="mx-auto h-7 w-7 text-drive-muted" />
+              <p className="mt-2 text-lg font-medium">Your drives show up here</p>
+              <p className="mx-auto mt-1 max-w-md text-sm text-drive-muted">
+                Open them from any browser, anywhere — nothing to install. A drive appears when you share a folder from
+                one of your devices, or when someone shares theirs with you.
+              </p>
+            </div>
+            <GetMacApp server={env.publicUrl} available={desktopAppServes(env.publicUrl)} />
+          </>
+        )
       ) : (
         <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {drives.map((d) => (
             <li key={d.id} className="relative group">
-              <Link
-                href={`/d/${d.id}`}
-                className="flex items-start gap-3 rounded-2xl bg-white border border-drive-border p-4 hover:shadow-drive transition"
-              >
-                <HardDrive className="w-6 h-6 text-drive-accent mt-0.5" />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate">{d.name}</div>
-                  <div className="text-xs text-drive-muted mt-1 flex items-center gap-1.5">
-                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${isOnline(d.id) ? "bg-green-500" : "bg-gray-300"}`} />
-                    {isOnline(d.id) ? "online" : (d.last_seen_at ? `last seen ${new Date(d.last_seen_at).toLocaleString()}` : "waiting for agent…")}
-                  </div>
-                </div>
-              </Link>
+              <DriveCard id={d.id} name={d.name} lastSeenAt={d.last_seen_at} />
               {/* Members can leave (creator can't — API enforces too) */}
               {d.owner_id !== user.id && <LeaveDriveButton driveId={d.id} driveName={d.name} />}
             </li>
@@ -130,5 +161,27 @@ aindrive              # this folder is now in aindrive`}
         </ul>
       )}
     </main>
+  );
+}
+
+function DriveCard({ id, name, lastSeenAt, badge }: { id: string; name: string; lastSeenAt: string | null; badge?: string }) {
+  const online = isOnline(id);
+  return (
+    <Link
+      href={`/d/${id}`}
+      className="flex items-start gap-3 rounded-2xl bg-white border border-drive-border p-4 hover:shadow-drive transition"
+    >
+      <HardDrive className="w-6 h-6 shrink-0 text-drive-accent mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-medium truncate">{name}</span>
+          {badge && <span className="shrink-0 rounded-full bg-drive-sidebar px-2 py-0.5 text-xs text-drive-muted">{badge}</span>}
+        </div>
+        <div className="text-xs text-drive-muted mt-1 flex items-center gap-1.5">
+          <span className={`inline-block w-1.5 h-1.5 rounded-full ${online ? "bg-green-500" : "bg-gray-300"}`} />
+          {online ? "online" : (lastSeenAt ? `last seen ${new Date(lastSeenAt).toLocaleString()}` : "waiting for agent…")}
+        </div>
+      </div>
+    </Link>
   );
 }

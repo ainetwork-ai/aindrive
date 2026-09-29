@@ -532,6 +532,26 @@ function open() {
       if (!/duplicate column/i.test(e.message)) throw e;
     }
   }
+  // Organizations (lib/orgs.js, docs/PERMISSIONS.md "Organizations"): a drive
+  // shared with an AIN SSO organization (issuer + org_id, as sso_memberships
+  // knows it). Every ACTIVE member gets `role` on the whole drive, resolved on
+  // each access check from sso_memberships — never copied into drive_members —
+  // so a suspension or offboarding ends it at once. Additive and idempotent.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS drive_org_shares (
+      drive_id TEXT NOT NULL,
+      issuer TEXT NOT NULL,
+      org_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+      created_by TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (drive_id, issuer, org_id),
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_drive_org_shares_org ON drive_org_shares(issuer, org_id);
+    CREATE INDEX IF NOT EXISTS idx_sso_memberships_org_user ON sso_memberships(issuer, org_id, user_id);
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

@@ -5,6 +5,7 @@ import { db, drizzleDb } from "./db";
 import { drives } from "../drizzle/schema";
 import { env } from "./env";
 import { generateEd25519Keypair } from "./willow/meadowcap";
+import { orgDrivesForUser, type OrgDriveRow } from "./orgs.js";
 
 export type DriveRow = {
   id: string;
@@ -137,15 +138,29 @@ export function getDriveNamespace(driveId: string): { pub: Uint8Array; secret: U
   };
 }
 
-export function listUserDrives(userId: string): DriveRow[] {
+/**
+ * Every drive the user can open: owned, shared with them (drive_members), or
+ * shared with an organization they are an active member of (lib/orgs.js),
+ * newest first. Org drives carry `org_id` so callers can group them.
+ */
+export function listUserDrives(userId: string): (DriveRow & { org_id?: string })[] {
   // GROUP BY + LEFT JOIN: raw SQL is cleaner than drizzle for this query
-  return db.prepare(`
+  const direct = db.prepare(`
     SELECT d.* FROM drives d
     LEFT JOIN drive_members m ON m.drive_id = d.id AND m.user_id = ?
     WHERE d.owner_id = ? OR m.user_id = ?
     GROUP BY d.id
     ORDER BY d.created_at DESC
   `).all(userId, userId, userId) as DriveRow[];
+  const seen = new Set(direct.map((d) => d.id));
+  const viaOrg: OrgDriveRow[] = [];
+  for (const d of orgDrivesForUser(userId)) {
+    if (seen.has(d.id)) continue;
+    seen.add(d.id);
+    viaOrg.push(d);
+  }
+  if (viaOrg.length === 0) return direct;
+  return [...direct, ...viaOrg].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
 }
 
 /**

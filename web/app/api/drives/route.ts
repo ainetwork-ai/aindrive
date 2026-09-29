@@ -5,6 +5,7 @@ import { createDrive, listUserDrives, adoptSignInPayoutWallet } from "@/lib/driv
 import { isOnline } from "@/lib/rpc";
 import { getUserDriveLimit } from "@/lib/limits";
 import { db } from "@/lib/db";
+import { listOrgDrivesForUser } from "@/lib/orgs.js";
 
 const Body = z.object({ name: z.string().min(1).max(120) });
 
@@ -13,6 +14,9 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   adoptSignInPayoutWallet(user.id);   // the sign-in wallet pays out on drives without one
   const drives = listUserDrives(user.id);
+  // Drives reached through (or published to) an organization carry it, so a
+  // client can group them and not offer "Leave" on the organization's drive.
+  const orgOf = new Map(listOrgDrivesForUser(user.id).flatMap((o) => o.drives.map((d) => [d.id, { id: o.orgId, slug: o.slug, name: o.name }] as const)));
   return NextResponse.json({
     drives: drives.map((d) => ({
       id: d.id,
@@ -23,6 +27,7 @@ export async function GET() {
       online: isOnline(d.id),
       // Owned vs shared-with-me: the mobile app offers "Leave" only on the latter.
       owned: d.owner_id === user.id,
+      org: orgOf.get(d.id) ?? null,
     })),
   });
 }

@@ -504,8 +504,11 @@ function resolveUserForState(issuer, s, passwordHash, ended) {
  *
  * aindrive has no organization-owned drives (every drive is personal,
  * ownership.md §2), so `deprovisioned` + ownershipTransferTo transfers
- * nothing; personal drives are never moved. appRole/groups are recorded and
- * reported but grant nothing: drive access is granted per person by drive owners.
+ * nothing; personal drives are never moved. What an organization gets is a
+ * personal drive its creator shared with it (lib/orgs.js): that access is read
+ * from these rows on every check, so a non-active status ends it with this
+ * commit. appRole only decides who may share a drive with the organization
+ * (`admin`/`owner`, lib/org-policy.js); groups are recorded and reported.
  *
  * A rolled-back legacy mapping ends what the wrongly linked person obtained
  * on that account the same way (endLinkedAccess), also before the 200.

@@ -11,7 +11,7 @@ bridge, SQLite access, and collab fan-out. React components and route
 
 Modules that `server.js` imports directly (no Next.js build step) are plain
 ESM `.js` with a hand-written `.d.ts` sidecar: `access-core`, `agents`,
-`boot-checks`, `db`, `path`, `rate-limit`. They are imported by both TypeScript
+`boot-checks`, `db`, `orgs`, `org-policy`, `path`, `rate-limit`. They are imported by both TypeScript
 routes and `node server.js`, so they cannot be `.ts`. Some are also mirrored
 by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
@@ -19,7 +19,8 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 **Permissions / access**
 - `access-core.js` — pure role algebra: `ROLE_RANK`, `bestMatchingRole`, `computeEntry`, `mergeRoleUpgradeOnly`. No DB, no session.
-- `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members`.
+- `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members` + organization shares (`orgs.js`).
+- `orgs.js` (+ `.d.ts`) — organizations: drives shared with an AIN SSO organization (`drive_org_shares`), the role an active member gets (`orgRoleInDrive`, read by `access.ts`, `dochub.js`, `mcp-tokens.ts`), the home page's org sections, share/unshare (audited in `sso_audit`), the sign-in landing. `org-policy.js` (+ `.d.ts`) — its pure rules: who may share (creator + org admin or `AINDRIVE_ORG_SHARE_ALLOWLIST`), the allowlist parser, `landingPath`. Operator: `scripts/org-drive.mjs`.
 - `drive-location.ts` — pure: `?path` + membership + stat kind → the drive page's folder, open file, breadcrumb root and grant listing (`locationPath` is the reverse, for the URL).
 - `require-access.ts` — `requireDriveRole()` auth gate for drive-scoped API routes (getUser→getDrive→resolveAccess→atLeast). With `opts.req` (fs/thumbnail, fs/stream, fs/download) it also takes the session JWT as `Authorization: Bearer` (`session.ts` `getRequestUser`; an invalid bearer is a 401, never a cookie fallback) — for hosts that proxy AINUI assets.
 - `sale-access.js` — the paid carve-out: `paidAccessDenial` (read gate, shared by HTTP and `dochub.js`), `paidLocksForPaths`/`paidLocksForListing` (🔒 rows). `paid-lock.ts` turns a 402 body into the paywall the drive UI shows (client-safe).
@@ -80,7 +81,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 ## Contracts & invariants
 
-- **Single access source**: ownership or a covering `drive_members` row — both free and paid shares write rows there. There is no separate wallet-allowlist or share-cookie path; `access.ts` and `dochub.js`'s `resolveRole` mirror the same rule (the latter is duplicated, not imported, because `next/headers` is unavailable under raw `node server.js`).
+- **Single access source**: ownership, a covering `drive_members` row — both free and paid shares write rows there — or an organization the drive is shared with (`orgs.js orgRoleInDrive`: a whole-drive viewer/editor grant, computed per check from `sso_memberships`, never copied into `drive_members`). There is no separate wallet-allowlist or share-cookie path; `access.ts` and `dochub.js`'s `resolveRole` mirror the same rule (the latter is duplicated, not imported, because `next/headers` is unavailable under raw `node server.js`; both call the same `orgRoleInDrive`).
 - **Path canonicalization**: every stored/looked-up path goes through `normalizePath` (`zPath` at API boundaries) before any `isAncestorOrSelf` check — slashes, `.` segments and Unicode NFC (macOS agents report NFD names). A gate judges the same canonical path it then serves: the WS hub canonicalizes its URL path, and a Yjs doc is named by the authorized path (`docIdFor`), never by a client-sent id. Case is not canonicalized, so the paywall and the `.aindrive/` check ignore it (a macOS agent serves `Premium/` for `premium/`) — `PERMISSIONS_MATRIX.md` R-ACC-PATH-001. The `NormalizedPath` brand asserted in `access.ts` relies on this.
 - **Role merges never downgrade** (`mergeRoleUpgradeOnly`); the creator row is never removable (`member-guard`).
 - **Payment network switch is atomic**: USDC chain+asset flip together; reads rebind stale known-USDC policy rows to the current network. `toAtomicAmount` requires decimals ≥ 2 (scales from cents).

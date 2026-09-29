@@ -30,16 +30,18 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 
 | Route | Gate |
 |-------|------|
-| `drives` (GET/POST) | list user's drives / create (per-user drive limit). Auth. |
+| `drives` (GET/POST) | list user's drives (owned, shared with them, or shared with an organization they are an active member of — those carry `org`) / create (per-user drive limit). Auth. |
 | `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy (validation shared with MCP `set_token_policy`). Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
 | `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. |
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |
+| `orgs` (GET/POST), `orgs/[orgId]` (DELETE) | share the whole drive with an AIN SSO organization (viewer/editor) / change its role / stop (`lib/orgs.js`, `lib/org-policy.js`). GET = owners (candidates for the creator only); POST = creator who is that org's admin or on `AINDRIVE_ORG_SHARE_ALLOWLIST`; DELETE = creator. Audited in `sso_audit`. |
+| `leave` (POST) | drop my own grants. Creator can't; access through an organization is 409 (only the creator unshares it). |
 | `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path; `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. Gates live in `lib/sales.ts`, shared with the MCP sale tools. |
 | `apps` (GET `?path`), `apps/[appId]/spaces/[spaceId]` (PUT `{path, shared}`) | the share sheet's "Shared in apps": the creator's connected apps' spaces and whether this folder is shared into each; PUT relays the toggle to the app as `{driveId, path, shared, name, driveName}` — `name` is the folder's name (the drive's name when the whole drive is shared), what the app should show. Creator only (GET answers `{apps: []}` to anyone else). |
 | `payout` (GET/PUT/DELETE) | path-scoped payout wallets. Creator only. PUT validation shared with MCP `set_payout_wallet`. |
 | `receipts` | payment ledger, newest first. Owner only. (Paged over MCP: `list_receipts`.) |
-| `showcase` (GET), `showcase/[shareId]` (GET) | upsell list / purchase entry (302 → `/s/<token>`). Gated to accounts related to the drive (owner or any member row). |
+| `showcase` (GET), `showcase/[shareId]` (GET) | upsell list / purchase entry (302 → `/s/<token>`). Gated to accounts related to the drive (owner, any member row, or an organization it is shared with). |
 | `agents`, `agents/[agentId]` | owner CRUD over in-drive agents; `apiKey` stripped from all responses. |
 | `agents/[agentId]/ask` | A2A ask; identity→policy→CLI execution. Tiered rate limit; outputs map to 200/401/402/429. |
 | `agents/[agentId]/.well-known/agent-card.json` | public A2A AgentCard (secrets stripped). |
@@ -97,7 +99,8 @@ Ops / dev:
   on failure (handlers early-return it). It also 403s the reserved `.aindrive/`
   subtree for every role. `zPath` rejects it in JSON bodies, and `rename` gates
   both `from` and `to`. Member/share/owner-scoped routes use
-  `resolveRole`/`getDrive.owner_id` directly.
+  `resolveRole`/`getDrive.owner_id` directly. A role reached through an
+  organization comes out of the same `resolveRole` (never "owner").
 - **Grants are upgrade-only** on paid-settle, share-accept, and re-invite
   (`mergeRoleUpgradeOnly`); the drive creator's member row is immutable.
   Explicit `PATCH /members/[id]` is the only path that may downgrade.

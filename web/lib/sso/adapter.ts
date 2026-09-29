@@ -17,6 +17,7 @@ import { adapterConfig, publicBase } from "./config";
 import { adapterJwksUrl, remoteJwks } from "./oidc";
 import { verifyAdapterRequest } from "./tokens";
 import { AdapterError, applyDesiredState, disconnectUserSockets, getAppliedState } from "./store.js";
+import { revalidateOrgDrives } from "../orgs.js";
 
 export const ADAPTER_SCHEMA_V1 = "ain-sso.adapter.v1";
 const MAX_BODY = 64 * 1024;
@@ -88,6 +89,9 @@ export async function handleAdapterUser(req: Request, orgId: string, sub: string
       if (state.sub !== sub || state.org.id !== orgId) throw new AdapterError("invalid_request", 400, "Body does not match the request path.", false);
       const { result, endedUserIds } = applyDesiredState(cfg.issuer, state);
       for (const userId of endedUserIds) disconnectUserSockets({ userId });
+      // Org drives (lib/orgs.js) read the membership on every check; open
+      // editors on them are re-checked too (e.g. their creator was suspended).
+      revalidateOrgDrives(cfg.issuer, orgId);
       return json(200, result);
     }
     return json(405, { error: "method_not_allowed", retryable: false }, { allow: "GET, PUT" });

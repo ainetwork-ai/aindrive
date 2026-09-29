@@ -76,6 +76,53 @@ explicit role change (PATCH) can lower a role.
   by sending its account-grant token (`Authorization: Bearer aind_aat_…`).
   See `README.md` and `docs/*payment*`.
 
+## Organizations (AIN SSO)
+
+Where AIN SSO is configured, a drive's **creator** can share the whole drive
+with an **organization** — an AIN SSO organization as the provisioning adapter
+recorded it (`sso_memberships`: issuer + org id, with its slug and name). It is
+the fourth way in, and the only one that does **not** write a grant: the role
+is computed on every check, so AIN SSO ending a membership ends the access in
+the same moment. Code: `web/lib/orgs.js` (DB), `web/lib/org-policy.js` (pure
+rules); table `drive_org_shares(drive_id, issuer, org_id, role)`.
+
+- **Who gets what.** Every person whose membership in that organization is
+  `active` — all of their rows for it; one suspended/deprovisioned row wins —
+  gets the share's role, `viewer` (default) or `editor`, on the whole drive
+  (`path=""`). Never `owner`. It comes out of the same functions every surface
+  already asks (`resolveRoleByUser`/`resolveAccess`, `entryView`, the doc
+  socket's `resolveRole`, the MCP scope ceiling `maxRoleInDrive`) and is merged
+  with the person's own grants by rank, so it never lowers one.
+- **When it stops.** The member is suspended or offboarded (the adapter push;
+  their sessions end too); the drive's creator is no longer an active member
+  of that organization (the share pauses for everyone, and resumes if they are
+  reactivated — it was their share to the org as a member); the creator
+  unshares it; or the AIN SSO adapter is not configured for that issuer (a
+  membership nobody keeps current grants nothing). Open collaborative editors
+  are re-checked when a share is lowered or removed and after each adapter push
+  for the organization.
+- **A ceiling like any grant.** An org viewer is a bare viewer: the paid
+  carve-out applies, no writes, no share links. An org editor edits and mints
+  viewer links; editor links, listing, members and invites stay owner-only. A
+  member can't `leave` an organization's drive (409) — the creator unshares it.
+- **Who may share.** The creator only (co-owners see the share read-only),
+  with an organization they are an active member of, **as its admin** (AIN SSO
+  app role `admin`/`owner`). AIN SSO assigns aindrive with app role `member`
+  unless an admin sets otherwise, so the operator can also allow named people:
+  `AINDRIVE_ORG_SHARE_ALLOWLIST=<org slug|id>:<aindrive user id|AIN subject>,…`
+  (stable ids only, never an email). This is deliberately narrower than "any
+  active member": publishing a drive to a whole company is an admin decision.
+  Unsharing is always allowed to the creator. The operator binds any drive by
+  id and org slug with `web/scripts/org-drive.mjs` (`docs/DEPLOY.md`
+  "Organization drives"). Every share, role change and unshare is recorded in
+  `sso_audit` (`org_drive_shared`, `org_drive_role_changed`,
+  `org_drive_unshared`; actor `user:<id>` or `operator`).
+- **What members see.** The signed-in home lists each of their organizations
+  first — its drives, or "No ComCom drive yet … ask your ComCom admin" — then
+  their personal drives. An AIN sign-in to the home page lands on the
+  organization's drive on the person's first sign-in and whenever they own no
+  personal drive (with one organization drive; several → the home page).
+
 ## What a member sees on entry
 
 `entryView` (membership) plus a stat of the path decide where a user lands —
@@ -105,7 +152,8 @@ email+password credential, **a Google account** (`POST /api/auth/google`: the ac
 
 An account that AIN SSO suspends (or offboards) from every organization it
 belongs to cannot sign in on any path and its sessions end; its drives,
-grants and personal tokens are kept. An AIN-linked account cannot reset its
+grants and personal tokens are kept. Suspension from one organization ends
+only that organization's drives (above). An AIN-linked account cannot reset its
 password by email.
 
 A **wallet-provisioned account** — minted for a wallet that paid or signed in

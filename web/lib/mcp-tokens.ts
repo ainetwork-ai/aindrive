@@ -19,6 +19,7 @@ import { nanoid } from "nanoid";
 import { db } from "./db";
 import { env } from "./env";
 import { ROLE_RANK, type Role } from "./access";
+import { orgRoleInDrive } from "./orgs.js";
 
 export type McpScope = "read" | "write";
 export type McpTokenKind = "pat" | "oauth";
@@ -63,8 +64,9 @@ export function mcpUrlFor(driveId: string): string {
 
 /**
  * Highest role the user holds anywhere in the drive (owner, or the best
- * drive_members grant at any path). Decides the scope ceiling at issue time:
- * someone who can edit nothing cannot mint a write token.
+ * grant at any path — drive_members rows or an organization's whole-drive
+ * role, lib/orgs.js). Decides the scope ceiling at issue time: someone who
+ * can edit nothing cannot mint a write token.
  */
 export function maxRoleInDrive(driveId: string, userId: string): Role | "none" {
   const drive = db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId) as
@@ -75,6 +77,8 @@ export function maxRoleInDrive(driveId: string, userId: string): Role | "none" {
   const rows = db
     .prepare("SELECT role FROM drive_members WHERE drive_id = ? AND user_id = ?")
     .all(driveId, userId) as { role: Role }[];
+  const orgRole = orgRoleInDrive(driveId, userId);
+  if (orgRole !== "none") rows.push({ role: orgRole });
   let best: Role | "none" = "none";
   for (const r of rows) {
     if (best === "none" || ROLE_RANK[r.role] > ROLE_RANK[best]) best = r.role;

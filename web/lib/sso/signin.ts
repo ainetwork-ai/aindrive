@@ -7,7 +7,8 @@ import { cookies } from "next/headers";
 import { env } from "../env";
 import { setCookie } from "../session";
 import { adoptSignInPayoutWallet } from "../drives";
-import { createSsoSession } from "./store.js";
+import { createSsoSession, identityFor } from "./store.js";
+import { signInLandingPath } from "../orgs.js";
 import { SSO_CHECKED_COOKIE, SSO_CHECKED_MAX_AGE } from "./silent";
 
 /** Pending authorization request (state, nonce, PKCE) — only the callback reads it. */
@@ -49,11 +50,23 @@ export async function markSilentChecked() {
   (await cookies()).set(SSO_CHECKED_COOKIE, "1", { httpOnly: true, sameSite: "lax", secure: secure(), path: "/", maxAge: SSO_CHECKED_MAX_AGE });
 }
 
-export async function beginSsoSession(userId: string, p: { issuer: string; subject: string; oidcSid: string | null; orgId: string | null; orgIds: string[] }) {
+/**
+ * Starts the session and returns where the browser goes next: `nextPath`,
+ * except that the home page becomes the person's organization drive on their
+ * first AIN sign-in or while they have no personal drive (lib/orgs.js
+ * signInLandingPath), so a company folder is the first thing they see.
+ */
+export async function beginSsoSession(
+  userId: string,
+  p: { issuer: string; subject: string; oidcSid: string | null; orgId: string | null; orgIds: string[] },
+  nextPath = "/",
+): Promise<string> {
+  // Read before createSsoSession stamps last_login_at.
+  const firstSignIn = !identityFor(p.issuer, p.subject)?.last_login_at;
   const ssoSessionId = createSsoSession({ userId, ...p });
   adoptSignInPayoutWallet(userId);
   await setCookie(userId, { ssoSessionId });
-  return ssoSessionId;
+  return signInLandingPath(userId, nextPath, firstSignIn);
 }
 
 /** Relative Location, like app/api/auth/logout: resolves against the public URL the browser used. */
