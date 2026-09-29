@@ -1,11 +1,15 @@
 // Trusted first-party OAuth clients (AINDRIVE_TRUSTED_OAUTH_CLIENTS; lib/oauth.ts
-// skipsConsent, lib/oauth-authorize.ts): a signed-in person visiting a trusted
-// client's valid authorization request gets the code without the consent
-// screen — the same code row "Allow" makes. Untrusted clients and invalid
-// requests are unchanged. An anonymous visitor goes through AIN SSO (silent
-// first; then AIN's sign-in for a trusted client, /login for anyone else) and
-// back to the very same request; a suspended or offboarded person never gets a
-// code. The operator's list is never garbage-collected and is boot-checked.
+// skipsConsent, lib/oauth-authorize.ts): a person signed in THROUGH AIN SSO
+// visiting a trusted client's valid authorization request, within its scope
+// ceiling, gets the code without the consent screen — the same code row
+// "Allow" makes. A password/Google/wallet session (which another site could
+// plant, or which may be another account), a login_hint of another AIN subject,
+// money-moving scopes, untrusted clients and invalid requests: as before. An
+// anonymous visitor of a trusted client goes through AIN SSO (silent first,
+// then AIN's sign-in; /login after a sign-out) and back to the very same
+// request; anyone else goes to /login. A suspended or offboarded person never
+// gets a code. The operator's list is never garbage-collected and is
+// boot-checked.
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,8 +46,11 @@ const callbackRoute = await import("../../app/api/auth/sso/callback/route.js");
 const linkRoute = await import("../../app/api/auth/sso/link/route.js");
 const tokenRoute = await import("../../app/api/oauth/token/route.js");
 const authorizeRoute = await import("../../app/api/oauth/authorize/route.js");
+const logoutRoute = await import("../../app/api/auth/logout/route.js");
 
 const TEAMS_REDIRECT = "https://teams.example.test/api/aindrive/callback";
+/** The documented production ceiling for AIN Teams (docs/DEPLOY.md). */
+const TEAMS_CEILING = "profile+drives:read";
 const OTHER_REDIRECT = "https://other.example.test/callback";
 const ORG = { id: "org_ain", slug: "ain", name: "AIN" };
 const verifier = randomBytes(32).toString("base64url");
@@ -67,8 +74,9 @@ const fake = fakeIssuerFetch(issuer, async () => ({
 type Params = Record<string, string | null>;
 const params = (clientId: string, extra: Params = {}): Params => ({
   response_type: "code", client_id: clientId, redirect_uri: clientId === teamsId ? TEAMS_REDIRECT : OTHER_REDIRECT,
-  code_challenge: challenge, code_challenge_method: "S256", scope: "profile drives:read", state: "st-1", resource: null, ...extra,
+  code_challenge: challenge, code_challenge_method: "S256", scope: "profile drives:read", state: "st-1", resource: null, login_hint: null, ...extra,
 });
+/** A password, Google or wallet session (no AIN SSO session row behind it). */
 const signInAs = async (userId: string) => { jar.set("aindrive_session", await session.sign(userId)); };
 const accountCodes = (clientId: string) =>
   db.prepare("SELECT user_id, scope, redirect_uri, code_challenge, sso_org_id, consumed FROM account_oauth_codes WHERE client_id = ? ORDER BY created_at").all(clientId);
@@ -116,6 +124,14 @@ const startPath = (p: Params, prompt?: "none") =>
   `/api/auth/sso/start?${prompt ? "prompt=none&" : ""}next=${encodeURIComponent(flow.authorizePath(p))}`;
 const loginPath = (p: Params) => `/login?next=${encodeURIComponent(flow.authorizePath(p))}`;
 
+/** "Continue with AIN" as `subject` (an AIN-linked account): an AIN SSO session of ORG. */
+async function signInWithAin(subject: string) {
+  signingIn = subject;
+  const auth = await start("/api/auth/sso/start?next=%2F");
+  await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER });
+  expect(await session.currentSsoSession()).toMatchObject({ subject, issuer: ISSUER });
+}
+
 function linkedUser(userId: string, subject: string) {
   db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run(userId, `${subject}@corp.example`, subject, "x");
   db.prepare("INSERT INTO sso_identities (issuer, subject, user_id, link_method, linked_at, last_login_at) VALUES (?,?,?,?,?,?)")
@@ -136,6 +152,7 @@ beforeAll(() => {
   linkedUser("u_carol", "acc_carol");
   linkedUser("u_dave", "acc_dave");
   linkedUser("u_erin", "acc_erin");
+  linkedUser("u_frank", "acc_frank");
   db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES ('u_bob', 'bob@example.com', 'Bob', 'x')").run();
   db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES ('d1', 'u_alice', 'D1', 'h', 's')").run();
   teamsId = oauth.registerClient("AIN Teams", [TEAMS_REDIRECT]).client_id;
@@ -146,29 +163,36 @@ beforeEach(() => {
   jar.clear();
   oidc.clearDiscoveryCache();
   Object.assign(process.env, SSO_ENV);
-  process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = teamsId;
+  process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=${TEAMS_CEILING}`;
   delete process.env.AINDRIVE_SSO_SILENT;
   delete process.env.AINDRIVE_LEGACY_LOGIN;
   signingIn = "acc_alice";
 });
 
 describe("AINDRIVE_TRUSTED_OAUTH_CLIENTS", () => {
-  it("parses ids and optional scope ceilings; unset = nobody", () => {
+  it("parses ids with their scope ceilings; unset = nobody", () => {
     expect(trusted.parseTrustedOAuthClients(undefined)).toEqual({ clients: new Map(), bad: [] });
     expect(trusted.parseTrustedOAuthClients(" ")).toEqual({ clients: new Map(), bad: [] });
-    const { clients, bad } = trusted.parseTrustedOAuthClients(" aind_client_A , aind_client_B=profile+drives:read, aind_client_C=profile drives:read drive:read ");
+    const { clients, bad } = trusted.parseTrustedOAuthClients(" aind_client_B=profile+drives:read, aind_client_C=profile drives:read drive:read ");
     expect(bad).toEqual([]);
     expect([...clients]).toEqual([
-      ["aind_client_A", null],
       ["aind_client_B", ["profile", "drives:read"]],
       ["aind_client_C", ["profile", "drives:read", "drive:read"]],
     ]);
   });
 
   it("a malformed entry is never trusted, and a client listed twice is trusted by neither entry", () => {
-    const { clients, bad } = trusted.parseTrustedOAuthClients("ok_1, bad id, x=, y=openid, ok_2, ok_2=profile, http://evil");
+    const { clients, bad } = trusted.parseTrustedOAuthClients("ok_1=profile, bad id=profile, x=, y=openid, ok_2=profile, ok_2=drives:read, http://evil");
     expect([...clients.keys()]).toEqual(["ok_1"]);
-    expect(bad).toEqual(["bad id", "x=", "y=openid", "ok_2=profile", "http://evil"]);
+    expect(bad).toEqual(["bad id=profile", "x=", "y=openid", "ok_2=drives:read", "http://evil"]);
+  });
+
+  it("the ceiling is required, and may not name a scope that moves money", () => {
+    // A bare id would let ANY valid scope skip consent — wallet:pay and drives:sell included.
+    const { clients, bad } = trusted.parseTrustedOAuthClients("bare, pay=profile+wallet:pay, sell=drives:sell, ok=profile+drives:read+drives:write");
+    expect([...clients.keys()]).toEqual(["ok"]);
+    expect(bad).toEqual(["bare", "pay=profile+wallet:pay", "sell=drives:sell"]);
+    expect([...trusted.CONSENT_ALWAYS_SCOPES].sort()).toEqual(["drives:sell", "wallet:pay"]);
   });
 
   it("the JS scope list mirrors lib/oauth.ts", () => {
@@ -178,7 +202,8 @@ describe("AINDRIVE_TRUSTED_OAUTH_CLIENTS", () => {
   it("a malformed value fails the production boot; a good one passes", () => {
     expect(trusted.trustedOAuthConfigErrors({})).toEqual([]);
     expect(trusted.trustedOAuthConfigErrors({ AINDRIVE_TRUSTED_OAUTH_CLIENTS: `${teamsId}=profile+drives:read` })).toEqual([]);
-    expect(trusted.trustedOAuthConfigErrors({ AINDRIVE_TRUSTED_OAUTH_CLIENTS: "a,a" })[0]).toMatch(/AINDRIVE_TRUSTED_OAUTH_CLIENTS .*bad: a\)/);
+    expect(trusted.trustedOAuthConfigErrors({ AINDRIVE_TRUSTED_OAUTH_CLIENTS: "a=profile,a=profile" })[0]).toMatch(/AINDRIVE_TRUSTED_OAUTH_CLIENTS .*bad: a=profile\)/);
+    expect(trusted.trustedOAuthConfigErrors({ AINDRIVE_TRUSTED_OAUTH_CLIENTS: teamsId })[0]).toMatch(/ceiling is required.*wallet:pay and drives:sell always need consent/);
 
     const saved = { ...process.env };
     const exit = vi.spyOn(process, "exit").mockImplementation(((code: number) => { throw new Error(`exit ${code}`); }) as never);
@@ -186,11 +211,14 @@ describe("AINDRIVE_TRUSTED_OAUTH_CLIENTS", () => {
     try {
       vi.stubEnv("NODE_ENV", "production");
       process.env.AINDRIVE_PUBLIC_URL = PUBLIC_URL;
-      process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = teamsId;
+      process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=${TEAMS_CEILING}`;
       expect(() => runBootChecks()).not.toThrow();
-      process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=profile+openid`;
-      expect(() => runBootChecks()).toThrow("exit 1");
-      expect(err.mock.calls.flat().join("\n")).toMatch(/AINDRIVE_TRUSTED_OAUTH_CLIENTS/);
+      for (const badValue of [`${teamsId}=profile+openid`, teamsId, `${teamsId}=profile+wallet:pay`]) {
+        err.mockClear();
+        process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = badValue;
+        expect(() => runBootChecks()).toThrow("exit 1");
+        expect(err.mock.calls.flat().join("\n")).toMatch(/AINDRIVE_TRUSTED_OAUTH_CLIENTS/);
+      }
     } finally {
       vi.unstubAllEnvs();
       exit.mockRestore();
@@ -200,9 +228,9 @@ describe("AINDRIVE_TRUSTED_OAUTH_CLIENTS", () => {
   });
 });
 
-describe("signed in: a trusted client gets its code without the consent screen", () => {
+describe("signed in through AIN SSO: a trusted client gets its code without the consent screen", () => {
   it("the code goes to the registered redirect_uri with state and iss, and redeems like any other", async () => {
-    await signInAs("u_bob");
+    await signInWithAin("acc_alice");
     const q = clientRedirect(await flow.authorizeStep(params(teamsId)), TEAMS_REDIRECT);
     expect(q.get("state")).toBe("st-1");
     expect(q.get("iss")).toBe(PUBLIC_URL);
@@ -210,7 +238,7 @@ describe("signed in: a trusted client gets its code without the consent screen",
     const res = await exchange(q.get("code")!, teamsId, TEAMS_REDIRECT);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ token_type: "Bearer", scope: "profile drives:read" });
-    expect(db.prepare("SELECT user_id, scope FROM account_tokens WHERE client_id = ?").all(teamsId)).toEqual([{ user_id: "u_bob", scope: "profile drives:read" }]);
+    expect(db.prepare("SELECT user_id, scope FROM account_tokens WHERE client_id = ?").all(teamsId)).toEqual([{ user_id: "u_alice", scope: "profile drives:read" }]);
   });
 
   it("recorded exactly like a click on Allow: the same code row, org scope included", async () => {
@@ -229,11 +257,55 @@ describe("signed in: a trusted client gets its code without the consent screen",
     expect(byClick).toEqual({ ...shape, redirect_uri: OTHER_REDIRECT });
   });
 
+  it("a password, Google or wallet session gets the consent screen — another site could have planted it, or it is another account", async () => {
+    // Review F1: a cross-site form signs the browser in to the attacker's
+    // account, then the victim's AIN Teams starts a connect. Whatever planted
+    // the session, only an AIN SSO session skips consent.
+    db.prepare("INSERT OR IGNORE INTO users (id, email, name, password_hash) VALUES ('u_mallory', 'mallory@evil.example', 'Mallory', 'x')").run();
+    for (const userId of ["u_mallory", "u_bob", "u_alice" /* AIN-linked, but this session is not AIN's */]) {
+      await signInAs(userId);
+      const before = accountCodes(teamsId).length;
+      expect(await flow.authorizeStep(params(teamsId))).toMatchObject({ kind: "consent", user: { id: userId } });
+      expect(accountCodes(teamsId)).toHaveLength(before);
+    }
+    // …where Allow still works: the person saw whose account it is.
+    expect((await allow(params(teamsId))).status).toBe(200);
+  });
+
+  it("an AIN SSO session that ended, or of another issuer, is no AIN session", async () => {
+    await signInWithAin("acc_alice");
+    const s = (await session.currentSsoSession())!;
+    db.prepare("UPDATE sso_sessions SET issuer = 'https://other-issuer.example' WHERE id = ?").run(s.id);
+    expect(await flow.sameAinPerson("u_alice", null)).toBe(false);
+    db.prepare("UPDATE sso_sessions SET issuer = ? WHERE id = ?").run(ISSUER, s.id);
+    expect(await flow.sameAinPerson("u_alice", null)).toBe(true);
+    expect(await flow.sameAinPerson("u_bob", null)).toBe(false); // not this session's user
+    store.endSsoSession(s.id, "test");
+    expect(await flow.sameAinPerson("u_alice", null)).toBe(false);
+  });
+
+  it("login_hint: the code only for that AIN subject; another subject gets the consent screen", async () => {
+    await signInWithAin("acc_alice");
+    clientRedirect(await flow.authorizeStep(params(teamsId, { login_hint: "acc_alice" })), TEAMS_REDIRECT);
+    const before = accountCodes(teamsId).length;
+    expect(await flow.authorizeStep(params(teamsId, { login_hint: "acc_frank" }))).toMatchObject({ kind: "consent", user: { id: "u_alice" } });
+    expect(accountCodes(teamsId)).toHaveLength(before);
+    // It survives the sign-in round trip (the `next` of every path).
+    jar.clear();
+    const p = params(teamsId, { login_hint: "acc_frank" });
+    expect(await flow.authorizeStep(p)).toEqual({ kind: "redirect", location: startPath(p, "none") });
+    signingIn = "acc_frank";
+    const auth = await start(startPath(p, "none"));
+    const back = await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER });
+    expect(new URL(back, PUBLIC_URL).searchParams.get("login_hint")).toBe("acc_frank");
+    clientRedirect(await stepAt(back), TEAMS_REDIRECT);
+  });
+
   it("an untrusted client — even one with the same name — still gets the consent screen, and no code", async () => {
-    await signInAs("u_bob");
+    await signInWithAin("acc_alice");
     const before = accountCodes(otherId).length;
     const step = await flow.authorizeStep(params(otherId));
-    expect(step).toMatchObject({ kind: "consent", user: { id: "u_bob" }, value: { client: { client_id: otherId }, driveId: null } });
+    expect(step).toMatchObject({ kind: "consent", user: { id: "u_alice" }, value: { client: { client_id: otherId }, driveId: null } });
     expect(accountCodes(otherId)).toHaveLength(before);
     delete process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS; // unset: today's behaviour for every client
     expect((await flow.authorizeStep(params(teamsId))).kind).toBe("consent");
@@ -242,6 +314,7 @@ describe("signed in: a trusted client gets its code without the consent screen",
   it.each([
     ["an unregistered redirect_uri", { redirect_uri: "https://teams.example.test/other" }],
     ["a redirect_uri on another host", { redirect_uri: "https://evil.example/api/aindrive/callback" }],
+    ["a redirect_uri variant", { redirect_uri: `${TEAMS_REDIRECT}/` }],
     ["no PKCE", { code_challenge: null }],
     ["PKCE plain", { code_challenge_method: "plain" }],
     ["an unknown scope", { scope: "profile openid" }],
@@ -250,7 +323,7 @@ describe("signed in: a trusted client gets its code without the consent screen",
     ["response_type token", { response_type: "token" }],
     ["an unknown client", { client_id: "aind_client_nope" }],
   ])("%s is an error page exactly as before — no code, no redirect", async (_label, extra) => {
-    await signInAs("u_bob");
+    await signInWithAin("acc_alice");
     const before = accountCodes(teamsId).length;
     const step = await flow.authorizeStep(params(teamsId, extra));
     const v = oauth.validateAuthorize(params(teamsId, extra));
@@ -262,8 +335,7 @@ describe("signed in: a trusted client gets its code without the consent screen",
   });
 
   it("a scope ceiling bounds what skips consent; a wider request gets the consent screen", async () => {
-    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=profile+drives:read`;
-    await signInAs("u_bob");
+    await signInWithAin("acc_alice");
     clientRedirect(await flow.authorizeStep(params(teamsId, { scope: "profile" })), TEAMS_REDIRECT);
     clientRedirect(await flow.authorizeStep(params(teamsId, { scope: "drives:read profile" })), TEAMS_REDIRECT);
     expect((await flow.authorizeStep(params(teamsId, { scope: "profile drives:read drives:write" }))).kind).toBe("consent");
@@ -276,20 +348,37 @@ describe("signed in: a trusted client gets its code without the consent screen",
     expect((await flow.authorizeStep(params(teamsId, { scope: "profile" }))).kind).toBe("consent");
   });
 
+  it("payment and sale scopes never skip consent: a bare entry trusts nobody, and no ceiling can list them", async () => {
+    // Review F3: a bare `<client_id>` used to trust every scope, wallet:pay and drives:sell included.
+    await signInWithAin("acc_alice");
+    const money = "profile wallet:pay drives:sell drives:write";
+    for (const list of [teamsId, `${teamsId}=profile+wallet:pay+drives:sell+drives:write`]) {
+      process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = list;
+      expect((await flow.authorizeStep(params(teamsId, { scope: money }))).kind).toBe("consent");
+      expect((await flow.authorizeStep(params(teamsId, { scope: "profile" }))).kind).toBe("consent"); // a bad list trusts nobody
+    }
+    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=profile+drives:read+drives:write`;
+    clientRedirect(await flow.authorizeStep(params(teamsId, { scope: "profile drives:write" })), TEAMS_REDIRECT);
+    for (const scope of ["profile wallet:pay", "profile drives:sell"]) {
+      expect((await flow.authorizeStep(params(teamsId, { scope }))).kind).toBe("consent");
+    }
+  });
+
   it("a drive grant: clamped to the person's role like Allow; no role in the drive → the consent page's refusal", async () => {
+    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=${TEAMS_CEILING}+drive:read+drive:write`;
     const drive = { resource: `${PUBLIC_URL}/mcp/d/d1`, scope: "drive:read drive:write" };
-    await signInAs("u_alice");
+    await signInWithAin("acc_alice");
     clientRedirect(await flow.authorizeStep(params(teamsId, drive)), TEAMS_REDIRECT);
-    expect(driveCodes(teamsId)).toEqual([{ user_id: "u_alice", drive_id: "d1", scope: "write", sso_org_id: null }]);
-    await signInAs("u_bob"); // not a member of d1
-    expect(await flow.authorizeStep(params(teamsId, drive))).toMatchObject({ kind: "consent", user: { id: "u_bob" }, value: { driveId: "d1" } });
+    expect(driveCodes(teamsId)).toEqual([{ user_id: "u_alice", drive_id: "d1", scope: "write", sso_org_id: ORG.id }]);
+    await signInWithAin("acc_frank"); // not a member of d1
+    expect(await flow.authorizeStep(params(teamsId, drive))).toMatchObject({ kind: "consent", user: { id: "u_frank" }, value: { driveId: "d1" } });
     expect(driveCodes(teamsId)).toHaveLength(1);
   });
 
   it("a code for a loopback or private-use-scheme redirect always needs the click (any program there can catch it)", async () => {
     const local = oauth.registerClient("Teams (dev)", ["http://localhost:3000/cb", "ainteams://cb"]).client_id;
-    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId},${local}`;
-    await signInAs("u_bob");
+    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=${TEAMS_CEILING},${local}=${TEAMS_CEILING}`;
+    await signInWithAin("acc_alice");
     const at = (redirect_uri: string) => flow.authorizeStep({ ...params(local), redirect_uri });
     expect((await at("ainteams://cb")).kind).toBe("consent");
     clientRedirect(await at("http://localhost:3000/cb"), "http://localhost:3000/cb"); // local development
@@ -309,6 +398,8 @@ describe("signed in: a trusted client gets its code without the consent screen",
     const post = readFileSync(join(__dirname, "../../app/api/oauth/authorize/route.ts"), "utf8");
     expect(post).toMatch(/await approve\(v\.value, user\.id/); // Allow and the trusted path share one approval
     expect(post).not.toMatch(/issueCode|issueAccountCode/);
+    const lib = readFileSync(join(__dirname, "../oauth-authorize.ts"), "utf8");
+    expect(lib).toContain("if (skipsConsent(v.value) && (await sameAinPerson(user.id, params.login_hint))) {");
   });
 });
 
@@ -350,19 +441,42 @@ describe("not signed in: through AIN SSO and back to the same request", () => {
     clientRedirect(await stepAt(back2), TEAMS_REDIRECT);
   });
 
-  it("an untrusted client: silent check too, then the usual /login; signed in, the consent screen as before", async () => {
+  it("an untrusted client: /login as before — no automatic AIN sign-in; signed in, the consent screen as before", async () => {
+    // Review F5: anyone can register a client (named "AIN Teams", even) and
+    // link here; a live AIN session must not sign its victim in on the way.
     const p = params(otherId);
-    expect(await flow.authorizeStep(p)).toEqual({ kind: "redirect", location: startPath(p, "none") });
-    const auth = await start(startPath(p, "none"));
-    const back = await callback({ error: "login_required", state: auth.searchParams.get("state")!, iss: ISSUER });
-    expect(await stepAt(back)).toEqual({ kind: "redirect", location: loginPath(p) });
-
-    jar.clear();
+    expect(await flow.authorizeStep(p)).toEqual({ kind: "redirect", location: loginPath(p) });
+    expect(jar.get("ain_sso_checked")).toBeUndefined();
+    // "Continue with AIN" on /login, on purpose: back, and the consent screen.
     const before = accountCodes(otherId).length;
-    const again = await start(startPath(p, "none"));
-    const signedIn = await callback({ code: "c", state: again.searchParams.get("state")!, iss: ISSUER });
+    const auth = await start(startPath(p));
+    const signedIn = await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER });
     expect(await stepAt(signedIn)).toMatchObject({ kind: "consent", user: { id: "u_alice" } });
     expect(accountCodes(otherId)).toHaveLength(before);
+  });
+
+  it("after a sign-out of aindrive in this browser: /login, not AIN's sign-in — a later silent-check link does not undo it", async () => {
+    // Review F2: AIN's "Stay signed in" (or a legacy sign-out) leaves a live AIN
+    // session, which would complete AIN's sign-in without a page.
+    const p = params(teamsId);
+    await signInWithAin("acc_alice");
+    const out = await logoutRoute.POST(new Request(`${PUBLIC_URL}/api/auth/logout?next=%2Fd%2Fx`, { method: "POST", headers: { origin: PUBLIC_URL } }));
+    expect(out.status).toBe(303);
+    expect(jar.get("aindrive_session")).toBeUndefined();
+    expect(jar.get("ain_sso_checked")).toBe("signed_out");
+    expect(await flow.authorizeStep(p)).toEqual({ kind: "redirect", location: loginPath(p) });
+    // Another site links the browser to a silent check: it runs, but the mark stays.
+    await start(startPath(p, "none"));
+    expect(jar.get("ain_sso_checked")).toBe("signed_out");
+    expect(await flow.authorizeStep(p)).toEqual({ kind: "redirect", location: loginPath(p) });
+    // "Continue with AIN" on /login is the person's choice: back, and the code.
+    const auth = await start(startPath(p));
+    const back = await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER });
+    clientRedirect(await stepAt(back), TEAMS_REDIRECT);
+    // A guard from a silent check (not a sign-out) still sends a trusted client to AIN's sign-in.
+    jar.clear();
+    jar.set("ain_sso_checked", "1");
+    expect(await flow.authorizeStep(p)).toEqual({ kind: "redirect", location: startPath(p) });
   });
 
   it("an AIN account with no aindrive account yet: connect-or-create, then the code; \"Not now\" → /login, not round again", async () => {
@@ -439,7 +553,7 @@ describe("housekeeping", () => {
     const drop = oauth.registerClient("Abandoned", ["https://gone.example.test/cb"]).client_id;
     const old = Date.now() - 8 * 24 * 60 * 60 * 1000;
     db.prepare("UPDATE oauth_clients SET created_at = ? WHERE client_id IN (?, ?)").run(old, keep, drop);
-    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}, ${keep}=profile`;
+    process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${teamsId}=${TEAMS_CEILING}, ${keep}=profile`;
     oauth.gcOAuth();
     expect(oauth.getClient(keep)).not.toBeNull();
     expect(oauth.getClient(drop)).toBeNull();

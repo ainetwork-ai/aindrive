@@ -20,7 +20,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { db } from "./db";
 import { env } from "./env";
 import { hashToken, mcpUrlFor, type McpScope } from "./mcp-tokens";
-import { parseTrustedOAuthClients } from "./oauth-trusted.js";
+import { CONSENT_ALWAYS_SCOPES, parseTrustedOAuthClients } from "./oauth-trusted.js";
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const DRIVE_SCOPES = ["drive:read", "drive:write"] as const;
@@ -171,8 +171,8 @@ export function getClient(clientId: string | null | undefined): OAuthClient | nu
 
 // ── Trusted first-party clients (AINDRIVE_TRUSTED_OAUTH_CLIENTS) ──────────
 
-/** Client id → scope ceiling (null = none). Read per call: a restart applies a change. Bad entries are never trusted. */
-function trustedClients(): Map<string, string[] | null> {
+/** Client id → scope ceiling. Read per call: a restart applies a change. Bad entries are never trusted. */
+function trustedClients(): Map<string, string[]> {
   return parseTrustedOAuthClients(process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS).clients;
 }
 
@@ -181,22 +181,24 @@ export function isTrustedClient(clientId: string | null | undefined): boolean {
 }
 
 /**
- * The code may be issued without the consent screen: the client is trusted,
- * the request is within its scope ceiling, and the code goes to an https
+ * The request itself may be granted without the consent screen: the client is
+ * trusted, every scope is within its ceiling and none moves money (wallet:pay,
+ * drives:sell — the parser already refuses them in a ceiling; checked again
+ * here so no list can grant them silently), and the code goes to an https
  * redirect_uri. Loopback http and private-use schemes (cursor://) can be
  * claimed by any program on the device, so a code sent there always needs the
  * person's click (outside production, http is allowed for local development).
  * Everything else — exact redirect_uri, PKCE S256, scopes — was already
- * checked by validateAuthorize, exactly as for any client.
+ * checked by validateAuthorize, exactly as for any client. Who is signed in
+ * is the caller's half (lib/oauth-authorize.ts `sameAinPerson`).
  */
 export function skipsConsent(v: ValidAuthorize): boolean {
-  const clients = trustedClients();
-  if (!clients.has(v.client.client_id)) return false;
-  const ceiling = clients.get(v.client.client_id) ?? null;
+  const ceiling = trustedClients().get(v.client.client_id);
+  if (!ceiling) return false;
   const protocol = new URL(v.redirectUri).protocol;
   if (protocol !== "https:" && !(protocol === "http:" && process.env.NODE_ENV !== "production")) return false;
   const wanted: string[] = v.driveId === null ? [...v.accountScopes] : scopeString(v.requestedScope).split(" ");
-  return ceiling === null || wanted.every((s) => ceiling.includes(s));
+  return wanted.every((s) => ceiling.includes(s) && !CONSENT_ALWAYS_SCOPES.includes(s));
 }
 
 // ── Authorization request validation (shared by consent page + POST) ────
@@ -210,6 +212,12 @@ export type AuthorizeParams = {
   scope?: string | null;
   state?: string | null;
   resource?: string | null;
+  /**
+   * OIDC-style hint (optional): the AIN SSO subject (`sub`) the client signed
+   * the person in with. Only a trusted client's consent skip reads it
+   * (lib/oauth-authorize.ts); validateAuthorize ignores it.
+   */
+  login_hint?: string | null;
 };
 
 type ValidAuthorizeBase = {

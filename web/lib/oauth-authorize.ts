@@ -5,20 +5,27 @@
  *
  *   invalid request            → the error page; never a redirect to the client
  *   not signed in              → sign in, then back to this same request (signInLocation)
- *   trusted client, in bounds  → the code at once: the same approval as "Allow"
- *   (lib/oauth.ts skipsConsent)
+ *   trusted client, in bounds, → the code at once: the same approval as "Allow"
+ *   signed in through AIN SSO    (lib/oauth.ts skipsConsent + sameAinPerson)
  *   anything else              → the consent page
  *
- * Signing in, with AIN SSO login on: a silent check first (prompt=none, once
- * per browser per 30 min — the `ain_sso_checked` guard of lib/sso/silent.ts),
- * so a person with a live AIN session sees no sign-in page at all. If that
- * fails (login_required & co.) the callback returns here anonymous, and then a
- * trusted client's person goes to AIN SSO's own sign-in (they are AIN users:
- * the app signed them in with it), anyone else to /login — which offers
- * "Continue with AIN" beside the legacy methods the operator still allows.
- * Someone back from "Not now" on /sso/link (signed in at AIN, no aindrive
- * account linked) goes to /login too, not round again. With SSO login off:
- * /login, as before.
+ * Only an AIN SSO session skips consent: a password, Google or wallet session
+ * can be planted by another site (login CSRF) or simply be another account
+ * than the one the app signed in, and the consent screen's "Signed in as …" is
+ * what stops that. With `login_hint` (the AIN subject the app signed the
+ * person in with) the session must also be that subject's.
+ *
+ * Signing in, for a trusted client with AIN SSO login on: a silent check first
+ * (prompt=none, once per browser per 30 min — the `ain_sso_checked` guard of
+ * lib/sso/silent.ts), so a person with a live AIN session sees no sign-in page
+ * at all. If that fails (login_required & co.) the callback returns here
+ * anonymous, and then the person goes to AIN SSO's own sign-in (they are AIN
+ * users: the app signed them in with it). /login instead — which offers
+ * "Continue with AIN" beside the legacy methods the operator still allows —
+ * for every other client (as before: anyone can register one), after a
+ * sign-out in this browser (the guard's `signed_out`), and for someone back
+ * from "Not now" on /sso/link (signed in at AIN, no aindrive account linked).
+ * With SSO login off: /login, as before.
  */
 import { cookies } from "next/headers";
 import { currentSsoSession, getUser, type SessionUser } from "./session";
@@ -35,12 +42,12 @@ import {
   type AuthorizeParams,
   type ValidAuthorize,
 } from "./oauth";
-import { ssoLoginEnabled } from "./sso/config";
-import { silentSsoEnabled, SSO_CHECKED_COOKIE } from "./sso/silent";
+import { ssoLoginConfig } from "./sso/config";
+import { silentSsoEnabled, SSO_CHECKED_COOKIE, SSO_SIGNED_OUT } from "./sso/silent";
 import { LINK_COOKIE } from "./sso/signin";
 import { getPendingLink } from "./sso/store.js";
 
-export const AUTHORIZE_KEYS = ["response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "scope", "state", "resource"] as const;
+export const AUTHORIZE_KEYS = ["response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "scope", "state", "resource", "login_hint"] as const;
 
 /** The authorization parameters of a query (a repeated or missing key is null). */
 export function authorizeParamsFrom(sp: Record<string, string | string[] | undefined>): AuthorizeParams {
@@ -65,12 +72,30 @@ export function authorizePath(params: AuthorizeParams): string {
  */
 export async function signInLocation(params: AuthorizeParams): Promise<string> {
   const next = encodeURIComponent(authorizePath(params));
-  if (!ssoLoginEnabled()) return `/login?next=${next}`;
+  const login = `/login?next=${next}`;
+  // Any site can register a client and link here: only the operator's own
+  // apps get the automatic AIN sign-in.
+  if (!ssoLoginConfig() || !isTrustedClient(params.client_id)) return login;
   const jar = await cookies();
-  if (!jar.get(SSO_CHECKED_COOKIE) && silentSsoEnabled()) return `/api/auth/sso/start?prompt=none&next=${next}`;
-  const declinedLink = !!getPendingLink(jar.get(LINK_COOKIE)?.value);
-  if (isTrustedClient(params.client_id) && !declinedLink) return `/api/auth/sso/start?next=${next}`;
-  return `/login?next=${next}`;
+  const guard = jar.get(SSO_CHECKED_COOKIE)?.value;
+  if (!guard && silentSsoEnabled()) return `/api/auth/sso/start?prompt=none&next=${next}`;
+  // Signed out of aindrive in this browser: AIN may still have a session, and
+  // its sign-in would complete without a page — the sign-out must hold.
+  if (guard === SSO_SIGNED_OUT) return login;
+  if (getPendingLink(jar.get(LINK_COOKIE)?.value)) return login; // "Not now"
+  return `/api/auth/sso/start?next=${next}`;
+}
+
+/**
+ * The session is the AIN person the trusted client means: a live AIN SSO
+ * session (of the configured issuer) of this user and, when the request
+ * carries `login_hint`, of that AIN subject. A legacy session never is.
+ */
+export async function sameAinPerson(userId: string, loginHint: string | null | undefined): Promise<boolean> {
+  const cfg = ssoLoginConfig();
+  const s = await currentSsoSession();
+  if (!cfg || !s || s.user_id !== userId || s.issuer !== cfg.issuer) return false;
+  return !loginHint || s.subject === loginHint;
 }
 
 export type Approval = { ok: true; redirect: string } | { ok: false; error: string };
@@ -109,7 +134,7 @@ export async function authorizeStep(params: AuthorizeParams): Promise<AuthorizeS
   // Null also for an account AIN SSO suspended or offboarded: no session of it verifies.
   const user = await getUser();
   if (!user) return { kind: "redirect", location: await signInLocation(params) };
-  if (skipsConsent(v.value)) {
+  if (skipsConsent(v.value) && (await sameAinPerson(user.id, params.login_hint))) {
     const approved = await approve(v.value, user.id);
     if (approved.ok) {
       const scope = v.value.driveId === null ? accountScopeString(v.value.accountScopes) : `${scopeString(v.value.requestedScope)} (${v.value.driveId})`;

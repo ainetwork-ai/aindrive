@@ -2,15 +2,18 @@
  * Trusted first-party OAuth clients (`AINDRIVE_TRUSTED_OAUTH_CLIENTS`): the
  * operator's own apps (e.g. AIN Teams) whose authorization requests skip the
  * consent screen. Parsing only — the policy lives in lib/oauth.ts
- * (`skipsConsent`) and app/mcp/README.md "Trusted first-party clients".
+ * (`skipsConsent`), lib/oauth-authorize.ts and app/mcp/README.md "Trusted
+ * first-party clients".
  *
  * Plain ESM + oauth-trusted.d.ts (lib/README.md ".js + .d.ts" pattern) because
  * boot-checks.js, loaded by `node server.js` without a build, validates the
  * same value.
  *
- * Format: comma-separated entries, each `<client_id>` (any scope the request
- * validly asks for) or `<client_id>=<scope>+<scope>…` (only requests within
- * those scopes skip consent; wider ones get the consent screen as usual).
+ * Format: comma-separated `<client_id>=<scope>+<scope>…` entries. The scopes
+ * are the ceiling: only requests within them skip consent, wider ones get the
+ * consent screen as usual. The ceiling is required — a bare `<client_id>`
+ * would let any scope skip consent — and may not name a scope that moves money
+ * (`wallet:pay`, `drives:sell`): those always need the person's click.
  * Unset/empty = no trusted client (the behaviour before this existed).
  */
 
@@ -19,13 +22,16 @@ export const KNOWN_OAUTH_SCOPES = Object.freeze([
   "drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell", "wallet:pay",
 ]);
 
+/** Payment and sale authority: never granted without the consent screen, whatever the list says. */
+export const CONSENT_ALWAYS_SCOPES = Object.freeze(["wallet:pay", "drives:sell"]);
+
 const CLIENT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /**
  * @param {string | null | undefined} raw
- * @returns {{ clients: Map<string, string[] | null>, bad: string[] }}
- *   `clients`: client id → its scope ceiling (null = none). `bad`: entries
- *   that are ignored (never trusted) and fail the boot in production.
+ * @returns {{ clients: Map<string, string[]>, bad: string[] }}
+ *   `clients`: client id → its scope ceiling. `bad`: entries that are ignored
+ *   (never trusted) and fail the boot in production.
  */
 export function parseTrustedOAuthClients(raw) {
   const clients = new Map();
@@ -33,13 +39,14 @@ export function parseTrustedOAuthClients(raw) {
   for (const entry of String(raw ?? "").split(",").map((e) => e.trim()).filter(Boolean)) {
     const eq = entry.indexOf("=");
     const id = (eq < 0 ? entry : entry.slice(0, eq)).trim();
-    const scopes = eq < 0 ? null : entry.slice(eq + 1).split(/[+\s]+/).filter(Boolean);
-    const scopesOk = scopes === null || (scopes.length > 0 && scopes.every((s) => KNOWN_OAUTH_SCOPES.includes(s)));
+    const scopes = eq < 0 ? [] : entry.slice(eq + 1).split(/[+\s]+/).filter(Boolean);
+    const scopesOk = scopes.length > 0
+      && scopes.every((s) => KNOWN_OAUTH_SCOPES.includes(s) && !CONSENT_ALWAYS_SCOPES.includes(s));
     if (!CLIENT_ID.test(id) || !scopesOk || clients.has(id)) {
       bad.push(entry);
       continue;
     }
-    clients.set(id, scopes ? [...new Set(scopes)] : null);
+    clients.set(id, [...new Set(scopes)]);
   }
   // A client listed twice is ambiguous: trust neither entry.
   for (const entry of bad) {
@@ -57,7 +64,8 @@ export function parseTrustedOAuthClients(raw) {
 export function trustedOAuthConfigErrors(env) {
   const { bad } = parseTrustedOAuthClients(env.AINDRIVE_TRUSTED_OAUTH_CLIENTS);
   if (!bad.length) return [];
+  const allowed = KNOWN_OAUTH_SCOPES.filter((s) => !CONSENT_ALWAYS_SCOPES.includes(s));
   return [
-    `AINDRIVE_TRUSTED_OAUTH_CLIENTS must be comma-separated <client_id> or <client_id>=<scope>+<scope> entries, each client once, scopes from ${KNOWN_OAUTH_SCOPES.join(" ")} (bad: ${bad.join(", ")}).`,
+    `AINDRIVE_TRUSTED_OAUTH_CLIENTS must be comma-separated <client_id>=<scope>+<scope> entries (the scope ceiling is required), each client once, scopes from ${allowed.join(" ")} — ${CONSENT_ALWAYS_SCOPES.join(" and ")} always need consent (bad: ${bad.join(", ")}).`,
   ];
 }

@@ -377,7 +377,7 @@ describe("sign-out and the loop guard", () => {
     expect(end.origin + end.pathname).toBe(`${ISSUER}/oidc/session/end`);
     expect(end.searchParams.get("post_logout_redirect_uri")).toBe(`${PUBLIC_URL}/`);
     expect(jar.get("aindrive_session")).toBeUndefined();
-    expect(jar.get("ain_sso_checked")).toBe("1");
+    expect(jar.get("ain_sso_checked")).toBe("signed_out"); // a sign-out's mark (lib/oauth-authorize.ts reads it)
     // AIN sends the browser to "/" whichever button the person chose there; with
     // "Stay signed in" the AIN session is alive, so a silent check would sign it back in.
     const landing = await middleware(page("/", { cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; ") }));
@@ -388,8 +388,8 @@ describe("sign-out and the loop guard", () => {
     jar.set("aindrive_session", await session.sign("u_legacy_ph"));
     const res = await logout();
     expect(where(res)).toBe("/");
-    expect(jar.get("ain_sso_checked")).toBe("1");
-    expect((await middleware(page("/", { cookie: "ain_sso_checked=1" }))).status).toBe(200);
+    expect(jar.get("ain_sso_checked")).toBe("signed_out");
+    expect((await middleware(page("/", { cookie: "ain_sso_checked=signed_out" }))).status).toBe(200);
   });
 
   it("with SSO off, sign-out sets nothing new", async () => {

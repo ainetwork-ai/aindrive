@@ -9,7 +9,7 @@ import { setCookie } from "../session";
 import { adoptSignInPayoutWallet } from "../drives";
 import { createSsoSession, identityFor } from "./store.js";
 import { signInLandingPath } from "../orgs.js";
-import { SSO_CHECKED_COOKIE, SSO_CHECKED_MAX_AGE } from "./silent";
+import { SSO_CHECKED_COOKIE, SSO_CHECKED_MAX_AGE, SSO_SIGNED_OUT } from "./silent";
 
 /** Pending authorization request (state, nonce, PKCE) — only the callback reads it. */
 export const TX_COOKIE = "aindrive_sso_tx";
@@ -43,11 +43,16 @@ export async function clearLinkCookie() {
 
 /**
  * The silent check's loop guard (lib/sso/silent.ts), outside the middleware:
- * set on every sign-out, so an AIN session this browser still has does not
- * sign it straight back in, and by the start route for every silent check.
+ * set on every sign-out (`signed_out`), so an AIN session this browser still
+ * has does not sign it straight back in, and by the start route for every
+ * silent check (`checked`, which never overwrites a sign-out's mark: a link
+ * to a silent check must not undo the sign-out for /oauth/authorize).
  */
-export async function markSilentChecked() {
-  (await cookies()).set(SSO_CHECKED_COOKIE, "1", { httpOnly: true, sameSite: "lax", secure: secure(), path: "/", maxAge: SSO_CHECKED_MAX_AGE });
+export async function markSilentChecked(reason: "checked" | "signed_out" = "checked") {
+  const jar = await cookies();
+  if (reason === "checked" && jar.get(SSO_CHECKED_COOKIE)?.value === SSO_SIGNED_OUT) return;
+  const value = reason === "signed_out" ? SSO_SIGNED_OUT : "1";
+  jar.set(SSO_CHECKED_COOKIE, value, { httpOnly: true, sameSite: "lax", secure: secure(), path: "/", maxAge: SSO_CHECKED_MAX_AGE });
 }
 
 /**
