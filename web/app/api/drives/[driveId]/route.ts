@@ -6,6 +6,7 @@ import { getDrive, setDrivePayoutWallet, setDriveAllowedTokens, getDriveRootPayo
 import { validateTokenPolicy } from "@/lib/sales";
 import { db } from "@/lib/db";
 import { disconnectAgent } from "@/lib/agents.js";
+import { onDriveDeleted } from "@/lib/share-events";
 
 /**
  * PATCH /api/drives/:driveId
@@ -101,6 +102,9 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ driv
     return NextResponse.json({ error: "only the drive creator can delete it" }, { status: 403 });
   }
   disconnectAgent(driveId);
+  // Change feed: every member (and the creator) hears `file.deleted` for the
+  // drive root — recorded BEFORE the cascade takes the member rows away.
+  onDriveDeleted(driveId);
   db.prepare("DELETE FROM drives WHERE id = ?").run(driveId);
   return NextResponse.json({ ok: true });
 }

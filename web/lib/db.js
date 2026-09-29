@@ -551,6 +551,35 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_drive_org_shares_org ON drive_org_shares(issuer, org_id);
     CREATE INDEX IF NOT EXISTS idx_sso_memberships_org_user ON sso_memberships(issuer, org_id, user_id);
+  // Change feed (lib/share-events-core.js, ain-integration plan task 10): one
+  // row per (event, recipient). `seq` is the global cursor (AUTOINCREMENT so a
+  // seq is never reused after a prune); `resource_key` is the contract's
+  // resource id (`<origin>#<driveId>#<fileId>`); `version` is strictly
+  // increasing per resource_key across every recipient (share_event_versions).
+  // No FK on drive_id on purpose: a drive's `file.deleted` must outlive the
+  // drive row. share_event_floors remembers, per recipient, the highest seq
+  // the retention prune removed, so a cursor below it answers `gap: true`.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS share_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipient_user_id TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      revision TEXT,
+      occurred_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_share_events_recipient ON share_events(recipient_user_id, seq);
+    CREATE TABLE IF NOT EXISTS share_event_versions (
+      resource_key TEXT PRIMARY KEY,
+      version INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS share_event_floors (
+      recipient_user_id TEXT PRIMARY KEY,
+      pruned_to INTEGER NOT NULL
+    );
   `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the

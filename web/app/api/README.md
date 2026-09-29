@@ -26,6 +26,7 @@ Auth / identity:
 | `apps` (GET/POST), `apps/[appId]` (DELETE) | connected apps (`lib/connected-apps.ts`): another app (e.g. ainmem) registers itself on the signed-in account with `{name, url, key}` — its spaces URL (https, public address; re-checked on every call) and the Bearer key this server sends it. One row per app origin. Login required. |
 | `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
 | `me/shared` | the caller's reachable files in the cross-product list contract (`lib/shared-items.ts`: `scope=mine\|shared_with_me\|shared_with_org\|recent`, `q`, `cursor`, `limit`); contract error bodies; R-SHARE-LIST-002. |
+| `me/events` | the caller's change feed (`lib/share-events.ts`, plan task 10): `?cursor=ev_<seq>` → `{ contract, events: [{ kind: "file", type, eventId, resourceId, version, occurredAt, revision?, recipient }], nextCursor, gap }`, ≤500 per page; `gap: true` (malformed cursor / below the 10 000-event retention floor) means re-list `me/shared`. Contract error bodies. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
 
@@ -84,6 +85,7 @@ Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md
 | `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
 | `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). `drives:write` / `drives:sell` unlock tools on `/mcp/d/[id]` only. |
 | `oauth/shared` (GET, CORS) | the same list as `me/shared` for an account grant with `drives:read` — contract error bodies (401/403/429/415/503). |
+| `oauth/events` (GET, CORS) | the same change feed as `me/events` for an account grant with `drives:read`; poll it (30 s is plenty). Contract error bodies (401/403/429/415/503). |
 | `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |
 
 Ops / dev:
@@ -114,6 +116,14 @@ Ops / dev:
   bytes, so inline same-origin HTML/script would be a stored-XSS vector.
 - **Paid share at creation requires the drive's own `payout_wallet`** (no
   global fallback) and a `currency` allowed by the drive policy.
+- **Every grant change is recorded in the change feed** (`lib/share-events-core.js`):
+  a `drive_members` insert (`members` POST, `s/[token]/accept`, paid settle,
+  invite claim on signup) records `file.shared` to that account; a removal
+  (`members/[id]` DELETE, `leave`) records `file.revoked`; `drives/[id]` DELETE
+  records `file.deleted` to every member *before* the cascade; the agent socket
+  records `file.availability` on each online/offline flip and
+  `file.updated`/`file.deleted` for `fs-changed` frames (after a `stat`).
+  Revoking a share *link* records nothing — access granted through it stays.
 - **Post-settle is crash-safe:** the on-chain settle is irreversible, so grant
   and receipt writes are best-effort/idempotent (tx_hash UNIQUE → treated as
   replay) and never surface a 500 that would hide a settled payment.

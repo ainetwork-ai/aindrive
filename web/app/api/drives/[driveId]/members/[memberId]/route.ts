@@ -5,6 +5,7 @@ import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { canRemoveMember } from "@/lib/member-guard";
+import { onMemberRevoked } from "@/lib/share-events";
 
 const PatchBody = z.object({
   role: z.enum(["viewer", "editor", "owner"]),
@@ -42,6 +43,8 @@ export async function DELETE(
     return NextResponse.json({ error: "only the drive creator can remove an owner" }, { status: 403 });
   }
   db.prepare("DELETE FROM drive_members WHERE id = ? AND drive_id = ?").run(memberId, driveId);
+  // Change feed: the removed member hears `file.revoked` for that grant path.
+  onMemberRevoked(driveId, member.user_id, [member.path]);
   return NextResponse.json({ ok: true });
 }
 

@@ -7,6 +7,7 @@ import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { addInvite, listInvites } from "@/lib/invites.js";
 import { zPath } from "@/lib/zod-helpers";
+import { onMemberGranted } from "@/lib/share-events";
 
 const Body = z.object({
   email: z.string().email(),
@@ -85,5 +86,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
         ELSE excluded.role
       END
   `).run(id, driveId, invitee.id, body.data.path, body.data.role);
+  // Change feed: the invitee (and only they) hears `file.shared` for the grant path.
+  onMemberGranted(driveId, invitee.id, body.data.path);
   return NextResponse.json({ ok: true });
 }
