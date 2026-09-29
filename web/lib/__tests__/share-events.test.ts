@@ -264,6 +264,9 @@ describe("paging and retention", () => {
     expect(page.gap).toBe(true);
     expect(page.nextCursor).not.toBe("ev_999999");
     expect(ev.decodeEventCursor(page.nextCursor)!).toBeLessThan(999999);
+    // and the answer is the recipient's whole retained history, so a re-list can rebuild the cache
+    const all = ev.listShareEvents("member1", null);
+    expect(page.events.map((e) => e.eventId)).toEqual(all.events.map((e) => e.eventId));
   });
 
   it("gap: a malformed cursor, or one below the retention floor after a prune", () => {

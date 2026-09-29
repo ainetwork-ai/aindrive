@@ -15,7 +15,8 @@
  * EVENT_PAGE_LIMIT events. `gap: true` when the cursor is malformed or below
  * the recipient's retention floor (the newest RETENTION_PER_RECIPIENT rows are
  * kept): the consumer re-lists (`/api/me/shared`) and continues from
- * `nextCursor`. `resourceId` is the shared-file list's key
+ * `nextCursor`. A cursor ahead of anything issued to that recipient (kept across a
+ * restore or a fresh install) is a gap too. `resourceId` is the shared-file list's key
  * (`<origin>#<driveId>#<fileId>`), so a `file.shared` matches a listed ref.
  *
  * What is recorded, and by whom (lib/share-events-core.js hooks):
@@ -142,7 +143,7 @@ export function listShareEvents(userId: string, cursor?: string | null, limit = 
   const max = Math.min(EVENT_PAGE_LIMIT, Math.max(1, Math.floor(limit) || EVENT_PAGE_LIMIT));
   const floor = prunedTo(userId);
   const decoded = decodeEventCursor(cursor);
-  const issued = latestSeq();
+  const issued = latestSeq(userId);
   const ahead = decoded !== null && decoded > issued;
   const gap = decoded === null || decoded < floor || ahead;
   const after = decoded === null || ahead ? floor : Math.max(decoded, floor);

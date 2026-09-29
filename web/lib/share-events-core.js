@@ -76,12 +76,6 @@ function pruneRecipient(recipientUserId) {
  *
  * @param {{ driveId: string, path: string, type: string, recipients: Iterable<string>, revision?: string|null, origin?: string, occurredAt?: string }} ev
  */
-/** The highest sequence number this feed has issued to anyone (0 on an empty feed). */
-export function latestSeq() {
-  const row = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM share_events").get();
-  return row.seq;
-}
-
 export function recordShareEvent(ev) {
   if (!FILE_EVENT_TYPES.includes(ev.type)) throw new Error(`unknown share event type: ${ev.type}`);
   const recipients = [...new Set([...ev.recipients].filter((r) => typeof r === "string" && r.length > 0))];
@@ -189,6 +183,12 @@ export function onFsChanged(driveId, path, info = {}, opts = {}) {
 // ── Reading ──────────────────────────────────────────────────────────────────
 
 /** Highest seq the retention prune removed for this recipient (0 = nothing pruned). */
+/** The highest sequence number issued TO THIS RECIPIENT (0 when they have none): a cursor above it was never theirs. */
+export function latestSeq(recipientUserId) {
+  const row = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM share_events WHERE recipient_user_id = ?").get(recipientUserId);
+  return row.seq;
+}
+
 export function prunedTo(recipientUserId) {
   return db.prepare("SELECT pruned_to FROM share_event_floors WHERE recipient_user_id = ?").get(recipientUserId)?.pruned_to ?? 0;
 }
