@@ -98,8 +98,15 @@ export default async function middleware(
 // file over ~7.5 MB (a base64 body > 10 MB). Not matching /api avoids the
 // buffering entirely; the route handlers stream their own bodies and enforce
 // their own size caps (AINDRIVE_MAX_WRITE_BYTES).
+//
+// /mcp and /a2a are JSON-RPC endpoints for the same reason: an MCP write_file
+// carries the file as base64 in one JSON body, so going through middleware cut
+// every file over ~7.5 MB mid-JSON and the SDK answered "Parse error: Invalid
+// JSON" (the AIN Teams / AINMem NAS archives hit it on 2026-09-29).
+// `config` must be a literal (Next analyses it statically at build time); the
+// test keeps MIDDLEWARE_MATCHER and the literal in step.
+export const MIDDLEWARE_MATCHER = "/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)).*)";
+
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|api/).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)).*)"],
 };
