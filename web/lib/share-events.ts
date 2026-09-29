@@ -38,6 +38,7 @@ import {
   RETENTION_PER_RECIPIENT,
   prunedTo,
   readEventsAfter,
+  latestSeq,
 } from "./share-events-core.js";
 
 export {
@@ -132,16 +133,19 @@ function toEvent(r: Row, recipient: string): FileEvent {
 
 /**
  * The events addressed to `userId` after `cursor`, oldest first. A cursor that
- * is malformed or older than the retention floor answers from the floor with
- * `gap: true`; the consumer re-lists and keeps polling from `nextCursor`.
- * Pure DB reads; never contacts an agent.
+ * is malformed, older than the retention floor, or AHEAD of anything this feed
+ * has issued (a cursor kept across a database restore or a fresh install)
+ * answers from the floor with `gap: true`; the consumer re-lists and keeps
+ * polling from `nextCursor`. Pure DB reads; never contacts an agent.
  */
 export function listShareEvents(userId: string, cursor?: string | null, limit = EVENT_PAGE_LIMIT): EventPage {
   const max = Math.min(EVENT_PAGE_LIMIT, Math.max(1, Math.floor(limit) || EVENT_PAGE_LIMIT));
   const floor = prunedTo(userId);
   const decoded = decodeEventCursor(cursor);
-  const gap = decoded === null || decoded < floor;
-  const after = decoded === null ? floor : Math.max(decoded, floor);
+  const issued = latestSeq();
+  const ahead = decoded !== null && decoded > issued;
+  const gap = decoded === null || decoded < floor || ahead;
+  const after = decoded === null || ahead ? floor : Math.max(decoded, floor);
   const rows = readEventsAfter(userId, after, max) as Row[];
   const last = rows.length ? rows[rows.length - 1].seq : after;
   return { contract: CONTRACT_VERSION, events: rows.map((r) => toEvent(r, userId)), nextCursor: encodeEventCursor(last), gap };

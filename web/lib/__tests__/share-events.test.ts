@@ -259,6 +259,13 @@ describe("paging and retention", () => {
     }
   });
 
+  it("gap: a cursor ahead of anything the feed issued (restore / fresh install) re-lists from the floor", () => {
+    const page = ev.listShareEvents("member1", "ev_999999");
+    expect(page.gap).toBe(true);
+    expect(page.nextCursor).not.toBe("ev_999999");
+    expect(ev.decodeEventCursor(page.nextCursor)!).toBeLessThan(999999);
+  });
+
   it("gap: a malformed cursor, or one below the retention floor after a prune", () => {
     expect(ev.listShareEvents("member1", "garbage").gap).toBe(true);
     expect(ev.listShareEvents("member1", "ev_").gap).toBe(true);

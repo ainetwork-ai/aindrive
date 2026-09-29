@@ -76,6 +76,12 @@ function pruneRecipient(recipientUserId) {
  *
  * @param {{ driveId: string, path: string, type: string, recipients: Iterable<string>, revision?: string|null, origin?: string, occurredAt?: string }} ev
  */
+/** The highest sequence number this feed has issued to anyone (0 on an empty feed). */
+export function latestSeq() {
+  const row = db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM share_events").get();
+  return row.seq;
+}
+
 export function recordShareEvent(ev) {
   if (!FILE_EVENT_TYPES.includes(ev.type)) throw new Error(`unknown share event type: ${ev.type}`);
   const recipients = [...new Set([...ev.recipients].filter((r) => typeof r === "string" && r.length > 0))];
