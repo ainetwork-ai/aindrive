@@ -6,9 +6,10 @@
 // files, sign-in pages, OAuth/MCP, bots, prefetches and RSC requests are
 // never touched, and nothing happens unless SSO sign-in is configured.
 // Also: prompt=create / ain_idp=google on the start route, "Not now"-safe
-// placeholders, and the loop-guard cookie on sign-out.
+// placeholders, the loop-guard cookie on sign-out, and a session cookie that
+// died server-side (the page repeats the check the middleware skipped).
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
@@ -27,7 +28,9 @@ Object.assign(process.env, SSO_ENV);
 process.env.AINDRIVE_SSO_ATTEST = "false";
 
 const { jar, cookies } = cookieJar();
-vi.mock("next/headers", () => ({ cookies }));
+/** The page request's headers, as next/headers headers() gives them to a server component. */
+let pageHeaders = new Headers();
+vi.mock("next/headers", () => ({ cookies, headers: () => Promise.resolve(pageHeaders) }));
 
 const { db } = await import("../db.js");
 const session = await import("../session");
@@ -39,6 +42,9 @@ const startRoute = await import("../../app/api/auth/sso/start/route.js");
 const callbackRoute = await import("../../app/api/auth/sso/callback/route.js");
 const linkRoute = await import("../../app/api/auth/sso/link/route.js");
 const logoutRoute = await import("../../app/api/auth/logout/route.js");
+const meRoute = await import("../../app/api/auth/me/route.js");
+const { handleBackchannelLogout } = await import("../sso/backchannel");
+const { staleSessionCheck } = await import("../sso/stale-session");
 
 const issuer = await createTestIssuer();
 let idTokenFor: (call: TokenEndpointCall, nonce: string) => Promise<string>;
@@ -360,15 +366,22 @@ describe("placeholders made by the provisioning adapter", () => {
 describe("sign-out and the loop guard", () => {
   const logout = (q = "") => logoutRoute.POST(new Request(`${PUBLIC_URL}/api/auth/logout${q}`, { method: "POST" }));
 
-  it("ending an AIN session (RP-initiated logout) clears the guard, so the next visit may check again", async () => {
+  it("signing out through AIN (RP-initiated logout) sets the guard: AIN's 'Stay signed in' still returns here", async () => {
     idTokenFor = claims("acc_silent");
     const auth = await startSilent("/d/abc");
     await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER });
-    jar.set("ain_sso_checked", "1");
+    jar.delete("ain_sso_checked"); // expired while signed in
     oidc.clearDiscoveryCache(); // not cached (e.g. after a restart): discovered for the logout
     const res = await logout();
-    expect(where(res)).toMatch(new RegExp(`^${ISSUER}/oidc/session/end\\?`));
-    expect(jar.get("ain_sso_checked")).toBeUndefined();
+    const end = new URL(where(res)!);
+    expect(end.origin + end.pathname).toBe(`${ISSUER}/oidc/session/end`);
+    expect(end.searchParams.get("post_logout_redirect_uri")).toBe(`${PUBLIC_URL}/`);
+    expect(jar.get("aindrive_session")).toBeUndefined();
+    expect(jar.get("ain_sso_checked")).toBe("1");
+    // AIN sends the browser to "/" whichever button the person chose there; with
+    // "Stay signed in" the AIN session is alive, so a silent check would sign it back in.
+    const landing = await middleware(page("/", { cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; ") }));
+    expect(isRedirect(landing)).toBe(false);
   });
 
   it("signing out of a legacy session keeps a live AIN session from signing the browser straight back in", async () => {
@@ -384,5 +397,90 @@ describe("sign-out and the loop guard", () => {
     jar.set("aindrive_session", await session.sign("u_legacy_ph"));
     await logout();
     expect(jar.get("ain_sso_checked")).toBeUndefined();
+  });
+});
+
+describe("a session cookie that died server-side does not switch the silent check off", () => {
+  const backchannel = async (c: Record<string, unknown>) =>
+    handleBackchannelLogout(new Request(`${PUBLIC_URL}/api/auth/sso/backchannel-logout`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ logout_token: await issuer.logoutToken(c) }).toString(),
+    }), { keys: issuer.keys });
+
+  /** Signed in with AIN, then signed out of AIN from another app: the next day this browser only has the dead cookie. */
+  async function deadCookie(sub: string) {
+    idTokenFor = claims(sub);
+    const auth = await startSilent("/d/abc");
+    expect(where(await callback({ code: "c", state: auth.searchParams.get("state")!, iss: ISSUER }))).toBe("/sso/link");
+    expect((await linkRoute.POST(new Request(`${PUBLIC_URL}/api/auth/sso/link`, { method: "POST", headers: { "content-type": "application/json", origin: PUBLIC_URL }, body: JSON.stringify({ method: "new" }) }))).status).toBe(200);
+    const dead = jar.get("aindrive_session")!;
+    expect((await backchannel({ sid: `sid-${sub}` })).status).toBe(200);
+    expect(await session.verify(dead)).toBeNull();
+    jar.clear();
+    jar.set("aindrive_session", dead);
+    pageHeaders = new Headers(NAV);
+    return dead;
+  }
+
+  it("the page repeats the check; the start route drops the dead cookie and sets the guard; AIN signs the browser back in", async () => {
+    const dead = await deadCookie("acc_dead");
+    // The middleware can't tell (Edge, no database): a cookie is present, so the page renders.
+    expect((await middleware(page("/d/abc?path=docs", { cookie: `aindrive_session=${dead}` }))).status).toBe(200);
+    // The page finds no user and asks: the middleware's decision, as if there were no cookie.
+    const check = await staleSessionCheck("/d/abc", "?path=docs");
+    expect(check).toBe("/api/auth/sso/start?prompt=none&next=%2Fd%2Fabc%3Fpath%3Ddocs");
+    const res = await startRoute.GET(new Request(`${PUBLIC_URL}${check}`));
+    expect(new URL(where(res)!).searchParams.get("prompt")).toBe("none");
+    expect(jar.get("aindrive_session")).toBeUndefined(); // dropped
+    expect(jar.get("ain_sso_checked")).toBe("1"); // the loop guard
+    // The person signed in to AIN again elsewhere: back, signed in.
+    lastNonce = new URL(where(res)!).searchParams.get("nonce")!;
+    const back = await callback({ code: "c2", state: new URL(where(res)!).searchParams.get("state")!, iss: ISSUER });
+    expect(where(back)).toBe("/d/abc?path=docs");
+    expect((await session.getUser())?.id).toBe(store.identityFor(ISSUER, "acc_dead")!.user_id);
+  });
+
+  it("no repeat with the guard, a live or no cookie, for RSC/prefetch/bots, or with the check off", async () => {
+    await deadCookie("acc_dead2");
+    expect(await staleSessionCheck("/")).toBe("/api/auth/sso/start?prompt=none&next=%2F");
+    jar.set("ain_sso_checked", "1");
+    expect(await staleSessionCheck("/")).toBeNull();
+    jar.delete("ain_sso_checked");
+    const skipped: Record<string, string>[] = [{ rsc: "1" }, { "sec-purpose": "prefetch" }, { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1)" }, { "sec-fetch-dest": "iframe" }];
+    for (const h of skipped) {
+      pageHeaders = new Headers({ ...NAV, ...h });
+      expect(await staleSessionCheck("/")).toBeNull();
+    }
+    pageHeaders = new Headers(NAV);
+    process.env.AINDRIVE_SSO_SILENT = "false";
+    expect(await staleSessionCheck("/")).toBeNull();
+    delete process.env.AINDRIVE_SSO_SILENT;
+    jar.delete("aindrive_session");
+    expect(await staleSessionCheck("/")).toBeNull(); // no cookie: the middleware already decided
+  });
+
+  it("the start route keeps a live cookie; /api/auth/me drops a dead one", async () => {
+    const dead = await deadCookie("acc_dead3");
+    expect((await meRoute.GET()).status).toBe(401);
+    expect(jar.get("aindrive_session")).toBeUndefined();
+    const live = await session.sign(store.identityFor(ISSUER, "acc_dead3")!.user_id);
+    jar.set("aindrive_session", live);
+    await startRoute.GET(new Request(`${PUBLIC_URL}/api/auth/sso/start?next=%2F`));
+    expect(jar.get("aindrive_session")).toBe(live);
+    expect(jar.get("ain_sso_checked")).toBeUndefined(); // the button is not a silent check
+    expect(dead).not.toBe(live);
+  });
+
+  it("the landing page and the drive pages ask before rendering anonymous", () => {
+    const src = (f: string) => readFileSync(join(__dirname, "../..", f), "utf8");
+    for (const [file, call] of [
+      ["app/page.tsx", 'staleSessionCheck("/")'],
+      ["app/d/[driveId]/page.tsx", "staleSessionCheck(`/d/${driveId}`"],
+      ["app/d/[driveId]/manage/page.tsx", "staleSessionCheck(`/d/${driveId}/manage`)"],
+    ]) {
+      expect(src(file)).toContain('import { staleSessionCheck } from "@/lib/sso/stale-session";');
+      expect(src(file)).toContain(call);
+    }
   });
 });

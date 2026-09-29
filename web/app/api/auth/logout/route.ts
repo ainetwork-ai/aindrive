@@ -3,7 +3,7 @@ import { clearWalletCookie } from "@/lib/wallet";
 import { safeNextPath } from "@/lib/safe-next";
 import { ssoLoginConfig, ssoPostLogoutRedirectUri } from "@/lib/sso/config";
 import { cachedMetadata, discover, endSessionUrl } from "@/lib/sso/oidc";
-import { clearSilentChecked, markSilentChecked } from "@/lib/sso/signin";
+import { markSilentChecked } from "@/lib/sso/signin";
 
 /** POST [?next=/d/…] — sign out; with `next`, go to sign-in and come back there ("switch account"). */
 export async function POST(req: Request) {
@@ -23,6 +23,12 @@ export async function POST(req: Request) {
   const raw = new URL(req.url).searchParams.get("next");
   const next = raw ? safeNextPath(raw) : "/";   // unsafe or missing → "/" (plain sign-out)
   const cfg = ssoLoginConfig();
+  // Every sign-out sets the silent check's loop guard (lib/sso/silent.ts), so
+  // an AIN session this browser may still have does not sign it straight back
+  // in: a legacy sign-in or "switch account" ends only aindrive's session, and
+  // AIN SSO's sign-out page also offers "Stay signed in", which ends only
+  // aindrive's grant and still returns here. Nothing changes while SSO is off.
+  if (cfg) await markSilentChecked();
   if (next === "/" && sso) {
     // Plain sign-out of an AIN session: RP-initiated logout at AIN SSO, which
     // ends the central session and signs the other apps out (back-channel).
@@ -31,15 +37,8 @@ export async function POST(req: Request) {
       const meta = cachedMetadata(cfg.issuer) ?? (await discover(cfg.issuer).catch(() => null));
       url = endSessionUrl(meta, cfg.clientId, ssoPostLogoutRedirectUri());
     }
-    if (url) {
-      await clearSilentChecked(); // no AIN session left: the next visit may check again
-      return new Response(null, { status: 303, headers: { Location: url } });
-    }
+    if (url) return new Response(null, { status: 303, headers: { Location: url } });
   }
-  // Only aindrive's session ended (a legacy sign-in, or "switch account"): the
-  // silent check (lib/sso/silent.ts) must not sign this browser straight back
-  // in with an AIN session it may still have. Nothing changes while SSO is off.
-  if (cfg) await markSilentChecked();
   return new Response(null, {
     status: 303,
     headers: { Location: next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/" },
