@@ -1,20 +1,19 @@
 /**
  * /oauth/authorize — OAuth consent screen for remote-MCP clients and for
  * account grants ("Sign in with aindrive", no `resource`).
- * Validates the request server-side, sends anonymous users through /login
- * (returning here), then renders the Approve/Deny form (./consent-form.tsx),
+ * lib/oauth-authorize.ts decides the step: an invalid request renders its
+ * error; an anonymous visitor signs in (AIN SSO when it is on) and comes back
+ * to this same request; a trusted first-party client gets its code without
+ * this screen; everyone else sees the Approve/Deny form (./consent-form.tsx),
  * which POSTs to /api/oauth/authorize. See app/mcp/README.md.
  */
 import { redirect } from "next/navigation";
-import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
-import { validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
+import { authorizeParamsFrom, authorizeStep } from "@/lib/oauth-authorize";
 import { clampScope } from "@/lib/mcp-tokens";
 import { AccountConsentForm, ConsentForm } from "./consent-form";
 
 export const dynamic = "force-dynamic";
-
-const KEYS = ["response_type", "client_id", "redirect_uri", "code_challenge", "code_challenge_method", "scope", "state", "resource"] as const;
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -25,46 +24,36 @@ function Shell({ children }: { children: React.ReactNode }) {
 }
 
 export default async function AuthorizePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const sp = await searchParams;
-  const params: AuthorizeParams = {};
-  for (const k of KEYS) {
-    const v = sp[k];
-    params[k] = typeof v === "string" ? v : null;
-  }
-
-  const v = validateAuthorize(params);
-  if (!v.ok) {
+  const params = authorizeParamsFrom(await searchParams);
+  const step = await authorizeStep(params);
+  if (step.kind === "invalid") {
     return (
       <Shell>
         <h1 className="text-xl font-semibold">Can&apos;t connect this app</h1>
-        <p className="mt-3 text-sm text-drive-muted">{v.error}</p>
+        <p className="mt-3 text-sm text-drive-muted">{step.error}</p>
       </Shell>
     );
   }
+  if (step.kind === "redirect") redirect(step.location);
+  const { user, value } = step;
 
-  const user = await getUser();
-  if (!user) {
-    const qs = new URLSearchParams(Object.entries(params).filter(([, x]) => x) as [string, string][]);
-    redirect(`/login?next=${encodeURIComponent(`/oauth/authorize?${qs}`)}`);
-  }
+  const redirectHost = (() => { const u = new URL(value.redirectUri); return u.host ? `${u.protocol}//${u.host}` : value.redirectUri; })();
 
-  const redirectHost = (() => { const u = new URL(v.value.redirectUri); return u.host ? `${u.protocol}//${u.host}` : v.value.redirectUri; })();
-
-  if (v.value.driveId === null) {
+  if (value.driveId === null) {
     return (
       <Shell>
         <AccountConsentForm
           params={params}
-          clientName={v.value.client.client_name}
+          clientName={value.client.client_name}
           redirectHost={redirectHost}
           userEmail={user.email}
-          scopes={v.value.accountScopes}
+          scopes={value.accountScopes}
         />
       </Shell>
     );
   }
 
-  const drive = getDrive(v.value.driveId);
+  const drive = getDrive(value.driveId);
   const ceiling = drive ? clampScope(drive.id, user.id, "write") : null;
   if (!drive || !ceiling) {
     return (
@@ -81,12 +70,12 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
     <Shell>
       <ConsentForm
         params={params}
-        clientName={v.value.client.client_name}
+        clientName={value.client.client_name}
         redirectHost={redirectHost}
         driveName={drive.name}
         userEmail={user.email}
         canWrite={ceiling === "write"}
-        requestedScope={v.value.requestedScope}
+        requestedScope={value.requestedScope}
       />
     </Shell>
   );

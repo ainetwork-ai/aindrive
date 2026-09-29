@@ -68,6 +68,9 @@ private-use scheme (`myapp://…`). Registration is rate-limited.
 
 The user signs in (email or wallet) and approves on aindrive's consent screen;
 they can lower the permission. You get `?code=…&state=…&iss={{BASE}}` back.
+(Apps the server's operator lists as its own first-party apps skip the consent
+screen for people signed in with their AIN account, and never for payment or
+sale scopes; every other app always gets it.)
 
 ### 3. Exchange and refresh
 

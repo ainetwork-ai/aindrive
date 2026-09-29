@@ -12,7 +12,7 @@ Auth / identity:
 
 | Route | Role / gate |
 |-------|-------------|
-| `auth/login`, `auth/signup`, `auth/logout` | email+password session cookie; rate-limited. First-ever signup → `admin`. |
+| `auth/login`, `auth/signup`, `auth/logout` | email+password session cookie; rate-limited. First-ever signup → `admin`. Login CSRF guard (`lib/auth-csrf.ts`, also on `auth/google` POST and `wallet/login`): a cross-origin `Origin`/`Sec-Fetch-Site` → 403, a non-`application/json` body → 415 (logout: Origin only). |
 | `handoffs` (POST/GET/DELETE `?audience`), `handoffs/[id]` (DELETE), `h/[id]` (GET, public) | file handoff links for A2A (`lib/handoff.ts`): the owner's device registers picked files, POST mints one short-lived link per file (`/api/h/<id>?k=<secret>`) plus one MCP view of the batch (`/mcp/h/<grant>`, `lib/handoff-mcp.ts`: only those files), a fetch is checked (secret/expiry/revocation), logged, and streamed from the device via the `handoff-read` RPC on a connected drive. Owners list (with fetch counts) and revoke. |
 | `auth/google` | GET → `{clientId}` (404 unless `AINDRIVE_GOOGLE_CLIENT_IDS`); POST `{idToken}` → verifies a Google ID token (`lib/google-auth.ts`: JWKS, issuer, our audience, verified email), reaches the linked account or creates one (409 `email_in_use` instead of linking by email), sets the cookie and returns `{token, user}` for native apps. |
 | `auth/sso`, `auth/sso/{start,callback,link}` | "Continue with AIN" (AIN SSO OIDC, `lib/sso/`): GET `auth/sso` → `{enabled, legacyLogin}` or 404 when off; `start` → AIN authorize (PKCE/state/nonce; `prompt=none` = the middleware's silent check, `prompt=create` = sign-up, `ain_idp=google`); `callback` → session, or `/sso/link` to connect an existing account (proof) or create one; a silent check that fails returns to the page anonymously. All 404 unless configured. |
@@ -79,7 +79,7 @@ Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md
 | Route | Notes |
 |-------|-------|
 | `oauth/register` (POST, CORS) | RFC 7591 dynamic client registration; public clients only; rate-limited per IP. |
-| `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. |
+| `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. Approves through `lib/oauth-authorize.ts` `approve`, as a trusted client's visit does without this POST. |
 | `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
 | `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). `drives:write` / `drives:sell` unlock tools on `/mcp/d/[id]` only. |
 | `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |

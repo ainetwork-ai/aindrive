@@ -11,11 +11,16 @@
  *   - account — NO `resource`, only account scopes (ACCOUNT_SCOPES);
  *               "Sign in with aindrive" for third-party apps. Codes/tokens
  *               live in account_oauth_codes / lib/account-tokens.ts.
+ *
+ * Trusted first-party clients (AINDRIVE_TRUSTED_OAUTH_CLIENTS, `skipsConsent`)
+ * get their code without the consent screen; the flow around the page is
+ * lib/oauth-authorize.ts.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { db } from "./db";
 import { env } from "./env";
 import { hashToken, mcpUrlFor, type McpScope } from "./mcp-tokens";
+import { CONSENT_ALWAYS_SCOPES, parseTrustedOAuthClients } from "./oauth-trusted.js";
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const DRIVE_SCOPES = ["drive:read", "drive:write"] as const;
@@ -130,7 +135,10 @@ export function isAllowedRedirectUri(raw: string): boolean {
 /**
  * Housekeeping, run on registration: drop codes past expiry by a day, and
  * registrations older than a week that never obtained a token (abandoned or
- * spam DCR). Keeps both tables bounded without a scheduler.
+ * spam DCR). Keeps both tables bounded without a scheduler. A trusted client
+ * is never dropped: the operator registered it once and configured its id in
+ * the other app (e.g. AIN Teams' AINDRIVE_CLIENT_ID), and it may sit unused
+ * for a week — before its first sign-in, or once every grant has been revoked.
  */
 export function gcOAuth(now = Date.now()) {
   db.prepare("DELETE FROM oauth_codes WHERE expires_at < ?").run(now - 24 * 60 * 60 * 1000);
@@ -138,8 +146,9 @@ export function gcOAuth(now = Date.now()) {
   db.prepare(
     `DELETE FROM oauth_clients WHERE created_at < ?
        AND client_id NOT IN (SELECT client_id FROM mcp_tokens WHERE client_id IS NOT NULL)
-       AND client_id NOT IN (SELECT client_id FROM account_tokens)`,
-  ).run(now - 7 * 24 * 60 * 60 * 1000);
+       AND client_id NOT IN (SELECT client_id FROM account_tokens)
+       AND client_id NOT IN (SELECT value FROM json_each(?))`,
+  ).run(now - 7 * 24 * 60 * 60 * 1000, JSON.stringify([...trustedClients().keys()]));
 }
 
 export function registerClient(clientName: string, redirectUris: string[]): OAuthClient {
@@ -160,6 +169,38 @@ export function getClient(clientId: string | null | undefined): OAuthClient | nu
   return { client_id: row.client_id, client_name: row.client_name, redirect_uris: JSON.parse(row.redirect_uris) };
 }
 
+// ── Trusted first-party clients (AINDRIVE_TRUSTED_OAUTH_CLIENTS) ──────────
+
+/** Client id → scope ceiling. Read per call: a restart applies a change. Bad entries are never trusted. */
+function trustedClients(): Map<string, string[]> {
+  return parseTrustedOAuthClients(process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS).clients;
+}
+
+export function isTrustedClient(clientId: string | null | undefined): boolean {
+  return !!clientId && trustedClients().has(clientId);
+}
+
+/**
+ * The request itself may be granted without the consent screen: the client is
+ * trusted, every scope is within its ceiling and none moves money (wallet:pay,
+ * drives:sell — the parser already refuses them in a ceiling; checked again
+ * here so no list can grant them silently), and the code goes to an https
+ * redirect_uri. Loopback http and private-use schemes (cursor://) can be
+ * claimed by any program on the device, so a code sent there always needs the
+ * person's click (outside production, http is allowed for local development).
+ * Everything else — exact redirect_uri, PKCE S256, scopes — was already
+ * checked by validateAuthorize, exactly as for any client. Who is signed in
+ * is the caller's half (lib/oauth-authorize.ts `sameAinPerson`).
+ */
+export function skipsConsent(v: ValidAuthorize): boolean {
+  const ceiling = trustedClients().get(v.client.client_id);
+  if (!ceiling) return false;
+  const protocol = new URL(v.redirectUri).protocol;
+  if (protocol !== "https:" && !(protocol === "http:" && process.env.NODE_ENV !== "production")) return false;
+  const wanted: string[] = v.driveId === null ? [...v.accountScopes] : scopeString(v.requestedScope).split(" ");
+  return wanted.every((s) => ceiling.includes(s) && !CONSENT_ALWAYS_SCOPES.includes(s));
+}
+
 // ── Authorization request validation (shared by consent page + POST) ────
 
 export type AuthorizeParams = {
@@ -171,6 +212,12 @@ export type AuthorizeParams = {
   scope?: string | null;
   state?: string | null;
   resource?: string | null;
+  /**
+   * OIDC-style hint (optional): the AIN SSO subject (`sub`) the client signed
+   * the person in with. Only a trusted client's consent skip reads it
+   * (lib/oauth-authorize.ts); validateAuthorize ignores it.
+   */
+  login_hint?: string | null;
 };
 
 type ValidAuthorizeBase = {

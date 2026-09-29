@@ -61,11 +61,56 @@ The flow follows the MCP authorization spec, so a client needs only the URL:
 2. `/.well-known/oauth-protected-resource/mcp/d/[id]` (RFC 9728) → the auth server
 3. `/.well-known/oauth-authorization-server` (RFC 8414)
 4. `POST /api/oauth/register`: dynamic client registration (RFC 7591), public clients only
-5. `/oauth/authorize`: login redirect, then consent page (`app/oauth/authorize/`) → `POST /api/oauth/authorize`
+5. `/oauth/authorize`: sign-in redirect, then consent page (`app/oauth/authorize/`) → `POST /api/oauth/authorize`.
+   The page's steps are `lib/oauth-authorize.ts` (`authorizeStep`); both paths approve through its `approve`.
 6. `POST /api/oauth/token`: `authorization_code` (PKCE S256 required) / `refresh_token`
 
 The drive comes from the RFC 8707 `resource` (= the drive's MCP URL). Scopes
 on the wire are `drive:read` / `drive:write`.
+
+Signing in (anonymous visitor of a valid request; an invalid one is always the
+error page): `/login?next=<this request>` — which offers "Continue with AIN"
+and the legacy methods still allowed — except for a trusted client's request
+with AIN SSO login on: a silent check first (`/api/auth/sso/start?prompt=none`,
+once per browser per 30 min — the `ain_sso_checked` guard; skipped with
+`AINDRIVE_SSO_SILENT=false`), so a live AIN session signs in without a page;
+when AIN answers `login_required` & co. the browser comes back anonymous and
+goes to AIN SSO's sign-in (`/api/auth/sso/start`). Still `/login` for it after
+a sign-out in this browser (guard `signed_out`: AIN's sign-in would complete
+without a page and undo it) and for someone back from "Not now" on
+`/sso/link`. Other clients never get the automatic sign-in: anyone can
+register one and link here. Every path returns to the same authorization
+request (`next`, `safeNextPath`). A suspended/offboarded account never signs
+in (lib/sso), so it never gets a code.
+
+### Trusted first-party clients — `AINDRIVE_TRUSTED_OAUTH_CLIENTS`
+
+The operator's own apps (AIN Teams) skip the consent screen: a visit of a
+valid request by a person signed in through AIN SSO is answered with the code
+at once (`lib/oauth.ts` `skipsConsent` + `lib/oauth-authorize.ts`
+`sameAinPerson`, list parsed by `lib/oauth-trusted.js`).
+
+- Value: comma-separated `<client_id>=<scope>+<scope>`; the scopes are the
+  ceiling (a wider request gets the consent screen) and are required.
+  `wallet:pay` and `drives:sell` can't be listed — payment and sale authority
+  always needs the click. Unset = none (every client asks). Read per request;
+  a malformed entry trusts nobody and fails the production boot. Register the
+  client once (`POST /api/oauth/register`), then list its id.
+- Only an **AIN SSO session** (live, of the configured issuer) skips consent.
+  A password, Google or wallet session gets the consent screen, whose "Signed
+  in as …" is what stops a session another site planted (login CSRF) or
+  simply another account than the app's person. With `login_hint=<AIN sub>`
+  (the subject the app signed the person in with; first-party apps get public
+  subs) the session must also be that subject's; any other → consent screen.
+- Only after the same validation as any client (registered exact
+  `redirect_uri`, PKCE S256, valid scopes) and only for an **https**
+  `redirect_uri` — loopback http / private-use schemes always ask (any program
+  on the device could catch the code; http is allowed outside production).
+- Same approval as "Allow" (`approve`): the same code row (`sso_org_id` from
+  an org's SSO session, so suspension/offboarding revokes it), a drive grant
+  clamped to the role (no role → the consent page's refusal). The only extra
+  trace is a `[oauth] consent skipped for trusted client` log line.
+- Never removed by `gcOAuth`'s "unused for a week" cleanup while listed.
 
 ## Account-level grant ("Sign in with aindrive") — `lib/account-tokens.ts`
 
@@ -149,7 +194,7 @@ on testnet; `AINDRIVE_DEV_BYPASS_X402=1` for demos).
   `resource` validation fails and the metadata points at the wrong host.
 - An authorization code is burned before it is checked, so a failed exchange can't be retried.
 - Replaying a superseded refresh token revokes the whole grant (the token leaked).
-- Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`).
-- The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing.
+- Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`). The sign-in/sign-up/sign-out POSTs refuse cross-origin requests and non-JSON bodies (`lib/auth-csrf.ts`): no other site can plant its session in the browser and have an app connected to it.
+- The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing — trust is by `client_id` only (`AINDRIVE_TRUSTED_OAUTH_CLIENTS`).
 - Redirect URIs: https, loopback http, or a private-use scheme (`cursor://`); never `javascript:`/`data:`/`file:`.
-- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`, `lib/__tests__/oauth-sale-tools.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.
+- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`, `lib/__tests__/oauth-sale-tools.test.ts`, `lib/__tests__/oauth-trusted.test.ts`, `lib/__tests__/auth-csrf.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.

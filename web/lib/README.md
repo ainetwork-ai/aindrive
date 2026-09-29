@@ -11,7 +11,7 @@ bridge, SQLite access, and collab fan-out. React components and route
 
 Modules that `server.js` imports directly (no Next.js build step) are plain
 ESM `.js` with a hand-written `.d.ts` sidecar: `access-core`, `agents`,
-`boot-checks`, `db`, `orgs`, `org-policy`, `path`, `rate-limit`. They are imported by both TypeScript
+`boot-checks`, `db`, `oauth-trusted`, `orgs`, `org-policy`, `path`, `rate-limit`. They are imported by both TypeScript
 routes and `node server.js`, so they cannot be `.ts`. Some are also mirrored
 by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
@@ -55,7 +55,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `device-agent-a2a.ts` — each drive's on-device agent over A2A (`/a2a/d/[driveId]`, card at `./.well-known/agent-card.json`): owner only, the question goes straight to the device's `agent-ask` RPC (no `.aindrive/agents` record — reading one per question turned a busy phone into "agent_not_found"); the reply carries an `ai.aindrive/ask-result` data part; billed like the old ask (tier budget, one `metadata.askId` = one ask).
 - `agui.ts` — AG-UI 1.0 agent (`/agui`, `/agui/d/[id]`): RunAgentInput in, one skill per run, events back (TOOL_CALL_*, `a2ui-surface` activity, state, text).
 - `agent-auth.ts` — one bearer → SkillCtx resolver for A2A and AG-UI (PAT, OAuth, account token, session JWT).
-- `mcp-http.ts` / `mcp-ui.ts` / `mcp-tokens.ts` / `oauth.ts` — remote MCP (tools, MCP Apps view, A2UI results), its tokens and the OAuth server. See `app/mcp/README.md`.
+- `mcp-http.ts` / `mcp-ui.ts` / `mcp-tokens.ts` / `oauth.ts` — remote MCP (tools, MCP Apps view, A2UI results), its tokens and the OAuth server. `oauth-authorize.ts` — what a visit of `/oauth/authorize` does (sign-in via AIN SSO, trusted client + AIN SSO session → code, else consent) and the one approval it shares with the consent POST; `oauth-trusted.js` — parses `AINDRIVE_TRUSTED_OAUTH_CLIENTS`. See `app/mcp/README.md`.
 - `ainui.ts` — server side of AINUI (`docs/AINUI.md`): wires `shared/a2ui/ainui.ts` (builders + action dispatcher) to runSkill, the transport's allow-list, the caller's live role and `mime.ts`. Used by `mcp-http.ts` (`X-AINUI: 1`), `agui.ts` (`forwardedProps.ainui`) and `aindrive-agent.ts` (`metadata.ainui`).
 
 **Storage / DB**
@@ -74,7 +74,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 **Infra**
 - Config/boot: `env.ts`, `load-env.js`, `boot-checks.js`, `cookie-config.ts`.
-- Identity: `session.ts` (session JWT cookie; verified through the AIN SSO gate — epoch, SSO session row, suspension), `sso/` (AIN SSO sign-in, provisioning adapter, back-channel logout — `sso/README.md`), `google-auth.ts` (Google ID token; never links by email).
+- Identity: `session.ts` (session JWT cookie; verified through the AIN SSO gate — epoch, SSO session row, suspension), `sso/` (AIN SSO sign-in, provisioning adapter, back-channel logout — `sso/README.md`), `google-auth.ts` (Google ID token; never links by email), `auth-csrf.ts` (login-CSRF guard of the auth POSTs that set or end the session cookie).
 - Observability: `logger.js`, `trace.js` (stdout + ring buffer).
 - Guards/limits: `rate-limit.js`, `limits.ts` (drives-per-account cap, `AINDRIVE_UNLIMITED_OWNERS` storage-cap exemption).
 - Helpers: `path.js`, `mime.ts`, `served-bytes.ts` (the only way a route serves user-typed bytes inline — fs/stream, /api/h), `zod-helpers.ts` (`zPath`), `sort-entries.ts`, `api-client.ts`, `wagmi-config.ts`, `eip6963-uuid-guard.ts` (stabilises misbehaving wallet-extension announces so the picker lists each wallet once).

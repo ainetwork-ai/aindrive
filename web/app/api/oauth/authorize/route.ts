@@ -4,12 +4,15 @@
  * the session cookie and a same-origin Origin header (CSRF). Re-validates
  * everything, clamps a drive grant's scope to the user's role (an account
  * grant has no drive to clamp against), and returns { redirect } — the
- * client's redirect_uri with `code` or `error`.
+ * client's redirect_uri with `code` or `error`. The approval itself is
+ * lib/oauth-authorize.ts `approve`, shared with a trusted client's visit of
+ * /oauth/authorize (no consent screen).
  */
 import { NextResponse } from "next/server";
-import { currentSsoSession, getUser } from "@/lib/session";
-import { isSameOrigin, issueAccountCode, issueCode, redirectWith, validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
-import { clampScope, isMcpScope } from "@/lib/mcp-tokens";
+import { getUser } from "@/lib/session";
+import { isSameOrigin, redirectWith, validateAuthorize, type AuthorizeParams } from "@/lib/oauth";
+import { approve } from "@/lib/oauth-authorize";
+import { isMcpScope } from "@/lib/mcp-tokens";
 
 export async function POST(req: Request) {
   if (!isSameOrigin(req)) return NextResponse.json({ error: "bad origin" }, { status: 403 });
@@ -20,23 +23,11 @@ export async function POST(req: Request) {
   if (!body) return NextResponse.json({ error: "bad_request" }, { status: 400 });
   const v = validateAuthorize(body);
   if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
-  const { client, redirectUri, codeChallenge, state } = v.value;
 
   if (body.decision !== "approve") {
-    return NextResponse.json({ redirect: redirectWith(redirectUri, { error: "access_denied", state }) });
+    return NextResponse.json({ redirect: redirectWith(v.value.redirectUri, { error: "access_denied", state: v.value.state }) });
   }
-  // Consented in an AIN SSO session of an organization → the grant is that
-  // org's and is revoked when the org suspends/offboards the person (lib/sso).
-  const ssoOrgId = (await currentSsoSession())?.org_id ?? null;
-  if (v.value.driveId === null) {
-    const code = issueAccountCode({ clientId: client.client_id, userId: user.id, scopes: v.value.accountScopes, redirectUri, codeChallenge, ssoOrgId });
-    return NextResponse.json({ redirect: redirectWith(redirectUri, { code, state }) });
-  }
-  const { driveId } = v.value;
-  const wanted = isMcpScope(body.scope_choice) ? body.scope_choice : v.value.requestedScope;
-  const scope = clampScope(driveId, user.id, wanted);
-  if (!scope) return NextResponse.json({ error: "You don't have access to this drive." }, { status: 403 });
-
-  const code = issueCode({ clientId: client.client_id, userId: user.id, driveId, scope, redirectUri, codeChallenge, ssoOrgId });
-  return NextResponse.json({ redirect: redirectWith(redirectUri, { code, state }) });
+  const approved = await approve(v.value, user.id, isMcpScope(body.scope_choice) ? body.scope_choice : undefined);
+  if (!approved.ok) return NextResponse.json({ error: approved.error }, { status: 403 });
+  return NextResponse.json({ redirect: approved.redirect });
 }

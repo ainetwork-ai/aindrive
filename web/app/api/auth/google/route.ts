@@ -13,6 +13,7 @@ import { googleClientIds, verifyGoogleIdToken, resolveAccountForGoogle, GoogleEm
 import { adoptSignInPayoutWallet } from "@/lib/drives";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
 import { attestLegacyLogin } from "@/lib/sso/app-attest";
+import { authPostRefusal } from "@/lib/auth-csrf";
 
 const Body = z.object({ idToken: z.string().min(20).max(8192) });
 
@@ -23,6 +24,9 @@ export function GET() {
 }
 
 export async function POST(req: Request) {
+  // Login CSRF (lib/auth-csrf.ts): the mobile app sends JSON without an Origin.
+  const csrf = authPostRefusal(req, { json: true });
+  if (csrf) return csrf;
   const rl = tryConsume({ name: "auth-google", key: clientKey(req, "auth-google"), limit: 20, windowMs: 60_000 });
   if (!rl.ok) return NextResponse.json({ error: "rate_limited" }, { status: 429, headers: { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } });
   const body = Body.safeParse(await req.json().catch(() => null));

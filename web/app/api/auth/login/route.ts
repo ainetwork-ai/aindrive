@@ -7,10 +7,14 @@ import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { adoptSignInPayoutWallet } from "@/lib/drives";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
 import { attestLegacyLogin } from "@/lib/sso/app-attest";
+import { authPostRefusal } from "@/lib/auth-csrf";
 
 const Body = z.object({ email: z.string().email(), password: z.string().min(1) });
 
 export async function POST(req: Request) {
+  // Login CSRF (lib/auth-csrf.ts): never a session from another site's form.
+  const csrf = authPostRefusal(req, { json: true });
+  if (csrf) return csrf;
   const rl = tryConsume({ name: "auth-login", key: clientKey(req, "auth-login"), limit: 10, windowMs: 60_000 });
   if (!rl.ok) {
     const retryAfter = Math.ceil(rl.retryAfterMs / 1000);

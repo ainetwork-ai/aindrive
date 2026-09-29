@@ -10,6 +10,7 @@ import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
 import { isReservedEmail } from "@/lib/sso/store.js";
 import { attestLegacyLogin } from "@/lib/sso/app-attest";
+import { authPostRefusal } from "@/lib/auth-csrf";
 
 const Body = z.object({
   // Reject the reserved wallet-placeholder domain (resolveAccountForWallet
@@ -27,6 +28,9 @@ const Body = z.object({
 });
 
 export async function POST(req: Request) {
+  // Login CSRF (lib/auth-csrf.ts): sign-up sets the session cookie too.
+  const csrf = authPostRefusal(req, { json: true });
+  if (csrf) return csrf;
   const rl = tryConsume({ name: "auth-signup", key: clientKey(req, "auth-signup"), limit: 5, windowMs: 300_000 });
   if (!rl.ok) {
     const retryAfter = Math.ceil(rl.retryAfterMs / 1000);

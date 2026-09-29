@@ -9,6 +9,7 @@ import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
 import { activeChainId } from "@/lib/payment-tokens";
 import { legacyLoginRefusal } from "@/lib/sso/policy";
+import { authPostRefusal } from "@/lib/auth-csrf";
 
 // The SIWE message must be signed FOR this origin; binding verify() to our
 // canonical host rejects a signature phished on another site.
@@ -26,6 +27,9 @@ const Body = z.object({
 // wallet-ownership cookie) — this establishes an account session with no email.
 // Login is a separate proof from payment (never mint a session from a payment).
 export async function POST(req: Request) {
+  // Login CSRF (lib/auth-csrf.ts): never a session from another site's form.
+  const csrf = authPostRefusal(req, { json: true });
+  if (csrf) return csrf;
   const rl = tryConsume({ name: "wallet-login", key: clientKey(req, "wallet-login"), limit: 10, windowMs: 60_000 });
   if (!rl.ok) {
     const retryAfter = Math.ceil(rl.retryAfterMs / 1000);

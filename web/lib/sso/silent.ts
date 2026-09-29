@@ -14,6 +14,14 @@ import { safeNextPath } from "../safe-next";
 
 export const SSO_CHECKED_COOKIE = "ain_sso_checked";
 export const SSO_CHECKED_MAX_AGE = 30 * 60;
+/**
+ * The guard's value after a sign-out (the logout route; any other setter
+ * writes "1"). The silent check skips the browser whatever the value; this one
+ * also keeps /oauth/authorize from sending a trusted client's visitor straight
+ * to AIN SSO's sign-in, which a live AIN session would complete without a page
+ * (lib/oauth-authorize.ts). A later check never downgrades it to "1".
+ */
+export const SSO_SIGNED_OUT = "signed_out";
 /** Mirrors lib/session.ts COOKIE. */
 export const SESSION_COOKIE = "aindrive_session";
 
