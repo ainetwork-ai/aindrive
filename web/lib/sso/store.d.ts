@@ -158,5 +158,12 @@ export type DesiredUserState = {
   issuedAt: string;
 };
 export declare function getAppliedState(issuer: string, orgId: string, subject: string): CurrentUserState | null;
-/** `endedUserIds`: accounts whose sessions ended (suspension, offboarding, a rolled-back legacy mapping) — close their sockets after commit. */
-export declare function applyDesiredState(issuer: string, state: DesiredUserState): { result: ApplyResult; endedUserIds: string[] };
+/**
+ * `endedUserIds`: accounts whose sessions ended (suspension, offboarding, a rolled-back legacy mapping) — close their sockets after commit.
+ * `unlinkedUserIds`: accounts a rolled-back legacy mapping pointed at (signed in through it or not) — close their sockets too.
+ * `orgIds`: organizations whose drives' open sockets to re-check (the pushed one and the subject's others, which move along when it is re-linked).
+ */
+export declare function applyDesiredState(
+  issuer: string,
+  state: DesiredUserState,
+): { result: ApplyResult; endedUserIds: string[]; unlinkedUserIds: string[]; orgIds: string[] };

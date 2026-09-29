@@ -4,8 +4,9 @@ import { getUser } from "@/lib/session";
 import { staleSessionCheck } from "@/lib/sso/stale-session";
 import { listUserDrives } from "@/lib/drives";
 import { listOrgDrivesForUser } from "@/lib/orgs.js";
+import { orgSectionState } from "@/lib/org-policy.js";
 import { isOnline } from "@/lib/rpc";
-import { Building2, Globe, HardDrive, Share2 } from "lucide-react";
+import { Building2, Globe, HardDrive, PauseCircle, Share2 } from "lucide-react";
 import { LeaveDriveButton } from "@/components/leave-drive-button";
 import { AddEmailForm } from "@/components/add-email-form";
 import { isWalletOnlyEmail, walletDisplayLabel } from "@/shared/wallet-display";
@@ -68,12 +69,16 @@ aindrive              # this folder is now in aindrive`}
 
   // Organization drives first (docs/PERMISSIONS.md "Organizations"): each
   // organization the person is an active member of, with the drives shared
-  // with it — or an empty state saying who sets one up. Every drive is listed
-  // once: a personal drive shared with an organization shows in its section.
+  // with it — or, by orgSectionState, "paused" (its creator is not an active
+  // member now) or an empty state saying who sets one up (one line when the
+  // person's own drives follow). Every drive is listed once: a personal drive
+  // shared with an organization shows in its section.
   const orgs = listOrgDrivesForUser(user.id);
   const inOrgSection = new Set(orgs.flatMap((o) => o.drives.map((d) => d.id)));
   const drives = listUserDrives(user.id).filter((d) => !inOrgSection.has(d.id));
   const hasAnyDrive = drives.length > 0 || inOrgSection.size > 0;
+  const sectionState = (o: (typeof orgs)[number]) =>
+    orgSectionState({ drives: o.drives.length, pausedDrives: o.pausedDrives, hasPersonalDrives: drives.length > 0 });
   return (
     <main className="min-h-screen min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-10">
       <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-8">
@@ -109,7 +114,22 @@ aindrive              # this folder is now in aindrive`}
             <h2 id={`org-${o.orgId}`} className="text-lg font-semibold truncate">{o.name}</h2>
             <span className="shrink-0 rounded-full bg-drive-sidebar px-2 py-0.5 text-xs text-drive-muted">Organization</span>
           </div>
-          {o.drives.length === 0 ? (
+          {sectionState(o) === "paused" ? (
+            <div className="flex items-start gap-3 rounded-2xl border border-drive-border bg-drive-panel px-5 py-4 text-sm" data-testid="org-paused">
+              <PauseCircle className="mt-0.5 h-5 w-5 shrink-0 text-drive-muted" />
+              <div className="min-w-0">
+                <p className="font-medium text-drive-text">{o.name}’s shared drive is paused</p>
+                <p className="mt-1 text-drive-muted">
+                  It comes back as soon as the person who shares it is an active {o.name} member again. Ask your {o.name}{" "}
+                  admin if it stays paused.
+                </p>
+              </div>
+            </div>
+          ) : sectionState(o) === "empty-compact" ? (
+            <p className="text-sm text-drive-muted" data-testid="org-empty">
+              No {o.name} drive yet — an admin shares one with {o.name}, and it appears here.
+            </p>
+          ) : sectionState(o) === "empty" ? (
             <div className="rounded-2xl border border-dashed border-drive-border px-5 py-6 text-sm" data-testid="org-empty">
               <p className="font-medium text-drive-text">No {o.name} drive yet</p>
               <p className="mt-1 text-drive-muted">

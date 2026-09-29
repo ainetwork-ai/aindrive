@@ -15,13 +15,23 @@ type OrgShare = {
   issuer: string; orgId: string; slug: string | null; name: string; role: OrgRole;
   activeMembers: number; ownerActive: boolean; inForce: boolean;
 };
-type Candidate = { orgId: string; slug: string | null; name: string; canShare: boolean; reason: string | null };
+type Refusal = "not_creator" | "not_member" | "not_admin";
+type Candidate = { orgId: string; slug: string | null; name: string; canShare: boolean; reason: string | null; reasonCode: Refusal | null };
 type OrgsResponse = { enabled: boolean; canManage: boolean; shares: OrgShare[]; candidates: Candidate[] };
 
 const ROLE_HELP: Record<OrgRole, string> = {
   viewer: "everyone can read & download",
   editor: "everyone can also upload, edit & delete",
 };
+
+/** Why this creator can't share with `c`, and what to do instead (lib/org-policy.js codes). */
+function refusalText(c: Candidate): string {
+  if (c.reasonCode === "not_admin") {
+    return `Only a ${c.name} admin can share drives with ${c.name}. Ask your aindrive operator to add this drive to ${c.name}.`;
+  }
+  const r = c.reason ?? "You can’t share this drive with the organization.";
+  return r[0].toUpperCase() + r.slice(1) + (/[.!?]$/.test(r) ? "" : ".");
+}
 
 export function DriveOrgAccess({ driveId, busy, setBusy }: { driveId: string; busy: boolean; setBusy: (b: boolean) => void }) {
   const [data, setData] = useState<OrgsResponse | null>(null);
@@ -124,7 +134,7 @@ export function DriveOrgAccess({ driveId, busy, setBusy }: { driveId: string; bu
                     <Button size="sm" variant="filled" disabled={busy} onClick={() => share(c.orgId, role)}>Share with {c.name}</Button>
                   </span>
                 ) : (
-                  <span className="basis-full text-caption text-drive-muted">{c.reason}</span>
+                  <span className="basis-full text-caption text-drive-muted" data-testid="org-share-refusal">{refusalText(c)}</span>
                 )}
                 {c.canShare && <span className="basis-full text-caption text-drive-muted">{role[0].toUpperCase() + role.slice(1)}: {ROLE_HELP[role]}</span>}
               </li>

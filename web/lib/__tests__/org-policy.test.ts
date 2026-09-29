@@ -1,7 +1,7 @@
 // Pure organization rules (lib/org-policy.js): who may share a drive with an
 // organization, the operator allowlist's format, and where a sign-in lands.
 import { describe, it, expect } from "vitest";
-import { landingPath, orgShareDecision, parseOrgShareAllowlist } from "../org-policy.js";
+import { landingPath, orgSectionState, orgShareDecision, parseOrgShareAllowlist } from "../org-policy.js";
 import { ssoConfigErrors } from "../boot-checks.js";
 
 const member = (appRole: string | null, active = true) => ({ orgId: "org_1", slug: "comcom", subject: "acc_1", appRole, active });
@@ -13,7 +13,7 @@ describe("orgShareDecision", () => {
   });
 
   it("a plain member may not — unless allowlisted for that org by user id or AIN subject", () => {
-    expect(orgShareDecision({ isCreator: true, userId: "u1", membership: member("member"), allowlist: [] })).toMatchObject({ ok: false, status: 403 });
+    expect(orgShareDecision({ isCreator: true, userId: "u1", membership: member("member"), allowlist: [] })).toMatchObject({ ok: false, status: 403, code: "not_admin" });
     for (const e of [{ org: "comcom", account: "u1" }, { org: "org_1", account: "acc_1" }]) {
       expect(orgShareDecision({ isCreator: true, userId: "u1", membership: member("member"), allowlist: [e] })).toEqual({ ok: true, via: "allowlist" });
     }
@@ -25,9 +25,9 @@ describe("orgShareDecision", () => {
 
   it("never for a non-creator, a non-member or a suspended member — even an admin or an allowlisted one", () => {
     const allow = [{ org: "comcom", account: "u1" }];
-    expect(orgShareDecision({ isCreator: false, userId: "u1", membership: member("admin"), allowlist: allow }).ok).toBe(false);
-    expect(orgShareDecision({ isCreator: true, userId: "u1", membership: null, allowlist: allow }).ok).toBe(false);
-    expect(orgShareDecision({ isCreator: true, userId: "u1", membership: member("admin", false), allowlist: allow }).ok).toBe(false);
+    expect(orgShareDecision({ isCreator: false, userId: "u1", membership: member("admin"), allowlist: allow })).toMatchObject({ ok: false, code: "not_creator" });
+    expect(orgShareDecision({ isCreator: true, userId: "u1", membership: null, allowlist: allow })).toMatchObject({ ok: false, code: "not_member" });
+    expect(orgShareDecision({ isCreator: true, userId: "u1", membership: member("admin", false), allowlist: allow })).toMatchObject({ ok: false, code: "not_member" });
   });
 });
 
@@ -62,5 +62,19 @@ describe("landingPath — where a sign-in lands", () => {
     expect(landingPath({ ...base, firstSignIn: true, orgDriveIds: ["d1", "d2"] })).toBe("/");
     expect(landingPath({ ...base, firstSignIn: true, orgDriveIds: [] })).toBe("/");
     expect(landingPath({ ...base, firstSignIn: true, orgDriveIds: ["d1", "d1"] })).toBe("/d/d1");
+  });
+});
+
+describe("orgSectionState — what the home shows for an organization", () => {
+  it("its drives when it has any it can open", () => {
+    expect(orgSectionState({ drives: 1, pausedDrives: 1, hasPersonalDrives: true })).toBe("drives");
+  });
+  it("'paused' (not 'no drive yet') when its only drives are paused", () => {
+    expect(orgSectionState({ drives: 0, pausedDrives: 1, hasPersonalDrives: false })).toBe("paused");
+    expect(orgSectionState({ drives: 0, pausedDrives: 2, hasPersonalDrives: true })).toBe("paused");
+  });
+  it("nothing shared yet: the full explanation, or one line above the person's own drives", () => {
+    expect(orgSectionState({ drives: 0, pausedDrives: 0, hasPersonalDrives: false })).toBe("empty");
+    expect(orgSectionState({ drives: 0, pausedDrives: 0, hasPersonalDrives: true })).toBe("empty-compact");
   });
 });

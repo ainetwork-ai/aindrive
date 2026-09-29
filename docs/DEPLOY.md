@@ -139,12 +139,14 @@ members (their rows are in `sso_memberships`).
    `share` refuses when the drive's owner is not an active member of that
    organization — the share would stay paused — unless `--force`. Every change
    takes effect at once (access is read per request, no restart) and is recorded
-   in `sso_audit` with actor `operator`. An `unshare` from the script does not
-   reach doc sockets already open in the server: those editors keep their live
-   document until they reconnect (every HTTP call is refused at once). The
-   drive's owner can do the same from the drive's Manage → Members →
-   Organizations card when they are the org's admin or allowlisted
-   (`AINDRIVE_ORG_SHARE_ALLOWLIST`).
+   in `sso_audit` with actor `operator`. The script runs in its own process, so
+   the server notices a lowered role or an unshare on doc sockets already open
+   by itself: a member's next edit is refused and their socket closed at once,
+   and a socket that only reads is closed within 5 s (every HTTP call is
+   refused at once). The drive's owner can do the same from the drive's Manage
+   → Members → Organizations card when they are the org's admin or
+   allowlisted (`AINDRIVE_ORG_SHARE_ALLOWLIST`); a creator who is neither is
+   told to ask the operator — this script.
 3. Members see it: the signed-in home lists the organization first, and an AIN
    sign-in lands on its drive on a person's first sign-in or while they have no
    personal drive of their own.

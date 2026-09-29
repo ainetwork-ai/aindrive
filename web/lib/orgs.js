@@ -103,13 +103,22 @@ export function userOrgs(userId) {
 
 /**
  * The signed-in home: each organization the person is an active member of,
- * with the drives shared with it (an empty list = the org has none yet).
+ * with the drives shared with it (an empty list = the org has none it can
+ * open) and `pausedDrives`: how many are shared with it but paused because
+ * their creator is not an active member now — so the home can say "paused"
+ * instead of "not set up yet" (org-policy.js orgSectionState).
  */
 export function listOrgDrivesForUser(userId) {
   const orgs = userOrgs(userId);
   if (orgs.length === 0) return [];
   const drives = orgDrivesForUser(userId);
-  return orgs.map((o) => ({ ...o, drives: drives.filter((d) => d.org_id === o.orgId) }));
+  const paused = new Map(
+    db.prepare(
+      `SELECT s.org_id, COUNT(*) AS n FROM drive_org_shares s JOIN drives d ON d.id = s.drive_id
+       WHERE s.issuer = ? AND NOT ${activeIn("d.owner_id")} GROUP BY s.org_id`,
+    ).all(orgs[0].issuer).map((r) => [r.org_id, r.n]),
+  );
+  return orgs.map((o) => ({ ...o, drives: drives.filter((d) => d.org_id === o.orgId), pausedDrives: paused.get(o.orgId) ?? 0 }));
 }
 
 /** Owns a drive that is not shared with an organization (the landing rule's "personal drive"). */
@@ -204,7 +213,7 @@ export function orgShareCandidates(driveId, userId) {
       membership: { orgId: o.orgId, slug: o.slug, subject: o.subject, appRole: o.appRole, active: true },
       allowlist,
     });
-    return { orgId: o.orgId, slug: o.slug, name: o.name, canShare: d.ok, reason: d.ok ? null : d.error };
+    return { orgId: o.orgId, slug: o.slug, name: o.name, canShare: d.ok, reason: d.ok ? null : d.error, reasonCode: d.ok ? null : d.code ?? null };
   });
 }
 

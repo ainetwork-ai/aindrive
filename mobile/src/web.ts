@@ -21,7 +21,7 @@ export interface Me { id: string; email?: string | null; name?: string | null; w
 /** A connected app's workspace a folder can be shared into (web/lib/connected-apps.ts). */
 export interface AppSpace { id: string; name: string; group?: string; icon?: string | null; members?: number; shared: boolean }
 export interface AppSpaces { app: { id: string; name: string; origin: string }; spaces: AppSpace[]; error?: string }
-export interface DriveInfo { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null; owned?: boolean }
+export interface DriveInfo { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null; owned?: boolean; org?: { id: string; slug: string | null; name: string } | null }
 
 export class Web {
   constructor(private server: string, private cookie: string) {}

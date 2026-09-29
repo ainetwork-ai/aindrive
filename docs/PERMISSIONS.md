@@ -100,11 +100,28 @@ rules); table `drive_org_shares(drive_id, issuer, org_id, role)`.
   unshares it; or the AIN SSO adapter is not configured for that issuer (a
   membership nobody keeps current grants nothing). Open collaborative editors
   are re-checked when a share is lowered or removed and after each adapter push
-  for the organization.
+  (for every organization of the pushed subject — a rolled-back legacy mapping
+  moves them all, and closes the unlinked account's sockets even when nobody
+  signed in through the link). A socket that got its access through an
+  organization is also checked before every frame it sends and swept every
+  5 s (`dochub.js revalidateOrgPeers`), so a change made outside the server
+  process — the operator script — stops its edits at once and its reading
+  within seconds.
+- **Live, never written down.** Nothing reached through an organization
+  becomes a `drive_members` row, for the member or anyone else, because a row
+  outlives the membership: share links are minted only on the caller's **own**
+  grants (an org editor gets 403 — ask the drive's owner); an editor's
+  `GET /shares` lists only their own links plus others' paid viewer links (the
+  sale badges) — never someone else's free link or an editor link, whose token
+  is the grant; accepting a paid link the organization already covers lets the
+  member in without writing a row; a purchase records what was bought, merged
+  with the buyer's own grants only (`access.ts personalRoleByUser`).
 - **A ceiling like any grant.** An org viewer is a bare viewer: the paid
-  carve-out applies, no writes, no share links. An org editor edits and mints
-  viewer links; editor links, listing, members and invites stay owner-only. A
-  member can't `leave` an organization's drive (409) — the creator unshares it.
+  carve-out applies, no writes, no share links. An org editor edits files;
+  links, listing, members and invites stay with personal grants and owners.
+  Members count as "related" for the showcase (list and Buy,
+  `isRelatedToDrive`). A member can't `leave` an organization's drive (409) —
+  the creator unshares it.
 - **Who may share.** The creator only (co-owners see the share read-only),
   with an organization they are an active member of, **as its admin** (AIN SSO
   app role `admin`/`owner`). AIN SSO assigns aindrive with app role `member`
@@ -112,14 +129,19 @@ rules); table `drive_org_shares(drive_id, issuer, org_id, role)`.
   `AINDRIVE_ORG_SHARE_ALLOWLIST=<org slug|id>:<aindrive user id|AIN subject>,…`
   (stable ids only, never an email). This is deliberately narrower than "any
   active member": publishing a drive to a whole company is an admin decision.
+  A creator who is neither sees, on the Manage card, that only an org admin
+  can and that the operator can add the drive.
   Unsharing is always allowed to the creator. The operator binds any drive by
   id and org slug with `web/scripts/org-drive.mjs` (`docs/DEPLOY.md`
   "Organization drives"). Every share, role change and unshare is recorded in
   `sso_audit` (`org_drive_shared`, `org_drive_role_changed`,
   `org_drive_unshared`; actor `user:<id>` or `operator`).
 - **What members see.** The signed-in home lists each of their organizations
-  first — its drives, or "No ComCom drive yet … ask your ComCom admin" — then
-  their personal drives. An AIN sign-in to the home page lands on the
+  first — its drives; "ComCom's shared drive is paused" while its creator is
+  not an active member; or "No ComCom drive yet … ask your ComCom admin" (one
+  line when their own drives follow, `org-policy.js orgSectionState`) — then
+  their personal drives. The app (`mobile/`, also the Mac app) groups them
+  under the organization's name and offers no "Leave" on them. An AIN sign-in to the home page lands on the
   organization's drive on the person's first sign-in and whenever they own no
   personal drive (with one organization drive; several → the home page).
 

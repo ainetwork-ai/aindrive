@@ -4,13 +4,19 @@ import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { ShareCreateBody, createShare, listShares } from "@/lib/sales";
 
+/**
+ * The drive's share links. Owners get the whole ledger; an editor (including
+ * one through an organization) only their own links plus others' paid viewer
+ * links for the sale badges — never another person's free link or an editor
+ * link, whose token would be the grant itself (lib/sales.ts listShares).
+ */
 export async function GET(_req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const role = resolveRole(driveId, user.id, "");
   if (!atLeast(role, "editor")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  return NextResponse.json({ shares: listShares(driveId) });
+  return NextResponse.json({ shares: listShares(driveId, atLeast(role, "owner") ? undefined : user.id) });
 }
 
 /**

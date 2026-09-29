@@ -19,8 +19,8 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 
 **Permissions / access**
 - `access-core.js` — pure role algebra: `ROLE_RANK`, `bestMatchingRole`, `computeEntry`, `mergeRoleUpgradeOnly`. No DB, no session.
-- `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members` + organization shares (`orgs.js`).
-- `orgs.js` (+ `.d.ts`) — organizations: drives shared with an AIN SSO organization (`drive_org_shares`), the role an active member gets (`orgRoleInDrive`, read by `access.ts`, `dochub.js`, `mcp-tokens.ts`), the home page's org sections, share/unshare (audited in `sso_audit`), the sign-in landing. `org-policy.js` (+ `.d.ts`) — its pure rules: who may share (creator + org admin or `AINDRIVE_ORG_SHARE_ALLOWLIST`), the allowlist parser, `landingPath`. Operator: `scripts/org-drive.mjs`.
+- `access.ts` — DB-backed role resolution (`resolveAccess`, `entryView`) over `drives` + `drive_members` + organization shares (`orgs.js`). `personalRoleByUser` leaves the organization out — for acts that write a durable grant (minting links, accept/settle merges); `isRelatedToDrive` is the showcase gate.
+- `orgs.js` (+ `.d.ts`) — organizations: drives shared with an AIN SSO organization (`drive_org_shares`), the role an active member gets (`orgRoleInDrive`, read by `access.ts`, `dochub.js`, `mcp-tokens.ts`), the home page's org sections (with paused shares counted), share/unshare (audited in `sso_audit`), the sign-in landing. `org-policy.js` (+ `.d.ts`) — its pure rules: who may share (creator + org admin or `AINDRIVE_ORG_SHARE_ALLOWLIST`, refusal codes), the allowlist parser, `landingPath`, `orgSectionState`. Operator: `scripts/org-drive.mjs`.
 - `drive-location.ts` — pure: `?path` + membership + stat kind → the drive page's folder, open file, breadcrumb root and grant listing (`locationPath` is the reverse, for the URL).
 - `require-access.ts` — `requireDriveRole()` auth gate for drive-scoped API routes (getUser→getDrive→resolveAccess→atLeast). With `opts.req` (fs/thumbnail, fs/stream, fs/download) it also takes the session JWT as `Authorization: Bearer` (`session.ts` `getRequestUser`; an invalid bearer is a 401, never a cookie fallback) — for hosts that proxy AINUI assets.
 - `sale-access.js` — the paid carve-out: `paidAccessDenial` (read gate, shared by HTTP and `dochub.js`), `paidLocksForPaths`/`paidLocksForListing` (🔒 rows). `paid-lock.ts` turns a 402 body into the paywall the drive UI shows (client-safe).
@@ -68,7 +68,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `migrations/` — one-shot idempotent migrations (`run.js` runs all at startup).
 
 **Collab / Willow**
-- `dochub.js` — per-doc WS broadcast hub for Y.js sync; authorizes (viewer=sub, editor=push), does NOT parse Y bytes.
+- `dochub.js` — per-doc WS broadcast hub for Y.js sync; authorizes (viewer=sub, editor=push), does NOT parse Y bytes. Sockets with organization-derived access are re-checked per frame and swept every 5 s (`revalidateOrgPeers`), so out-of-process share changes (operator script) reach them.
 - `yjs/aindrive-provider.ts` — browser Y.js provider over the doc WS (+ IndexedDB persistence). `yjs/trace-client.ts` — browser trace emitter.
 - `willow/` — Meadowcap capability issuance (`cap-issue.ts`) + Ed25519 schemes (`meadowcap.js`, `schemes.js`).
 

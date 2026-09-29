@@ -452,10 +452,13 @@ function revokeOrgCredentials(userId, orgId) {
 
 /**
  * adapter-protocol §4.4: link by sub; a verified legacyUserId once; follow a
- * rolled-back mapping. Accounts whose sessions ended are added to `ended`
- * (the caller closes their sockets after commit).
+ * rolled-back mapping. Accounts whose sessions ended are added to `ended`;
+ * an account a rolled-back mapping pointed at is added to `unlinked` whether
+ * or not anyone signed in through the link — its organization access came
+ * over its own sessions too (lib/orgs.js). The caller closes both accounts'
+ * sockets after commit.
  */
-function resolveUserForState(issuer, s, passwordHash, ended) {
+function resolveUserForState(issuer, s, passwordHash, ended, unlinked) {
   const ev = (action, userId, details) => audit({ actor: "ain-sso", action, issuer, subject: s.sub, orgId: s.org.id, userId, details: { version: s.version, ...details } });
   let ident = identityFor(issuer, s.sub);
 
@@ -468,6 +471,7 @@ function resolveUserForState(issuer, s, passwordHash, ended) {
     const used = ident.last_login_at !== null && ident.last_login_at !== undefined;
     const revoked = used ? endLinkedAccess(ident.user_id, ident.linked_at, "legacy_mapping_rolled_back") : {};
     if (used) ended.push(ident.user_id);
+    unlinked.push(ident.user_id);
     ev("legacy_unlinked", ident.user_id, { legacyUserId: ident.user_id, used, ...revoked });
     ident = undefined;
   }
@@ -513,7 +517,12 @@ function resolveUserForState(issuer, s, passwordHash, ended) {
  * A rolled-back legacy mapping ends what the wrongly linked person obtained
  * on that account the same way (endLinkedAccess), also before the 200.
  *
- * @returns {{ result: {appliedVersion:number, localUserId:string, status:string}, endedUserIds: string[] }}
+ * After commit the caller closes the sockets of `endedUserIds` and
+ * `unlinkedUserIds`, and re-checks open sockets on the drives of every
+ * organization in `orgIds`: the pushed one and the subject's others (whose
+ * rows move to another account when the subject is re-linked).
+ *
+ * @returns {{ result: {appliedVersion:number, localUserId:string, status:string}, endedUserIds: string[], unlinkedUserIds: string[], orgIds: string[] }}
  */
 export function applyDesiredState(issuer, s) {
   const key = [issuer, s.org.id, s.sub];
@@ -524,10 +533,16 @@ export function applyDesiredState(issuer, s) {
   const run = db.transaction(() => {
     const cur = db.prepare("SELECT * FROM sso_memberships WHERE issuer = ? AND org_id = ? AND subject = ?").get(...key);
     if (cur && s.version <= cur.applied_version) {
-      return { result: { appliedVersion: cur.applied_version, localUserId: cur.user_id, status: cur.status }, endedUserIds: [] };
+      return { result: { appliedVersion: cur.applied_version, localUserId: cur.user_id, status: cur.status }, endedUserIds: [], unlinkedUserIds: [], orgIds: [] };
     }
     const ended = [];
-    const userId = resolveUserForState(issuer, s, passwordHash || unusablePasswordHash(), ended);
+    const unlinked = [];
+    // Every organization of this subject, read before its rows can move to
+    // another account (a rolled-back mapping or a placeholder hand-over).
+    const subjectOrgIds = db
+      .prepare("SELECT DISTINCT org_id FROM sso_memberships WHERE issuer = ? AND subject = ?")
+      .all(issuer, s.sub).map((r) => r.org_id);
+    const userId = resolveUserForState(issuer, s, passwordHash || unusablePasswordHash(), ended, unlinked);
     const name = typeof s.profile.name === "string" ? s.profile.name.trim().slice(0, 80) : "";
     if (name) db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, userId);
     // A re-linked subject (rolled-back legacy mapping) brings its other orgs along.
@@ -561,7 +576,12 @@ export function applyDesiredState(issuer, s) {
       }
     }
     ev("applied", { status: s.status, appRole: active ? s.appRole : null, groups });
-    return { result: { appliedVersion: s.version, localUserId: userId, status: s.status }, endedUserIds: ended };
+    return {
+      result: { appliedVersion: s.version, localUserId: userId, status: s.status },
+      endedUserIds: ended,
+      unlinkedUserIds: unlinked,
+      orgIds: [...new Set([s.org.id, ...subjectOrgIds])],
+    };
   });
   return run.immediate();
 }

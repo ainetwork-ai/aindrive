@@ -168,7 +168,7 @@ dropped — except `private`:
 ## 6a. Organizations (AIN SSO) — `lib/orgs.js`, `lib/org-policy.js`
 
 Model and rationale: [`PERMISSIONS.md`](PERMISSIONS.md) "Organizations".
-Tests: `web/lib/__tests__/orgs.test.ts`, `org-policy.test.ts`,
+Tests: `web/lib/__tests__/orgs.test.ts`, `org-leaks.test.ts`, `org-policy.test.ts`,
 `org-landing.test.ts`, `org-schema.test.ts`.
 
 | ID | Requirement | Status |
@@ -177,11 +177,14 @@ Tests: `web/lib/__tests__/orgs.test.ts`, `org-policy.test.ts`,
 | `R-ORG-ACC-002` | Non-member, member of another org, suspended or deprovisioned member (any non-active row for that org) → `none` from the organization. | CURRENT |
 | `R-ORG-ACC-003` | The share is in force only while the drive's creator is an active member of that org and the AIN SSO adapter is configured for its issuer; otherwise `none` for every member (paused, resumes on reactivation). | CURRENT |
 | `R-ORG-ACC-004` | Merged with personal grants by rank (never lowers one); never `owner`; the paid carve-out applies to an org viewer. | CURRENT |
-| `R-ORG-WRITE-001` | Org viewer: no fs writes, no share links. Org editor: writes, viewer links only (editor links stay owner-only, `R-SHARE-*`). Members roster/invites unchanged (editor+/owner). | CURRENT |
+| `R-ORG-WRITE-001` | Org viewer: no fs writes, no share links. Org editor: fs writes; members roster/invites unchanged (editor+/owner). | CURRENT |
+| `R-ORG-LINK-001` | An organization's role never becomes a `drive_members` row: `createShare`/`editShare` need editor through the caller's own grants (`personalRoleByUser`; org-only → 403); a non-owner's `GET /shares` = own links + others' paid viewer links (no other free link, no editor link); paid `accept` covered only by the org → 200, no row; settle merges with own grants only. | CURRENT |
+| `R-ORG-SHOW-001` | `showcase` and `showcase/[shareId]` share one gate, `isRelatedToDrive` (owner, any member row, active org member). | CURRENT |
 | `R-ORG-MANAGE-001` | Share / change role (`POST /orgs`): the **creator**, an active member of that org, who is its admin (app role `admin`\|`owner`) or on `AINDRIVE_ORG_SHARE_ALLOWLIST` (`<org>:<user id\|subject>`). Co-owners: read-only `GET`. | CURRENT |
 | `R-ORG-MANAGE-002` | Unshare (`DELETE /orgs/:orgId`): the creator, always. Operator: `scripts/org-drive.mjs`. | CURRENT |
 | `R-ORG-LEAVE-001` | `POST /leave` with access only through an organization → `409`, nothing changes. | CURRENT |
-| `R-ORG-WS-001` | Lowering/removing a share, and every adapter push for the org, re-check open doc sockets on its drives; a socket whose role changed closes (4401). | CURRENT |
+| `R-ORG-WS-001` | Lowering/removing a share, and every adapter push (all the pushed subject's orgs), re-check open doc sockets on its drives; a socket whose role changed closes (4401). A rolled-back legacy mapping also closes the unlinked account's sockets. | CURRENT |
+| `R-ORG-WS-002` | A socket with org-derived access is re-checked before each frame it sends (a lowered/removed share drops the frame, 4401) and swept every 5 s — changes from another process (operator script) included. | CURRENT |
 | `R-ORG-AUDIT-001` | Share, role change, unshare → `sso_audit` (`org_drive_shared` / `org_drive_role_changed` / `org_drive_unshared`). | CURRENT |
 | `R-ORG-LAND-001` | AIN sign-in to `/`: first sign-in, or no personal drive → the organization's drive (exactly one; several → `/`). An explicit `next` is kept. Home lists organization sections first. | CURRENT |
 

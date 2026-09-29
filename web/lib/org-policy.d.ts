@@ -8,7 +8,10 @@ export type OrgShareAllowEntry = { org: string; account: string };
 export declare function parseOrgShareAllowlist(raw: string | null | undefined): { entries: OrgShareAllowEntry[]; bad: string[] };
 
 export type OrgShareMembership = { orgId: string; slug: string | null; subject: string; appRole: string | null; active: boolean };
-export type OrgShareDecision = { ok: true; via: "org_admin" | "allowlist" } | { ok: false; status: number; error: string };
+export type OrgShareRefusal = "not_creator" | "not_member" | "not_admin";
+export type OrgShareDecision =
+  | { ok: true; via: "org_admin" | "allowlist" }
+  | { ok: false; status: number; code?: OrgShareRefusal; error: string };
 export declare function orgShareDecision(input: {
   isCreator: boolean;
   userId: string;
@@ -22,3 +25,6 @@ export declare function landingPath(input: {
   ownsPersonalDrive: boolean;
   orgDriveIds: string[];
 }): string;
+
+export type OrgSectionState = "drives" | "paused" | "empty" | "empty-compact";
+export declare function orgSectionState(input: { drives: number; pausedDrives: number; hasPersonalDrives: boolean }): OrgSectionState;

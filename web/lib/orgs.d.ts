@@ -1,6 +1,6 @@
 // Types for lib/orgs.js (plain ESM so lib/dochub.js and scripts/org-drive.mjs can use it).
 import type { DriveRow } from "./drives";
-import type { OrgShareDecision, OrgShareMembership, OrgShareRole, OrgShareAllowEntry } from "./org-policy.js";
+import type { OrgShareDecision, OrgShareMembership, OrgShareRefusal, OrgShareRole, OrgShareAllowEntry } from "./org-policy.js";
 
 export type { OrgShareRole };
 export type OrgRoleOrNone = "none" | OrgShareRole;
@@ -14,7 +14,7 @@ export declare function orgDrivesForUser(userId: string): OrgDriveRow[];
 
 export type UserOrg = { issuer: string; orgId: string; subject: string; appRole: string | null; slug: string | null; name: string };
 export declare function userOrgs(userId: string): UserOrg[];
-export declare function listOrgDrivesForUser(userId: string): Array<UserOrg & { drives: OrgDriveRow[] }>;
+export declare function listOrgDrivesForUser(userId: string): Array<UserOrg & { drives: OrgDriveRow[]; pausedDrives: number }>;
 
 export declare function ownsPersonalDrive(userId: string): boolean;
 export declare function signInLandingPath(userId: string, nextPath: string, firstSignIn: boolean): string;
@@ -42,7 +42,10 @@ export declare function checkOrgShare(
   orgId: string,
 ): (Extract<OrgShareDecision, { ok: true }> & { issuer: string; membership: OrgShareMembership }) | Extract<OrgShareDecision, { ok: false }>;
 
-export type OrgShareCandidate = { orgId: string; slug: string | null; name: string; canShare: boolean; reason: string | null };
+export type OrgShareCandidate = {
+  orgId: string; slug: string | null; name: string; canShare: boolean;
+  reason: string | null; reasonCode: OrgShareRefusal | null;
+};
 export declare function orgShareCandidates(driveId: string, userId: string): OrgShareCandidate[];
 
 export declare function revalidateOrgDrives(issuer: string, orgId: string): number;

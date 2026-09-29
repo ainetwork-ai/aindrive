@@ -126,4 +126,9 @@ describe("home page — organization sections come first", () => {
     expect(src.indexOf('data-testid="org-empty"')).toBeGreaterThan(orgAt);
     expect(src.indexOf("drives.map((d) =>", orgAt)).toBeGreaterThan(orgAt);
   });
+  it("chooses paused / empty / one-line empty through orgSectionState (org-policy.test.ts)", () => {
+    expect(src).toMatch(/import \{ orgSectionState \} from "@\/lib\/org-policy\.js"/);
+    expect(src).toContain('data-testid="org-paused"');
+    expect(src).toMatch(/orgSectionState\(\{ drives: o\.drives\.length, pausedDrives: o\.pausedDrives, hasPersonalDrives: drives\.length > 0 \}\)/);
+  });
 });

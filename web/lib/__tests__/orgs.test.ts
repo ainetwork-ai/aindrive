@@ -226,14 +226,20 @@ describe("route level: members read, viewers can't write or mint editor links", 
     expect(agentCalls.some((c) => c.method === "write" && c.path === "notes.md")).toBe(true);
   });
 
-  it("share links: an org viewer can't mint one; an org editor mints viewer links but never editor links", async () => {
+  it("share links: an organization's role never mints one — viewer or editor (a link is a durable grant)", async () => {
     await as(MEMBER);
     expect((await sharesRoute.POST(json(`/api/drives/${DRIVE}/shares`, "POST", { path: "", role: "viewer" }), ctx(DRIVE))).status).toBe(403);
     expect((await sharesRoute.POST(json(`/api/drives/${DRIVE}/shares`, "POST", { path: "", role: "editor" }), ctx(DRIVE))).status).toBe(403);
     const viewerLink = await sharesRoute.POST(json(`/api/drives/${EDIT_DRIVE}/shares`, "POST", { path: "", role: "viewer" }), ctx(EDIT_DRIVE));
-    expect(viewerLink.status).toBe(200);
+    expect(viewerLink.status).toBe(403);
+    expect((await viewerLink.json()).error).toMatch(/organization/);
     const editorLink = await sharesRoute.POST(json(`/api/drives/${EDIT_DRIVE}/shares`, "POST", { path: "", role: "editor" }), ctx(EDIT_DRIVE));
     expect(editorLink.status).toBe(403);
+    // Their own grant (an invitation) still lets them pass on what it covers.
+    db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES (?,?,?,?,?)").run("m-mem-team", EDIT_DRIVE, MEMBER, "docs", "editor");
+    expect((await sharesRoute.POST(json(`/api/drives/${EDIT_DRIVE}/shares`, "POST", { path: "docs", role: "viewer" }), ctx(EDIT_DRIVE))).status).toBe(200);
+    expect((await sharesRoute.POST(json(`/api/drives/${EDIT_DRIVE}/shares`, "POST", { path: "other", role: "viewer" }), ctx(EDIT_DRIVE))).status).toBe(403);
+    db.prepare("DELETE FROM drive_members WHERE id = 'm-mem-team'").run();
   });
 
   it("members roster and invites stay owner/editor surfaces", async () => {
@@ -326,7 +332,7 @@ describe("management: share / unshare from the Manage page", () => {
     const body = await (await orgsRoute.GET(get(`/api/drives/${DRIVE}/orgs`), ctx(DRIVE))).json();
     expect(body).toMatchObject({ enabled: true, canManage: true });
     expect(body.shares).toEqual([expect.objectContaining({ orgId: COMCOM.id, name: "ComCom", role: "viewer", inForce: true })]);
-    expect(body.candidates).toEqual([{ orgId: COMCOM.id, slug: "comcom", name: "ComCom", canShare: true, reason: null }]);
+    expect(body.candidates).toEqual([{ orgId: COMCOM.id, slug: "comcom", name: "ComCom", canShare: true, reason: null, reasonCode: null }]);
     await as(CO);
     const co = await (await orgsRoute.GET(get(`/api/drives/${DRIVE}/orgs`), ctx(DRIVE))).json();
     expect(co).toMatchObject({ canManage: false, candidates: [] });
@@ -334,12 +340,15 @@ describe("management: share / unshare from the Manage page", () => {
     expect((await orgsRoute.GET(get(`/api/drives/${DRIVE}/orgs`), ctx(DRIVE))).status).toBe(403);
   });
 
-  it("a creator who is only a plain member cannot share with the org (403)…", async () => {
+  it("a creator who is only a plain member cannot share with the org (403) and is pointed at the operator…", async () => {
     await as(PLAIN);
     const res = await orgsRoute.POST(json(url, "POST", { orgId: COMCOM.id }), ctx(PLAIN_DRIVE));
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toMatch(/organization admin/);
+    expect((await res.json()).error).toMatch(/organization admin.*operator/);
     expect(orgs.listDriveOrgShares(PLAIN_DRIVE)).toEqual([]);
+    // The Manage card gets a code for its "ask your operator" copy (drive-org-access.tsx).
+    const body = await (await orgsRoute.GET(get(url), ctx(PLAIN_DRIVE))).json();
+    expect(body.candidates).toEqual([expect.objectContaining({ orgId: COMCOM.id, canShare: false, reasonCode: "not_admin" })]);
   });
 
   it("…unless the operator allowlisted them for it (by user id or AIN subject, never email)", async () => {
@@ -406,5 +415,21 @@ describe("home page data: organization sections", () => {
     expect(orgs.listOrgDrivesForUser(OTHER)).toEqual([expect.objectContaining({ name: "Acme", drives: [] })]);
     expect(orgs.listOrgDrivesForUser(OUTSIDER)).toEqual([]);
     expect(orgs.listOrgDrivesForUser(SPLIT).map((s) => s.name)).toEqual(["Acme"]);
+  });
+
+  it("a share paused by its creator's suspension is reported as paused, not as 'no drive yet'", () => {
+    const tmp = "d-acme-paused";
+    const creator = "u-acme-creator";
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run(creator, `${creator}@example.com`, creator, "x");
+    identity(creator, "acc_acme_creator"); membership(creator, "acc_acme_creator", ACME, "active", "admin");
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run(tmp, creator, "Acme HQ", "h", "s");
+    orgs.shareDriveWithOrg({ driveId: tmp, issuer: ISSUER, orgId: ACME.id, role: "viewer", actor: "test" });
+    expect(orgs.listOrgDrivesForUser(OTHER)).toEqual([expect.objectContaining({ name: "Acme", pausedDrives: 0, drives: [expect.objectContaining({ id: tmp })] })]);
+    push("acc_acme_creator", ACME, "suspended", 2);
+    expect(orgs.listOrgDrivesForUser(OTHER)).toEqual([expect.objectContaining({ name: "Acme", drives: [], pausedDrives: 1 })]);
+    expect(access.resolveRoleByUser(tmp, OTHER, "")).toBe("none");
+    push("acc_acme_creator", ACME, "active", 3, "admin");
+    expect(orgs.listOrgDrivesForUser(OTHER)).toEqual([expect.objectContaining({ pausedDrives: 0, drives: [expect.objectContaining({ id: tmp })] })]);
+    orgs.unshareDriveFromOrg({ driveId: tmp, orgId: ACME.id, actor: "test" });
   });
 });

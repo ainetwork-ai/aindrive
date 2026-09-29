@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
+import { isRelatedToDrive } from "@/lib/access";
 
 // Purchase entry point for a single showcase item. The showcase list DTO no
 // longer carries the share token (URL slug) — buyers click through here, and
@@ -17,15 +18,11 @@ export async function GET(
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const drive = getDrive(driveId);
   if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
-  // Relationship gate: mirrors the showcase list endpoint exactly — owner, or
-  // at least one drive_members row at any path. Without it this route would be
-  // a shareId→token oracle for unrelated logged-in users.
-  const related =
-    drive.owner_id === user.id ||
-    !!db.prepare(
-      "SELECT 1 FROM drive_members WHERE drive_id = ? AND user_id = ? LIMIT 1"
-    ).get(driveId, user.id);
-  if (!related) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // Relationship gate: the showcase list endpoint's, shared (isRelatedToDrive:
+  // owner, any drive_members row, or an organization the drive is shared
+  // with). Without it this route would be a shareId→token oracle for
+  // unrelated logged-in users.
+  if (!isRelatedToDrive(driveId, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   // Only listed paid shares are reachable here — not a general id→token lookup.
   const row = db.prepare(
     "SELECT token FROM shares WHERE id = ? AND drive_id = ? AND listed = 1 AND price_usdc IS NOT NULL"
