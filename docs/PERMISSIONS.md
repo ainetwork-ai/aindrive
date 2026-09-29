@@ -76,6 +76,75 @@ explicit role change (PATCH) can lower a role.
   by sending its account-grant token (`Authorization: Bearer aind_aat_…`).
   See `README.md` and `docs/*payment*`.
 
+## Organizations (AIN SSO)
+
+Where AIN SSO is configured, a drive's **creator** can share the whole drive
+with an **organization** — an AIN SSO organization as the provisioning adapter
+recorded it (`sso_memberships`: issuer + org id, with its slug and name). It is
+the fourth way in, and the only one that does **not** write a grant: the role
+is computed on every check, so AIN SSO ending a membership ends the access in
+the same moment. Code: `web/lib/orgs.js` (DB), `web/lib/org-policy.js` (pure
+rules); table `drive_org_shares(drive_id, issuer, org_id, role)`.
+
+- **Who gets what.** Every person whose membership in that organization is
+  `active` — all of their rows for it; one suspended/deprovisioned row wins —
+  gets the share's role, `viewer` (default) or `editor`, on the whole drive
+  (`path=""`). Never `owner`. It comes out of the same functions every surface
+  already asks (`resolveRoleByUser`/`resolveAccess`, `entryView`, the doc
+  socket's `resolveRole`, the MCP scope ceiling `maxRoleInDrive`) and is merged
+  with the person's own grants by rank, so it never lowers one.
+- **When it stops.** The member is suspended or offboarded (the adapter push;
+  their sessions end too); the drive's creator is no longer an active member
+  of that organization (the share pauses for everyone, and resumes if they are
+  reactivated — it was their share to the org as a member); the creator
+  unshares it; or the AIN SSO adapter is not configured for that issuer (a
+  membership nobody keeps current grants nothing). Open collaborative editors
+  are re-checked when a share is lowered or removed and after each adapter push
+  (for every organization of the pushed subject — a rolled-back legacy mapping
+  moves them all, and closes the unlinked account's sockets even when nobody
+  signed in through the link). A socket that got its access through an
+  organization is also checked before every frame it sends and swept every
+  5 s (`dochub.js revalidateOrgPeers`), so a change made outside the server
+  process — the operator script — stops its edits at once and its reading
+  within seconds.
+- **Live, never written down.** Nothing reached through an organization
+  becomes a `drive_members` row, for the member or anyone else, because a row
+  outlives the membership: share links are minted only on the caller's **own**
+  grants (an org editor gets 403 — ask the drive's owner); an editor's
+  `GET /shares` lists only their own links plus others' paid viewer links (the
+  sale badges) — never someone else's free link or an editor link, whose token
+  is the grant; accepting a paid link the organization already covers lets the
+  member in without writing a row; a purchase records what was bought, merged
+  with the buyer's own grants only (`access.ts personalRoleByUser`).
+- **A ceiling like any grant.** An org viewer is a bare viewer: the paid
+  carve-out applies, no writes, no share links. An org editor edits files;
+  links, listing, members and invites stay with personal grants and owners.
+  Members count as "related" for the showcase (list and Buy,
+  `isRelatedToDrive`). A member can't `leave` an organization's drive (409) —
+  the creator unshares it.
+- **Who may share.** The creator only (co-owners see the share read-only),
+  with an organization they are an active member of, **as its admin** (AIN SSO
+  app role `admin`/`owner`). AIN SSO assigns aindrive with app role `member`
+  unless an admin sets otherwise, so the operator can also allow named people:
+  `AINDRIVE_ORG_SHARE_ALLOWLIST=<org slug|id>:<aindrive user id|AIN subject>,…`
+  (stable ids only, never an email). This is deliberately narrower than "any
+  active member": publishing a drive to a whole company is an admin decision.
+  A creator who is neither sees, on the Manage card, that only an org admin
+  can and that the operator can add the drive.
+  Unsharing is always allowed to the creator. The operator binds any drive by
+  id and org slug with `web/scripts/org-drive.mjs` (`docs/DEPLOY.md`
+  "Organization drives"). Every share, role change and unshare is recorded in
+  `sso_audit` (`org_drive_shared`, `org_drive_role_changed`,
+  `org_drive_unshared`; actor `user:<id>` or `operator`).
+- **What members see.** The signed-in home lists each of their organizations
+  first — its drives; "ComCom's shared drive is paused" while its creator is
+  not an active member; or "No ComCom drive yet … ask your ComCom admin" (one
+  line when their own drives follow, `org-policy.js orgSectionState`) — then
+  their personal drives. The app (`mobile/`, also the Mac app) groups them
+  under the organization's name and offers no "Leave" on them. An AIN sign-in to the home page lands on the
+  organization's drive on the person's first sign-in and whenever they own no
+  personal drive (with one organization drive; several → the home page).
+
 ## What a member sees on entry
 
 `entryView` (membership) plus a stat of the path decide where a user lands —
@@ -105,7 +174,8 @@ email+password credential, **a Google account** (`POST /api/auth/google`: the ac
 
 An account that AIN SSO suspends (or offboards) from every organization it
 belongs to cannot sign in on any path and its sessions end; its drives,
-grants and personal tokens are kept. An AIN-linked account cannot reset its
+grants and personal tokens are kept. Suspension from one organization ends
+only that organization's drives (above). An AIN-linked account cannot reset its
 password by email.
 
 A **wallet-provisioned account** — minted for a wallet that paid or signed in

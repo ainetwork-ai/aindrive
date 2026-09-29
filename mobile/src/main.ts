@@ -853,7 +853,7 @@ async function refreshRemotes(force = false) {
     const mine = localDriveIds();
     const next = all.filter((d) => !mine.has(d.id));
     // Only what the list shows: lastSeenAt ticks on every heartbeat, and a redraw would close an open menu.
-    const shown = (xs: RemoteDrive[]) => JSON.stringify(xs.map((d) => [d.id, d.name, d.online, d.hostname, d.owned, d.online ? "" : d.lastSeenAt]));
+    const shown = (xs: RemoteDrive[]) => JSON.stringify(xs.map((d) => [d.id, d.name, d.online, d.hostname, d.owned, d.org?.id ?? null, d.online ? "" : d.lastSeenAt]));
     const changed = shown(next) !== shown(remotes);
     remotes = next;
     remotesAt = Date.now();
@@ -1887,7 +1887,10 @@ function homeScreen(): string {
     </div>`;
   const acts = activity.slice(0, showAllActivity ? 30 : 4);
   const others = remotes.filter((d) => d.owned !== false);
-  const sharedWithMe = remotes.filter((d) => d.owned === false);
+  // Drives an organization shares with this account get their own section per
+  // organization, above the personal ones (web home does the same).
+  const viaOrg = remotes.filter((d) => d.owned === false && d.org);
+  const sharedWithMe = remotes.filter((d) => d.owned === false && !d.org);
   const who = state.email ?? "Account";
   return `
     <div class="topbar">
@@ -1910,6 +1913,10 @@ function homeScreen(): string {
       : empty}
 
     ${!ON_MAC ? sourcesSection() : ""}
+
+    ${byOrg(viaOrg).map(([org, ds]) => `
+      <div class="section"><h2>${esc(org)}</h2></div>
+      ${ds.map((d) => remoteCard(d)).join("")}`).join("")}
 
     ${others.length ? `
       <div class="section"><h2>My drives on other devices</h2><button class="link" id="refresh-remotes">${icon("refresh", 16)} Refresh</button></div>
@@ -1953,6 +1960,13 @@ function byDevice(ds: RemoteDrive[]): [string, RemoteDrive[]][] {
   return [...groups.entries()].sort((a, b) => Number(online(b[1]) > 0) - Number(online(a[1]) > 0));
 }
 
+/** Organization drives under one heading per organization (by name). */
+function byOrg(ds: RemoteDrive[]): [string, RemoteDrive[]][] {
+  const groups = new Map<string, RemoteDrive[]>();
+  for (const d of ds) { const k = d.org?.name ?? ""; groups.set(k, [...(groups.get(k) ?? []), d]); }
+  return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
 /** A drive this account can reach that another device serves (or that someone shared with you). */
 function remoteCard(d: RemoteDrive, withDevice = true): string {
   // The server stores "YYYY-MM-DD HH:MM:SS" in UTC with no zone marker.
@@ -1965,12 +1979,12 @@ function remoteCard(d: RemoteDrive, withDevice = true): string {
       <button data-act="chat">${icon("chat", 18)} Chat with agents</button>
       <button data-act="mcp">${icon("plug", 18)} MCP</button>
       <button data-act="web">${icon("external", 18)} Open on the web</button>
-      ${d.owned === false ? `<div class="sep"></div><button class="danger" data-act="leave">${icon("logout", 18)} Leave drive</button>` : ""}
+      ${d.owned === false && !d.org ? `<div class="sep"></div><button class="danger" data-act="leave">${icon("logout", 18)} Leave drive</button>` : ""}
     </div>` : "";
   return `
     <div class="card remote" data-remote="${esc(d.id)}">
       <div class="folder">
-        <div class="glyph" data-act="browse">${d.owned === false ? I.users : I.drive}</div>
+        <div class="glyph" data-act="browse">${d.owned === false ? (d.org ? I.building : I.users) : I.drive}</div>
         <div style="min-width:0" data-act="browse" role="button">
           <div class="name">${esc(d.name)}</div>
           <div class="state"><span class="dot ${d.online ? "on" : "off"}"></span>${esc(seen)}${withDevice && d.hostname ? ` · ${esc(deviceName(d))}` : ""}</div>
@@ -2057,7 +2071,7 @@ function bindHome() {
       else if (act === "chat") openChat(d.id, d.name, "", d.owned !== false);
       else if (act === "mcp") openMcp(d.id, d.name);
       else if (act === "web") void Browser.open({ url: `${state.server}/d/${d.id}` });
-      else if (act === "leave") void leaveDrive(d);
+      else if (act === "leave" && !d.org) void leaveDrive(d);
     }));
   });
   app.querySelectorAll<HTMLElement>("[data-share]").forEach((card) => {

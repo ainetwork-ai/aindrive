@@ -2,7 +2,7 @@
 // rendered to SVG strings for the string-template UI. Only the icons imported
 // here end up in the bundle.
 import {
-  ArrowDown, ArrowLeft, ArrowRightLeft, ArrowUp, Bot, Check, ChevronRight, CircleDollarSign, Cloud, Copy, Download, EllipsisVertical,
+  ArrowDown, ArrowLeft, ArrowRightLeft, ArrowUp, Bot, Building2, Check, ChevronRight, CircleDollarSign, Cloud, Copy, Download, EllipsisVertical,
   ExternalLink, File, History, FileAudio, FileCode, FileImage, FileText, FileVideo, Folder, FolderInput, FolderPlus, HardDrive, House,
   Info, Cpu, Globe, LayoutGrid, Link, List, Lock, LogOut, Mail, Menu, MessageSquare, Pencil, Phone, Plug, Plus, RefreshCw, Save, Search,
   Settings, Share2, Smartphone, Sparkles, Trash2, TrendingUp, Upload, UserMinus, Users, Wallet, X,
@@ -15,7 +15,7 @@ function svg(node: IconNode, size = 20, extra = ""): string {
 }
 
 const nodes = {
-  agent: Bot, back: ArrowLeft, check: Check, chevron: ChevronRight, close: X, copy: Copy, dollar: CircleDollarSign,
+  agent: Bot, back: ArrowLeft, building: Building2, check: Check, chevron: ChevronRight, close: X, copy: Copy, dollar: CircleDollarSign,
   download: Download, drive: HardDrive, edit: Pencil, external: ExternalLink, file: File, fileAudio: FileAudio, fileCode: FileCode,
   fileImage: FileImage, fileText: FileText, fileVideo: FileVideo, folder: Folder, folderPlus: FolderPlus, grid: LayoutGrid,
   home: House, history: History, info: Info, cpu: Cpu, cloud: Cloud, globe: Globe, link: Link, list: List, lock: Lock, logout: LogOut, mail: Mail, menu: Menu, chat: MessageSquare,

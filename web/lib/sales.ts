@@ -13,7 +13,7 @@ import { z } from "zod";
 import { isAddress } from "viem";
 import { db } from "./db";
 import { payoutWalletFor, setPayoutWallet, type DriveRow } from "./drives";
-import { resolveRole, atLeast } from "./access";
+import { resolveRole, personalRoleByUser, atLeast } from "./access";
 import {
   parseTokenPolicy, pickShareCurrency, policyChainViolation, resolveDriveTokens, type PaymentToken,
 } from "./payment-tokens";
@@ -52,17 +52,33 @@ export type ShareRow = {
   listed: number;
 };
 
-/** Every share link of a drive, newest first. */
-export function listShares(driveId: string): ShareRow[] {
+/**
+ * Share links of a drive, newest first. Without `forUser`: every link (the
+ * owner's ledger, the creator-only MCP tools). With `forUser` (a non-owner
+ * editor — GET /shares): only what they may pass on or need to see — the
+ * links they created, plus others' PAID viewer links (the sale badges; a paid
+ * link grants nothing without paying). Never someone else's free link or any
+ * editor link: holding the token IS the grant, and editor links are
+ * owner-only (createShare), so reading one must not be a way around that.
+ */
+export function listShares(driveId: string, forUser?: string): ShareRow[] {
+  const cols = "id, path, role, token, expires_at, created_at, price_usdc, currency, listed";
+  if (forUser === undefined) {
+    return db.prepare(`SELECT ${cols} FROM shares WHERE drive_id = ? ORDER BY created_at DESC`).all(driveId) as ShareRow[];
+  }
   return db.prepare(`
-    SELECT id, path, role, token, expires_at, created_at, price_usdc, currency, listed
-    FROM shares WHERE drive_id = ? ORDER BY created_at DESC
-  `).all(driveId) as ShareRow[];
+    SELECT ${cols} FROM shares
+    WHERE drive_id = ? AND role != 'editor'
+      AND (created_by = ? OR price_usdc IS NOT NULL)
+    ORDER BY created_at DESC
+  `).all(driveId, forUser) as ShareRow[];
 }
 
 /**
  * Mint a share link (free, or paid when `price_usdc` is set). Gates: editor at
- * the path; listing and editor links are owner-only; a paid share needs a
+ * the path through the caller's OWN grants (an organization's role does not
+ * count: a link turns into a durable drive_members row that would outlive the
+ * membership); listing and editor links are owner-only; a paid share needs a
  * payout wallet covering the path and a currency in the drive's policy; a
  * non-root path must exist on the agent (so the agent must be online).
  */
@@ -72,8 +88,13 @@ export async function createShare(
   input: ShareCreateInput,
 ): Promise<{ ok: true; id: string; token: string; url: string } | SaleErr> {
   const driveId = drive.id;
-  const role = resolveRole(driveId, userId, input.path);
-  if (!atLeast(role, "editor")) return { ok: false, status: 403, error: "forbidden" };
+  const role = personalRoleByUser(driveId, userId, input.path);
+  if (!atLeast(role, "editor")) {
+    if (atLeast(resolveRole(driveId, userId, input.path), "editor")) {
+      return { ok: false, status: 403, error: "access through your organization can't be passed on with a link — ask the drive's owner to share it" };
+    }
+    return { ok: false, status: 403, error: "forbidden" };
+  }
 
   // [rev2-D] Listing on the drive's showcase is owner-only: a path-scoped
   // editor must not be able to put arbitrary priced items on the drive's
@@ -165,9 +186,10 @@ export function editShare(
   if (!share) return { ok: false, status: 404, error: "not found" };
 
   // created_by has no FK, so a removed editor whose id still matches the
-  // column must NOT retain edit rights — hence the live role re-check.
+  // column must NOT retain edit rights — hence the live role re-check, on the
+  // same own-grants role createShare requires (never an organization's).
   const isOwner = atLeast(resolveRole(driveId, userId, ""), "owner");
-  if (!isOwner && (share.created_by !== userId || !atLeast(resolveRole(driveId, userId, share.path), "editor"))) {
+  if (!isOwner && (share.created_by !== userId || !atLeast(personalRoleByUser(driveId, userId, share.path), "editor"))) {
     return { ok: false, status: 403, error: "forbidden" };
   }
 

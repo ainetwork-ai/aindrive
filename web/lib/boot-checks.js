@@ -1,3 +1,5 @@
+import { parseOrgShareAllowlist } from "./org-policy.js";
+
 /**
  * runBootChecks — called once at server startup.
  * In development (NODE_ENV !== "production") every check is a no-op so local
@@ -102,6 +104,11 @@ export function ssoConfigErrors(env) {
   }
   if (/^(true|1)$/i.test(enabled) && (!issuer || !clientId || !secret)) {
     errors.push("AINDRIVE_SSO_ENABLED=true needs AINDRIVE_SSO_ISSUER, AINDRIVE_SSO_CLIENT_ID and AINDRIVE_SSO_CLIENT_SECRET.");
+  }
+  // Organization sharing (lib/orgs.js): who besides org admins may share a drive with their org.
+  const allow = parseOrgShareAllowlist(v("AINDRIVE_ORG_SHARE_ALLOWLIST"));
+  if (allow.bad.length) {
+    errors.push(`AINDRIVE_ORG_SHARE_ALLOWLIST must be comma-separated <org slug or id>:<user id or AIN subject> entries, no emails (bad: ${allow.bad.join(", ")}).`);
   }
   return errors;
 }

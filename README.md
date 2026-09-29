@@ -164,6 +164,14 @@ SaaS subscription.
 aindrive has three layered access mechanisms — each more cryptographically
 strict than the last:
 
+> **Organizations (AIN SSO).** Where AIN SSO is configured, a drive's creator
+> can also share the whole drive with an AIN SSO organization: every active
+> member gets viewer/editor access, which ends the moment AIN SSO suspends or
+> offboards them, and the signed-in home lists the organization's drives
+> first. Model, rules and who may share: [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md)
+> "Organizations"; operator binding: [`docs/DEPLOY.md`](docs/DEPLOY.md)
+> "Organization drives".
+
 ### 1. Owner-managed allowlist (simple)
 
 ```

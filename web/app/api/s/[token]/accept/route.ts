@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
-import { resolveRoleByUser, type Role } from "@/lib/access";
+import { personalRoleByUser, resolveRoleByUser, type Role } from "@/lib/access";
 import { holdsPaidShare } from "@/lib/sale-access.js";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 
@@ -43,9 +43,18 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
   // what the link sells (holdsPaidShare: share.role — not a viewer floor, so a
   // free link at the same path can't upgrade to a paid tier — and past the
   // paid read gate, so a parent folder's viewer still pays). Else pay via GET.
+  // Only what they hold through their OWN grants is written down: an
+  // organization's role is live, and a member row made from it would outlive
+  // the membership (docs/PERMISSIONS.md "Organizations"). Someone covered only
+  // through an organization is let in without a row (GET /s/<token> sent them
+  // here as entitled).
   if (share.price_usdc) {
-    const role = resolveRoleByUser(share.drive_id, user.id, share.path);
-    if (!holdsPaidShare(share.drive_id, share, role, user.id)) {
+    const own = personalRoleByUser(share.drive_id, user.id, share.path);
+    if (!holdsPaidShare(share.drive_id, share, own, user.id)) {
+      const live = resolveRoleByUser(share.drive_id, user.id, share.path);
+      if (holdsPaidShare(share.drive_id, share, live, user.id)) {
+        return NextResponse.json({ driveId: share.drive_id, path: share.path });
+      }
       return NextResponse.json({ error: "payment required" }, { status: 402 });
     }
   }

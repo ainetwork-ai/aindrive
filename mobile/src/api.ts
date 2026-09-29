@@ -113,7 +113,10 @@ export async function deleteDrive(server: string, sessionCookie: string, driveId
 
 // ---------------------------------------------------------------- other devices (same account)
 
-export interface RemoteDrive { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null; owned?: boolean }
+/** An AIN SSO organization a drive is shared with (web/app/api/drives `org`; docs/PERMISSIONS.md "Organizations"). */
+export interface DriveOrg { id: string; slug: string | null; name: string }
+/** `org`: the drive reaches this account through (or is published to) an organization — grouped under it, never "Leave". */
+export interface RemoteDrive { id: string; name: string; hostname: string | null; online: boolean; lastSeenAt?: string | null; owned?: boolean; org?: DriveOrg | null }
 
 /** Every drive this account owns — the ones served by THIS phone and by any other device. */
 export async function listDrives(server: string, sessionCookie: string): Promise<RemoteDrive[]> {

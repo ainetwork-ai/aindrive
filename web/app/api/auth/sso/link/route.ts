@@ -42,8 +42,8 @@ async function finish(pending: PendingLinkRow, userId: string) {
   await clearLinkCookie();
   let orgIds: string[] = [];
   try { orgIds = JSON.parse(pending.org_ids); } catch {}
-  await beginSsoSession(userId, { issuer: pending.issuer, subject: pending.subject, oidcSid: pending.oidc_sid, orgId: pending.org_id, orgIds });
-  return NextResponse.json({ redirect: pending.next_path });
+  const next = await beginSsoSession(userId, { issuer: pending.issuer, subject: pending.subject, oidcSid: pending.oidc_sid, orgId: pending.org_id, orgIds }, pending.next_path);
+  return NextResponse.json({ redirect: next });
 }
 
 export async function POST(req: Request) {

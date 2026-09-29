@@ -68,14 +68,12 @@ export async function GET(req: Request) {
     // A placeholder the provisioning adapter made (never signed in) is not the
     // person's account yet: they may still connect their legacy one.
     if (!(legacy !== "false" && isPlaceholderIdentity(linked))) {
-      await beginSsoSession(linked.user_id, session);
-      return redirectTo(pending.next_path);
+      return redirectTo(await beginSsoSession(linked.user_id, session, pending.next_path));
     }
   } else if (legacy === "false") {
     const { userId } = resolveOrCreateUserForSubject({ issuer: config.issuer, subject: identity.sub, name: identity.name, email: identity.email, emailVerified: identity.emailVerified });
     if (isAccountBlocked(userId)) return silent ? anonymous("account_suspended") : loginError("account_suspended");
-    await beginSsoSession(userId, session);
-    return redirectTo(pending.next_path);
+    return redirectTo(await beginSsoSession(userId, session, pending.next_path));
   }
 
   const linkId = createPendingLink({

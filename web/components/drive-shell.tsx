@@ -206,7 +206,8 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   }, []);
 
   // Editors (not just owners) get the inline sale badges so someone editing a
-  // file knows it's monetized. GET /shares is editor-at-root; a purely
+  // file knows it's monetized. GET /shares is editor-at-root (a non-owner gets
+  // their own links + the paid viewer links, lib/sales.ts listShares); a purely
   // path-scoped editor 403s → res.ok false → badges stay empty (tolerated).
   const loadShares = useCallback(async () => {
     if (role !== "editor" && role !== "owner") return;

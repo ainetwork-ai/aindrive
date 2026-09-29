@@ -44,6 +44,9 @@ Sharing / payments:
   exports `PaymentTokensEditor`, which `drive-manage` renders.
 - `drive-manage` — owner Settings page, Members/Links/Sales/Payments left-rail.
   Owns the editable drive token-policy editor (`PaymentTokensEditor`) + payout.
+- `drive-org-access` — the Members tab's "Organizations" card: share the whole
+  drive with an AIN SSO organization, change its role, stop sharing
+  (`/api/drives/:id/orgs`; rules in `lib/org-policy.js`).
 - `share-gate(.tsx/-client)` — the `/s/[token]` paywall: x402 pay + Permit2
   approve. `-client` is the SSR-skipping wrapper.
 - `x402-badges` / `x402-logo` — price badge + brand mark.

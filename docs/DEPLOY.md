@@ -103,6 +103,7 @@ load-bearing ones:
 | `AINDRIVE_LEGACY_LOGIN` | `true` | `unlinked_only` (AIN-linked accounts must use AIN) or `false` (no password/Google/wallet sign-in, signup or email reset). Applies only while `AINDRIVE_SSO_ENABLED=true`. With SSO on, `true` shows "Sign up with AIN" next to the legacy sign-up; any other value makes sign-up go to AIN SSO (`prompt=create`). A mistyped value fails the boot. |
 | `AINDRIVE_SSO_SILENT` | **unset** (on while SSO login is enabled) | `false` turns off only the automatic sign-in check (a page visit without a session goes once per 30 min to AIN SSO with `prompt=none`; `web/lib/sso/silent.ts`). |
 | `AINDRIVE_SSO_ATTEST`, `AINDRIVE_SSO_ATTEST_EMAIL_DOMAINS` | **unset** (on with the client secret) / `comcom.ai` | After a legacy sign-in aindrive reports the Google `sub` (Google) or a company address it verified by email code (password) to AIN SSO (`/api/upstream/app-attest`), so the AIN account links to it. `ATTEST=false` = off; domains comma-separated or `none`. |
+| `AINDRIVE_ORG_SHARE_ALLOWLIST` | **unset** (only org admins share) | Organization drives (`docs/PERMISSIONS.md` "Organizations"): a drive's creator may share it with an AIN SSO organization from its Manage page when AIN SSO makes them that org's admin (app role `admin`/`owner`). This comma-separated list also allows named people: `<org slug or id>:<aindrive user id or AIN subject>` — stable ids, never an email; a malformed entry fails the boot. Read per request. The operator script (below) needs no allowlist. |
 | `AINDRIVE_DEFAULT_DRIVE_LIMIT` | **unset** (unlimited) | Positive integer caps drives per account (`POST /api/drives` → 429 `drive_limit_reached`). Every shared folder is a drive, so a low cap bites phone users first. |
 | `AINDRIVE_UNLIMITED_OWNERS` | **unset** (every owner capped by tier) | Comma-separated user ids and/or wallet addresses. Drives whose owner is listed (by id, or by any wallet linked to the owner's account) skip the per-owner file-count cap: free 1,000 / pro 100,000 files summed over all of that owner's drives, counted on every write path (browser, MCP PAT, account token). Set it for an app's operator account that stores many users' files in one drive through a PAT. Read per request; a restart applies it. |
 
@@ -110,6 +111,45 @@ load-bearing ones:
 wallet in Settings → Payments; a paid share can't be created until they do.
 There is no deployment-wide payout fallback (it would misroute funds in a
 multi-tenant drive).
+
+## Organization drives (AIN SSO)
+
+A company folder every employee sees (e.g. ComCom's) is an ordinary drive that
+its owner — an **active member** of the organization — serves with the aindrive
+agent, shared with the organization. Model: `docs/PERMISSIONS.md`
+"Organizations". Needs the AIN SSO adapter live (`AINDRIVE_SSO_ISSUER` +
+`AINDRIVE_SSO_CLIENT_ID`) and AIN SSO to have provisioned the organization's
+members (their rows are in `sso_memberships`).
+
+1. Serve the folder from the owner's account (e.g. `kimminhyun@comcom.ai`): on
+   the host that holds it, run `aindrive` in that folder signed in as that
+   account. Its drive id is the `<id>` in `/d/<id>`.
+2. Bind it to the organization, in the running web container
+   (`aindrive-web-1`; the image ships `scripts/org-drive.mjs`):
+
+   ```bash
+   sudo docker exec aindrive-web-1 node scripts/org-drive.mjs orgs                    # organizations + their drives
+   sudo docker exec aindrive-web-1 node scripts/org-drive.mjs share --drive <id> --org comcom                  # viewer (default)
+   sudo docker exec aindrive-web-1 node scripts/org-drive.mjs share --drive <id> --org comcom --role editor    # or change the role
+   sudo docker exec aindrive-web-1 node scripts/org-drive.mjs list --drive <id>
+   sudo docker exec aindrive-web-1 node scripts/org-drive.mjs unshare --drive <id> --org comcom
+   ```
+
+   `--org` takes the slug or the org id (`--issuer` if two issuers know it).
+   `share` refuses when the drive's owner is not an active member of that
+   organization — the share would stay paused — unless `--force`. Every change
+   takes effect at once (access is read per request, no restart) and is recorded
+   in `sso_audit` with actor `operator`. The script runs in its own process, so
+   the server notices a lowered role or an unshare on doc sockets already open
+   by itself: a member's next edit is refused and their socket closed at once,
+   and a socket that only reads is closed within 5 s (every HTTP call is
+   refused at once). The drive's owner can do the same from the drive's Manage
+   → Members → Organizations card when they are the org's admin or
+   allowlisted (`AINDRIVE_ORG_SHARE_ALLOWLIST`); a creator who is neither is
+   told to ask the operator — this script.
+3. Members see it: the signed-in home lists the organization first, and an AIN
+   sign-in lands on its drive on a person's first sign-in or while they have no
+   personal drive of their own.
 
 ## CDP facilitator — verified facts (2026-06)
 

@@ -9,7 +9,7 @@ import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
 import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "@/lib/account-tokens";
 import { bearerFrom } from "@/lib/mcp-http";
-import { resolveRoleByUser, type Role } from "@/lib/access";
+import { personalRoleByUser, resolveRoleByUser, type Role } from "@/lib/access";
 import { holdsPaidShare } from "@/lib/sale-access.js";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
 import { getDriveNamespace, payoutWalletFor } from "@/lib/drives";
@@ -236,9 +236,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     // role at this path (e.g. an owner-added editor paying through a viewer
     // share). mergeRoleUpgradeOnly returns the higher of current/incoming.
     // Safe read-then-merge-then-write: better-sqlite3 is synchronous and
-    // single-process, so nothing interleaves between the resolveRoleByUser
-    // read and the INSERT. Revisit if this moves to multi-process/pooled access.
-    const currentRole = resolveRoleByUser(share.drive_id, settleAccountId, share.path);
+    // single-process, so nothing interleaves between the read and the INSERT.
+    // Revisit if this moves to multi-process/pooled access. The merge reads
+    // the buyer's OWN grants (personalRoleByUser): an organization's role is
+    // live and must not be written down here as a durable member row that
+    // outlives the membership.
+    const currentRole = personalRoleByUser(share.drive_id, settleAccountId, share.path);
     const mergedRole = mergeRoleUpgradeOnly(currentRole, share.role);
     db.prepare(
       `INSERT INTO drive_members (id, drive_id, user_id, path, role)
