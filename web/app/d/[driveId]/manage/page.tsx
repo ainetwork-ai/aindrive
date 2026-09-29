@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getUser } from "@/lib/session";
+import { staleSessionCheck } from "@/lib/sso/stale-session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast } from "@/lib/access";
 import { DriveManage } from "@/components/drive-manage";
@@ -10,7 +11,8 @@ import { DriveManage } from "@/components/drive-manage";
 export default async function ManagePage({ params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const user = await getUser();
-  if (!user) redirect(`/login?next=/d/${driveId}/manage`);
+  // A dead session cookie gets the automatic AIN sign-in the middleware skipped.
+  if (!user) redirect((await staleSessionCheck(`/d/${driveId}/manage`)) ?? `/login?next=/d/${driveId}/manage`);
   const drive = getDrive(driveId);
   if (!drive) return <main className="p-10">Drive not found.</main>;
   if (!atLeast(resolveRole(driveId, user.id, ""), "owner")) redirect(`/d/${driveId}`);

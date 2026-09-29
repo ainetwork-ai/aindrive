@@ -86,8 +86,8 @@ export async function handleAdapterUser(req: Request, orgId: string, sub: string
       const { state } = await verifyAdapterRequest({ ...common, body });
       if (!state) throw new AdapterError("invalid_request", 400, "A DesiredUserState body is required.", false);
       if (state.sub !== sub || state.org.id !== orgId) throw new AdapterError("invalid_request", 400, "Body does not match the request path.", false);
-      const { result, endedUserId } = applyDesiredState(cfg.issuer, state);
-      if (endedUserId) disconnectUserSockets({ userId: endedUserId });
+      const { result, endedUserIds } = applyDesiredState(cfg.issuer, state);
+      for (const userId of endedUserIds) disconnectUserSockets({ userId });
       return json(200, result);
     }
     return json(405, { error: "method_not_allowed", retryable: false }, { allow: "GET, PUT" });

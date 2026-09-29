@@ -41,14 +41,10 @@ export async function clearLinkCookie() {
 }
 
 /**
- * The silent check's loop guard (lib/sso/silent.ts). Cleared when a sign-out
- * also ended the AIN session (the next page view may check again); set when
- * only aindrive's session ended, so an AIN session this browser still has
- * does not sign it straight back in.
+ * The silent check's loop guard (lib/sso/silent.ts), outside the middleware:
+ * set on every sign-out, so an AIN session this browser still has does not
+ * sign it straight back in, and by the start route for every silent check.
  */
-export async function clearSilentChecked() {
-  (await cookies()).set(SSO_CHECKED_COOKIE, "", { httpOnly: true, sameSite: "lax", secure: secure(), path: "/", maxAge: 0 });
-}
 export async function markSilentChecked() {
   (await cookies()).set(SSO_CHECKED_COOKIE, "1", { httpOnly: true, sameSite: "lax", secure: secure(), path: "/", maxAge: SSO_CHECKED_MAX_AGE });
 }

@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { getUser } from "@/lib/session";
+import { staleSessionCheck } from "@/lib/sso/stale-session";
 import { listUserDrives } from "@/lib/drives";
 import { isOnline } from "@/lib/rpc";
 import { Globe, HardDrive, Share2 } from "lucide-react";
@@ -13,6 +15,9 @@ import { desktopAppServes } from "@/shared/desktop";
 export default async function Home() {
   const user = await getUser();
   if (!user) {
+    // A dead session cookie: the automatic AIN sign-in the middleware skipped.
+    const check = await staleSessionCheck("/");
+    if (check) redirect(check);
     // The web is where you use aindrive — from any browser, nothing to install.
     // Installing is only for putting a folder IN (the Mac app or the terminal
     // agent on the device that holds it), so it comes second.

@@ -83,6 +83,20 @@ export async function clearCookie() {
 }
 
 /**
+ * Deletes a session cookie that no longer verifies (its session ended through
+ * AIN SSO, the account was suspended, the epoch moved on, it expired): kept,
+ * it would make the middleware skip the silent check (lib/sso/stale-session.ts).
+ * Route handlers only. True if it did.
+ */
+export async function dropDeadSessionCookie(): Promise<boolean> {
+  const jar = await cookies();
+  const token = jar.get(COOKIE)?.value;
+  if (!token || (await verify(token))) return false;
+  jar.delete(COOKIE);
+  return true;
+}
+
+/**
  * The AIN SSO session behind the current cookie, if it is one and still live
  * (null for legacy sessions). Its `org_id` scopes credentials created in it.
  */

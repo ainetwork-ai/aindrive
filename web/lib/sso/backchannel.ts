@@ -3,14 +3,16 @@
  * `sid` ends only the aindrive sessions created with that OIDC session; with
  * only `sub` it ends every session of the linked account (epoch bump: browser
  * cookies, CLI/mobile pairing tokens and bearer uses alike). Open
- * collaboration sockets of the ended sessions are closed. Answers 200, or 400
- * for an invalid token, always `Cache-Control: no-store`.
+ * collaboration sockets of the ended sessions are closed. A sign-in of that
+ * OIDC session (or AIN account) still waiting on /sso/link is cancelled, so it
+ * can't be finished after the AIN session ended. Answers 200, or 400 for an
+ * invalid token, always `Cache-Control: no-store`.
  */
 import type { JWTVerifyGetKey } from "jose";
 import { adapterConfig } from "./config";
 import { adapterJwksUrl, discover, remoteJwks } from "./oidc";
 import { LogoutTokenError, verifyLogoutToken } from "./tokens";
-import { audit, disconnectUserSockets, endAllUserSessions, endSessionsBySid, identityFor } from "./store.js";
+import { audit, cancelPendingLinks, disconnectUserSockets, endAllUserSessions, endSessionsBySid, identityFor } from "./store.js";
 
 const MAX_BODY = 16 * 1024;
 
@@ -53,14 +55,19 @@ export async function handleBackchannelLogout(req: Request, deps: { keys?: JWTVe
   try {
     if (logout.sid) {
       const ended = endSessionsBySid(cfg.issuer, logout.sid);
+      const pendingLinks = cancelPendingLinks(cfg.issuer, { sid: logout.sid });
       if (ended.length) disconnectUserSockets({ sessionIds: ended.map((s) => s.id) });
-      audit({ actor: "ain-sso", action: "backchannel_logout", issuer: cfg.issuer, subject: logout.sub, details: { sid: logout.sid, sessionsEnded: ended.length } });
+      audit({ actor: "ain-sso", action: "backchannel_logout", issuer: cfg.issuer, subject: logout.sub, details: { sid: logout.sid, sessionsEnded: ended.length, pendingLinks } });
     } else if (logout.sub) {
+      // Pending sign-ins exist precisely while the AIN account is not linked yet.
+      const pendingLinks = cancelPendingLinks(cfg.issuer, { sub: logout.sub });
       const ident = identityFor(cfg.issuer, logout.sub);
       if (ident) {
         const ended = endAllUserSessions(ident.user_id, "backchannel_logout");
         disconnectUserSockets({ userId: ident.user_id });
-        audit({ actor: "ain-sso", action: "backchannel_logout", issuer: cfg.issuer, subject: logout.sub, userId: ident.user_id, details: { allSessions: true, ssoSessionRows: ended } });
+        audit({ actor: "ain-sso", action: "backchannel_logout", issuer: cfg.issuer, subject: logout.sub, userId: ident.user_id, details: { allSessions: true, ssoSessionRows: ended, pendingLinks } });
+      } else if (pendingLinks) {
+        audit({ actor: "ain-sso", action: "backchannel_logout", issuer: cfg.issuer, subject: logout.sub, details: { allSessions: true, pendingLinks } });
       }
     }
   } catch (err) {

@@ -33,6 +33,9 @@ const { onDocConnect } = await import("../dochub.js");
 const userRoute = await import("../../app/api/sso/v1/orgs/[orgId]/users/[sub]/route.js");
 const loginRoute = await import("../../app/api/auth/login/route.js");
 const pollRoute = await import("../../app/api/auth/cli/poll/route.js");
+const membersRoute = await import("../../app/api/drives/[driveId]/members/route.js");
+const oauth = await import("../oauth");
+const { walletLoginAccount } = await import("../wallet");
 
 const issuer = await createTestIssuer();
 const ORG = { id: "org_comcom", slug: "comcom", name: "ComCom" };
@@ -244,6 +247,72 @@ describe("legacy mapping (adapter-protocol §4.4)", () => {
     expect(store.ssoAccountState("legacy_c")).toBe("unmanaged"); // an ordinary account again
     expect(db.prepare("SELECT id FROM users WHERE id = 'legacy_c'").get()).toBeTruthy(); // never deleted
   });
+
+  it("a rollback ends everything the wrongly linked person obtained on the account — before the 200", async () => {
+    const L = "legacy_rb";
+    const HOUR = 60 * 60 * 1000;
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run(L, "rb@example.com", "RB", "x");
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run("drive_rb", L, "RB's", "h", "s");
+    // The owner's own credentials from before the (wrong) link.
+    const ownPat = mcpTokens.issuePat({ userId: L, driveId: "drive_rb", name: "own", scope: "read", ttlDays: null });
+    db.prepare("UPDATE mcp_tokens SET created_at = ? WHERE id = ?").run(Date.now() - 24 * HOUR, ownPat.row.id);
+    db.prepare("INSERT INTO account_wallets (id, account_id, wallet_address, verified_via, login_enabled, linked_at) VALUES ('w_own', ?, '0xown', 'siwe', 1, datetime('now', '-1 day'))").run(L);
+
+    // AIN SSO maps L to the wrong AIN account; that person signs in and lands in L's account.
+    expect((await (await put(desired("acc_rb", { version: 1, legacyUserId: L }))).json()).localUserId).toBe(L);
+    const ses = store.createSsoSession({ userId: L, issuer: ISSUER, subject: "acc_rb", oidcSid: "sid-rb", orgId: ORG.id, orgIds: [ORG.id] });
+    const browser = await session.sign(L, { ssoSessionId: ses });
+    // From there: a CLI pairing (a plain session JWT, no `ses`), an org PAT, a PAT from a
+    // session without an org, an OAuth grant, an unredeemed code, wallet sign-in, an open socket.
+    const cli = await session.sign(L);
+    const orgPat = mcpTokens.issuePat({ userId: L, driveId: "drive_rb", name: "org", scope: "write", ttlDays: 90, ssoOrgId: ORG.id }).token;
+    const noOrgPat = mcpTokens.issuePat({ userId: L, driveId: "drive_rb", name: "no org", scope: "write", ttlDays: null }).token;
+    const grant = accountTokens.issueAccountTokens({ userId: L, clientId: "c-rb", clientName: "App", scopes: ["profile"], ssoOrgId: ORG.id }).access_token;
+    const verifier = "v".repeat(43);
+    const code = oauth.issueCode({ clientId: "c-rb", userId: L, driveId: "drive_rb", scope: "read", redirectUri: "https://app.example/cb", codeChallenge: oauth.pkceS256(verifier), ssoOrgId: ORG.id });
+    db.prepare("INSERT INTO account_wallets (id, account_id, wallet_address, verified_via, login_enabled) VALUES ('w_rb', ?, '0xrb', 'siwe', 1)").run(L);
+    db.prepare("INSERT INTO cli_link_requests (link_id, device_secret_hash, user_id, expires_at) VALUES (?, ?, ?, datetime('now', '+10 minutes'))").run("link-rb", "00", L);
+    const ws = fakeWs();
+    await onDocConnect(ws, { headers: { cookie: `aindrive_session=${cli}` } }, { drive: "drive_rb", path: "notes.md" });
+    expect(ws.closedWith).toBeNull();
+    expect(await session.verify(cli)).toBe(L);
+    expect(mcpTokens.verifyMcpToken(orgPat)).not.toBeNull();
+
+    // The administrator rolls the mapping back.
+    const res = await put(desired("acc_rb", { version: 2, legacyUserId: null }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).localUserId).not.toBe(L);
+
+    expect(await session.verify(browser)).toBeNull();
+    expect(await session.verify(cli)).toBeNull(); // every session JWT of the account (epoch)
+    expect(db.prepare("SELECT 1 FROM cli_link_requests WHERE link_id = 'link-rb'").get()).toBeUndefined();
+    expect(ws.closedWith).toBe(4401);
+    expect(mcpTokens.verifyMcpToken(orgPat)).toBeNull();
+    expect(mcpTokens.verifyMcpToken(noOrgPat)).toBeNull();
+    expect(accountTokens.verifyAccountToken(grant)).toBeNull();
+    expect(oauth.redeemCode({ code, clientId: "c-rb", redirectUri: "https://app.example/cb", codeVerifier: verifier })).toBeNull();
+    expect(walletLoginAccount("0xrb")).toEqual({ accountId: L, loginEnabled: false });
+    // What the owner had before the link stays, and so does the account's data.
+    expect(mcpTokens.verifyMcpToken(ownPat.token)).not.toBeNull();
+    expect(walletLoginAccount("0xown")).toEqual({ accountId: L, loginEnabled: true });
+    expect(db.prepare("SELECT owner_id FROM drives WHERE id = 'drive_rb'").get()).toEqual({ owner_id: L });
+    expect(store.ssoAccountState(L)).toBe("unmanaged");
+    expect(await session.verify(await session.sign(L))).toBe(L); // the owner signs in again as usual
+    const ev = db.prepare("SELECT details FROM sso_audit WHERE subject = 'acc_rb' AND action = 'legacy_unlinked'").get() as { details: string };
+    expect(JSON.parse(ev.details)).toMatchObject({ legacyUserId: L, used: true, mcpTokens: 2, accountTokens: 1, codes: 1, walletLogins: 1 });
+  });
+
+  it("a mapping nobody signed in through is rolled back without signing the owner out", async () => {
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run("legacy_unused", "unused@example.com", "U", "x");
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run("drive_unused", "legacy_unused", "U", "h", "s");
+    const own = await session.sign("legacy_unused");
+    const pat = mcpTokens.issuePat({ userId: "legacy_unused", driveId: "drive_unused", name: "own", scope: "read", ttlDays: null }).token;
+    await put(desired("acc_unused", { version: 1, legacyUserId: "legacy_unused" }));
+    expect((await put(desired("acc_unused", { version: 2, legacyUserId: null }))).status).toBe(200);
+    expect(store.isSsoLinked("legacy_unused")).toBe(false);
+    expect(await session.verify(own)).toBe("legacy_unused");
+    expect(mcpTokens.verifyMcpToken(pat)).not.toBeNull();
+  });
 });
 
 describe("a placeholder the adapter made gives way to the legacy account (app attestation linked later)", () => {
@@ -269,6 +338,52 @@ describe("a placeholder the adapter made gives way to the legacy account (app at
     expect((await res.json()).localUserId).toBe(localUserId);
     expect(store.identityFor(ISSUER, "acc_used")!.user_id).toBe(localUserId);
     expect(store.isSsoLinked("legacy_q")).toBe(false);
+  });
+
+  it("drives shared with the placeholder's address move to the legacy account, which also takes later shares", async () => {
+    const L = "legacy_sh";
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run(L, "minji.personal@gmail.example", "S", "x");
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run("u_sh_owner", "owner-sh@comcom.example", "O", "x");
+    for (const d of ["drive_sh1", "drive_sh2"]) db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run(d, "u_sh_owner", d, "h", "s");
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run("drive_sh_own", L, "L's own", "h", "s");
+    // Provisioned: the placeholder takes the person's free work address.
+    const placeholder = (await (await put(desired("acc_sh", { version: 1 }))).json()).localUserId as string;
+    expect(db.prepare("SELECT email FROM users WHERE id = ?").get(placeholder)).toEqual({ email: "acc_sh@comcom.example" });
+    // Colleagues share with that address: the members route grants the placeholder.
+    jar.set("aindrive_session", await session.sign("u_sh_owner"));
+    const share = (drive: string, role: string, path = "") => membersRoute.POST(
+      new Request(`${PUBLIC_URL}/api/drives/${drive}/members`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "acc_sh@comcom.example", role, path }) }),
+      { params: Promise.resolve({ driveId: drive }) },
+    );
+    expect((await share("drive_sh1", "editor")).status).toBe(200);
+    expect((await share("drive_sh2", "viewer", "docs")).status).toBe(200);
+    db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES ('m_sh', 'drive_sh2', ?, 'docs', 'editor')").run(L); // already more
+    db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES ('m_sh_own', 'drive_sh_own', ?, '', 'viewer')").run(placeholder);
+    expect(mcpTokens.maxRoleInDrive("drive_sh1", placeholder)).toBe("editor");
+
+    // The person's legacy account is attested later: the placeholder gives way.
+    expect((await (await put(desired("acc_sh", { version: 2, legacyUserId: L }))).json()).localUserId).toBe(L);
+    expect(mcpTokens.maxRoleInDrive("drive_sh1", L)).toBe("editor");
+    const rows = db.prepare("SELECT drive_id, path, role FROM drive_members WHERE user_id = ? ORDER BY drive_id").all(L);
+    expect(rows).toEqual([{ drive_id: "drive_sh1", path: "", role: "editor" }, { drive_id: "drive_sh2", path: "docs", role: "editor" }]); // upgrade-only; none on L's own drive
+    expect(db.prepare("SELECT count(*) c FROM drive_members WHERE user_id = ?").get(placeholder)).toEqual({ c: 0 });
+    // The placeholder gives up the address: a later share doesn't land on an account nobody uses.
+    const held = (db.prepare("SELECT email FROM users WHERE id = ?").get(placeholder) as { email: string }).email;
+    expect(store.isReservedEmail(held)).toBe(true);
+    expect((await share("drive_sh1", "viewer", "later")).status).toBe(202); // pending, visible to the owner
+    const ev = db.prepare("SELECT details FROM sso_audit WHERE subject = 'acc_sh' AND action = 'placeholder_replaced'").get() as { details: string };
+    expect(JSON.parse(ev.details)).toMatchObject({ placeholderUserId: placeholder, grantsMoved: 3, emailReleased: true });
+  });
+
+  it("the same when the person proves the legacy account on /sso/link", async () => {
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run("legacy_sl", "sl@gmail.example", "SL", "x");
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run("u_sl_owner", "owner-sl@comcom.example", "O", "x");
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run("drive_sl", "u_sl_owner", "D", "h", "s");
+    const placeholder = (await (await put(desired("acc_sl", { version: 1 }))).json()).localUserId as string;
+    db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES ('m_sl', 'drive_sl', ?, '', 'viewer')").run(placeholder);
+    expect(store.linkExistingUser({ issuer: ISSUER, subject: "acc_sl", userId: "legacy_sl", method: "app_proof:legacy_password", actor: "user:legacy_sl" })).toEqual({ ok: true, userId: "legacy_sl" });
+    expect(mcpTokens.maxRoleInDrive("drive_sl", "legacy_sl")).toBe("viewer");
+    expect(mcpTokens.maxRoleInDrive("drive_sl", placeholder)).toBe("none");
   });
 
   it("the legacy account must exist and be free, as for a first push", async () => {

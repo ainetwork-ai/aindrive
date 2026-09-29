@@ -82,7 +82,7 @@ export type SilentRequest = {
   method: string;
   pathname: string;
   search: string;
-  headers: Headers;
+  headers: Pick<Headers, "get" | "has">;
   cookies: { has(name: string): boolean };
 };
 

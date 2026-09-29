@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getUser } from "@/lib/session";
+import { staleSessionCheck } from "@/lib/sso/stale-session";
 import { getDrive } from "@/lib/drives";
 import { resolveRole, atLeast, entryView } from "@/lib/access";
 import { readDenial } from "@/lib/require-access";
@@ -43,7 +44,8 @@ export default async function DrivePage({ params, searchParams }: {
   const rawPath = Array.isArray(sp.path) ? sp.path[0] : sp.path;
 
   const user = await getUser();
-  if (!user) redirect(`/login?next=/d/${driveId}`);
+  // A dead session cookie gets the automatic AIN sign-in the middleware skipped.
+  if (!user) redirect((await staleSessionCheck(`/d/${driveId}`, rawPath !== undefined ? `?${new URLSearchParams({ path: rawPath })}` : "")) ?? `/login?next=/d/${driveId}`);
   const drive = getDrive(driveId);
   if (!drive) return <main className="p-10">Drive not found.</main>;
 
