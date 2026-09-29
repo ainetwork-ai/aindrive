@@ -61,11 +61,45 @@ The flow follows the MCP authorization spec, so a client needs only the URL:
 2. `/.well-known/oauth-protected-resource/mcp/d/[id]` (RFC 9728) → the auth server
 3. `/.well-known/oauth-authorization-server` (RFC 8414)
 4. `POST /api/oauth/register`: dynamic client registration (RFC 7591), public clients only
-5. `/oauth/authorize`: login redirect, then consent page (`app/oauth/authorize/`) → `POST /api/oauth/authorize`
+5. `/oauth/authorize`: sign-in redirect, then consent page (`app/oauth/authorize/`) → `POST /api/oauth/authorize`.
+   The page's steps are `lib/oauth-authorize.ts` (`authorizeStep`); both paths approve through its `approve`.
 6. `POST /api/oauth/token`: `authorization_code` (PKCE S256 required) / `refresh_token`
 
 The drive comes from the RFC 8707 `resource` (= the drive's MCP URL). Scopes
 on the wire are `drive:read` / `drive:write`.
+
+Signing in (anonymous visitor of a valid request; an invalid one is always the
+error page): SSO login off → `/login?next=<this request>`. AIN SSO login on →
+a silent check first (`/api/auth/sso/start?prompt=none`, once per browser per
+30 min — the `ain_sso_checked` guard; skipped with `AINDRIVE_SSO_SILENT=false`),
+so a live AIN session signs in without a page. When AIN answers
+`login_required` & co. the browser comes back anonymous, then a trusted
+client's person goes to AIN SSO's sign-in (`/api/auth/sso/start`), anyone else
+to `/login` (which offers "Continue with AIN" and the legacy methods still
+allowed); so does someone back from "Not now" on `/sso/link`. Every path
+returns to the same authorization request (`next`, `safeNextPath`). A
+suspended/offboarded account never signs in (lib/sso), so it never gets a code.
+
+### Trusted first-party clients — `AINDRIVE_TRUSTED_OAUTH_CLIENTS`
+
+The operator's own apps (AIN Teams) skip the consent screen: a signed-in
+visit of a valid request is answered with the code at once (`lib/oauth.ts`
+`skipsConsent`, list parsed by `lib/oauth-trusted.js`).
+
+- Value: comma-separated `<client_id>` (any scope) or
+  `<client_id>=<scope>+<scope>` (a ceiling: a wider request gets the consent
+  screen). Unset = none (every client asks). Read per request; a malformed
+  entry trusts nobody and fails the production boot. Register the client
+  once (`POST /api/oauth/register`), then list its id.
+- Only after the same validation as any client (registered exact
+  `redirect_uri`, PKCE S256, valid scopes) and only for an **https**
+  `redirect_uri` — loopback http / private-use schemes always ask (any program
+  on the device could catch the code; http is allowed outside production).
+- Same approval as "Allow" (`approve`): the same code row (`sso_org_id` from
+  an org's SSO session, so suspension/offboarding revokes it), a drive grant
+  clamped to the role (no role → the consent page's refusal). The only extra
+  trace is a `[oauth] consent skipped for trusted client` log line.
+- Never removed by `gcOAuth`'s "unused for a week" cleanup while listed.
 
 ## Account-level grant ("Sign in with aindrive") — `lib/account-tokens.ts`
 
@@ -150,6 +184,6 @@ on testnet; `AINDRIVE_DEV_BYPASS_X402=1` for demos).
 - An authorization code is burned before it is checked, so a failed exchange can't be retried.
 - Replaying a superseded refresh token revokes the whole grant (the token leaked).
 - Cookie-authenticated mutations (consent, PAT issue/revoke) require a same-origin `Origin` (`isSameOrigin`).
-- The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing.
+- The consent screen labels `client_name` as self-reported and shows the redirect origin. DCR is open, so the name proves nothing — trust is by `client_id` only (`AINDRIVE_TRUSTED_OAUTH_CLIENTS`).
 - Redirect URIs: https, loopback http, or a private-use scheme (`cursor://`); never `javascript:`/`data:`/`file:`.
-- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`, `lib/__tests__/oauth-sale-tools.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.
+- Tests: `lib/__tests__/mcp-auth.test.ts`, `lib/__tests__/oauth-account.test.ts`, `lib/__tests__/oauth-sale-tools.test.ts`, `lib/__tests__/oauth-trusted.test.ts`. Design: `docs/superpowers/specs/2026-09-23-remote-mcp-design.md`.

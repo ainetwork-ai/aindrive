@@ -1,4 +1,5 @@
 import { parseOrgShareAllowlist } from "./org-policy.js";
+import { trustedOAuthConfigErrors } from "./oauth-trusted.js";
 
 /**
  * runBootChecks — called once at server startup.
@@ -54,6 +55,11 @@ export function runBootChecks() {
   //    value the operator set but got wrong fails the boot, so a typo never
   //    silently leaves legacy login on or SSO half-configured.
   errors.push(...ssoConfigErrors(process.env));
+
+  // 5. Trusted first-party OAuth clients (lib/oauth-trusted.js): a malformed
+  //    entry would otherwise be ignored — the app it names would silently get
+  //    the consent screen again.
+  errors.push(...trustedOAuthConfigErrors(process.env));
 
   if (errors.length > 0) {
     console.error("\n[aindrive] BOOT FAILED — production environment is misconfigured:\n");
