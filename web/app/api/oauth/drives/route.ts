@@ -1,8 +1,11 @@
 /**
  * GET /api/oauth/drives — the drives an account-grant token's user can reach
  * (`aind_aat_…` with the `drives:read` scope): { drives: [{ id, name, online,
- * role }] }, role = the user's highest role anywhere in the drive. Read the
- * files through `/mcp/d/<id>` with the same token. See app/mcp/README.md.
+ * role, orgId }] }, role = the user's highest role anywhere in the drive;
+ * orgId = the AIN SSO organization the drive is shared with when the user
+ * reaches it through that organization (null for own and invited drives), so
+ * an app can tell "the company's drives" from personal ones. Read the files
+ * through `/mcp/d/<id>` with the same token. See app/mcp/README.md.
  */
 import { tryConsume, clientKey } from "@/lib/rate-limit";
 import { ACCOUNT_API_HEADERS, authenticateAccountRequest } from "@/lib/account-tokens";
@@ -27,6 +30,7 @@ export function GET(req: Request) {
     name: d.name,
     online: isOnline(d.id),
     role: maxRoleInDrive(d.id, userId),
+    orgId: d.org_id ?? null,
   }));
   return Response.json({ drives }, { headers: ACCOUNT_API_HEADERS });
 }
