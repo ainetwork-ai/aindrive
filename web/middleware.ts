@@ -103,8 +103,10 @@ export default async function middleware(
 // carries the file as base64 in one JSON body, so going through middleware cut
 // every file over ~7.5 MB mid-JSON and the SDK answered "Parse error: Invalid
 // JSON" (the AIN Teams / AINMem NAS archives hit it on 2026-09-29).
+// `config` must be a literal (Next analyses it statically at build time); the
+// test keeps MIDDLEWARE_MATCHER and the literal in step.
 export const MIDDLEWARE_MATCHER = "/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)).*)";
 
 export const config = {
-  matcher: [MIDDLEWARE_MATCHER],
+  matcher: ["/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)).*)"],
 };
