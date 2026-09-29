@@ -62,7 +62,8 @@ explicit role change (PATCH) can lower a role.
 - **Invite** (`POST /api/drives/:id/members`, owner-only): by email. If the
   email already has an account → immediate `drive_members` grant. If not → a
   **pending invite** (`drive_invites`, 202) that converts to a grant the moment
-  that email signs up (`claimInvitesForEmail`, upgrade-only). Owners see and
+  that email signs up (`claimInvitesForEmail`, upgrade-only) — by the emailed
+  code, or through AIN SSO with that AIN-verified address. Owners see and
   cancel pending invites from the Manage page.
 - **Share link** (`shares.token` → `/s/<token>`): `viewer`/`editor`, optionally
   priced + `listed` on the drive showcase. Free links convert to a grant via
