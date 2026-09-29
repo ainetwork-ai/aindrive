@@ -3,6 +3,8 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { classifyKind } from "@/lib/mime";
+import { delegatedAgentErrorCode } from "@/lib/resource-delegation";
+import { errorResponse } from "@/lib/shared-items";
 
 const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16 * 1024 * 1024), 10);
 
@@ -16,6 +18,12 @@ const MAX_READ_BYTES = parseInt(process.env.AINDRIVE_MAX_READ_BYTES ?? String(16
  *
  * `encoding=utf8` / `encoding=base64` force the transport, matching the
  * pre-existing API used by viewer.tsx.
+ *
+ * Also accepts `Authorization: Bearer <ain-rdlg+jwt>` + `X-AIN-PoP`: an agent
+ * reading on behalf of the delegated account (lib/resource-delegation.ts,
+ * R-DLG-READ-001). Such a caller gets contract error bodies
+ * ({error:{code,message,retryable}}), including `source_offline` when the
+ * drive's agent is not connected.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
@@ -33,7 +41,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   else if (encodingParam === "utf8") encoding = "utf8";
   else encoding = classified.kind === "binary" ? "base64" : "utf8";
 
-  const gate = await requireDriveRole(driveId, path, { min: "viewer" });
+  const gate = await requireDriveRole(driveId, path, { min: "viewer", delegation: { req, action: "read" } });
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
   try {
@@ -52,6 +60,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     return NextResponse.json({ ...result, encoding, mime: classified.mime });
   } catch (e) {
     const err = e as AgentError;
+    if (gate.delegation) return errorResponse(delegatedAgentErrorCode(err), err.message);
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
   }
 }

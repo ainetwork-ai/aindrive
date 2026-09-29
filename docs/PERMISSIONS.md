@@ -194,3 +194,38 @@ A wallet the owner **signs in with** (login-enabled) is also their default
 **payout** wallet: linking it or signing in with it sets it as the root payout
 wallet of every drive they own that has none (`adoptOwnerPayoutWallet`), and new
 drives start with it. Drives that already have a payout wallet keep theirs.
+
+## Delegated reads
+
+An agent can read **one file (or folder)** on a user's behalf without holding
+the user's session: a product (ainteams, ainmem, …) asks AIN SSO for a
+**resource delegation** (`ain-rdlg+jwt`, AIN SSO `wallet-and-delegation.md` §5)
+naming the account (`sub`), this server (`aud`), the resource keys
+(`https://<origin>#<driveId>#<fileId>`, the `fileId` of the shared-file list)
+and the actions, bound to the agent's key (`cnf`). The agent presents it to
+`GET /api/drives/:id/fs/read` or `fs/list` as `Authorization: Bearer …` with a
+per-request proof of possession (`X-AIN-PoP`). aindrive then applies the
+**three-check rule** (`web/lib/resource-delegation.ts`, matrix
+`R-DLG-READ-001`):
+
+1. **The user may.** `sub` must be linked to an account here
+   (`sso_identities`), and that account must hold `viewer+` at the path *at the
+   time of the call* — ownership or a `drive_members` grant, with the paid
+   carve-out and the reserved `.aindrive/` subtree exactly as for the account
+   itself. A delegation never widens what the account may do, and losing the
+   grant (or the AIN membership) ends the delegated access at once.
+2. **The grant names it.** The file's own key, or the key of an **ancestor
+   folder** (up to the drive root — the only inheritance; no wildcards), with
+   the action; the token is for this origin, unexpired and not revoked
+   (revocation is asked of AIN SSO and cached for at most 60 s; when AIN SSO
+   cannot be reached and nothing is cached, the read is refused, never
+   allowed).
+3. **Product context.** aindrive has no per-product rule for a read; `prd`
+   and `agt` are informational. The caller is bound to the **key** in `cnf`,
+   not to the agent's name — a proof signed by another key fails.
+
+Only `read` and `list` are delegated today. A `write` or `invoke` action in the
+grant authorises nothing: the write, delete, share and member routes do not
+accept the token, and the agent protocols (MCP/A2A/AG-UI) refuse it by name.
+Refusals use the cross-product error body (`auth_required`, `forbidden`,
+`source_offline`, `temporary_failure`) and never echo the token.

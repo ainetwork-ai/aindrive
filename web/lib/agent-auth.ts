@@ -10,6 +10,11 @@
  *                             `drives:sell` tools stay on the MCP endpoint
  *   session JWT (as bearer)   legacy first-party auth → full account access
  *
+ * An `ain-rdlg+jwt` (resource delegation, lib/resource-delegation.ts) is NOT
+ * a skill credential: it names one file (or folder) and is honoured only by
+ * the fs/read and fs/list routes, with proof of possession. It is refused
+ * here by name so it never falls through to the session verifier.
+ *
  * Bearer only — the session COOKIE is deliberately not accepted: these
  * endpoints answer CORS `*` and parse bodies regardless of Content-Type, so a
  * cookie credential would allow blind same-site request forgery.
@@ -20,6 +25,7 @@
 import { verify } from "./session";
 import { maxRoleInDrive, verifyMcpToken } from "./mcp-tokens";
 import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "./account-tokens";
+import { isResourceDelegationToken } from "./resource-delegation";
 import type { SkillCtx } from "@/shared/agent-skills";
 import { isSaleSkill, isSkillName, skillGroup } from "@/shared/skill-descriptors";
 
@@ -54,6 +60,10 @@ function bearerOf(req: Request): string | null {
  */
 export async function resolveAgentAuth(req: Request, pinDriveId?: string): Promise<AgentAuth> {
   const bearer = bearerOf(req);
+
+  if (isResourceDelegationToken(bearer)) {
+    return { ok: false, status: 403, error: "resource delegation tokens are accepted only by the file read routes (fs/read, fs/list) with proof of possession" };
+  }
 
   if (bearer?.startsWith("aind_pat_") || bearer?.startsWith("aind_oat_")) {
     const t = verifyMcpToken(bearer);

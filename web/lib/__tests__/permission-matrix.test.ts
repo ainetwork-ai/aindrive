@@ -102,6 +102,7 @@ describe("TARGET — not yet implemented (see PERMISSIONS_MATRIX.md)", () => {
   // locked paid items; showcase.test.ts). Covered by sale-access.test.ts (unit)
   // + e2e #190 (HTTP/listing) and #121 (WS).
   // R-SHARE-LIST-002 (CURRENT) is asserted end-to-end in shared-items.test.ts.
+  // R-DLG-READ-001 (CURRENT) is asserted end-to-end in resource-delegation.test.ts.
   it.todo("R-SHARE-ORG-001: drive_org_grants(drive_id, path, issuer, org_id, role) — an org-wide grant read by bestMatchingRole for every active sso_memberships member; list scope shared_with_org / shareOrigin org");
   it.todo("R-COMP-001: owner can comp a paid path to an account (free read, no edit rights), revocable + auditable");
   it.todo("R-COMP-002: comp entitlements in a separate comp_grants table (decided); paid read gate checks payment_receipts OR comp_grants, nearest-ancestor");
