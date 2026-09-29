@@ -2,8 +2,9 @@
 // granted immediately by the members route; only unknown emails land in
 // drive_invites, and convert to drive_members the moment that email signs up.
 import { nanoid } from "nanoid";
-import { db } from "@/lib/db";
-import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
+// Relative imports: lib/sso/store.js (plain ESM, also loaded by `node server.js`) uses it.
+import { db } from "./db.js";
+import { mergeRoleUpgradeOnly } from "./access-core.js";
 
 // Upsert a pending invite (one row per drive+email+path; re-invite overwrites
 // the role — pending grants aren't a security boundary, the owner is editing).
@@ -27,7 +28,8 @@ export function deleteInvite(driveId, inviteId) {
 
 // Convert every pending invite for this email into a real grant, upgrade-only
 // (never lowers a role a prior path-grant already gave), then clear them.
-// Called from signup right after the user row is created.
+// Called right after the user row is created: legacy signup, and an account
+// created through AIN SSO with the AIN-verified address (lib/sso/store.js).
 export function claimInvitesForEmail(userId, email) {
   const invites = db.prepare(
     "SELECT id, drive_id, path, role FROM drive_invites WHERE email = lower(?)",

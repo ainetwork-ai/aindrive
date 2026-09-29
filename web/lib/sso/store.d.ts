@@ -17,7 +17,7 @@ export type SsoAccountState = "unmanaged" | "active" | "blocked";
 export declare function ssoAccountState(userId: string): SsoAccountState;
 export declare function isAccountBlocked(userId: string): boolean;
 export declare function isSsoLinked(userId: string): boolean;
-export type IdentityRow = { user_id: string; link_method: string; last_login_at: number | null };
+export type IdentityRow = { user_id: string; link_method: string; linked_at: number; last_login_at: number | null };
 export declare function identityFor(issuer: string, subject: string): IdentityRow | undefined;
 /** Made by the provisioning adapter and never signed in to: a verified legacy link replaces it. */
 export declare function isPlaceholderIdentity(ident: IdentityRow | null | undefined): boolean;
@@ -100,6 +100,8 @@ export declare function createPendingLink(opts: {
 }): string;
 export declare function getPendingLink(id: string | null | undefined): PendingLinkRow | null;
 export declare function deletePendingLink(id: string): void;
+/** Back-channel logout: drops sign-ins waiting on /sso/link from that OIDC session (or, with only `sub`, that AIN account). */
+export declare function cancelPendingLinks(issuer: string, by: { sid?: string | null; sub?: string | null }): number;
 
 export declare function resolveOrCreateUserForSubject(opts: {
   issuer: string;
@@ -156,4 +158,5 @@ export type DesiredUserState = {
   issuedAt: string;
 };
 export declare function getAppliedState(issuer: string, orgId: string, subject: string): CurrentUserState | null;
-export declare function applyDesiredState(issuer: string, state: DesiredUserState): { result: ApplyResult; endedUserId: string | null };
+/** `endedUserIds`: accounts whose sessions ended (suspension, offboarding, a rolled-back legacy mapping) — close their sockets after commit. */
+export declare function applyDesiredState(issuer: string, state: DesiredUserState): { result: ApplyResult; endedUserIds: string[] };

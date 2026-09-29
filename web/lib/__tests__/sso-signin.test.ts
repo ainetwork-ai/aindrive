@@ -30,6 +30,9 @@ const startRoute = await import("../../app/api/auth/sso/start/route.js");
 const callbackRoute = await import("../../app/api/auth/sso/callback/route.js");
 const linkRoute = await import("../../app/api/auth/sso/link/route.js");
 const configRoute = await import("../../app/api/auth/sso/route.js");
+const { handleBackchannelLogout } = await import("../sso/backchannel");
+const { addInvite, listInvites } = await import("../invites.js");
+const { maxRoleInDrive } = await import("../mcp-tokens");
 
 const issuer = await createTestIssuer();
 let idTokenFor: (call: TokenEndpointCall, nonce: string) => Promise<string>;
@@ -68,6 +71,12 @@ async function signIn(sub: string, extra: Record<string, unknown> = {}, next = "
   return callback({ code: `code-${sub}`, state: auth.searchParams.get("state")!, iss: ISSUER });
 }
 const where = (res: Response) => res.headers.get("location");
+const backchannel = async (c: Record<string, unknown>) =>
+  handleBackchannelLogout(new Request(`${PUBLIC_URL}/api/auth/sso/backchannel-logout`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ logout_token: await issuer.logoutToken(c) }).toString(),
+  }), { keys: issuer.keys });
 
 describe("authorization request", () => {
   it("the login page learns SSO is on", async () => {
@@ -265,5 +274,77 @@ describe("suspended accounts", () => {
     const res = await signIn("acc_new2");
     expect(where(res)).toBe("/login?sso_error=account_suspended");
     expect(jar.get("aindrive_session")).toBeUndefined();
+  });
+});
+
+describe("back-channel logout while the sign-in waits on /sso/link", () => {
+  it("the AIN session (sid) ended: 'connect or create' can no longer be finished at this browser", async () => {
+    expect(where(await signIn("acc_pend"))).toBe("/sso/link");
+    expect((await backchannel({ sid: "sid-acc_pend", sub: "acc_pend" })).status).toBe(200);
+    for (const body of [{ method: "new" }, { method: "legacy_session" }]) {
+      const res = await link(body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "expired" });
+    }
+    expect(store.identityFor(ISSUER, "acc_pend")).toBeUndefined();
+    expect(await session.getUser()).toBeNull();
+    const ev = db.prepare("SELECT details FROM sso_audit WHERE action = 'backchannel_logout' AND subject = 'acc_pend'").get() as { details: string };
+    expect(JSON.parse(ev.details)).toMatchObject({ sid: "sid-acc_pend", pendingLinks: 1 });
+  });
+
+  it("sub alone (sign-out everywhere, suspension) cancels that AIN account's waiting sign-ins too", async () => {
+    expect(where(await signIn("acc_pend2"))).toBe("/sso/link");
+    expect((await backchannel({ sub: "acc_pend2" })).status).toBe(200);
+    expect((await link({ method: "new" })).status).toBe(400);
+    expect(store.identityFor(ISSUER, "acc_pend2")).toBeUndefined();
+  });
+
+  it("another OIDC session's logout leaves the waiting sign-in alone", async () => {
+    expect(where(await signIn("acc_pend3"))).toBe("/sso/link");
+    expect((await backchannel({ sid: "sid-someone-else" })).status).toBe(200);
+    expect((await link({ method: "new" })).status).toBe(200);
+  });
+});
+
+describe("drive invites pending for the address of an account created through AIN", () => {
+  beforeAll(() => {
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)").run("u_inv_owner", "inv-owner@example.com", "O", "x");
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)").run("drive_inv", "u_inv_owner", "Team", "h", "s");
+  });
+  const role = (userId: string, path = "") => db.prepare("SELECT role FROM drive_members WHERE drive_id = 'drive_inv' AND user_id = ? AND path = ?").get(userId, path) as { role: string } | undefined;
+
+  it("sign-up with AIN (legacy login off) claims them, as a legacy sign-up does", async () => {
+    addInvite("drive_inv", "acc_inv1@corp.example", "", "viewer", "u_inv_owner");
+    addInvite("drive_inv", "ACC_INV1@corp.example", "docs", "editor", "u_inv_owner");
+    process.env.AINDRIVE_LEGACY_LOGIN = "false";
+    expect(where(await signIn("acc_inv1"))).toBe("/d/abc");
+    const me = (await session.getUser())!;
+    expect(me.email).toBe("acc_inv1@corp.example");
+    expect(maxRoleInDrive("drive_inv", me.id)).toBe("editor");
+    expect(role(me.id)).toEqual({ role: "viewer" });
+    expect(role(me.id, "docs")).toEqual({ role: "editor" });
+    expect(listInvites("drive_inv")).toEqual([]);
+  });
+
+  it("'create' on /sso/link claims them too", async () => {
+    addInvite("drive_inv", "acc_inv2@corp.example", "", "viewer", "u_inv_owner");
+    expect(where(await signIn("acc_inv2"))).toBe("/sso/link");
+    expect((await link({ method: "new" })).status).toBe(200);
+    const me = (await session.getUser())!;
+    expect(role(me.id)).toEqual({ role: "viewer" });
+    expect(listInvites("drive_inv")).toEqual([]);
+  });
+
+  it("an address AIN did not verify, or one the new account could not take, claims nothing", async () => {
+    addInvite("drive_inv", "acc_inv3@corp.example", "", "viewer", "u_inv_owner");
+    process.env.AINDRIVE_LEGACY_LOGIN = "false";
+    await signIn("acc_inv3", { email_verified: false });
+    expect(role((await session.getUser())!.id)).toBeUndefined();
+    jar.clear();
+    addInvite("drive_inv", "taken-inv@corp.example", "", "viewer", "u_inv_owner");
+    db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES ('u_taken_inv', 'taken-inv@corp.example', 'T', 'x')").run();
+    await signIn("acc_inv4", { email: "taken-inv@corp.example" });
+    expect(role((await session.getUser())!.id)).toBeUndefined();
+    expect((listInvites("drive_inv") as { email: string }[]).map((i) => i.email).sort()).toEqual(["acc_inv3@corp.example", "taken-inv@corp.example"]);
   });
 });

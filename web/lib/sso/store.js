@@ -17,6 +17,8 @@ import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { db } from "../db.js";
+import { mergeRoleUpgradeOnly } from "../access-core.js";
+import { claimInvitesForEmail } from "../invites.js";
 
 export const SSO_PLACEHOLDER_DOMAIN = "sso.aindrive.local";
 const RESERVED_EMAIL_DOMAINS = ["wallet.aindrive.local", SSO_PLACEHOLDER_DOMAIN];
@@ -58,24 +60,50 @@ export function isSsoLinked(userId) {
 
 export function identityFor(issuer, subject) {
   return db
-    .prepare("SELECT user_id, link_method, last_login_at FROM sso_identities WHERE issuer = ? AND subject = ?")
+    .prepare("SELECT user_id, link_method, linked_at, last_login_at FROM sso_identities WHERE issuer = ? AND subject = ?")
     .get(issuer, subject);
 }
 
 /**
  * An account the provisioning adapter created before anyone signed in through
  * it (no SSO session was ever made for it: last_login_at is set by
- * createSsoSession). It holds nothing of the person's yet, so a verified
- * legacy link — the adapter's legacyUserId or an in-app proof — replaces it.
+ * createSsoSession). Nobody used it, so a verified legacy link — the adapter's
+ * legacyUserId or an in-app proof — replaces it. What others gave it (a drive
+ * shared with the address it holds) moves along (replacePlaceholder).
  */
 export function isPlaceholderIdentity(ident) {
   return !!ident && ident.link_method === "provisioned" && (ident.last_login_at === null || ident.last_login_at === undefined);
 }
 
 /**
+ * Drive grants of `fromUserId` become `toUserId`'s, upgrade-only per (drive,
+ * path) like every grant (never lowers a role the account already has; none
+ * on a drive it owns). Returns how many grants moved.
+ */
+function moveDriveGrants(fromUserId, toUserId) {
+  const rows = db
+    .prepare("SELECT m.drive_id, m.path, m.role, d.owner_id FROM drive_members m JOIN drives d ON d.id = m.drive_id WHERE m.user_id = ?")
+    .all(fromUserId);
+  const current = db.prepare("SELECT role FROM drive_members WHERE drive_id = ? AND user_id = ? AND path = ?");
+  const upsert = db.prepare(
+    "INSERT INTO drive_members (id, drive_id, user_id, path, role) VALUES (?, ?, ?, ?, ?) ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role",
+  );
+  for (const r of rows) {
+    if (r.owner_id === toUserId) continue;
+    upsert.run(nanoid(12), r.drive_id, toUserId, r.path, mergeRoleUpgradeOnly(current.get(r.drive_id, toUserId, r.path)?.role ?? "none", r.role));
+  }
+  db.prepare("DELETE FROM drive_members WHERE user_id = ?").run(fromUserId);
+  return rows.length;
+}
+
+/**
  * Re-points a placeholder link to the verified legacy account; the
- * organization state recorded for the subject moves with it. The placeholder
- * users row stays (users are never deleted).
+ * organization state recorded for the subject moves with it, and so do the
+ * drive grants people gave the placeholder (it took the person's free work
+ * address, and the members route grants by address). The placeholder then
+ * gives that address up for a reserved one, so later shares to it don't land
+ * on an account nobody signs in to (and no email reset can reach it). The
+ * placeholder users row stays (users are never deleted).
  */
 function replacePlaceholder({ issuer, subject, placeholderUserId, userId, method, proof, actor, orgId = null }) {
   db.prepare(
@@ -83,7 +111,11 @@ function replacePlaceholder({ issuer, subject, placeholderUserId, userId, method
      WHERE issuer = ? AND subject = ? AND user_id = ?`,
   ).run(userId, method, proof === undefined ? null : json(proof), now(), issuer, subject, placeholderUserId);
   db.prepare("UPDATE sso_memberships SET user_id = ? WHERE issuer = ? AND subject = ? AND user_id = ?").run(userId, issuer, subject, placeholderUserId);
-  audit({ actor, action: "placeholder_replaced", issuer, subject, orgId, userId, details: { placeholderUserId, method } });
+  const grantsMoved = moveDriveGrants(placeholderUserId, userId);
+  const held = db.prepare("SELECT email FROM users WHERE id = ?").get(placeholderUserId);
+  const emailReleased = !!held && !isReservedEmail(held.email);
+  if (emailReleased) db.prepare("UPDATE users SET email = ? WHERE id = ?").run(emailForNewAccount([], subject), placeholderUserId);
+  audit({ actor, action: "placeholder_replaced", issuer, subject, orgId, userId, details: { placeholderUserId, method, grantsMoved, emailReleased } });
 }
 
 export function sessionEpoch(userId) {
@@ -172,6 +204,35 @@ export function endAllUserSessions(userId, reason) {
   })();
 }
 
+/**
+ * A legacy mapping was rolled back (adapter-protocol §4.4: "end the sessions
+ * and credentials the person obtained on it through the link, before
+ * answering"). aindrive cannot tell the account's owner from the person
+ * wrongly linked to it, so everything that may have come through the link
+ * ends: every session JWT (epoch bump — browser cookie, CLI/mobile pairing
+ * token, bearer), the SSO session rows and uncollected CLI pairings; PATs,
+ * OAuth grants and unredeemed codes made in an SSO session or since the link
+ * was made; wallet sign-in added since then. Open collaboration sockets are
+ * closed by the caller after commit. Drives, files and grants stay.
+ */
+function endLinkedAccess(userId, linkedAt, reason) {
+  const t = now();
+  const since = Number.isFinite(linkedAt) ? linkedAt : 0;
+  const ssoSessionRows = endAllUserSessions(userId, reason);
+  const cred = "user_id = ? AND (sso_org_id IS NOT NULL OR created_at >= ?)";
+  return {
+    ssoSessionRows,
+    mcpTokens: db.prepare(`UPDATE mcp_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND ${cred}`).run(t, userId, since).changes,
+    accountTokens: db.prepare(`UPDATE account_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND ${cred}`).run(t, userId, since).changes,
+    codes:
+      db.prepare(`UPDATE oauth_codes SET consumed = 1 WHERE consumed = 0 AND ${cred}`).run(userId, since).changes +
+      db.prepare(`UPDATE account_oauth_codes SET consumed = 1 WHERE consumed = 0 AND ${cred}`).run(userId, since).changes,
+    walletLogins: db
+      .prepare("UPDATE account_wallets SET login_enabled = 0 WHERE account_id = ? AND login_enabled = 1 AND linked_at >= datetime(?, 'unixepoch')")
+      .run(userId, Math.floor(since / 1000)).changes,
+  };
+}
+
 /** Closes the account's live collaboration websockets (hook registered by lib/dochub.js). */
 export function disconnectUserSockets(match) {
   const hook = globalThis.__aindrive_dochub_disconnect;
@@ -229,6 +290,17 @@ export function deletePendingLink(id) {
   db.prepare("DELETE FROM sso_pending_links WHERE id = ?").run(id);
 }
 
+/**
+ * Back-channel logout: an AIN sign-in still waiting on /sso/link ("connect or
+ * create") from that OIDC session — or, with only `sub`, from any session of
+ * that AIN account — can no longer be finished. Returns how many were dropped.
+ */
+export function cancelPendingLinks(issuer, { sid = null, sub = null } = {}) {
+  if (sid) return db.prepare("DELETE FROM sso_pending_links WHERE issuer = ? AND oidc_sid = ?").run(issuer, sid).changes;
+  if (sub) return db.prepare("DELETE FROM sso_pending_links WHERE issuer = ? AND subject = ?").run(issuer, sub).changes;
+  return 0;
+}
+
 // ── Identity linking ──────────────────────────────────────────────────────
 
 function emailTaken(email) {
@@ -269,7 +341,7 @@ function insertNewUser({ name, emailCandidates, subject, passwordHash }) {
   const email = emailForNewAccount(emailCandidates, subject);
   db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)")
     .run(id, email, nameForNewAccount(name, email), passwordHash);
-  return id;
+  return { id, email };
 }
 
 /** An unusable password: random input no login attempt can reproduce. */
@@ -281,17 +353,20 @@ function unusablePasswordHash() {
  * The account for (issuer, subject), creating it just in time if none is
  * linked. Atomic under concurrent first logins (several requests or several
  * processes): one immediate transaction + the (issuer, subject) primary key,
- * so exactly one account is created and every caller gets it.
+ * so exactly one account is created and every caller gets it. An account that
+ * takes the AIN-verified address claims the drive invites pending for it,
+ * as a legacy sign-up does after its emailed code.
  */
 export function resolveOrCreateUserForSubject({ issuer, subject, name, email, emailVerified, method = "jit", actor = "ain-sso-login" }) {
   const passwordHash = unusablePasswordHash(); // outside the write lock (bcrypt is slow)
   const run = db.transaction(() => {
     const hit = identityFor(issuer, subject);
     if (hit) return { userId: hit.user_id, created: false };
-    const userId = insertNewUser({ name, emailCandidates: emailVerified ? [email] : [], subject, passwordHash });
-    insertIdentity({ issuer, subject, userId, method, proof: { emailVerified: !!emailVerified } });
-    audit({ actor, action: "user_created", issuer, subject, userId, details: { method } });
-    return { userId, created: true };
+    const user = insertNewUser({ name, emailCandidates: emailVerified ? [email] : [], subject, passwordHash });
+    insertIdentity({ issuer, subject, userId: user.id, method, proof: { emailVerified: !!emailVerified } });
+    const invitesClaimed = emailVerified && !isReservedEmail(user.email) ? claimInvitesForEmail(user.id, user.email) : 0;
+    audit({ actor, action: "user_created", issuer, subject, userId: user.id, details: { method, invitesClaimed } });
+    return { userId: user.id, created: true };
   });
   return run.immediate();
 }
@@ -375,18 +450,25 @@ function revokeOrgCredentials(userId, orgId) {
   };
 }
 
-/** adapter-protocol §4.4: link by sub; a verified legacyUserId once; follow a rolled-back mapping. */
-function resolveUserForState(issuer, s, passwordHash) {
+/**
+ * adapter-protocol §4.4: link by sub; a verified legacyUserId once; follow a
+ * rolled-back mapping. Accounts whose sessions ended are added to `ended`
+ * (the caller closes their sockets after commit).
+ */
+function resolveUserForState(issuer, s, passwordHash, ended) {
   const ev = (action, userId, details) => audit({ actor: "ain-sso", action, issuer, subject: s.sub, orgId: s.org.id, userId, details: { version: s.version, ...details } });
   let ident = identityFor(issuer, s.sub);
 
   if (ident && ident.link_method === "legacy_mapping" && s.legacyUserId !== ident.user_id) {
     // The mapping was rolled back at AIN SSO: this legacy account is no longer
-    // this person's. Its sessions reached through this sub end; its data stays.
+    // this person's. If anyone signed in through the link (last_login_at),
+    // everything they could have obtained on it ends before the 200
+    // (endLinkedAccess); its data stays.
     db.prepare("DELETE FROM sso_identities WHERE issuer = ? AND subject = ?").run(issuer, s.sub);
-    db.prepare("UPDATE sso_sessions SET ended_at = ?, end_reason = 'legacy_mapping_rolled_back' WHERE issuer = ? AND subject = ? AND user_id = ? AND ended_at IS NULL")
-      .run(now(), issuer, s.sub, ident.user_id);
-    ev("legacy_unlinked", ident.user_id, { legacyUserId: ident.user_id });
+    const used = ident.last_login_at !== null && ident.last_login_at !== undefined;
+    const revoked = used ? endLinkedAccess(ident.user_id, ident.linked_at, "legacy_mapping_rolled_back") : {};
+    if (used) ended.push(ident.user_id);
+    ev("legacy_unlinked", ident.user_id, { legacyUserId: ident.user_id, used, ...revoked });
     ident = undefined;
   }
   // A placeholder made by an earlier push (nobody signed in to it yet) gives
@@ -407,7 +489,7 @@ function resolveUserForState(issuer, s, passwordHash) {
     return legacy.id;
   }
 
-  const userId = insertNewUser({ name: s.profile.name, emailCandidates: [s.profile.workEmail, s.profile.email], subject: s.sub, passwordHash });
+  const { id: userId } = insertNewUser({ name: s.profile.name, emailCandidates: [s.profile.workEmail, s.profile.email], subject: s.sub, passwordHash });
   insertIdentity({ issuer, subject: s.sub, userId, method: "provisioned", proof: { orgId: s.org.id, version: s.version } });
   ev("user_created", userId, { method: "provisioned" });
   return userId;
@@ -425,7 +507,10 @@ function resolveUserForState(issuer, s, passwordHash) {
  * nothing; personal drives are never moved. appRole/groups are recorded and
  * reported but grant nothing: drive access is granted per person by drive owners.
  *
- * @returns {{ result: {appliedVersion:number, localUserId:string, status:string}, endedUserId: string|null }}
+ * A rolled-back legacy mapping ends what the wrongly linked person obtained
+ * on that account the same way (endLinkedAccess), also before the 200.
+ *
+ * @returns {{ result: {appliedVersion:number, localUserId:string, status:string}, endedUserIds: string[] }}
  */
 export function applyDesiredState(issuer, s) {
   const key = [issuer, s.org.id, s.sub];
@@ -436,9 +521,10 @@ export function applyDesiredState(issuer, s) {
   const run = db.transaction(() => {
     const cur = db.prepare("SELECT * FROM sso_memberships WHERE issuer = ? AND org_id = ? AND subject = ?").get(...key);
     if (cur && s.version <= cur.applied_version) {
-      return { result: { appliedVersion: cur.applied_version, localUserId: cur.user_id, status: cur.status }, endedUserId: null };
+      return { result: { appliedVersion: cur.applied_version, localUserId: cur.user_id, status: cur.status }, endedUserIds: [] };
     }
-    const userId = resolveUserForState(issuer, s, passwordHash || unusablePasswordHash());
+    const ended = [];
+    const userId = resolveUserForState(issuer, s, passwordHash || unusablePasswordHash(), ended);
     const name = typeof s.profile.name === "string" ? s.profile.name.trim().slice(0, 80) : "";
     if (name) db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, userId);
     // A re-linked subject (rolled-back legacy mapping) brings its other orgs along.
@@ -458,12 +544,11 @@ export function applyDesiredState(issuer, s) {
     ).run(issuer, s.org.id, s.sub, userId, s.org.slug, s.org.name, s.status, active ? s.appRole : null, json(groups),
       s.version, s.legacyUserId, s.ownershipTransferTo, now());
 
-    let endedUserId = null;
     const ev = (action, details) => audit({ actor: "ain-sso", action, issuer, subject: s.sub, orgId: s.org.id, userId, details: { version: s.version, ...details } });
     if (!active) {
       const entering = !cur || cur.status !== s.status || cur.user_id !== userId;
       const endedSessions = entering ? endAllUserSessions(userId, `sso_${s.status}`) : 0;
-      if (entering) endedUserId = userId;
+      if (entering && !ended.includes(userId)) ended.push(userId);
       const revoked = revokeOrgCredentials(userId, s.org.id);
       if (entering || revoked.mcpTokens + revoked.accountTokens + revoked.codes > 0) {
         ev("access_revoked", { status: s.status, sessionsEnded: entering, ssoSessionRows: endedSessions, ...revoked });
@@ -473,7 +558,7 @@ export function applyDesiredState(issuer, s) {
       }
     }
     ev("applied", { status: s.status, appRole: active ? s.appRole : null, groups });
-    return { result: { appliedVersion: s.version, localUserId: userId, status: s.status }, endedUserId };
+    return { result: { appliedVersion: s.version, localUserId: userId, status: s.status }, endedUserIds: ended };
   });
   return run.immediate();
 }
