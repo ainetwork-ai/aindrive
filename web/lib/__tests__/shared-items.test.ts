@@ -1,7 +1,7 @@
 // R-SHARE-LIST-002 (docs/PERMISSIONS_MATRIX.md §4): the common shared-file list
 // in the cross-product contract shape — lib/shared-items.ts, /api/me/shared,
 // /api/oauth/shared and the list_shared skill.
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,7 @@ const acct = await import("../account-tokens");
 const meRoute = await import("../../app/api/me/shared/route.js");
 const oauthRoute = await import("../../app/api/oauth/shared/route.js");
 const { runSkill, driveScopedDescriptors, SKILL_DESCRIPTORS } = await import("../../shared/agent-skills");
+const reqId = await import("../request-id");
 
 const ORIGIN = "https://drive.test";
 let clientId = "";
@@ -415,5 +416,76 @@ describe("skill list_shared", () => {
     expect(await runSkill({ userId: "member1", driveId: "d1" }, "list_shared", {})).toMatchObject({ kind: "err", code: "forbidden" });
     expect(await runSkill({ userId: "member1" }, "list_shared", { scope: "public" })).toMatchObject({ kind: "err", code: "invalid_params" });
     expect(await runSkill({ userId: "member1" }, "list_shared", { limit: 0 })).toMatchObject({ kind: "err", code: "invalid_params" });
+  });
+});
+
+describe("12.5: request ids and log lines on the shared-file routes", () => {
+  const lines: Record<string, unknown>[] = [];
+  const consoleLines: unknown[][] = [];
+  const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { consoleLines.push(a); });
+  beforeAll(() => reqId.setRouteLogSink((l) => { lines.push(l); }));
+  afterAll(() => { reqId.setRouteLogSink(null); spy.mockRestore(); });
+  afterEach(() => { delete process.env.AIN_INTEGRATION_ENABLED; lines.length = 0; consoleLines.length = 0; });
+
+  it("flag on: /api/me/shared and /api/oauth/shared answer with X-Request-Id and log one line — no cookie, no bearer", async () => {
+    process.env.AIN_INTEGRATION_ENABLED = "true";
+    const cookie = await sign("member1");
+    cookieJar.set("aindrive_session", cookie);
+    const me = await meRoute.GET(new Request(`${ORIGIN}/api/me/shared?scope=shared_with_me`, { headers: { "x-request-id": "consumer-req-42" } }));
+    expect(me.status).toBe(200);
+    expect(me.headers.get("x-request-id")).toBe("consumer-req-42");
+    const token = issue("member1", "drives:read");
+    const tok = await tokenGet("scope=shared_with_me", token);
+    expect(tok.status).toBe(200);
+    expect(tok.headers.get("x-request-id")).toMatch(/^req_[0-9a-f]{24}$/);
+    expect(tok.headers.get("access-control-expose-headers")).toContain("X-Request-Id");
+    const bad = await tokenGet("scope=shared_with_me", `${token}x`);
+    expect(bad.status).toBe(401);
+    expect(lines).toEqual([
+      { requestId: "consumer-req-42", route: "me/shared", status: 200, userId: "member1", auth: "session" },
+      { requestId: tok.headers.get("x-request-id"), route: "oauth/shared", status: 200, userId: "member1", auth: "account_token" },
+      { requestId: bad.headers.get("x-request-id"), route: "oauth/shared", status: 401, code: "auth_required", auth: "anonymous" },
+    ]);
+    const text = JSON.stringify(lines);
+    expect(text).not.toContain(token);
+    expect(text).not.toContain(cookie);
+    expect(text).not.toContain("aind_");
+  });
+
+  it("a failure is logged with its message scrubbed of anything credential-shaped", async () => {
+    process.env.AIN_INTEGRATION_ENABLED = "1";
+    const token = issue("member1", "drives:read");
+    const spyErr = new Error(`db exploded near Bearer ${token} and eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln and aindrive_session=abc.def`);
+    // Fail the listing's own query (the token check before it still runs).
+    const original = db.prepare.bind(db);
+    const prep = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+      if (sql.includes("FROM drives WHERE owner_id")) throw spyErr;
+      return original(sql);
+    }) as typeof db.prepare);
+    try {
+      const r = await tokenGet("scope=mine", token);
+      expect(r.status).toBe(503);
+    } finally {
+      prep.mockRestore();
+    }
+    const line = lines.find((l) => l.status === 503)!;
+    expect(line).toMatchObject({ route: "oauth/shared", code: "temporary_failure", auth: "account_token", userId: "member1" });
+    expect(String(line.err)).toContain("db exploded");
+    const all = JSON.stringify([lines, consoleLines.map((a) => a.map(String))]);
+    expect(all).not.toContain(token);
+    expect(all).not.toContain("eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4In0");
+    expect(all).not.toContain("abc.def");
+  });
+
+  it("flag off: no header, no line", async () => {
+    cookieJar.set("aindrive_session", await sign("member1"));
+    const me = await meGet("scope=mine");
+    expect(me.headers.get("x-request-id")).toBeNull();
+    expect(lines).toEqual([]);
+  });
+
+  it("scrubSecrets blanks bearer values, JWTs, aindrive tokens and credential parameters", () => {
+    const s = reqId.scrubSecrets("Bearer abc.def ghi eyJa.eyJb.sig aind_aat_123 token=zzz&dt=yyy sig=1 code=q aindrive_session=v");
+    expect(s).toBe("Bearer [redacted] ghi [redacted-jwt] [redacted-token] token=[redacted]&dt=[redacted] sig=[redacted] code=[redacted] aindrive_session=[redacted]");
   });
 });

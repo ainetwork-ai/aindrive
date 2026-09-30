@@ -3,6 +3,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { getUser } from "@/lib/session";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import {
   getUploadSession, setSessionReceivedBytes, deleteUploadSession,
   statAgentTempBytes, appendPartToAgent, lockSession, unlockSession,
@@ -83,7 +84,10 @@ async function resolveState(session: UploadSession, driveSecret: string): Promis
 // agent-side rename and its bookkeeping (bump + row delete are adjacent sync
 // ops after the rename await), so neither ran — run them here, exactly once.
 function finishPublished(session: UploadSession, ownerId: string) {
-  if (session.is_creating) bumpOwnerUsage(ownerId, { files: 1 });
+  if (session.is_creating) {
+    bumpOwnerUsage(ownerId, { files: 1 });
+    dropGenerations(session.drive_id, session.path); // a new file (task 10.2)
+  }
   deleteUploadSession(session.id);
   return NextResponse.json({ complete: true, receivedBytes: session.size, path: session.path });
 }
@@ -170,7 +174,10 @@ export async function PATCH(req: Request, { params }: Ctx) {
     await callAgent(driveId, drive.drive_secret,
       { method: "rename", from: session.temp_path, to: session.path },
       { timeoutMs: 120_000 });
-    if (session.is_creating) bumpOwnerUsage(drive.owner_id as string, { files: 1 });
+    if (session.is_creating) {
+      bumpOwnerUsage(drive.owner_id as string, { files: 1 });
+      dropGenerations(driveId, session.path); // a new file (task 10.2)
+    }
     deleteUploadSession(session.id);
     return NextResponse.json({ complete: true, receivedBytes: total, path: session.path });
   } catch (e) {

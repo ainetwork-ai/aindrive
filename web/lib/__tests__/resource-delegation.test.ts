@@ -54,6 +54,8 @@ vi.mock("../rpc", () => {
       if (params.method === "read") {
         const content = files[`${driveId}:${params.path}`];
         if (content === undefined) throw new AgentError("not found", 404);
+        // What a real agent relays for a file removed under it: errno text naming the owner's disk.
+        if (content === "__ENOENT__") throw new AgentError(`ENOENT: no such file or directory, open '/home/owner/Private Clients/${params.path}'`, 502);
         return { content };
       }
       if (params.method === "list") {
@@ -77,6 +79,7 @@ const { resolveAgentAuth } = await import("../agent-auth");
 const readRoute = await import("../../app/api/drives/[driveId]/fs/read/route.js");
 const listRoute = await import("../../app/api/drives/[driveId]/fs/list/route.js");
 const deleteRoute = await import("../../app/api/drives/[driveId]/fs/delete/route.js");
+const { setRouteLogSink } = await import("../request-id");
 
 const ORIGIN = "https://drive.test";
 const SUB_A = "acc_alice000001"; // linked to alice1 (viewer at d1/docs, viewer at d1/premium)
@@ -201,10 +204,11 @@ async function capture(p: Promise<Response>): Promise<{ status: number; body: an
   return { status: res.status, body: text ? JSON.parse(text) : null, headers: res.headers };
 }
 
-type CallOpts = { token?: string | null; pop?: string | null; agent?: Agent; cookie?: string };
+type CallOpts = { token?: string | null; pop?: string | null; agent?: Agent; cookie?: string; requestId?: string };
 async function call(kind: "read" | "list", driveId: string, path: string, o: CallOpts = {}) {
   const url = `${ORIGIN}/api/drives/${driveId}/fs/${kind}?path=${encodeURIComponent(path)}`;
   const headers: Record<string, string> = {};
+  if (o.requestId) headers["x-request-id"] = o.requestId;
   if (o.token) headers.authorization = `Bearer ${o.token}`;
   const proof = o.pop === null ? null : o.pop ?? (o.token ? await pop(o.agent ?? agentA, { url }) : null);
   if (proof) headers["x-ain-pop"] = proof;
@@ -496,6 +500,99 @@ describe("R-DLG-READ-001: source and issuer availability", () => {
     await expect(client.check("rdlg_2")).rejects.toBeInstanceOf(rd.DelegationStatusUnavailable);
     client.forget("rdlg_1");
     await expect(client.check("rdlg_1")).rejects.toBeInstanceOf(rd.DelegationStatusUnavailable);
+  });
+});
+
+describe("06.5: a delegated listing follows the same rule as the account's own", () => {
+  it("names hidden from the account (unlisted sale, reserved subtree) are hidden from its agent too", async () => {
+    // d3: alice is a root viewer; an unlisted sale and a stray `.aindrive` entry sit at the root.
+    db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret, last_seen_at, created_at) VALUES (?,?,?,?,?,?,?)")
+      .run("d3", "owner1", "Root Share", "h", "s", "2026-09-28 10:00:00", "2026-09-03 00:00:00");
+    db.prepare("INSERT INTO drive_members (id, drive_id, user_id, path, role, created_at) VALUES (?,?,?,?,?,?)")
+      .run("m_d3", "d3", "alice1", "", "viewer", "2026-09-12 00:00:00");
+    const s = db.prepare("INSERT INTO shares (id, drive_id, path, role, token, price_usdc, currency, listed) VALUES (?,?,?,?,?,?,?,?)");
+    s.run("s_d3_private", "d3", "private-sale", "viewer", "tok_d3p", 9, "USDC", 0);
+    s.run("s_d3_listed", "d3", "listed-sale", "viewer", "tok_d3l", 9, "USDC", 1);
+    Object.assign(files, {
+      "d3:open.md": "open",
+      "d3:private-sale/secret.md": "secret",
+      "d3:listed-sale/teaser.md": "teaser",
+      "d3:.aindrive/config.json": "{}",
+    });
+    online.add("d3");
+    try {
+      const token = await mint({ res: [{ resource: fileKey("d3", ""), actions: ["list", "read"] }] });
+      const delegated = await call("list", "d3", "", { token });
+      const own = await call("list", "d3", "", { cookie: await sign("alice1") });
+      expect(delegated.status).toBe(200);
+      const names = (b: { entries: { name: string; locked?: boolean }[] }) => b.entries.map((e) => `${e.name}${e.locked ? ":locked" : ""}`).sort();
+      expect(names(delegated.body)).toEqual(["listed-sale:locked", "open.md"]);
+      expect(names(delegated.body)).toEqual(names(own.body));
+      // …and the bytes behind a hidden or locked name stay closed to the agent.
+      for (const p of ["private-sale/secret.md", "listed-sale/teaser.md", ".aindrive/config.json"]) {
+        const r = await call("read", "d3", p, { token: await mint({ res: [{ resource: fileKey("d3", ""), actions: ["read"] }] }) });
+        expect(r.status, p).toBe(403);
+      }
+    } finally {
+      online.delete("d3");
+    }
+  });
+
+  it("an agent error never relays the device's text (absolute paths, other names): a fixed message per code", async () => {
+    files["d1:docs/gone.md"] = "__ENOENT__";
+    try {
+      const token = await mint({ res: [{ resource: fileKey("d1", "docs"), actions: ["read"] }] });
+      const r = await call("read", "d1", "docs/gone.md", { token });
+      expect(r.status).toBe(410);
+      expect(r.body.error).toMatchObject({ code: "resource_deleted", retryable: false, message: "the file is no longer there" });
+      const text = JSON.stringify(r.body);
+      expect(text).not.toContain("/home/owner");
+      expect(text).not.toContain("Private Clients");
+      // The cookie caller (the account itself) keeps the old body.
+      const own = await call("read", "d1", "docs/gone.md", { cookie: await sign("alice1") });
+      expect(own.status).toBe(502);
+    } finally {
+      delete files["d1:docs/gone.md"];
+    }
+  });
+});
+
+describe("12.5: request ids and log lines on the delegated routes", () => {
+  const lines: Record<string, unknown>[] = [];
+  beforeAll(() => setRouteLogSink((l) => { lines.push(l); }));
+  afterAll(() => setRouteLogSink(null));
+  afterEach(() => { delete process.env.AIN_INTEGRATION_ENABLED; lines.length = 0; });
+
+  it("flag on: every answer carries X-Request-Id (the caller's own when well-formed) and one log line with ids, no token", async () => {
+    process.env.AIN_INTEGRATION_ENABLED = "1";
+    const token = await mint();
+    const ok = await call("read", "d1", "docs/report.md", { token, requestId: "trace-0001-abcdef" });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("x-request-id")).toBe("trace-0001-abcdef");
+    const claims = await rd.verifyResourceDelegation(token);
+    expect(lines).toEqual([{
+      requestId: "trace-0001-abcdef", route: "fs/read", status: 200, driveId: "d1", auth: "delegation",
+      userId: "alice1", taskId: claims.jti, resourceId: REPORT,
+    }]);
+    // A refusal is logged with its contract code and detail; a malformed (or token-shaped) inbound id is replaced.
+    const denied = await call("list", "d1", "docs", { token, requestId: token.slice(0, 100) });
+    expect(denied.status).toBe(403);
+    const rid = denied.headers.get("x-request-id")!;
+    expect(rid).toMatch(/^req_[0-9a-f]{24}$/);
+    expect(lines[1]).toMatchObject({ requestId: rid, route: "fs/list", status: 403, code: "forbidden", detail: "not_granted", auth: "delegation" });
+    for (const l of lines) {
+      const text = JSON.stringify(l);
+      expect(text).not.toContain(token);
+      expect(text).not.toMatch(/eyJ[A-Za-z0-9_-]{10,}/);
+      expect(text).not.toContain("docs/report.md"); // the resource is its id, never its path
+    }
+  });
+
+  it("flag off: no header and no line (the route answers as before)", async () => {
+    const r = await call("read", "d1", "docs/report.md", { token: await mint() });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("x-request-id")).toBeNull();
+    expect(lines).toEqual([]);
   });
 });
 

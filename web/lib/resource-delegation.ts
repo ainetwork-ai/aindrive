@@ -549,6 +549,25 @@ export function delegatedAgentErrorCode(err: { status?: number; message?: string
   const status = err.status ?? 500;
   if (status === 504 && /offline/i.test(err.message ?? "")) return "source_offline";
   if (status === 404) return "resource_deleted";
+  // The device's own "file is gone" (the agent relays errno text with a 502): the
+  // resource is deleted, not a transient failure a consumer should retry.
+  if (/\bENOENT\b|no such file or directory/i.test(err.message ?? "")) return "resource_deleted";
   if (status >= 500) return "temporary_failure";
   return "unsupported_input";
+}
+
+/**
+ * The message a delegated caller sees for an agent failure: fixed per code.
+ * The agent's own text is never relayed — it can carry the owner's absolute
+ * local path or the names of files the caller cannot list (plan task 06.5;
+ * contract errors.ts: "never includes file names of resources the caller
+ * cannot see").
+ */
+export function delegatedAgentMessage(code: ErrorCode): string {
+  switch (code) {
+    case "source_offline": return "the drive's device is not connected";
+    case "resource_deleted": return "the file is no longer there";
+    case "temporary_failure": return "the drive could not answer right now";
+    default: return "the drive could not serve this request";
+  }
 }

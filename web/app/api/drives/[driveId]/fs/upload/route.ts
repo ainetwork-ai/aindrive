@@ -5,6 +5,7 @@ import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 
 /**
  * POST /api/drives/:driveId/fs/upload?path=...
@@ -155,7 +156,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     await callAgent(driveId, drive.drive_secret, { method: "rename", from: tmp, to: path }, { timeoutMs: 120_000 });
     renamed = true;
 
-    if (creating) bumpOwnerUsage(ownerId, { files: 1 });
+    if (creating) {
+      bumpOwnerUsage(ownerId, { files: 1 });
+      dropGenerations(driveId, path); // a new file: no old ref names it (task 10.2)
+    }
     return NextResponse.json({ ok: true, path, bytes: total });
   } catch (e) {
     const err = e as AgentError;

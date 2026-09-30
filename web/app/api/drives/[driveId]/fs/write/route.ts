@@ -4,6 +4,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
 // Default 100 MB so ordinary video/image uploads go through (16 MB rejected most
@@ -73,7 +74,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     const result = await callAgent(driveId, drive.drive_secret, {
       method: "write", path: body.data.path, content, encoding: body.data.encoding,
     });
-    if (creating) bumpOwnerUsage(ownerId, { files: 1 });
+    if (creating) {
+      bumpOwnerUsage(ownerId, { files: 1 });
+      dropGenerations(driveId, body.data.path); // a new file: no old ref names it (task 10.2)
+    }
     return NextResponse.json(result);
   } catch (e) {
     const err = e as AgentError;

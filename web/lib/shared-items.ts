@@ -36,6 +36,9 @@ import { resolveRoleByUser } from "./access";
 import { paidLocksForPaths } from "./sale-access.js";
 import { orgDrivesForUser } from "./orgs.js";
 import { lookupMime } from "./mime";
+import { ainIntegrationEnabled } from "./ain-integration.js";
+import { generationFor, revisionWithGeneration } from "./path-generations.js";
+import { isSystemPath } from "@/shared/domain/policy/system-paths";
 
 // ── Contract (mirror of packages/contracts/src, version 1.0) ─────────────────
 
@@ -193,13 +196,17 @@ function refFor(origin: string, drive: DriveRow, path: string, ownerRef: OwnerRe
   const mime = isRoot ? null : lookupMime(name);
   const lastSeenAt = toInstant(drive.last_seen_at);
   const online = isOnline(drive.id);
+  // The drive publishes no mtime; its last heartbeat (else creation) stands in.
+  let revision = sharedRevision({ mtimeMs: lastSeenAt ? Date.parse(lastSeenAt) : Date.parse(toInstant(drive.created_at) ?? "") || 0, size: 0 });
+  // Task 10.2: the path's generation pins the ref to the file there now
+  // (fs/read?revision= refuses it once another file takes the path).
+  if (ainIntegrationEnabled()) revision = revisionWithGeneration(revision, generationFor(drive.id, cpath.slice(1)));
   return {
     contract: CONTRACT_VERSION,
     issuer: origin,
     driveId: drive.id,
     fileId: sharedFileId(drive.id, cpath),
-    // The drive publishes no mtime; its last heartbeat (else creation) stands in.
-    revision: sharedRevision({ mtimeMs: lastSeenAt ? Date.parse(lastSeenAt) : Date.parse(toInstant(drive.created_at) ?? "") || 0, size: 0 }),
+    revision,
     kind: mime ? "file" : "folder",
     ...(mime ? { mimeType: mime } : {}),
     displayName: name || drive.name,
@@ -242,7 +249,9 @@ function memberItems(origin: string, userId: string): FileListItem[] {
     .all(userId) as { drive_id: string; path: string; share_id: string | null }[];
   const receiptAt = new Map(receipts.map((r) => [`${r.drive_id}\0${r.path}`, r] as const));
   const byDrive = new Map<string, MemberRow[]>();
-  for (const r of rows) byDrive.set(r.id, [...(byDrive.get(r.id) ?? []), r]);
+  // A grant row on the reserved `.aindrive/` subtree names nothing the member
+  // can open (every route refuses it): never list it (task 06.5).
+  for (const r of rows) if (!isSystemPath(r.path)) byDrive.set(r.id, [...(byDrive.get(r.id) ?? []), r]);
 
   const items: FileListItem[] = [];
   for (const [driveId, grants] of byDrive) {
