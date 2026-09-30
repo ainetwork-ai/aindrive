@@ -14,6 +14,9 @@ test("parseLine reads the CLI's plain lines and pino JSON", () => {
   assert.deepEqual(parseLine('{"level":30,"msg":"reconnecting"}'), { state: "connecting" });
   assert.deepEqual(parseLine('{"level":50,"msg":"agent connection error","err":"ECONNREFUSED"}'), { state: "connecting", detail: "ECONNREFUSED" });
   assert.deepEqual(parseLine("aindrive: link expired or already used"), { state: "error", detail: "link expired or already used" });
+  // Removed from the web: an error the folder shows, not an endless "connecting".
+  assert.deepEqual(parseLine('{"level":40,"msg":"device refused","code":4401,"reason":"this device\'s key is no longer valid (rotated or removed from the web)","waitSec":30}'),
+    { state: "error", detail: "this device's key is no longer valid (rotated or removed from the web)" });
   assert.equal(parseLine('{"msg":"rpc"}'), null);
   assert.equal(parseLine(""), null);
 });

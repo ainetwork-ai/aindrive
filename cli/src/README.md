@@ -23,7 +23,7 @@ internals.
 | `willow/` | `KvDriverSqlite` + `schemes` backing the official Willow `Store` |
 | `sig.js` | HMAC sign/verify of RPC frames — **mirrors `web/lib/sig.js`** (wire-compat) |
 | `config.js` | on-disk secret/cred store: drive config + global creds, written `0600` / dir `0700`; drive config replaced atomically |
-| `rotation.js` | live credential rotation pushed by the server (`rotate-credentials` RPC): persist new + previous pair, 60 s old-secret grace, revert on a 4401 handshake, commit on `hello` |
+| `rotation.js` | live credential rotation pushed by the server (`rotate-credentials` RPC): persist new + previous pair, 60 s old-secret grace, revert on a 4401 handshake, commit on `hello`; `adoptConfigOnDisk` picks up a pair `aindrive rotate-token` wrote while serving |
 | `api.js` | thin HTTP client (`apiFetch`) to the server |
 | `afan-bridge.js` | afan host bridge (opt-in: `"afanBridge": true` in `.aindrive/config.json` or `AINDRIVE_AFAN_BRIDGE=1`): answers `people/*/agent-requests/*.md` with `agent-results/<id>.md` — author confirmed by the server, owner-only handoff grant, A2A `message/send`. Spec: afan-soverign `docs/AGENT_BRIDGE.md` |
 | `handoffs.js` | `~/.aindrive/handoffs.json` device keys (0600): `handoff-read` serves only registered, unexpired keys; `writeHandoffs`/`removeHandoffs` (mirror of the Mac app's) for the afan bridge |

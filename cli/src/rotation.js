@@ -1,4 +1,4 @@
-import { writeDriveConfig } from "./config.js";
+import { readDriveConfig, writeDriveConfig } from "./config.js";
 
 /**
  * Live credential rotation, driven by the server over the signed RPC channel
@@ -58,5 +58,21 @@ export async function commitRotation({ root, drive }) {
   if (!drive.previousCredentials) return false;
   delete drive.previousCredentials;
   await writeDriveConfig(root, drive);
+  return true;
+}
+
+/**
+ * The server refused our token (4401) and no live rotation is in flight: if the
+ * folder's config holds a different pair — `aindrive rotate-token` ran while
+ * this agent was serving — adopt it. True when it did (reconnect right away);
+ * false means the device really was removed.
+ */
+export async function adoptConfigOnDisk({ root, drive }) {
+  const disk = await readDriveConfig(root);
+  if (!disk || disk.driveId !== drive.driveId) return false;
+  if (typeof disk.agentToken !== "string" || typeof disk.driveSecret !== "string") return false;
+  if (disk.agentToken === drive.agentToken) return false;
+  drive.agentToken = disk.agentToken;
+  drive.driveSecret = disk.driveSecret;
   return true;
 }
