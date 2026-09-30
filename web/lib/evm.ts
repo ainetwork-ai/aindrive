@@ -20,19 +20,3 @@ export function basePublicClient(): PublicClient {
   // bare `PublicClient` return type this function promises callers.
   return createPublicClient({ chain: chain as Chain, transport: http(rpc) });
 }
-
-// CAIP-2 network (x402 wire form) → a read-only client for that chain, or
-// null for a chain this server has no RPC for. Unlike basePublicClient() this
-// is not pinned to the active chain: a testnet deployment may quote custom
-// tokens on Base mainnet (payment-tokens.ts policyChainViolation), and a
-// settle on that chain must be checkable on that chain.
-const CHAIN_BY_CAIP2: Record<string, keyof typeof CHAINS> = {
-  "eip155:8453": "base",
-  "eip155:84532": "base-sepolia",
-};
-export function publicClientForNetwork(network: string): PublicClient | null {
-  const name = CHAIN_BY_CAIP2[network];
-  if (!name) return null;
-  const { chain, rpc } = CHAINS[name];
-  return createPublicClient({ chain: chain as Chain, transport: http(rpc) });
-}
