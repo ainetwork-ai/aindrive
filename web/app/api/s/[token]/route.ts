@@ -4,7 +4,6 @@ import { nanoid } from "nanoid";
 import { encodePaymentRequiredHeader, decodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentRequirements, PaymentRequired, PaymentPayload } from "@x402/core/types";
 import { canSettle, verifyAndSettle } from "@/lib/x402-facilitator";
-import { recoverSettledAuthorization } from "@/lib/x402-recover";
 import { db } from "@/lib/db";
 import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
@@ -213,35 +212,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     return paymentGate(402, "invalid PAYMENT-SIGNATURE header");
   }
 
-  let settled = await verifyAndSettle(payload, requirements, `share ${token} token=${tok.symbol} method=${tok.transferMethod}`);
-  // A refused settle may still have moved the money: the facilitator mined the
-  // transfer but its answer was lost, so the retry (ours inside
-  // verifyAndSettle, or the buyer's product re-sending the same envelope) now
-  // sees a used nonce. Ask the chain before answering 402 — otherwise the buyer
-  // is charged and holds nothing (lib/x402-recover.ts).
-  if (!settled.ok && settled.status === 402) {
-    const recovered = await recoverSettledAuthorization(payload, requirements);
-    if (recovered) {
-      // One on-chain payment credits one account, once: a transaction that
-      // already has a receipt (the normal path recorded it, or another account
-      // replayed the same envelope first) is refused. No await between this
-      // check and the grant + receipt writes below, so a concurrent replay
-      // cannot slip in between (better-sqlite3 is synchronous, one process).
-      const credited = db.prepare("SELECT account_id FROM payment_receipts WHERE tx_hash = ?").get(recovered.transaction) as { account_id: string | null } | undefined;
-      if (credited) {
-        // The same buyer's concurrent retry, beaten to the record by its twin:
-        // answer as the member it now is. Only while the grant still holds —
-        // an owner's revocation is not undone by replaying the old envelope.
-        if (buyerId && credited.account_id === buyerId) {
-          const role = resolveRoleByUser(share.drive_id, buyerId, share.path);
-          if (holdsPaidShare(share.drive_id, share, role, buyerId)) return NextResponse.json({ ...okBody, role, txHash: recovered.transaction });
-        }
-        return paymentGate(402, "this payment has already been credited");
-      }
-      console.warn(`[x402] settle answer lost (${settled.reason}) — crediting the on-chain settlement tx=${recovered.transaction} share=${share.id}`);
-      settled = { ok: true, payer: recovered.payer, transaction: recovered.transaction, network: recovered.network, bypass: false };
-    }
-  }
+  const settled = await verifyAndSettle(payload, requirements, `share ${token} token=${tok.symbol} method=${tok.transferMethod}`);
   if (!settled.ok) {
     if (settled.status === 503) return NextResponse.json({ error: settled.reason }, { status: 503 });
     // Spec: missing Permit2 allowance is a precondition failure (412), not a
