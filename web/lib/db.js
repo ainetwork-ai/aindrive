@@ -582,6 +582,21 @@ function open() {
       pruned_to INTEGER NOT NULL
     );
   `);
+  // Per-path generations (lib/path-generations.js, ain-integration plan task
+  // 10.2): a nonce per (drive, path) handed out with a ref and dropped when the
+  // path is re-created or removed, so an old ref never resolves to a newer file
+  // at the same path. No FK: rows are dropped with the path, and a drive's rows
+  // are meaningless (never read) once the drive is gone.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS path_generations (
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      generation TEXT NOT NULL,
+      birth_ms REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (drive_id, path)
+    );
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

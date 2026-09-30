@@ -21,7 +21,9 @@ import { maxRoleInDrive } from "@/lib/mcp-tokens";
 import { getDrive, listUserDrives, listPayoutWallets, setDriveAllowedTokens, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { callAgent, AgentError } from "@/lib/rpc";
-import { paidAccessDenial, paidLocksForListing } from "@/lib/sale-access.js";
+import { paidAccessDenial } from "@/lib/sale-access.js";
+import { visibleChildren } from "@/lib/listing-visibility";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { normalizePath } from "@/lib/path";
 import { getOwnerStorageCaps } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
@@ -176,15 +178,12 @@ export async function runSkill(
     return { kind: "err", code: "forbidden", message: `payment required for ${path || "/"}` };
   }
 
-  // R-VIS-PAID-001, as in fs/list: listed paid children show as locked,
-  // unlisted (private, link-only) paid children are hidden entirely.
+  // The one listing rule, as in fs/list (lib/listing-visibility.ts): listed
+  // paid children show as locked, unlisted (private, link-only) paid children
+  // and the reserved subtree are hidden entirely.
   type Entry = { name: string; isDir: boolean; size?: number; locked?: boolean };
-  const visibleEntries = (dir: string, entries: Entry[]): Entry[] => {
-    const locks = paidLocksForListing(driveId, dir, entries.map((e) => e.name), role, ctx.userId);
-    return entries
-      .filter((e) => !(locks[e.name] && !locks[e.name].listed))
-      .map((e) => (locks[e.name] ? { ...e, locked: true } : e));
-  };
+  const visibleEntries = (dir: string, entries: Entry[]): Entry[] =>
+    visibleChildren(driveId, dir, entries, role, ctx.userId).map(({ entry, lock }) => (lock ? { ...entry, locked: true } : entry));
 
   try {
     switch (name) {
@@ -233,7 +232,10 @@ export async function runSkill(
           }
         }
         const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
-        if (creating) bumpOwnerUsage(ownerId, { files: 1 });
+        if (creating) {
+          bumpOwnerUsage(ownerId, { files: 1 });
+          dropGenerations(driveId, path); // a new file: no old ref names it (task 10.2)
+        }
         return { kind: "ok", structured: r, text: `wrote ${path}` };
       }
       case "delete_path": {
@@ -251,6 +253,7 @@ export async function runSkill(
           kind = entry.isDir ? "folder" : "file";
         } catch { /* parent unlistable — let the agent decide */ }
         const r = await callAgent(driveId, driveSecret, { method: "delete", path });
+        dropGenerations(driveId, path); // task 10.2: old refs under the path never resolve to a newer file
         const ownerId = drive.owner_id as string;
         if (kind === "file") bumpOwnerUsage(ownerId, { files: -1 });
         else if (kind === "folder") bumpOwnerUsage(ownerId, { folders: -1 });

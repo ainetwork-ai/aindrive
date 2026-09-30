@@ -169,6 +169,9 @@ async function toEntry(root, abs) {
     isDir: stat.isDirectory(),
     size: stat.size,
     mtimeMs: stat.mtimeMs,
+    // When the file was created (0 where the filesystem does not record it): lets
+    // the web tell a re-created file from the one an old reference named (plan task 10.2).
+    birthtimeMs: stat.birthtimeMs || 0,
     ext: path.extname(name).slice(1).toLowerCase(),
     mime: stat.isDirectory() ? "folder" : guessMime(name),
   };

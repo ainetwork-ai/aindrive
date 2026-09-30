@@ -48,6 +48,8 @@ export type DriveEntry = {
   isDir: boolean;
   size: number;
   mtimeMs: number;
+  /** Creation time where the agent's filesystem records one (cli ≥ this change; 0/absent = unknown). */
+  birthtimeMs?: number;
   ext: string;
   mime: string;
 };

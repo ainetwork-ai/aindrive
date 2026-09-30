@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
 const Body = z.object({ from: zRequiredPath, to: zRequiredPath });
@@ -32,6 +33,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   }
   try {
     const result = await callAgent(driveId, drive.drive_secret, { method: "rename", from, to });
+    // Path-derived refs: the old path is gone, and the new one holds a different file than any old ref to it (task 10.2).
+    dropGenerations(driveId, from);
+    dropGenerations(driveId, to);
     if (replacesFile) bumpOwnerUsage(drive.owner_id as string, { files: -1 });
     return NextResponse.json(result);
   } catch (e) {

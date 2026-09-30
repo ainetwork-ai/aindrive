@@ -4,6 +4,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
 const Body = z.object({ path: zRequiredPath });
@@ -41,6 +42,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   try {
     const result = await callAgent(driveId, drive.drive_secret, { method: "mkdir", path: body.data.path });
     bumpOwnerUsage(ownerId, { folders: 1 });
+    dropGenerations(driveId, body.data.path); // a new folder (task 10.2)
     return NextResponse.json(result);
   } catch (e) {
     const err = e as AgentError;

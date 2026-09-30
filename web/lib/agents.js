@@ -6,6 +6,8 @@ import { broadcastReload } from "./dochub.js";
 import { trace, docIdFor } from "./trace.js";
 import { log } from "./logger.js";
 import { onAgentOnlineChanged, onFsChanged } from "./share-events-core.js";
+import { dropGenerations, observeEntry } from "./path-generations.js";
+import { normalizePath } from "./path.js";
 
 /**
  * In-memory registry of currently-connected agent WebSockets.
@@ -287,6 +289,16 @@ async function recordFsChange(driveId, path) {
     info = r && "entry" in r ? { exists: !!r.entry, entry: r.entry ?? undefined } : {};
   } catch (e) {
     log.debug({ drive: driveId, path, err: e?.message || String(e) }, "[share-events] stat before fs-changed record failed");
+  }
+  // Per-path generations (task 10.2): a path the device says is gone loses its
+  // generation, so whatever is created there next gets a new one; a re-created
+  // file (another birth time) rotates it. Best-effort, like the feed itself.
+  try {
+    const p = normalizePath(String(path));
+    if (info.exists === false) dropGenerations(driveId, p);
+    else if (info.entry) observeEntry(driveId, p, info.entry);
+  } catch (e) {
+    log.debug({ drive: driveId, err: e?.message || String(e) }, "[path-generations] fs-changed not applied");
   }
   return onFsChanged(driveId, path, info);
 }

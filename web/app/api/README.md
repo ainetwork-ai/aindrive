@@ -25,7 +25,7 @@ Auth / identity:
 | `wallet/me` | current wallet address from cookie. |
 | `apps` (GET/POST), `apps/[appId]` (DELETE) | connected apps (`lib/connected-apps.ts`): another app (e.g. ainmem) registers itself on the signed-in account with `{name, url, key}` — its spaces URL (https, public address; re-checked on every call) and the Bearer key this server sends it. One row per app origin. Login required. |
 | `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
-| `me/shared` | the caller's reachable files in the cross-product list contract (`lib/shared-items.ts`: `scope=mine\|shared_with_me\|shared_with_org\|recent`, `q`, `cursor`, `limit`); contract error bodies; R-SHARE-LIST-002. |
+| `me/shared` | the caller's reachable files in the cross-product list contract (`lib/shared-items.ts`: `scope=mine\|shared_with_me\|shared_with_org\|recent`, `q`, `cursor`, `limit`); contract error bodies; R-SHARE-LIST-002. With `AIN_INTEGRATION_ENABLED` a ref's `revision` ends in `-g<generation>` and every answer (also `oauth/shared`) carries `X-Request-Id` + one log line (`lib/request-id.ts`). |
 | `me/events` | the caller's change feed (`lib/share-events.ts`, plan task 10): `?cursor=ev_<seq>` → `{ contract, events: [{ kind: "file", type, eventId, resourceId, version, occurredAt, revision?, recipient }], nextCursor, gap }`, ≤500 per page; `gap: true` (malformed cursor / below the 10 000-event retention floor) means re-list `me/shared`. Contract error bodies. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
@@ -55,7 +55,7 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 
 | Route | Notes |
 |-------|-------|
-| `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). |
+| `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). Which children a listing shows is `lib/listing-visibility.ts` (the rule the skills share). With `AIN_INTEGRATION_ENABLED`: entries carry `generation` + `revision`, `read?generation=` (or `revision=…-g<gen>`) answers 410 `resource_deleted` once the path holds another file (`lib/path-generations.js`), and both answer with `X-Request-Id` (`lib/request-id.ts`; delegated calls are logged without the token). |
 | `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. |
 | `upload` | single-POST raw octet-stream for files ≤ one part (8 MiB) → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. Aborts never publish a partial file. |
 | `upload-sessions` | chunked + resumable upload for larger files (tus-style). POST opens a session; PATCH `:uploadId` appends sequential ≤8 MiB parts (`X-Upload-Offset` must equal server `receivedBytes`, else 409 + authoritative offset); final part renames atomically. Recovery truth = agent temp's stat size, so a part that died mid-append never double-appends. ≤2 GiB. |

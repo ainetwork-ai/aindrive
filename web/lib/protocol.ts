@@ -38,8 +38,14 @@ export type DriveEntry = {
   isDir: boolean;
   size: number;
   mtimeMs: number;
+  /** Creation time where the agent's filesystem records one (cli ≥ this change; 0/absent = unknown). */
+  birthtimeMs?: number;
   ext: string;
   mime: string;
+  // Per-path generation (plan task 10.2), set by fs/list with AIN_INTEGRATION_ENABLED:
+  // `revision` = `m<mtimeMs>-s<size>-g<generation>`; fs/read?generation= refuses a stale one.
+  generation?: string;
+  revision?: string;
   // Paid carve-out (R-VIS-PAID-001): set by the fs/list route when the viewer
   // can't yet read this priced child. The agent never sends these — they are
   // server-annotated per requester. UI shows 🔒 + price + ticker.

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
 
 const Body = z.object({ path: zRequiredPath });
@@ -28,6 +29,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   } catch { /* leave kind=unknown */ }
   try {
     const result = await callAgent(driveId, drive.drive_secret, { method: "delete", path: body.data.path });
+    // An old ref to anything under the path must never resolve to what is created there next (task 10.2).
+    dropGenerations(driveId, body.data.path);
     if (kind === "file") bumpOwnerUsage(drive.owner_id as string, { files: -1 });
     else if (kind === "folder") bumpOwnerUsage(drive.owner_id as string, { folders: -1 });
     return NextResponse.json(result);

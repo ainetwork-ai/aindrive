@@ -8,20 +8,31 @@
  * unsupported_input for a malformed query, 503 temporary_failure. A scope this
  * server only approximates is flagged in `X-AIN-Scope-Unsupported` (`org=`
  * outside shared_with_org) / `X-AIN-Scope-Fallback` (recent).
+ *
+ * With AIN_INTEGRATION_ENABLED every answer carries `X-Request-Id` and is
+ * logged once (lib/request-id.ts: no cookie, no query string).
  */
 import { getUser } from "@/lib/session";
 import { errorResponse, listSharedItems, parseListQuery, requestOrigin, sharedScopeHeaders } from "@/lib/shared-items";
+import { contractErrorOf, logRoute, requestIdOf, scrubSecrets, withRequestId } from "@/lib/request-id";
 
 export async function GET(req: Request) {
+  const requestId = requestIdOf(req);
+  let userId: string | null = null;
+  const done = async (res: Response, error?: unknown) => {
+    logRoute({ requestId, route: "me/shared", status: res.status, ...(await contractErrorOf(res)), userId, auth: userId ? "session" : "anonymous", error });
+    return withRequestId(res, requestId);
+  };
   const user = await getUser();
-  if (!user) return errorResponse("auth_required", "sign in to list your shared files", { actionUrl: `${requestOrigin(req)}/login` });
+  if (!user) return done(errorResponse("auth_required", "sign in to list your shared files", { actionUrl: `${requestOrigin(req)}/login` }));
+  userId = user.id;
   const parsed = parseListQuery(new URL(req.url));
-  if (!parsed.ok) return errorResponse("unsupported_input", parsed.message);
+  if (!parsed.ok) return done(errorResponse("unsupported_input", parsed.message));
   try {
     const body = listSharedItems(user.id, { ...parsed.opts, origin: requestOrigin(req) });
-    return Response.json(body, { headers: { "Cache-Control": "no-store", ...sharedScopeHeaders(parsed.opts.scope, parsed.opts.org) } });
+    return done(Response.json(body, { headers: { "Cache-Control": "no-store", ...sharedScopeHeaders(parsed.opts.scope, parsed.opts.org) } }));
   } catch (e) {
-    console.error("[me/shared] listing failed", e);
-    return errorResponse("temporary_failure", "could not list shared files right now");
+    console.error("[me/shared] listing failed", scrubSecrets(String((e as Error)?.message ?? e)));
+    return done(errorResponse("temporary_failure", "could not list shared files right now"), e);
   }
 }

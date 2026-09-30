@@ -7,6 +7,7 @@ import { validateTokenPolicy } from "@/lib/sales";
 import { db } from "@/lib/db";
 import { disconnectAgent } from "@/lib/agents.js";
 import { onDriveDeleted } from "@/lib/share-events";
+import { dropGenerations } from "@/lib/path-generations.js";
 
 /**
  * PATCH /api/drives/:driveId
@@ -106,5 +107,6 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ driv
   // drive root — recorded BEFORE the cascade takes the member rows away.
   onDriveDeleted(driveId);
   db.prepare("DELETE FROM drives WHERE id = ?").run(driveId);
+  dropGenerations(driveId, "");
   return NextResponse.json({ ok: true });
 }
