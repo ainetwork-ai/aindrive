@@ -551,6 +551,7 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_drive_org_shares_org ON drive_org_shares(issuer, org_id);
     CREATE INDEX IF NOT EXISTS idx_sso_memberships_org_user ON sso_memberships(issuer, org_id, user_id);
+  `);
   // Change feed (lib/share-events-core.js, ain-integration plan task 10): one
   // row per (event, recipient). `seq` is the global cursor (AUTOINCREMENT so a
   // seq is never reused after a prune); `resource_key` is the contract's
