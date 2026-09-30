@@ -242,22 +242,40 @@ export function createAfanBridge(o) {
     return value;
   }
 
+  /**
+   * Accounts OTHER than the drive's creator that can write `people/<handle>/…` — an editor (or co-owner) on the
+   * drive root, on `people`, or on `people/<handle>` itself. Any of them could have written the request file (or,
+   * at the root, rewritten drive.md's owner line), so a request under that handle cannot be attributed to one person.
+   */
+  async function writersOf(handle) {
+    const r = await serverCall("GET", `/api/drives/${encodeURIComponent(driveId)}/members`);
+    if (r.status === 401) throw reject("auth_required", "this aindrive host's sign-in is no longer valid", "session-refused");
+    if (r.status >= 500) throw new Error(`members ${r.status}`); // transient: retryable, not cached (see verifyAuthor)
+    if (r.status !== 200 || !Array.isArray(r.json?.members)) throw reject("forbidden", "the drive's members could not be read to confirm the author", "author-unverified");
+    const scopes = new Set(["", "people", `people/${handle}`]);
+    return new Set(r.json.members
+      .filter((m) => scopes.has(cleanRel(m?.path ?? "")) && (m.role === "editor" || m.role === "owner"))
+      .map((m) => ({ key: String(m.email ?? m.id ?? "").toLowerCase(), exact: cleanRel(m?.path ?? "") === `people/${handle}` })))
+  }
+
   async function verifyAuthorUncached(handle) {
     const ownerHandle = await driveOwnerHandle();
     if (ownerHandle && ownerHandle === handle) {
       const r = await serverCall("GET", `/api/drives/${encodeURIComponent(driveId)}`);
-      if (r.status === 200) return { kind: "owner", account: `aindrive:${sessionSubject(r.session) ?? driveId}` };
       if (r.status === 401) throw reject("auth_required", "this aindrive host's sign-in is no longer valid", "session-refused");
-      throw reject("forbidden", `drive.md names "${handle}" as owner, but this host's account does not own the drive`, "drive-owner-mismatch");
+      if (r.status >= 500) throw new Error(`drive ${r.status}`); // transient: retryable, not cached
+      if (r.status !== 200) throw reject("forbidden", `drive.md names "${handle}" as owner, but this host's account does not own the drive`, "drive-owner-mismatch");
+      // The owner's folder (and drive.md at the root) must be writable by the owner alone, or the request could be
+      // someone else's wearing the owner's handle — and it would run with an owner handoff grant.
+      const others = await writersOf(handle);
+      if (others.size) throw reject("forbidden", `another account can write people/${handle} (or the drive root), so this request cannot be attributed to the owner`, "author-ambiguous");
+      return { kind: "owner", account: `aindrive:${sessionSubject(r.session) ?? driveId}` };
     }
-    const r = await serverCall("GET", `/api/drives/${encodeURIComponent(driveId)}/members`);
-    if (r.status === 401) throw reject("auth_required", "this aindrive host's sign-in is no longer valid", "session-refused");
-    if (r.status !== 200 || !Array.isArray(r.json?.members)) throw reject("forbidden", "the drive's members could not be read to confirm the author", "author-unverified");
-    const want = `people/${handle}`;
-    const holders = new Set(r.json.members
-      .filter((m) => cleanRel(m?.path) === want && (m.role === "editor" || m.role === "owner"))
-      .map((m) => String(m.email ?? m.id ?? "").toLowerCase()));
-    if (holders.size !== 1) throw reject("forbidden", `no single account holds editor on ${want}`, holders.size ? "author-ambiguous" : "author-unverified");
+    const writers = [...await writersOf(handle)];
+    const exact = new Set(writers.filter((w) => w.exact).map((w) => w.key));
+    const broader = writers.filter((w) => !w.exact);
+    if (broader.length) throw reject("forbidden", `an account with editor on the drive root or on people can write people/${handle}`, "author-ambiguous");
+    if (exact.size !== 1) throw reject("forbidden", `no single account holds editor on people/${handle}`, exact.size ? "author-ambiguous" : "author-unverified");
     return { kind: "member", account: null };
   }
 

@@ -417,6 +417,36 @@ describe("unverified authors are never executed", () => {
     expect(state.a2aCalls).toHaveLength(0);
   });
 
+  it("owner request refused when a member holds editor on the drive root (could forge the request or drive.md)", async () => {
+    state.members.push({ id: "m4", path: "", role: "editor", email: "root-editor@example.com" });
+    const rel = writeRequest("haechan", "u8");
+    const bridge = makeBridge();
+    await bridge.process(rel);
+    await bridge.idle();
+    expect(readResult("haechan", "u8").fm).toMatchObject({ status: "rejected", error: { code: "forbidden", detail: "author-ambiguous" } });
+    expect(state.a2aCalls).toHaveLength(0);
+  });
+
+  it("owner request refused when another account holds editor on people or people/<owner>", async () => {
+    for (const [i, path] of [["u9", "people"], ["u10", "people/haechan"]]) {
+      state.members = [{ id: "mx", path, role: "editor", email: "x@example.com" }];
+      const rel = writeRequest("haechan", i);
+      const bridge = makeBridge();
+      await bridge.process(rel);
+      await bridge.idle();
+      expect(readResult("haechan", i).fm).toMatchObject({ status: "rejected", error: { detail: "author-ambiguous" } });
+    }
+    expect(state.a2aCalls).toHaveLength(0);
+  });
+
+  it("member request refused when someone holds editor on a parent path", async () => {
+    state.members.push({ id: "m5", path: "people", role: "editor", email: "parent@example.com" });
+    const rel = writeRequest("mina", "u11");
+    const bridge = makeBridge();
+    await bridge.process(rel);
+    expect(readResult("mina", "u11").fm).toMatchObject({ status: "rejected", error: { detail: "author-ambiguous" } });
+  });
+
   it("two accounts holding editor on the same handle → ambiguous, refused", async () => {
     state.members.push({ id: "m3", path: "people/mina", role: "editor", email: "other@example.com" });
     const rel = writeRequest("mina", "u5");
