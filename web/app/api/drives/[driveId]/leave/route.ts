@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { getUser } from "@/lib/session";
 import { getDrive } from "@/lib/drives";
 import { orgRoleInDrive } from "@/lib/orgs.js";
+import { onMemberRevoked } from "@/lib/share-events";
 
 /**
  * POST /api/drives/:driveId/leave — remove MYSELF from a drive.
@@ -30,6 +31,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ driveI
       { status: 400 },
     );
   }
+  const paths = (db
+    .prepare("SELECT path FROM drive_members WHERE drive_id = ? AND user_id = ?")
+    .all(driveId, user.id) as { path: string }[]).map((r) => r.path);
   const res = db
     .prepare("DELETE FROM drive_members WHERE drive_id = ? AND user_id = ?")
     .run(driveId, user.id);
@@ -45,5 +49,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ driveI
     }
     return NextResponse.json({ error: "not a member of this drive" }, { status: 404 });
   }
+  // Change feed: one `file.revoked` per grant path I held (my own consumers hide them).
+  onMemberRevoked(driveId, user.id, paths);
   return NextResponse.json({ ok: true });
 }

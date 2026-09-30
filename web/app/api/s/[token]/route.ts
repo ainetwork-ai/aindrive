@@ -17,6 +17,7 @@ import { issueShareCap } from "@/lib/willow/cap-issue";
 import { onPaymentSettled } from "@/lib/payment-hooks";
 import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork, policyChainViolation } from "@/lib/payment-tokens";
 import { paymasterEnabled } from "@/lib/paymaster";
+import { onMemberGranted } from "@/lib/share-events";
 
 // The facilitator (resolution, verify→settle with timeouts and retries, the
 // dev bypass) lives in lib/x402-facilitator.ts, shared with the x402_settle skill.
@@ -248,6 +249,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role`
     ).run(nanoid(12), share.drive_id, settleAccountId, share.path, mergedRole);
+    // Change feed: the buyer's account hears `file.shared` (origin paid) for the sold path.
+    onMemberGranted(share.drive_id, settleAccountId, share.path);
   } catch (e) {
     console.error(`[paid-grant] post-settle drive_members write failed — tx=${txHash} payer=${payerWallet}`, e);
   }

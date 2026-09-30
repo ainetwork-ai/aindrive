@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 // Relative imports: lib/sso/store.js (plain ESM, also loaded by `node server.js`) uses it.
 import { db } from "./db.js";
 import { mergeRoleUpgradeOnly } from "./access-core.js";
+import { onMemberGranted } from "./share-events-core.js";
 
 // Upsert a pending invite (one row per drive+email+path; re-invite overwrites
 // the role — pending grants aren't a security boundary, the owner is editing).
@@ -50,6 +51,8 @@ export function claimInvitesForEmail(userId, email) {
       const merged = mergeRoleUpgradeOnly(existing?.role ?? "none", inv.role);
       grant.run(nanoid(12), inv.drive_id, userId, inv.path, merged, merged);
       drop.run(inv.id);
+      // Change feed: the new account hears `file.shared` for each claimed grant.
+      onMemberGranted(inv.drive_id, userId, inv.path);
     }
   });
   tx();

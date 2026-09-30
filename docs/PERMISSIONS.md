@@ -229,3 +229,26 @@ grant authorises nothing: the write, delete, share and member routes do not
 accept the token, and the agent protocols (MCP/A2A/AG-UI) refuse it by name.
 Refusals use the cross-product error body (`auth_required`, `forbidden`,
 `source_offline`, `temporary_failure`) and never echo the token.
+
+## Change feed
+
+Every change to *who can reach what* is also written to a per-account **change
+feed** (`web/lib/share-events-core.js`, plan task 10 of ain-integration), read
+at `GET /api/me/events?cursor=` (session) and `GET /api/oauth/events?cursor=`
+(account grant with `drives:read`) in the cross-product event contract:
+`file.shared` when a grant reaches an account (invite, share-link accept, paid
+settle, invite claim on signup), `file.revoked` when the owner removes it or the
+member leaves, `file.deleted` to every member when the drive is deleted,
+`file.availability` (revision `online`/`offline`) to the creator and members
+when the drive's device connects or disconnects, and `file.updated` /
+`file.deleted` for paths the device reports as changed (a rename arrives as
+deleted + updated in Phase A). The `resourceId` is the shared-file list's key
+(`https://<origin>#<driveId>#<fileId>`), `version` is strictly increasing per
+resource, a page holds at most 500 events and `nextCursor` (`ev_<seq>`)
+continues it; `gap: true` (a malformed cursor, or one older than the 10 000
+newest events kept per account) tells the consumer to re-list
+`/api/me/shared` first. Events name no token, signed URL or secret, and they are
+**hints only**: revoking a share *link* records nothing (access already granted
+through it stays), and every real read still resolves the grant at call time
+(`resolveRoleByUser`) — a consumer that missed an event is never granted more
+than the origin allows.

@@ -28,3 +28,9 @@ export function startHeartbeat(
   ws: { on(event: "pong", cb: () => void): unknown; ping(): void; terminate(): void; readyState: number; OPEN: number },
   opts?: { intervalMs?: number; onBeat?: () => void; onDead?: () => void },
 ): ReturnType<typeof setInterval>;
+/** Accept a device agent's WebSocket (custom server): auth, registry, heartbeat, frames, change-feed availability. */
+export function onAgentConnect(
+  ws: { on(event: string, cb: (...args: any[]) => void): unknown; send(data: string): void; close(code?: number, reason?: string): void; ping(): void; terminate(): void; readyState: number; OPEN: number },
+  req: { headers: Record<string, string | string[] | undefined> },
+  query: { driveId?: string } | undefined,
+): Promise<void>;

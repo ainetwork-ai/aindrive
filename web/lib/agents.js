@@ -5,6 +5,7 @@ import { verifyPayload, signPayload } from "./sig.js";
 import { broadcastReload } from "./dochub.js";
 import { trace, docIdFor } from "./trace.js";
 import { log } from "./logger.js";
+import { onAgentOnlineChanged, onFsChanged } from "./share-events-core.js";
 
 /**
  * In-memory registry of currently-connected agent WebSockets.
@@ -158,9 +159,17 @@ export async function onAgentConnect(ws, req, query) {
     // multi-device. The most recent connection becomes the RPC target.
   }
 
+  // Change feed: `file.availability` only when the drive's online answer
+  // (isAgentConnected) actually flips — a second device joining an online
+  // drive, or a re-connect that replaces the primary, records nothing.
+  const wasOnline = agents.has(driveId);
   const entry = { ws, driveSecret: row.drive_secret, pending: new Map() };
   agents.set(driveId, entry);
   db.prepare("UPDATE drives SET last_seen_at = datetime('now') WHERE id = ?").run(driveId);
+  if (!wasOnline) {
+    try { onAgentOnlineChanged(driveId, true); }
+    catch (e) { log.warn({ drive: driveId, err: e?.message || String(e) }, "[share-events] availability(online) failed"); }
+  }
 
   log.info({ drive: driveId }, "agent connected");
   try { trace("server", "agent-connect", { docId: "agent-" + driveId }); } catch {}
@@ -195,6 +204,14 @@ export async function onAgentConnect(ws, req, query) {
     if (msg?.type === "fs-changed" && typeof msg.path === "string") {
       const sent = broadcastReload(driveId, msg.path);
       if (sent > 0) log.info({ drive: driveId, path: msg.path, editors: sent }, "[fs-changed] editors reloaded");
+      // Change feed: the frame names the path only (cli/src/agent.js sends
+      // {type, path}; fs.watch's rename/change kind is not carried), so stat it
+      // to tell a removal from a write. A rename thus lands as file.deleted
+      // (old path) + file.updated (new path) — Phase A of the plan's task 10.
+      // The RPC is best-effort: with no answer the change is still recorded as
+      // file.updated without a revision. Never lets an error reach the socket.
+      recordFsChange(driveId, msg.path).catch((e) =>
+        log.warn({ drive: driveId, path: msg.path, err: e?.message || String(e) }, "[share-events] fs-changed failed"));
       return;
     }
     // Multi-device sync frames — broadcast to OTHER connected agents on the same drive.
@@ -231,7 +248,12 @@ export async function onAgentConnect(ws, req, query) {
 
   ws.on("close", () => {
     clearInterval(heartbeat);
-    if (agents.get(driveId) === entry) agents.delete(driveId);
+    if (agents.get(driveId) === entry) {
+      agents.delete(driveId);
+      // The drive's online answer just flipped (see onAgentOnlineChanged above).
+      try { onAgentOnlineChanged(driveId, false); }
+      catch (e) { log.warn({ drive: driveId, err: e?.message || String(e) }, "[share-events] availability(offline) failed"); }
+    }
     const peers = globalThis.__aindrive_agents_by_drive?.get(driveId);
     if (peers) {
       peers.delete(ws);
@@ -251,6 +273,22 @@ export async function onAgentConnect(ws, req, query) {
   ws.on("error", (e) => {
     log.warn({ drive: driveId, err: e?.message || String(e) }, "agent ws error");
   });
+}
+
+/**
+ * Record an `fs-changed` frame in the change feed: stat the path on the device
+ * (`exists` false → file.deleted, true → file.updated + revision, unknown →
+ * file.updated) and fan out to the drive's audience. See onFsChanged.
+ */
+async function recordFsChange(driveId, path) {
+  let info = {};
+  try {
+    const r = await sendRpc(driveId, { method: "stat", path: String(path).normalize("NFC") }, { timeoutMs: 10_000 });
+    info = r && "entry" in r ? { exists: !!r.entry, entry: r.entry ?? undefined } : {};
+  } catch (e) {
+    log.debug({ drive: driveId, path, err: e?.message || String(e) }, "[share-events] stat before fs-changed record failed");
+  }
+  return onFsChanged(driveId, path, info);
 }
 
 function randomReqId() {

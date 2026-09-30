@@ -19,6 +19,7 @@ import { nanoid } from "nanoid";
 import { db } from "../db.js";
 import { mergeRoleUpgradeOnly } from "../access-core.js";
 import { claimInvitesForEmail } from "../invites.js";
+import { onMemberGranted } from "../share-events-core.js";
 
 export const SSO_PLACEHOLDER_DOMAIN = "sso.aindrive.local";
 const RESERVED_EMAIL_DOMAINS = ["wallet.aindrive.local", SSO_PLACEHOLDER_DOMAIN];
@@ -91,6 +92,8 @@ function moveDriveGrants(fromUserId, toUserId) {
   for (const r of rows) {
     if (r.owner_id === toUserId) continue;
     upsert.run(nanoid(12), r.drive_id, toUserId, r.path, mergeRoleUpgradeOnly(current.get(r.drive_id, toUserId, r.path)?.role ?? "none", r.role));
+    // Change feed: the person now holds the grant the placeholder was given.
+    onMemberGranted(r.drive_id, toUserId, r.path);
   }
   db.prepare("DELETE FROM drive_members WHERE user_id = ?").run(fromUserId);
   return rows.length;
