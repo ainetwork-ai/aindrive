@@ -78,9 +78,9 @@ export async function runCli(argv) {
     .description("sign in and serve the current folder")
     .option("--server <url>", "server URL", DEFAULT_SERVER)
     .option("--no-open", "do not open the browser")
-    .action(async (opts) => {
+    .action(async (opts, cmd) => {
       const parentOpts = program.opts();
-      const mergedOpts = { ...parentOpts, ...opts };
+      const mergedOpts = { ...parentOpts, ...opts, server: givenServer(program, cmd) ?? DEFAULT_SERVER };
       const args = buildArgs(mergedOpts, ["login"]);
       await cmdLogin(args);
       const dir = resolve(".");
@@ -144,15 +144,31 @@ export async function runCli(argv) {
   program
     .command("mcp")
     .description("run a Model Context Protocol stdio server for aindrive")
-    .option("--server <url>", "server URL", DEFAULT_SERVER)
-    .action(async (opts) => {
-      const parentOpts = program.opts();
-      const mergedOpts = { ...parentOpts, ...opts };
-      const args = buildArgs(mergedOpts, ["mcp"]);
-      await cmdMcp(args);
+    .option("--server <url>", "server URL (default: the server `aindrive login` saved)")
+    .action(async (_opts, cmd) => {
+      // No --server → undefined, so the MCP client falls back to
+      // AINDRIVE_SERVER, then the server the saved login belongs to
+      // (mcp/client.js) — never to a different server than the cookie's.
+      await cmdMcp({ flags: { server: givenServer(program, cmd) }, positional: ["mcp"] });
     });
 
   await program.parseAsync(["node", "aindrive", ...argv]);
+}
+
+/**
+ * The --server the user typed, or undefined. The program and the subcommands
+ * both declare --server; Commander hands a flag typed after the subcommand to
+ * the PROGRAM (program options are recognised anywhere), and the subcommand
+ * keeps its default — so merging the two let the subcommand's default
+ * (https://aindrive.ainetwork.ai) override `aindrive login|mcp --server <url>`
+ * and the session for <url> went to the default server.
+ */
+export function givenServer(program, cmd) {
+  for (const c of [cmd, program]) {
+    const source = c?.getOptionValueSource?.("server");
+    if (source && source !== "default") return c.opts().server;
+  }
+  return undefined;
 }
 
 /** Build the args shape expected by command files: { flags, positional } */
