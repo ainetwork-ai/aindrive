@@ -9,8 +9,9 @@ export declare function orgAccessIssuer(): string | null;
 export declare function orgShareAllowlist(): OrgShareAllowEntry[];
 export declare function orgRoleInDrive(driveId: string, userId: string | null | undefined): OrgRoleOrNone;
 
-export type OrgDriveRow = DriveRow & { org_id: string; org_role: OrgShareRole };
+export type OrgDriveRow = DriveRow & { org_id: string; org_role: OrgShareRole; org_shared_at: number };
 export declare function orgDrivesForUser(userId: string): OrgDriveRow[];
+export declare function activeOrgMemberIds(issuer: string, orgId: string, except?: string | null): string[];
 
 export type UserOrg = { issuer: string; orgId: string; subject: string; appRole: string | null; slug: string | null; name: string };
 export declare function userOrgs(userId: string): UserOrg[];

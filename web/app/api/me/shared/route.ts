@@ -6,8 +6,8 @@
  * Cookie session, as /api/me/tier. Errors are contract bodies
  * (`{ error: { code, message, retryable } }`): 401 auth_required, 415
  * unsupported_input for a malformed query, 503 temporary_failure. A scope this
- * server only approximates is flagged in `X-AIN-Scope-Unsupported` /
- * `X-AIN-Scope-Fallback` (shared_with_org, recent).
+ * server only approximates is flagged in `X-AIN-Scope-Unsupported` (`org=`
+ * outside shared_with_org) / `X-AIN-Scope-Fallback` (recent).
  */
 import { getUser } from "@/lib/session";
 import { errorResponse, listSharedItems, parseListQuery, requestOrigin, sharedScopeHeaders } from "@/lib/shared-items";

@@ -22,8 +22,12 @@
  * What is recorded, and by whom (lib/share-events-core.js hooks):
  *   file.shared        a grant reached the recipient — members POST (registered
  *                      invitee), share-link accept, paid settle, invite claim
- *                      on signup, an SSO placeholder's grants moving to the person
- *   file.revoked       the recipient's grant went — members DELETE, leave
+ *                      on signup, an SSO placeholder's grants moving to the person;
+ *                      the drive shared with an organization (root key, every
+ *                      active member but the creator — lib/orgs.js)
+ *   file.revoked       the recipient's grant went — members DELETE, leave; the
+ *                      organization share removed (root key, same members). A
+ *                      membership ending records nothing: reads re-check it
  *   file.deleted       the drive was deleted (root key, every member) — or the
  *                      device reported a path that no longer exists
  *   file.updated       the device reported a change at a path that exists
@@ -50,6 +54,8 @@ export {
   driveAudience,
   onMemberGranted,
   onMemberRevoked,
+  onOrgShared,
+  onOrgRevoked,
   onDriveDeleted,
   onAgentOnlineChanged,
   onFsChanged,
