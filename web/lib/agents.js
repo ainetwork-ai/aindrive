@@ -37,16 +37,32 @@ export function listConnectedDrives() {
 }
 
 /**
- * Drop the live agent for a drive that is being deleted. The agent's token
- * row goes away with the drive, so its next reconnect is refused (4404); this
- * just stops it answering in the meantime.
+ * Drop every live device socket of a drive — the RPC primary AND the other
+ * devices kept for sync — once its credentials stop being valid:
+ *   - drive deleted (4410): the token row goes with the drive, so a reconnect
+ *     is refused (4404);
+ *   - credentials rotated from the web (4401): a lost or removed device would
+ *     otherwise keep answering on its open socket — the server signs requests
+ *     with the secret it held when that socket connected — until it happened
+ *     to reconnect. Its reconnect with the old token is refused (4401).
+ * Returns how many sockets were closed.
  */
-export function disconnectAgent(driveId) {
+export function disconnectAgent(driveId, code = 4410, reason = "drive deleted") {
+  const sockets = new Set(globalThis.__aindrive_agents_by_drive?.get(driveId) ?? []);
   const entry = agents.get(driveId);
-  if (!entry) return false;
-  try { entry.ws.close(4410, "drive deleted"); } catch {}
-  agents.delete(driveId);
-  return true;
+  if (entry) {
+    sockets.add(entry.ws);
+    // Off the RPC map now, not when the close handshake ends: no request may
+    // reach the removed device in between (its "close" then records nothing).
+    agents.delete(driveId);
+    // A rotated drive still exists, so its audience hears it went offline.
+    if (code !== 4410) {
+      try { onAgentOnlineChanged(driveId, false); }
+      catch (e) { log.warn({ drive: driveId, err: e?.message || String(e) }, "[share-events] availability(offline) failed"); }
+    }
+  }
+  for (const ws of sockets) { try { ws.close(code, reason); } catch {} }
+  return sockets.size;
 }
 
 /**

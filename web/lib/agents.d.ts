@@ -20,7 +20,8 @@ export function sendRpc<M extends RpcParams["method"]>(
 export function isAgentConnected(driveId: string): boolean;
 export function listConnectedDrives(): string[];
 /** Close the live agent socket for a drive being deleted; false if none was connected. */
-export function disconnectAgent(driveId: string): boolean;
+/** Closes every device socket of the drive (4410 drive deleted by default; 4401 after a rotation). Returns how many. */
+export function disconnectAgent(driveId: string, code?: number, reason?: string): number;
 /** An agent's list/stat result with entry names and paths in NFC (the server's path identity). */
 export function canonicalAgentResult<R>(result: R): R;
 /** Ping every interval; terminate a socket whose previous ping got no pong. */

@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { env } from "./env";
 import { db } from "./db";
 import { cookieOptions } from "./cookie-config";
-import { endSsoSession, getSsoSession, isAccountBlocked, liveSessionUserId, sessionEpoch } from "./sso/store.js";
+import { disconnectUserSockets, endAllUserSessions, endSsoSession, getSsoSession, isAccountBlocked, liveSessionUserId, sessionEpoch } from "./sso/store.js";
 
 const COOKIE = "aindrive_session";
 const enc = new TextEncoder();
@@ -116,4 +116,23 @@ export async function endCurrentSsoSession() {
   const s = await currentSsoSession();
   if (s) endSsoSession(s.id, "logout");
   return s;
+}
+
+/**
+ * "Sign out everywhere": ends EVERY session of the signed-in account — this
+ * browser, other browsers, and the sign-in a CLI / Mac app / phone keeps from
+ * pairing (`~/.aindrive/credentials.json`, a 30-day session JWT) — by bumping
+ * the account's session epoch (lib/sso/store.js endAllUserSessions), and closes
+ * the account's open collaboration sockets. What a lost device could still do
+ * with its sign-in (list drives, read other devices' files, mint a drive's
+ * credentials again with `aindrive rotate-token`) stops here; the drive a
+ * device serves is removed separately (rotate / delete). Returns the user id,
+ * or null when no one is signed in.
+ */
+export async function endAllSessionsOfCurrentUser(): Promise<string | null> {
+  const user = await getUser();
+  if (!user) return null;
+  endAllUserSessions(user.id, "signed_out_everywhere");
+  disconnectUserSockets({ userId: user.id });
+  return user.id;
 }

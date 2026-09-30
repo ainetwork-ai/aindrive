@@ -166,12 +166,33 @@ function DangerSection({ driveId, driveName, busy, setBusy }: {
     router.push("/");
     router.refresh();
   }
+  // Lost or given-away device: new agent credentials for the drive. The server
+  // drops every device connected with the old ones and refuses them after
+  // (POST /rotate); members, links and sales stay. The new pair is discarded —
+  // a trusted device takes the drive back with `aindrive rotate-token`.
+  async function removeDevice() {
+    if (!confirm(
+      `Remove the device serving "${driveName}"?\n\nIt is disconnected now and can no longer serve this drive. Members, links and sales stay; the drive shows offline until a device you trust serves it again (run \`aindrive rotate-token\` in its folder, then \`aindrive\`).\n\nIf the device was lost, also use "Sign out on all devices" so its sign-in stops working.`,
+    )) return;
+    setBusy(true);
+    const res = await apiFetch(`/api/drives/${driveId}/rotate`, { method: "POST" });
+    setBusy(false);
+    if (!res.ok) { toast.error(res.error || "Failed to remove the device"); return; }
+    toast.success("Device removed — it can no longer serve this drive");
+  }
   return (
+    <>
+    <SectionCard icon={<Ban className="w-4 h-4" />} title="Remove device" description="Disconnect the computer or phone serving this drive and stop its key from working — for a lost or replaced device. Members, links and sales stay.">
+      <Button variant="tonal" icon={<Ban className="w-4 h-4" />} disabled={busy} onClick={removeDevice}>
+        Remove device
+      </Button>
+    </SectionCard>
     <SectionCard icon={<TrashIcon className="w-4 h-4" />} title="Delete drive" description="Permanently remove this drive from aindrive. Files on the device that serves it are not touched.">
       <Button variant="tonal" className="text-red-600" icon={<TrashIcon className="w-4 h-4" />} disabled={busy} onClick={del}>
         Delete this drive
       </Button>
     </SectionCard>
+    </>
   );
 }
 

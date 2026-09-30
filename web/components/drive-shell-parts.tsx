@@ -189,6 +189,14 @@ function AccountFooter() {
           {email && <span className="block truncate text-caption text-drive-muted">{email}</span>}
         </span>
       </button>
+      {/* Lost a laptop or phone? Its CLI / app sign-in ends too (lib/session.ts endAllSessionsOfCurrentUser). */}
+      <button
+        type="submit"
+        formAction="/api/auth/logout?everywhere=1"
+        className="w-full px-3 py-1 rounded-lg text-left text-caption text-drive-muted hover:bg-drive-hover hover:text-drive-text"
+      >
+        Sign out on all devices
+      </button>
     </form>
   );
 }

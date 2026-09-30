@@ -36,6 +36,9 @@ export function parseLine(line) {
       if (j.msg === "connected") return { state: "online" };
       if (j.msg === "disconnected" || j.msg === "reconnecting") return { state: "connecting" };
       if (j.msg === "agent connection error") return { state: "connecting", detail: j.err };
+      // The server refused this device (removed from the web / drive deleted): not "connecting" —
+      // it only retries every few minutes, in case the owner re-attaches the folder.
+      if (j.msg === "device refused") return { state: "error", detail: j.reason };
       return null;
     } catch { return null; }
   }

@@ -1,4 +1,4 @@
-import { clearCookie, endCurrentSsoSession } from "@/lib/session";
+import { clearCookie, currentSsoSession, endAllSessionsOfCurrentUser, endCurrentSsoSession } from "@/lib/session";
 import { clearWalletCookie } from "@/lib/wallet";
 import { safeNextPath } from "@/lib/safe-next";
 import { ssoLoginConfig, ssoPostLogoutRedirectUri } from "@/lib/sso/config";
@@ -6,7 +6,12 @@ import { cachedMetadata, discover, endSessionUrl } from "@/lib/sso/oidc";
 import { markSilentChecked } from "@/lib/sso/signin";
 import { authPostRefusal } from "@/lib/auth-csrf";
 
-/** POST [?next=/d/…] — sign out; with `next`, go to sign-in and come back there ("switch account"). */
+/**
+ * POST [?next=/d/…] — sign out; with `next`, go to sign-in and come back there ("switch account").
+ * POST ?everywhere=1 — sign out on every device too (lib/session.ts
+ * endAllSessionsOfCurrentUser): other browsers and the sign-in a lost laptop's
+ * CLI or a phone keeps stop working at once.
+ */
 export async function POST(req: Request) {
   // Another site can't sign this browser out (lib/auth-csrf.ts); the forms
   // that post here are same-origin, so they carry our Origin.
@@ -14,7 +19,12 @@ export async function POST(req: Request) {
   if (csrf) return csrf;
   // An AIN SSO sign-in has a server-side session row: end it first, so the
   // cookie is dead even if the browser kept a copy (lib/sso/README.md).
-  const sso = await endCurrentSsoSession();
+  // "Everywhere" ends every session row of the account, this one included —
+  // read this one first (it still drives the AIN sign-out redirect below).
+  const everywhere = new URL(req.url).searchParams.get("everywhere") === "1";
+  let sso;
+  if (everywhere) { sso = await currentSsoSession(); await endAllSessionsOfCurrentUser(); }
+  else sso = await endCurrentSsoSession();
   // Clear BOTH credentials: the session cookie (identity) AND the wallet
   // cookie. The wallet cookie authorizes the AI-agent tier / rate-limit
   // budget (lib/tier.ts getUserTier → getWallet), so leaving it set would
