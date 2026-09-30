@@ -8,6 +8,8 @@ import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
 import { log } from "./logger.js";
 import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
+import { afanBridgeEnabled, createAfanBridge } from "./afan-bridge.js";
+import { readGlobalCreds } from "./config.js";
 
 const PROTOCOL_VERSION = 1;
 const require = createRequire(import.meta.url);
@@ -79,9 +81,11 @@ export async function runAgent({ root, drive, server }) {
 
   installShutdownHandlers();
 
+  const afanBridge = startAfanBridge({ root, drive, server });
+
   while (!shuttingDown) {
     try {
-      await connectOnce({ root, drive, wsUrl });
+      await connectOnce({ root, drive, wsUrl, afanBridge });
       attempt = 0;
     } catch (e) {
       log.error({ err: e.message || String(e) }, "agent connection error");
@@ -144,7 +148,33 @@ export function toWsUrl(server, driveId) {
   return u.toString();
 }
 
-function connectOnce({ root, drive, wsUrl }) {
+/**
+ * The afan host bridge (afan-bridge.js) for this folder, or null. Opt-in: `"afanBridge": true` in the
+ * folder's .aindrive/config.json, or AINDRIVE_AFAN_BRIDGE=1. It verifies authors with this machine's
+ * `aindrive login` session — only when that session is for this drive's server.
+ */
+export function startAfanBridge({ root, drive, server }, env = process.env) {
+  if (!afanBridgeEnabled(drive, env)) return null;
+  const serverUrl = drive.serverUrl || server;
+  const sameServer = (a, b) => { try { return new URL(a).origin === new URL(b).origin; } catch { return false; } };
+  const bridge = createAfanBridge({
+    root,
+    driveId: drive.driveId,
+    server: serverUrl,
+    getSession: async () => {
+      const creds = await readGlobalCreds();
+      return creds?.sessionCookie && sameServer(creds.server, serverUrl) ? creds.sessionCookie : null;
+    },
+    ainizeUrl: env.AINIZE_URL,
+    ainizeToken: env.AINIZE_TOKEN,
+    hostVersion: APP_VERSION,
+  });
+  bridge.startCatalogTimer();
+  log.info({ driveId: drive.driveId }, "afan bridge on");
+  return bridge;
+}
+
+function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
       headers: { authorization: `Bearer ${drive.agentToken}` },
@@ -165,6 +195,8 @@ function connectOnce({ root, drive, wsUrl }) {
       activeWs = ws;
       watchServerSilence(ws);
       log.info({ driveId: drive.driveId }, "connected");
+      // Requests written while this agent was offline — the watcher only sees new ones.
+      if (afanBridge) afanBridge.scan().catch((e) => log.warn({ err: e.message }, "afan bridge scan failed"));
       // Tell the server which machine this agent is running on (shown next to
       // the drive in the UI) and what it can do (phone protocol v2).
       try { ws.send(JSON.stringify(agentHello())); } catch {}
@@ -177,6 +209,8 @@ function connectOnce({ root, drive, wsUrl }) {
           if (!filename) return;
           const rel = filename.split(sep).join("/");
           if (rel.startsWith(".aindrive/") || rel === ".aindrive") return;
+          // afan requests (people/*/agent-requests/*.md) go to the bridge too; it ignores everything else.
+          if (afanBridge) afanBridge.notify(rel);
           const existing = recentChanges.get(rel);
           if (existing) clearTimeout(existing);
           const t = setTimeout(() => {
