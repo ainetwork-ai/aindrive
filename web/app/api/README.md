@@ -37,7 +37,7 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 | `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. |
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |
-| `orgs` (GET/POST), `orgs/[orgId]` (DELETE) | share the whole drive with an AIN SSO organization (viewer/editor) / change its role / stop (`lib/orgs.js`, `lib/org-policy.js`). GET = owners (candidates for the creator only); POST = creator who is that org's admin or on `AINDRIVE_ORG_SHARE_ALLOWLIST`; DELETE = creator. Audited in `sso_audit`. |
+| `orgs` (GET/POST), `orgs/[orgId]` (DELETE) | share the whole drive with an AIN SSO organization (viewer/editor) / change its role / stop (`lib/orgs.js`, `lib/org-policy.js`). GET = owners (candidates for the creator only); POST = creator who is that org's admin or on `AINDRIVE_ORG_SHARE_ALLOWLIST`; DELETE = creator. Audited in `sso_audit`; a new share / an unshare reaches every active member's change feed (`file.shared` / `file.revoked`, root key). |
 | `leave` (POST) | drop my own grants. Creator can't; access through an organization is 409 (only the creator unshares it). |
 | `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path through the caller's own grants (an organization's role never mints a link — it would become a durable grant); `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. GET = editor at root: owners get every link, others their own + others' paid viewer links (never another's free link or an editor link). Gates live in `lib/sales.ts`, shared with the MCP sale tools. |
 | `apps` (GET `?path`), `apps/[appId]/spaces/[spaceId]` (PUT `{path, shared}`) | the share sheet's "Shared in apps": the creator's connected apps' spaces and whether this folder is shared into each; PUT relays the toggle to the app as `{driveId, path, shared, name, driveName}` — `name` is the folder's name (the drive's name when the whole drive is shared), what the app should show. Creator only (GET answers `{apps: []}` to anyone else). |
@@ -119,7 +119,10 @@ Ops / dev:
 - **Every grant change is recorded in the change feed** (`lib/share-events-core.js`):
   a `drive_members` insert (`members` POST, `s/[token]/accept`, paid settle,
   invite claim on signup) records `file.shared` to that account; a removal
-  (`members/[id]` DELETE, `leave`) records `file.revoked`; `drives/[id]` DELETE
+  (`members/[id]` DELETE, `leave`) records `file.revoked`; an organization
+  share (`orgs` POST, new share only) records `file.shared` to every active
+  member of the org and `orgs/[orgId]` DELETE `file.revoked` (a membership
+  ending records nothing — reads re-check it); `drives/[id]` DELETE
   records `file.deleted` to every member *before* the cascade; the agent socket
   records `file.availability` on each online/offline flip and
   `file.updated`/`file.deleted` for `fs-changed` frames (after a `stat`).

@@ -11,6 +11,7 @@ import type { FileListItem, FileListResponse, FileListScope, ListSharedOpts } fr
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-shared-items-"));
 process.env.AINDRIVE_PUBLIC_URL = "https://drive.test";
 process.env.AINDRIVE_SSO_ISSUER = "https://auth.test";
+process.env.AINDRIVE_SSO_CLIENT_ID = "app_aindrive"; // organization access is evaluated (lib/orgs.js orgAccessIssuer)
 
 const cookieJar = new Map<string, string>();
 vi.mock("next/headers", () => ({
@@ -59,7 +60,7 @@ const NFC_PATH = "앨범/파일.txt";
 
 beforeAll(async () => {
   const u = db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)");
-  for (const [id, email] of [["owner1", "o@example.com"], ["member1", "m@example.com"], ["buyer1", "b@example.com"], ["nobody1", "n@example.com"], ["invitee1", "i@example.com"], ["pager1", "p@example.com"]]) {
+  for (const [id, email] of [["owner1", "o@example.com"], ["member1", "m@example.com"], ["buyer1", "b@example.com"], ["nobody1", "n@example.com"], ["invitee1", "i@example.com"], ["pager1", "p@example.com"], ["orgmember1", "om@example.com"], ["suspended1", "su@example.com"]]) {
     u.run(id, email, id, "x");
   }
   const d = db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret, last_seen_at, created_at) VALUES (?,?,?,?,?,?,?)");
@@ -83,6 +84,24 @@ beforeAll(async () => {
   db.prepare("INSERT INTO sso_identities (issuer, subject, user_id, link_method, linked_at) VALUES (?,?,?,?,?)")
     .run("https://auth.test", "acc_owner", "owner1", "jit", Date.now());
   for (const p of ["a", "b", "c", "d", "e"]) m.run(`pg_${p}`, "d2", "pager1", p, "viewer", `2026-09-2${p.charCodeAt(0) - 96} 00:00:00`);
+  // Organizations (R-SHARE-ORG-001): owner1 is active in org_1 and org_2 and
+  // shares d1 with org_1 (viewer) and d2 with org_2 (editor). orgmember1 is
+  // active in both; suspended1 holds a suspended org_1 row; member1/nobody1
+  // are in none. d3 is shared with org_1 by member1, who is NOT a member of
+  // it: that share is paused (R-ORG-ACC-003) and must not be listed.
+  const ms = db.prepare(
+    `INSERT INTO sso_memberships (issuer, org_id, subject, user_id, org_slug, org_name, status, app_role, groups_json, applied_version, updated_at)
+     VALUES ('https://auth.test', ?, ?, ?, ?, ?, ?, ?, '[]', 1, ?)`,
+  );
+  ms.run("org_1", "acc_owner", "owner1", "one", "Org One", "active", "admin", 1);
+  ms.run("org_2", "acc_owner", "owner1", "two", "Org Two", "active", "admin", 1);
+  ms.run("org_1", "acc_om", "orgmember1", "one", "Org One", "active", "member", 1);
+  ms.run("org_2", "acc_om", "orgmember1", "two", "Org Two", "active", "member", 1);
+  ms.run("org_1", "acc_su", "suspended1", "one", "Org One", "suspended", null, 1);
+  const os = db.prepare("INSERT INTO drive_org_shares (drive_id, issuer, org_id, role, created_by, created_at, updated_at) VALUES (?,'https://auth.test',?,?,?,?,?)");
+  os.run("d1", "org_1", "viewer", "owner1", Date.UTC(2026, 8, 15), Date.UTC(2026, 8, 15));
+  os.run("d2", "org_2", "editor", "owner1", Date.UTC(2026, 8, 16), Date.UTC(2026, 8, 16));
+  os.run("d3", "org_1", "editor", "member1", Date.UTC(2026, 8, 17), Date.UTC(2026, 8, 17));
   clientId = oauth.registerClient("Afan", ["https://afan.example/cb"]).client_id;
 });
 
@@ -162,12 +181,61 @@ describe("listSharedItems — scopes", () => {
     expect(list("owner1", "mine").items.find((i) => i.ref.driveId === "d2")!.ref.availability).toEqual({ state: "offline" });
   });
 
-  it("shared_with_org is empty (no org grants yet) and recent falls back to shared_with_me", () => {
-    expect(list("member1", "shared_with_org").items).toEqual([]);
+  it("shared_with_org: an active member sees each drive shared with their organizations as a root ref with the share's role (R-SHARE-ORG-001)", () => {
+    const r = list("orgmember1", "shared_with_org");
+    expect(r.nextCursor).toBeNull();
+    // Newest share first; d3's share is paused (its creator is not in org_1) and never listed.
+    expect(r.items.map((i) => i.ref.driveId)).toEqual(["d2", "d1"]);
+    const d1 = r.items[1];
+    expect(d1).toMatchObject({ role: "viewer", shareOrigin: "org", sharedAt: "2026-09-15T00:00:00.000Z" });
+    expect(d1.paid).toBeUndefined();
+    expect(d1.ref).toMatchObject({
+      issuer: ORIGIN, kind: "folder", displayName: "Team Drive", fileId: shared.sharedFileId("d1", ""),
+      ownerRef: { kind: "account", issuer: "https://auth.test", subject: "acc_owner" },
+      availability: { state: "offline", lastSeenAt: "2026-09-28T10:00:00.000Z" },
+      sourceUrl: "https://drive.test/d/d1/", legacy: { path: "/" },
+    });
+    expect(r.items[0]).toMatchObject({ role: "editor", shareOrigin: "org", ref: { driveId: "d2", displayName: "Second", legacy: { path: "/" } } });
+    // Availability follows the agent registry, as for any ref.
+    online.add("d1");
+    try {
+      expect(list("orgmember1", "shared_with_org").items[1].ref.availability.state).toBe("online");
+    } finally {
+      online.delete("d1");
+    }
+    // Only the organization scope carries these rows; nothing secret rides along.
+    expect(list("orgmember1", "shared_with_me").items).toEqual([]);
+    expect(list("orgmember1", "mine").items).toEqual([]);
+    expect(JSON.stringify(r)).not.toMatch(/drive_secret|agent_token_hash|namespace_/);
+  });
+
+  it("shared_with_org: the caller's own drives, a non-member, a member of no organization and a suspended member get nothing", () => {
+    expect(list("owner1", "shared_with_org").items).toEqual([]); // owner1 is a member of both orgs — but they are their drives
+    expect(list("member1", "shared_with_org").items).toEqual([]); // in no organization (a direct grant on d1 is shared_with_me)
+    expect(list("nobody1", "shared_with_org").items).toEqual([]);
+    expect(list("suspended1", "shared_with_org").items).toEqual([]);
+    // A suspended row wins over an active one for the same (org, account).
+    db.prepare("INSERT INTO sso_memberships (issuer, org_id, subject, user_id, status, groups_json, applied_version, updated_at) VALUES ('https://auth.test','org_1','acc_su2','suspended1','active','[]',1,2)").run();
+    try {
+      expect(list("suspended1", "shared_with_org").items).toEqual([]);
+    } finally {
+      db.prepare("DELETE FROM sso_memberships WHERE subject = 'acc_su2'").run();
+    }
+  });
+
+  it("org= keeps one organization's rows; outside shared_with_org it is unsupported (empty + header)", () => {
+    expect(list("orgmember1", "shared_with_org", { org: "org_1" }).items.map((i) => i.ref.driveId)).toEqual(["d1"]);
+    expect(list("orgmember1", "shared_with_org", { org: "org_2" }).items.map((i) => i.ref.driveId)).toEqual(["d2"]);
+    expect(list("orgmember1", "shared_with_org", { org: "org_none" }).items).toEqual([]);
+    expect(list("suspended1", "shared_with_org", { org: "org_1" }).items).toEqual([]);
     expect(list("member1", "shared_with_me", { org: "org_1" }).items).toEqual([]);
-    expect(shared.sharedScopeHeaders("shared_with_org")).toEqual({ "X-AIN-Scope-Unsupported": "shared_with_org" });
+    expect(shared.sharedScopeHeaders("shared_with_org")).toEqual({});
+    expect(shared.sharedScopeHeaders("shared_with_org", "org_1")).toEqual({});
     expect(shared.sharedScopeHeaders("shared_with_me", "org_1")).toEqual({ "X-AIN-Scope-Unsupported": "org" });
     expect(shared.sharedScopeHeaders("recent")).toEqual({ "X-AIN-Scope-Fallback": "recent=shared_with_me" });
+  });
+
+  it("recent falls back to shared_with_me", () => {
     expect(paths(list("member1", "recent"))).toEqual(paths(list("member1", "shared_with_me")));
   });
 
@@ -260,8 +328,13 @@ describe("GET /api/me/shared (session)", () => {
     expect(JSON.stringify(body)).not.toMatch(/tok_paid|tok_secret/);
 
     const org = await meGet("scope=shared_with_org");
-    expect(org.headers.get("x-ain-scope-unsupported")).toBe("shared_with_org");
-    expect((await org.json()).items).toEqual([]);
+    expect(org.headers.get("x-ain-scope-unsupported")).toBeNull();
+    expect((await org.json()).items).toEqual([]); // member1 is in no organization
+    cookieJar.set("aindrive_session", await sign("orgmember1"));
+    const orgRows = await (await meGet("scope=shared_with_org&org=org_1")).json();
+    expect(orgRows.items.map((i: FileListItem) => [i.ref.driveId, i.shareOrigin])).toEqual([["d1", "org"]]);
+    expect((await meGet("scope=shared_with_me&org=org_1")).headers.get("x-ain-scope-unsupported")).toBe("org");
+    cookieJar.set("aindrive_session", await sign("member1"));
     const recent = await meGet("scope=recent");
     expect(recent.headers.get("x-ain-scope-fallback")).toBe("recent=shared_with_me");
     expect((await recent.json()).items).toHaveLength(4);
@@ -302,8 +375,9 @@ describe("GET /api/oauth/shared (account token)", () => {
       .toEqual(list("member1", "shared_with_me").items.map((i) => i.ref.fileId).sort());
     const mine = await (await tokenGet("scope=mine", issue("owner1", "drives:read"))).json();
     expect(mine.items.map((i: FileListItem) => i.ref.driveId).sort()).toEqual(["d1", "d2"]);
-    const org = await tokenGet("scope=shared_with_org", issue("owner1", "drives:read"));
-    expect(org.headers.get("x-ain-scope-unsupported")).toBe("shared_with_org");
+    const org = await tokenGet("scope=shared_with_org", issue("orgmember1", "drives:read"));
+    expect(org.headers.get("x-ain-scope-unsupported")).toBeNull();
+    expect((await org.json()).items.map((i: FileListItem) => i.ref.driveId)).toEqual(["d2", "d1"]);
     expect(oauthRoute.OPTIONS().status).toBe(204);
   });
 

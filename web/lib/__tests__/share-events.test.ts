@@ -11,6 +11,10 @@ import type { FileEvent } from "../share-events";
 
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), "aindrive-share-events-"));
 process.env.AINDRIVE_PUBLIC_URL = "https://drive.test";
+// Organization shares are evaluated only with the AIN SSO adapter configured (lib/orgs.js).
+const ISSUER = "https://auth.test";
+process.env.AINDRIVE_SSO_ISSUER = ISSUER;
+process.env.AINDRIVE_SSO_CLIENT_ID = "app_aindrive";
 // A small retention window so the prune path runs without 10 000 rows.
 process.env.AINDRIVE_SHARE_EVENT_RETENTION = "40";
 
@@ -39,6 +43,8 @@ const memberRoute = await import("../../app/api/drives/[driveId]/members/[member
 const leaveRoute = await import("../../app/api/drives/[driveId]/leave/route.js");
 const driveRoute = await import("../../app/api/drives/[driveId]/route.js");
 const acceptRoute = await import("../../app/api/s/[token]/accept/route.js");
+const orgsRoute = await import("../../app/api/drives/[driveId]/orgs/route.js");
+const orgRoute = await import("../../app/api/drives/[driveId]/orgs/[orgId]/route.js");
 const meRoute = await import("../../app/api/me/events/route.js");
 const oauthRoute = await import("../../app/api/oauth/events/route.js");
 
@@ -84,7 +90,16 @@ const openSockets: FakeWs[] = [];
 
 beforeAll(async () => {
   const u = db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)");
-  for (const id of ["owner1", "member1", "member2", "nobody1", "pruner1"]) u.run(id, `${id}@example.com`, id, "x");
+  for (const id of ["owner1", "member1", "member2", "nobody1", "pruner1", "orgA", "orgB", "orgS"]) u.run(id, `${id}@example.com`, id, "x");
+  // org_1: owner1 (admin — may share their drive with it), orgA and orgB active, orgS suspended.
+  const ms = db.prepare(
+    `INSERT INTO sso_memberships (issuer, org_id, subject, user_id, org_slug, org_name, status, app_role, groups_json, applied_version, updated_at)
+     VALUES (?, 'org_1', ?, ?, 'one', 'Org One', ?, ?, '[]', 1, ?)`,
+  );
+  ms.run(ISSUER, "acc_owner", "owner1", "active", "admin", 1);
+  ms.run(ISSUER, "acc_a", "orgA", "active", "member", 1);
+  ms.run(ISSUER, "acc_b", "orgB", "active", "member", 1);
+  ms.run(ISSUER, "acc_s", "orgS", "suspended", null, 1);
   db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)")
     .run("d1", "owner1", "Team", await bcrypt.hash(AGENT_TOKEN, 4), DRIVE_SECRET);
   db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?,?,?,?,?)")
@@ -178,6 +193,52 @@ describe("grants", () => {
       expect(del[0]).toMatchObject({ resourceId: key("d2", "/"), version: 1, recipient: u });
     }
     expect(feed("nobody1")).toEqual([]);
+  });
+});
+
+describe("organization shares (R-SHARE-ORG-001)", () => {
+  const mark: Record<string, number> = {};
+  const since = (u: string) => feed(u).slice(mark[u] ?? 0).filter((e) => e.type === "file.shared" || e.type === "file.revoked");
+
+  it("sharing a drive with an organization → file.shared on the root key to every active member, not the creator or a suspended member", async () => {
+    for (const u of ["owner1", "member2", "orgA", "orgB", "orgS", "nobody1"]) mark[u] = feed(u).length;
+    await asUser("owner1");
+    const res = await orgsRoute.POST(json({ orgId: "org_1", role: "viewer" }), ctx({ driveId: "d1" }));
+    expect(res.status).toBe(201);
+    for (const u of ["orgA", "orgB"]) {
+      expect(since(u)).toHaveLength(1);
+      expect(since(u)[0]).toMatchObject({ type: "file.shared", resourceId: key("d1", "/"), recipient: u });
+    }
+    expect(since("orgA")[0].version).toBe(since("orgB")[0].version); // one change, one version
+    for (const u of ["owner1", "member2", "orgS", "nobody1"]) expect(since(u)).toEqual([]);
+    // The listed ref and the event name the same resource.
+    expect(shared.listSharedItems("orgA", { scope: "shared_with_org" }).items.map((i) => `${ORIGIN}#${i.ref.driveId}#${i.ref.fileId}`)).toEqual([key("d1", "/")]);
+  });
+
+  it("a role change is not a new share, and a membership ending records nothing", async () => {
+    await asUser("owner1");
+    expect((await orgsRoute.POST(json({ orgId: "org_1", role: "editor" }), ctx({ driveId: "d1" }))).status).toBe(200);
+    expect(since("orgA")).toHaveLength(1);
+    expect(since("orgB")).toHaveLength(1);
+    // orgB is suspended by the adapter: access ends on the next read; the feed stays quiet.
+    db.prepare("UPDATE sso_memberships SET status = 'suspended', app_role = NULL WHERE issuer = ? AND org_id = 'org_1' AND user_id = 'orgB'").run(ISSUER);
+    expect(since("orgB")).toHaveLength(1);
+    expect(shared.listSharedItems("orgB", { scope: "shared_with_org" }).items).toEqual([]);
+  });
+
+  it("unsharing → file.revoked to the members active at that moment (the version keeps climbing)", async () => {
+    await asUser("owner1");
+    const res = await orgRoute.DELETE(new Request(`${ORIGIN}/api`, { method: "DELETE" }), ctx({ driveId: "d1", orgId: "org_1" }));
+    expect(res.status).toBe(200);
+    const a = since("orgA");
+    expect(a.map((e) => e.type)).toEqual(["file.shared", "file.revoked"]);
+    expect(a[1].resourceId).toBe(key("d1", "/"));
+    expect(a[1].version).toBeGreaterThan(a[0].version);
+    expect(since("orgB")).toHaveLength(1); // suspended before the unshare: no longer in the audience
+    for (const u of ["owner1", "member2", "orgS", "nobody1"]) expect(since(u)).toEqual([]);
+    expect(shared.listSharedItems("orgA", { scope: "shared_with_org" }).items).toEqual([]);
+    // Nothing secret rode along.
+    expect(JSON.stringify(feed("orgA"))).not.toMatch(/acc_|org_1|app_aindrive/);
   });
 });
 

@@ -75,6 +75,7 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
     description:
       "The files the user can reach, as common file references (contract 1.0): scope `mine` = drives they created, " +
       "`shared_with_me` = every folder/file shared with them by others (role, shareOrigin, paid entitlement), " +
+      "`shared_with_org` = drives shared with an organization they are an active member of (shareOrigin org), " +
       "`recent` = shared_with_me newest first. Page with `cursor` = the previous page's nextCursor.",
     inputSchema: {
       type: "object",

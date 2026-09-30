@@ -149,6 +149,22 @@ export function onMemberRevoked(driveId, userId, paths, opts = {}) {
   return out;
 }
 
+/**
+ * The drive was shared with an organization (lib/orgs.js shareDriveWithOrg):
+ * every active member of it — the drive's creator excepted, it is their own
+ * drive — hears `file.shared` on the drive-root key. A membership that later
+ * goes inactive records nothing: every read re-checks the organization, and
+ * the consumer's re-list drops the row.
+ */
+export function onOrgShared(driveId, memberUserIds, opts = {}) {
+  return safe("file.shared", () => recordShareEvent({ driveId, path: "", type: "file.shared", recipients: memberUserIds, ...opts }));
+}
+
+/** The organization share went (unshareDriveFromOrg): `file.revoked` on the root key to the same members. */
+export function onOrgRevoked(driveId, memberUserIds, opts = {}) {
+  return safe("file.revoked", () => recordShareEvent({ driveId, path: "", type: "file.revoked", recipients: memberUserIds, ...opts }));
+}
+
 /** Call BEFORE `DELETE FROM drives`: the member rows are cascaded away with it. */
 export function onDriveDeleted(driveId, opts = {}) {
   return safe("file.deleted", () => recordShareEvent({ driveId, path: "", type: "file.deleted", recipients: driveAudience(driveId), ...opts }));

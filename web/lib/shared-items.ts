@@ -16,8 +16,13 @@
  *   shared_with_me  every `drive_members` row of the caller on a drive someone
  *                   else created → one ref per grant path. A pending
  *                   `drive_invites` row is NOT shared yet and never appears.
- *   shared_with_org aindrive has no organization grant today → empty
- *                   (R-SHARE-ORG-001, TARGET); the route says so in a header.
+ *   shared_with_org every drive shared with an organization the caller is an
+ *                   ACTIVE member of (`drive_org_shares` × `sso_memberships`,
+ *                   lib/orgs.js orgDrivesForUser: in-force shares only) → its
+ *                   root as a folder ref with the share's role and
+ *                   `shareOrigin: org` (R-SHARE-ORG-001). `org=` keeps one
+ *                   organization's rows. The caller's own drives are left out,
+ *                   and a suspended membership yields nothing.
  *   recent          nothing records opens today → the shared_with_me list,
  *                   newest grant first; the route says so in a header.
  *
@@ -29,6 +34,7 @@ import { env } from "./env";
 import { isOnline } from "./rpc";
 import { resolveRoleByUser } from "./access";
 import { paidLocksForPaths } from "./sale-access.js";
+import { orgDrivesForUser } from "./orgs.js";
 import { lookupMime } from "./mime";
 
 // ── Contract (mirror of packages/contracts/src, version 1.0) ─────────────────
@@ -263,6 +269,29 @@ function memberItems(origin: string, userId: string): FileListItem[] {
   return items;
 }
 
+/**
+ * The drives shared with an organization the caller is an active member of
+ * (R-SHARE-ORG-001): one root ref per (drive, org), newest share first, with
+ * the share's role — a whole-drive grant, so no per-path locks to judge here
+ * (a paid subtree is the fs/list route's job, as for a direct root grant).
+ * The caller's own drives are never "shared with" them. A share that is not
+ * in force (the creator left the org, the adapter is off) is not listed: the
+ * caller could not open it (R-ORG-ACC-003).
+ */
+function orgItems(origin: string, userId: string, org?: string): FileListItem[] {
+  const rows = orgDrivesForUser(userId)
+    .filter((d) => d.owner_id !== userId && (!org || d.org_id === org))
+    .sort((a, b) => b.org_shared_at - a.org_shared_at || a.id.localeCompare(b.id) || a.org_id.localeCompare(b.org_id));
+  const owners = new Map<string, OwnerRef>();
+  return rows.map((d) => {
+    if (!owners.has(d.owner_id)) owners.set(d.owner_id, ownerRefFor(origin, d.owner_id));
+    const item: FileListItem = { ref: refFor(origin, d, "", owners.get(d.owner_id)!), role: d.org_role, shareOrigin: "org" };
+    const sharedAt = Number.isFinite(d.org_shared_at) ? new Date(d.org_shared_at).toISOString() : undefined;
+    if (sharedAt) item.sharedAt = sharedAt;
+    return item;
+  });
+}
+
 const CURSOR_PREFIX = "v1:";
 const encodeCursor = (scope: FileListScope, offset: number) => Buffer.from(`${CURSOR_PREFIX}${scope}:${offset}`, "utf8").toString("base64url");
 function decodeCursor(scope: FileListScope, cursor: string | undefined): number | null {
@@ -274,11 +303,15 @@ function decodeCursor(scope: FileListScope, cursor: string | undefined): number 
   return Number(m[2]);
 }
 
-/** Extra response headers the route sends for a scope this server only approximates. */
+/**
+ * Extra response headers the route sends for a scope this server only
+ * approximates: `org=` means nothing outside shared_with_org (an organization
+ * never restricts `mine`; a direct grant belongs to no organization), and
+ * `recent` is shared_with_me in disguise.
+ */
 export function sharedScopeHeaders(scope: FileListScope, org?: string): Record<string, string> {
   const h: Record<string, string> = {};
-  if (scope === "shared_with_org") h["X-AIN-Scope-Unsupported"] = "shared_with_org";
-  else if (org) h["X-AIN-Scope-Unsupported"] = "org";
+  if (org && scope !== "shared_with_org") h["X-AIN-Scope-Unsupported"] = "org";
   if (scope === "recent") h["X-AIN-Scope-Fallback"] = "recent=shared_with_me";
   return h;
 }
@@ -290,9 +323,9 @@ export function listSharedItems(userId: string, opts: ListSharedOpts): FileListR
   const asOf = new Date().toISOString();
 
   let all: FileListItem[];
-  // No organization grants exist yet (R-SHARE-ORG-001), so an org-restricted
-  // listing has nothing to show — empty, never someone else's rows.
-  if (opts.scope === "shared_with_org" || opts.org) all = [];
+  if (opts.scope === "shared_with_org") all = orgItems(origin, userId, opts.org?.trim() || undefined);
+  // `org=` restricts nothing but the organization scope: empty, never someone else's rows.
+  else if (opts.org) all = [];
   else if (opts.scope === "mine") all = ownedItems(origin, userId);
   else all = memberItems(origin, userId); // shared_with_me, and recent's stand-in
 
