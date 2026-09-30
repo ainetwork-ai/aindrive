@@ -394,7 +394,11 @@ export function createAfanBridge(o) {
 
   function refDriveId(ref) {
     if (typeof ref.file_key === "string") { const parts = ref.file_key.split("#"); if (parts.length >= 3) return parts[1]; }
-    if (typeof ref.source_url === "string") { const m = /\/d\/([^/?#]+)\//.exec(ref.source_url); if (m) return decodeURIComponent(m[1]); }
+    // Both sourceUrl spellings aindrive serves: /d/<id>/<path> and /d/<id>?path=<path>.
+    if (typeof ref.source_url === "string") {
+      const m = /\/d\/([^/?#]+)(?:[/?#]|$)/.exec(ref.source_url);
+      if (m) { try { return decodeURIComponent(m[1]); } catch { return m[1]; } }
+    }
     return null;
   }
 

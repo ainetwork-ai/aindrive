@@ -36,6 +36,7 @@ import { resolveRoleByUser } from "./access";
 import { paidLocksForPaths } from "./sale-access.js";
 import { orgDrivesForUser } from "./orgs.js";
 import { lookupMime } from "./mime";
+import { sourceUrlFor } from "./source-url";
 import { ainIntegrationEnabled } from "./ain-integration.js";
 import { generationFor, revisionWithGeneration } from "./path-generations.js";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
@@ -212,7 +213,7 @@ function refFor(origin: string, drive: DriveRow, path: string, ownerRef: OwnerRe
     displayName: name || drive.name,
     ownerRef,
     availability: { state: online ? "online" : "offline", ...(lastSeenAt ? { lastSeenAt } : {}) },
-    sourceUrl: `${origin}/d/${encodeURIComponent(drive.id)}${cpath.split("/").map(encodeURIComponent).join("/")}`,
+    sourceUrl: sourceUrlFor(origin, drive.id, cpath),
     legacy: { path: cpath },
   };
 }

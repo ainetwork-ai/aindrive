@@ -1,6 +1,7 @@
 // R-SHARE-LIST-002 (docs/PERMISSIONS_MATRIX.md §4): the common shared-file list
 // in the cross-product contract shape — lib/shared-items.ts, /api/me/shared,
 // /api/oauth/shared and the list_shared skill.
+import { sourcePathRedirect } from "../source-url";
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -136,6 +137,11 @@ describe("listSharedItems — scopes", () => {
     // A file share is told from a folder by its extension.
     const file = r.items.find((i) => i.ref.legacy?.path === `/${NFC_PATH}`)!;
     expect(file.ref).toMatchObject({ kind: "file", mimeType: "text/plain", displayName: "파일.txt" });
+    // Defect A (docs/06 §20.1): "open original" must resolve — the path form
+    // goes through the /d/[driveId]/[...path] redirect to the page's ?path=.
+    const src = new URL(file.ref.sourceUrl!);
+    const hop = sourcePathRedirect("d1", src.pathname.split("/").slice(3));
+    expect(hop.ok && new URL(hop.location, ORIGIN).searchParams.get("path")).toBe(NFC_PATH);
     // Owner of d3 → d3 only under mine, never shared_with_me even with a member row.
     expect(paths(list("member1", "mine"))).toEqual(["d3:/"]);
     // Newest grant first (recent's stand-in order).

@@ -294,6 +294,16 @@ describe("happy path (owner request)", () => {
     expectNoSecretsIn(root);
   });
 
+  it("a ref named only by source_url is tied to its drive in either sourceUrl spelling (path or ?path=)", async () => {
+    const q = writeRequest("haechan", "r3q", { file_refs: [{ legacy_path: "/x.pdf", source_url: `${base}/d/drv_other?path=x.pdf` }] });
+    const p = writeRequest("haechan", "r3p", { file_refs: [{ legacy_path: "/x.pdf", source_url: `${base}/d/drv_other/x.pdf` }] });
+    const bridge = makeBridge();
+    await Promise.all([bridge.process(q), bridge.process(p)]);
+    await bridge.idle();
+    for (const id of ["r3q", "r3p"]) expect(readResult("haechan", id).fm).toMatchObject({ status: "rejected", error: { code: "forbidden", detail: "cross-drive-file" } });
+    expect(state.a2aCalls.filter((c) => c.rpc.method === "message/send")).toHaveLength(0);
+  });
+
   it("an agent's failed task is a failed result with the contract error shape", async () => {
     state.agentMode = "fail";
     const rel = writeRequest("haechan", "r6");
