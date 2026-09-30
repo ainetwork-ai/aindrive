@@ -140,31 +140,26 @@ export function matchSpelling(root, abs, fsx = { existsSync, readdirSync }) {
 }
 
 /**
- * Replace `abs` with `data` so that nobody ever sees a half-written file: the
- * bytes go to a hidden temp under `.aindrive/tmp/` (same filesystem as the
- * drive, excluded from listings and the watcher) and are then renamed over the
- * target. Two overlapping writes to one path each publish their own complete
- * content — the last rename wins — instead of truncating and interleaving into
- * one file (plan 12.3: two editors saving at once left a file whose head was
- * one save and whose tail was the other). An existing file keeps its mode. A
- * target on another filesystem (a mount inside the drive: EXDEV) falls back to
- * an in-place write.
+ * Write `data` to `abs`, one write per file at a time in this agent. Two
+ * overlapping `write` RPCs for one path used to run two `fs.writeFile`s at
+ * once: each truncated and wrote through its own fd, leaving a file whose head
+ * was one save and whose tail the other (plan 12.3). Chained here, each save
+ * lands whole and the last one wins.
+ *
+ * In place on purpose, not temp + rename: Node's recursive fs.watch on Linux
+ * watches each file's inode, so a file replaced by rename stops reporting
+ * later edits made on the device (the editor's reload). A reader racing a write
+ * can still see it half-written — web downloads catch that through
+ * download-chunk's mtimeMs/size and end the stream instead.
  */
-export async function writeFileAtomic(root, abs, data) {
-  const tmpDir = path.join(root, ".aindrive", "tmp");
-  await fsp.mkdir(tmpDir, { recursive: true });
-  const tmp = path.join(tmpDir, `w-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
-  let mode;
-  try { mode = (await fsp.stat(abs)).mode & 0o7777; } catch { /* new file */ }
-  try {
-    await fsp.writeFile(tmp, data, mode === undefined ? undefined : { mode });
-    if (mode !== undefined) await fsp.chmod(tmp, mode);
-    await fsp.rename(tmp, abs);
-  } catch (e) {
-    await fsp.rm(tmp, { force: true }).catch(() => {});
-    if (e && e.code === "EXDEV") { await fsp.writeFile(abs, data); return; }
-    throw e;
-  }
+const _writeChains = new Map(); // abs path → tail of its write chain
+export function writeFileSerialized(abs, data) {
+  const prev = _writeChains.get(abs) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => fsp.writeFile(abs, data));
+  const tail = run.catch(() => {});
+  _writeChains.set(abs, tail);
+  tail.then(() => { if (_writeChains.get(abs) === tail) _writeChains.delete(abs); });
+  return run;
 }
 
 export function toRel(root, abs) {
@@ -289,7 +284,7 @@ export async function handleRpc(params, root) {
       const data = Buffer.from(params.content, encoding);
       // Suppress fs-changed for 2s after our own write so reload loop doesn't fire
       try { _suppressFsChange(params.path); } catch {}
-      await writeFileAtomic(root, abs, data);
+      await writeFileSerialized(abs, data);
       try { cliTrace(root, docIdFor(root, params.path), "disk-write", { extra: { path: params.path, byteLen: data.length } }); } catch {}
       return { method: "write", ok: true, bytes: data.length };
     }

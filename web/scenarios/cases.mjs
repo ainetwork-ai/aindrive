@@ -705,10 +705,11 @@ add(42, "list subfolder", async () => {
   assert(Array.isArray(r.body.entries));
 });
 
-add(43, "list non-existent → 502/500", async () => {
+add(43, "list non-existent → 404", async () => {
   const cookie = await reEnsureOwner();
   const r = await jget(`/api/drives/${state.driveId}/fs/list?path=__nope__`, { headers: { cookie } });
-  assert(r.status >= 500 && r.status < 600);
+  // The agent's ENOENT is the request's miss, not a device failure (lib/agents.js agentErrorStatus).
+  assert(r.status === 404);
 });
 
 add(44, "stat existing file via list", async () => {

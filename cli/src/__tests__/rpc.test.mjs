@@ -133,9 +133,9 @@ describe("reserved .aindrive paths over RPC", () => {
 });
 
 // Plan 12.3: two saves of one file at once must never leave a file made of
-// both (the old in-place writeFile truncated and wrote through two fds).
-describe("write is atomic (temp + rename)", () => {
-  it("overlapping writes leave exactly one complete content, no temp behind", async () => {
+// both (two concurrent writeFile calls truncated and wrote through two fds).
+describe("writes of one file are serialized", () => {
+  it("overlapping writes leave exactly one complete content", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "aindrive-atomic-"));
     try {
       for (let i = 0; i < 5; i++) {
@@ -147,22 +147,23 @@ describe("write is atomic (temp + rename)", () => {
         const got = readFileSync(path.join(root, "same.md"), "utf8");
         expect(got === a || got === b).toBe(true);
       }
-      expect(readdirSync(path.join(root, ".aindrive", "tmp"))).toEqual([]);
       const listed = await handleRpc({ method: "list", path: "" }, root);
       expect(listed.entries.map((e) => e.name)).toEqual(["same.md"]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("keeps an existing file's mode and writes through an NFD spelling on disk", async () => {
+  it("keeps the file's inode (a recursive fs.watch keeps seeing it), mode and NFD spelling", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "aindrive-atomic-"));
     try {
       const nfd = "스크립트.sh".normalize("NFD");
       writeFileSync(path.join(root, nfd), "old");
       chmodSync(path.join(root, nfd), 0o750);
+      const ino = statSync(path.join(root, nfd)).ino;
       await handleRpc({ method: "write", path: "스크립트.sh".normalize("NFC"), content: "new" }, root);
       expect(readdirSync(root).filter((n) => n !== ".aindrive")).toEqual([nfd]);
       expect(readFileSync(path.join(root, nfd), "utf8")).toBe("new");
       expect(statSync(path.join(root, nfd)).mode & 0o777).toBe(0o750);
+      expect(statSync(path.join(root, nfd)).ino).toBe(ino);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
