@@ -143,7 +143,7 @@ export function toRel(root, abs) {
   return path.relative(root, abs).split(path.sep).join("/");
 }
 
-function guessMime(name) {
+export function guessMime(name) {
   const ext = path.extname(name).toLowerCase();
   const map = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
