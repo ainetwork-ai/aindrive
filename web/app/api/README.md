@@ -68,7 +68,7 @@ Payments / capabilities:
 
 | Route | Gate |
 |-------|------|
-| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. Optional `Authorization: Bearer aind_aat_…` (a relaying app, server-to-server): the purchase is credited to that account instead of the payer wallet's; a bad account token → 401 before any payment. No CORS. |
+| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. A refused settle whose EIP-3009 authorization already settled on-chain (the facilitator's answer was lost) is credited from the chain, once (`lib/x402-recover.ts`). Owner/already-entitled bypass pay. Optional `Authorization: Bearer aind_aat_…` (a relaying app, server-to-server): the purchase is credited to that account instead of the payer wallet's; a bad account token → 401 before any payment. No CORS. |
 | `s/[token]/accept` (POST) | redeem a free (or already-paid-covered) share into a `drive_members` grant. Login required; never settles payment. |
 | `x402/lift` (GET) | pay an AIN micropayment to lift a scoped limit / unlock a tier (`scope=tier:pro` etc.). |
 | `cap/verify` (POST) | decode + describe a Meadowcap capability token. |
