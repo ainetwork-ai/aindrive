@@ -65,7 +65,7 @@ export type RpcResult =
   | { method: "rename"; ok: true }
   | { method: "delete"; ok: true }
   | { method: "upload-chunk"; ok: true; receivedBytes: number }
-  | { method: "download-chunk"; data: string; eof: boolean }
+  | { method: "download-chunk"; data: string; eof: boolean; mtimeMs?: number; size?: number }
   | { method: "yjs-write"; ok: true; bytes: number }
   | { method: "yjs-read"; data: string; bytes: number }
   | { method: "agent-ask"; answer: string; sources: AskSource[]; action?: Record<string, unknown> }

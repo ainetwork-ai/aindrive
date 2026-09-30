@@ -139,6 +139,34 @@ export function matchSpelling(root, abs, fsx = { existsSync, readdirSync }) {
   return cur;
 }
 
+/**
+ * Replace `abs` with `data` so that nobody ever sees a half-written file: the
+ * bytes go to a hidden temp under `.aindrive/tmp/` (same filesystem as the
+ * drive, excluded from listings and the watcher) and are then renamed over the
+ * target. Two overlapping writes to one path each publish their own complete
+ * content — the last rename wins — instead of truncating and interleaving into
+ * one file (plan 12.3: two editors saving at once left a file whose head was
+ * one save and whose tail was the other). An existing file keeps its mode. A
+ * target on another filesystem (a mount inside the drive: EXDEV) falls back to
+ * an in-place write.
+ */
+export async function writeFileAtomic(root, abs, data) {
+  const tmpDir = path.join(root, ".aindrive", "tmp");
+  await fsp.mkdir(tmpDir, { recursive: true });
+  const tmp = path.join(tmpDir, `w-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+  let mode;
+  try { mode = (await fsp.stat(abs)).mode & 0o7777; } catch { /* new file */ }
+  try {
+    await fsp.writeFile(tmp, data, mode === undefined ? undefined : { mode });
+    if (mode !== undefined) await fsp.chmod(tmp, mode);
+    await fsp.rename(tmp, abs);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    if (e && e.code === "EXDEV") { await fsp.writeFile(abs, data); return; }
+    throw e;
+  }
+}
+
 export function toRel(root, abs) {
   return path.relative(root, abs).split(path.sep).join("/");
 }
@@ -261,7 +289,7 @@ export async function handleRpc(params, root) {
       const data = Buffer.from(params.content, encoding);
       // Suppress fs-changed for 2s after our own write so reload loop doesn't fire
       try { _suppressFsChange(params.path); } catch {}
-      await fsp.writeFile(abs, data);
+      await writeFileAtomic(root, abs, data);
       try { cliTrace(root, docIdFor(root, params.path), "disk-write", { extra: { path: params.path, byteLen: data.length } }); } catch {}
       return { method: "write", ok: true, bytes: data.length };
     }
@@ -308,7 +336,9 @@ export async function handleRpc(params, root) {
         const buf = Buffer.alloc(length);
         const { bytesRead } = await fh.read(buf, 0, length, params.offset);
         const eof = params.offset + bytesRead >= st.size;
-        return { method: "download-chunk", data: buf.subarray(0, bytesRead).toString("base64"), eof };
+        // mtimeMs/size of the file this chunk came from: the web ends a stream
+        // whose file was replaced mid-way instead of splicing two versions.
+        return { method: "download-chunk", data: buf.subarray(0, bytesRead).toString("base64"), eof, mtimeMs: st.mtimeMs, size: st.size };
       } finally { await fh.close(); }
     }
     case "thumbnail": {

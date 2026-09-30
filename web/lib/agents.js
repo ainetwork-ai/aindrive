@@ -28,6 +28,23 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const ROTATION_GRACE_MS = 60_000;
 const ROTATION_SWEEP_MS = 5 * 60_000;
 
+/**
+ * HTTP status for an error the device agent answered with. The agent relays
+ * its own message (errno text from the device's filesystem, or its path
+ * guard's words); most are the device failing (502), but some are the
+ * request's fault or a plain answer, and a 502 for those tells a client to
+ * retry what can never work (plan 12.3: a 256-byte name answered 502).
+ */
+export function agentErrorStatus(message) {
+  const m = String(message || "");
+  if (/\bENOENT\b|no such file or directory/i.test(m)) return 404;
+  if (/\bENAMETOOLONG\b|name too long|path too long/i.test(m)) return 400;
+  if (/^invalid path|path escapes drive root|reserved path|cannot (?:rename|delete) root/i.test(m)) return 400;
+  if (/\bEISDIR\b|is a directory|\bENOTDIR\b|not a directory/i.test(m)) return 400;
+  if (/\bENOSPC\b|no space left|\bEDQUOT\b|quota exceeded/i.test(m)) return 507;
+  return 502;
+}
+
 export function isAgentConnected(driveId) {
   return agents.has(driveId);
 }
@@ -243,7 +260,7 @@ export async function onAgentConnect(ws, req, query) {
     if (msg.ok) pending.resolve(canonicalAgentResult(msg.result));
     else {
       const e = new Error(msg.error || "agent error");
-      e.status = 502;
+      e.status = agentErrorStatus(e.message);
       pending.reject(e);
     }
   });

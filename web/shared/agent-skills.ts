@@ -27,6 +27,9 @@ import { dropGenerations } from "@/lib/path-generations.js";
 import { normalizePath } from "@/lib/path";
 import { getOwnerStorageCaps } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import {
+  BACKSLASH_ERROR, baseRevisionOf, conflictWith, expectedRevision, hasBackslash, withPathLock, type Current,
+} from "@/lib/write-guard";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
 import {
@@ -216,27 +219,45 @@ export async function runSkill(
         if (byteLength > MAX_WRITE_BYTES) {
           return { kind: "err", code: "invalid_params", message: `payload too large (limit ${MAX_WRITE_BYTES} bytes)` };
         }
-        const { parent, base } = splitPath(path);
-        let creating = true;
-        try {
-          const l = await callAgent(driveId, driveSecret, { method: "list", path: parent });
-          creating = !((l.entries ?? []) as Entry[]).some((e) => e.name === base && !e.isDir);
-        } catch { /* parent missing → create */ }
-        // The cap is the drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS),
-        // not the caller's: PAT / account-token calls carry no wallet cookie.
-        const ownerId = drive.owner_id as string;
-        if (creating) {
-          const { tier, fileLimit: limit } = getOwnerStorageCaps(ownerId);
-          if (Number.isFinite(limit) && getOwnerUsage(ownerId).files + 1 > limit) {
-            return { kind: "err", code: "forbidden", message: `file_limit_reached (tier ${tier}, limit ${limit})` };
+        if (hasBackslash(path)) return { kind: "err", code: "invalid_params", message: BACKSLASH_ERROR };
+        const baseRevision = arg(args, "base_revision");
+        const expected = expectedRevision(typeof baseRevision === "string" ? baseRevision : undefined, new Headers());
+        // As fs/write: one write of a path at a time, and an optional
+        // conditional write (lib/write-guard.ts) instead of a silent overwrite.
+        return withPathLock(driveId, path, async () => {
+          let current: Current = { exists: false };
+          try {
+            const st = await callAgent(driveId, driveSecret, { method: "stat", path });
+            if (st.entry) current = { exists: true, isDir: !!st.entry.isDir, revision: baseRevisionOf(st.entry) };
+          } catch (e) {
+            if (expected !== null) return { kind: "err" as const, code: "internal" as const, message: (e as Error).message };
           }
-        }
-        const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
-        if (creating) {
-          bumpOwnerUsage(ownerId, { files: 1 });
-          dropGenerations(driveId, path); // a new file: no old ref names it (task 10.2)
-        }
-        return { kind: "ok", structured: r, text: `wrote ${path}` };
+          const conflict = conflictWith(expected, current);
+          if (conflict) {
+            return { kind: "err" as const, code: "invalid_params" as const, message: `conflict: the file changed since that revision (current revision: ${conflict.currentRevision ?? "none"})` };
+          }
+          const creating = !current.exists || current.isDir;
+          // The cap is the drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS),
+          // not the caller's: PAT / account-token calls carry no wallet cookie.
+          const ownerId = drive.owner_id as string;
+          if (creating) {
+            const { tier, fileLimit: limit } = getOwnerStorageCaps(ownerId);
+            if (Number.isFinite(limit) && getOwnerUsage(ownerId).files + 1 > limit) {
+              return { kind: "err" as const, code: "forbidden" as const, message: `file_limit_reached (tier ${tier}, limit ${limit})` };
+            }
+          }
+          const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
+          if (creating) {
+            bumpOwnerUsage(ownerId, { files: 1 });
+            dropGenerations(driveId, path); // a new file: no old ref names it (task 10.2)
+          }
+          let revision: string | undefined;
+          try {
+            const st = await callAgent(driveId, driveSecret, { method: "stat", path });
+            if (st.entry && !st.entry.isDir) revision = baseRevisionOf(st.entry);
+          } catch { /* the write itself succeeded */ }
+          return { kind: "ok" as const, structured: revision ? { ...r, revision } : r, text: `wrote ${path}` };
+        });
       }
       case "delete_path": {
         // "" is the drive root — the whole shared folder, never a delete target

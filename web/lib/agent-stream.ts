@@ -23,13 +23,22 @@ export function agentByteStream(
   endExclusive: number,
 ): ReadableStream<Uint8Array> {
   let offset = start;
+  // The version the first chunk came from (agents that report it: the CLI).
+  // A later chunk from another version means the file was replaced while we
+  // streamed — end with an error rather than hand out a splice of two files.
+  let version: string | null = null;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (offset >= endExclusive) { controller.close(); return; }
       const length = Math.min(STREAM_CHUNK_BYTES, endExclusive - offset);
       try {
         const r = await callAgent(driveId, driveSecret, { method: "download-chunk", path, offset, length }, { timeoutMs: STREAM_CHUNK_TIMEOUT_MS }) as
-          { data: string; eof: boolean };
+          { data: string; eof: boolean; mtimeMs?: number; size?: number };
+        if (typeof r.mtimeMs === "number" && typeof r.size === "number") {
+          const v = `${r.mtimeMs}:${r.size}`;
+          if (version === null) version = v;
+          else if (v !== version) { controller.error(new Error("file changed during download")); return; }
+        }
         const buf = Buffer.from(r.data, "base64");
         if (buf.length === 0) { controller.close(); return; } // unexpected EOF (file shrank)
         offset += buf.length;
