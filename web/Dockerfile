@@ -61,6 +61,8 @@ COPY --from=builder --chown=app:app /app/src ./src
 COPY --from=builder --chown=app:app /app/shared ./shared
 # Operator command (docs/DEPLOY.md "Organization drives"): docker compose exec web node scripts/org-drive.mjs …
 COPY --from=builder --chown=app:app /app/scripts/org-drive.mjs ./scripts/org-drive.mjs
+# Operator command (docs/DEPLOY.md "Backup and restore"): run once after putting a backup of the DB back.
+COPY --from=builder --chown=app:app /app/scripts/after-restore.mjs ./scripts/after-restore.mjs
 COPY --from=builder --chown=app:app /app/package.json ./package.json
 COPY --from=builder --chown=app:app /app/next.config.ts ./next.config.ts
 
