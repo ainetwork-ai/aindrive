@@ -952,7 +952,7 @@ aindrive mcp        # stdio MCP server
 | Sharing | `create_share`, `list_shares` |
 | Wallet allowlist | `grant_access`, `list_access`, `revoke_access` |
 | Capabilities | `verify_cap` |
-| Paid shares | `resolve_share` (auto-builds the x402 X-PAYMENT envelope) |
+| Paid shares | `resolve_share` (returns the price and the x402 v2 `PAYMENT-REQUIRED`; pass the buyer-signed `PAYMENT-SIGNATURE` as `payment` to buy — the CLI holds no wallet key and never pays by itself) |
 | Agents | `list_agents`, `ask_agent` (A2A) |
 
 **Resources exposed:** `aindrive://drive/<driveId>/{+path}` — Claude can

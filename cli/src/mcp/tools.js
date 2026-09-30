@@ -24,6 +24,51 @@ function requireOwner(ctx, name) {
   return null;
 }
 
+/** Base units → decimal string ("500000", 6 → "0.5"), without floating point. */
+function formatUnits(amount, decimals) {
+  const v = BigInt(amount);
+  const base = 10n ** BigInt(decimals);
+  const frac = (v % base).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return frac ? `${v / base}.${frac}` : `${v / base}`;
+}
+
+function headerValue(headers, name) {
+  if (!headers) return null;
+  if (typeof headers.get === "function") return headers.get(name);
+  const v = headers[name] ?? headers[name.toLowerCase()];
+  return Array.isArray(v) ? v[0] : v ?? null;
+}
+
+/**
+ * A paid share the caller has not bought (or a payment the server refused):
+ * tell the agent what to pay and how, instead of pretending to pay. The
+ * server only accepts an x402 v2 PAYMENT-SIGNATURE signed by the buyer's
+ * wallet; the CLI holds no wallet key, so it never builds one itself.
+ */
+function paymentRequired(e, server, token, attempted) {
+  const body = e.body && typeof e.body === "object" ? e.body : {};
+  const req = (Array.isArray(body.accepts) && body.accepts[0]) || {};
+  const cur = body.currency || {};
+  const decimals = Number.isInteger(cur.decimals) ? cur.decimals : null;
+  let price = null;
+  try { if (decimals != null && req.amount != null) price = formatUnits(req.amount, decimals); } catch { /* non-integer amount */ }
+  const out = {
+    error: e.status === 412 ? "permit2_allowance_required" : "payment_required",
+    reason: body.error ?? null,
+    price: price != null ? `${price}${cur.symbol ? ` ${cur.symbol}` : ""}` : null,
+    amount: req.amount ?? null,
+    network: req.network ?? null,
+    asset: req.asset ?? null,
+    payTo: req.payTo ?? null,
+    scheme: req.scheme ?? null,
+    paymentRequired: headerValue(e.headers, "payment-required"),
+    buyUrl: `${server}/s/${token}`,
+    next: "sign paymentRequired with the buyer's wallet (x402 v2) and call resolve_share again with payment=<PAYMENT-SIGNATURE>, or open buyUrl in a browser",
+  };
+  const head = `resolve_share: ${attempted ? "payment not accepted" : "payment required"} [HTTP ${e.status}]`;
+  return { isError: true, content: [{ type: "text", text: `${head}\n${JSON.stringify(out, null, 2)}` }] };
+}
+
 export const TOOLS = [
   // ──────────────── A. Discovery ────────────────
   {
@@ -262,29 +307,27 @@ export const TOOLS = [
   {
     name: "resolve_share",
     description:
-      "Resolve a share token (from /s/<token>). Free shares return immediately. Paid shares trigger an X-PAYMENT flow: in DEV_BYPASS mode the server accepts a synthesised authorisation, otherwise the bound wallet (set AINDRIVE_WALLET_COOKIE) is used.",
+      "Resolve a share token (from /s/<token>). Free shares, and paid shares this account (or the AINDRIVE_WALLET_COOKIE wallet) already bought, " +
+      "return the grant. An unpaid paid share returns `payment_required` with the price, network, asset, payee and the x402 v2 " +
+      "PAYMENT-REQUIRED header: sign it with the buyer's wallet (x402 v2 — e.g. an @x402 client or the AIN-UI signX402Payment adapter) " +
+      "and call again with `payment` = the base64 PAYMENT-SIGNATURE, or buy in the browser at `buyUrl`. Nothing is charged without a signature.",
     inputSchema: {
       type: "object", required: ["token"],
-      properties: { token: { type: "string", description: "share token from URL /s/<token>" } },
+      properties: {
+        token: { type: "string", description: "share token from URL /s/<token>" },
+        payment: { type: "string", description: "base64 x402 v2 PAYMENT-SIGNATURE signed by the buyer's wallet for the returned PAYMENT-REQUIRED (optional)" },
+      },
     },
     handler: async (args, ctx) => {
-      // First attempt: plain GET (free shares + wallets already on the allowlist).
+      const path = `/api/s/${encodeURIComponent(args.token)}`;
       try {
-        const r = await ctx.client.get(`/api/s/${args.token}`);
+        const r = await ctx.client.get(path, args.payment ? { headers: { "PAYMENT-SIGNATURE": args.payment } } : {});
         return txt(r.body);
       } catch (e) {
-        if (e.status !== 402) throw e;
+        // 402 = pay first; 412 = permit2 allowance needed (the approve runs in the buyer's wallet).
+        if (e.status !== 402 && e.status !== 412) throw e;
+        return paymentRequired(e, ctx.client.server, args.token, !!args.payment);
       }
-      // 402 → build a minimal X-PAYMENT envelope. In DEV_BYPASS the server only
-      // checks the JSON shape; in prod a real wallet signature is required and
-      // we can't synthesise one here.
-      const fakePayer = process.env.AINDRIVE_DEMO_PAYER || "0xdemodemodemodemodemodemodemodemodemo0000";
-      const xPayment = Buffer.from(JSON.stringify({
-        x402Version: 1, scheme: "exact", network: "base-sepolia",
-        payload: { authorization: { from: fakePayer } },
-      })).toString("base64");
-      const r2 = await ctx.client.get(`/api/s/${args.token}`, { headers: { "x-payment": xPayment } });
-      return txt(r2.body);
     },
   },
 
