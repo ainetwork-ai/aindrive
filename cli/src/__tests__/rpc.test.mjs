@@ -1,7 +1,7 @@
 // Unit tests for safeResolve traversal guard and isSelfWrite TTL.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { tmpdir } from "node:os";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync, chmodSync, statSync } from "node:fs";
 import path from "node:path";
 import { safeResolve, isSelfWrite, handleRpc, isReservedRpcPath } from "../rpc.js";
 
@@ -129,5 +129,41 @@ describe("reserved .aindrive paths over RPC", () => {
     expect((await handleRpc({ method: "list", path: ".aindrive/agents" }, root)).entries.map((e) => e.name)).toEqual(["a.json"]);
     await handleRpc({ method: "upload-chunk", path: ".aindrive/uploads/u.part", data: Buffer.from("hi").toString("base64"), chunkId: 0 }, root);
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// Plan 12.3: two saves of one file at once must never leave a file made of
+// both (two concurrent writeFile calls truncated and wrote through two fds).
+describe("writes of one file are serialized", () => {
+  it("overlapping writes leave exactly one complete content", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "aindrive-atomic-"));
+    try {
+      for (let i = 0; i < 5; i++) {
+        const a = `A${i}`.repeat(4 * 1024 * 1024), b = `b${i}`.repeat(1024 * 1024);
+        await Promise.all([
+          handleRpc({ method: "write", path: "same.md", content: a }, root),
+          handleRpc({ method: "write", path: "same.md", content: b }, root),
+        ]);
+        const got = readFileSync(path.join(root, "same.md"), "utf8");
+        expect(got === a || got === b).toBe(true);
+      }
+      const listed = await handleRpc({ method: "list", path: "" }, root);
+      expect(listed.entries.map((e) => e.name)).toEqual(["same.md"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("keeps the file's inode (a recursive fs.watch keeps seeing it), mode and NFD spelling", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "aindrive-atomic-"));
+    try {
+      const nfd = "스크립트.sh".normalize("NFD");
+      writeFileSync(path.join(root, nfd), "old");
+      chmodSync(path.join(root, nfd), 0o750);
+      const ino = statSync(path.join(root, nfd)).ino;
+      await handleRpc({ method: "write", path: "스크립트.sh".normalize("NFC"), content: "new" }, root);
+      expect(readdirSync(root).filter((n) => n !== ".aindrive")).toEqual([nfd]);
+      expect(readFileSync(path.join(root, nfd), "utf8")).toBe("new");
+      expect(statSync(path.join(root, nfd)).mode & 0o777).toBe(0o750);
+      expect(statSync(path.join(root, nfd)).ino).toBe(ino);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

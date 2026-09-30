@@ -123,6 +123,10 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
         path: { type: "string" },
         content: { type: "string" },
         encoding: { type: "string", enum: ["utf8", "base64"], default: "utf8" },
+        base_revision: {
+          type: "string",
+          description: "Optional. The revision you last read (a listing's `revision`); if the file changed since, nothing is written and the error names the current revision. \"none\" = only create a new file.",
+        },
       },
     },
   },

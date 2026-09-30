@@ -56,13 +56,13 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 | Route | Notes |
 |-------|-------|
 | `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). Which children a listing shows is `lib/listing-visibility.ts` (the rule the skills share). With `AIN_INTEGRATION_ENABLED`: entries carry `generation` + `revision`, `read?generation=` (or `revision=…-g<gen>`) answers 410 `resource_deleted` once the path holds another file (`lib/path-generations.js`), and both answer with `X-Request-Id` (`lib/request-id.ts`; delegated calls are logged without the token). |
-| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. |
+| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. One write of a path at a time; optional `baseRevision` (or `If-Match`, `none`/`If-None-Match: *` = create only) → 409 `{error:{code:"conflict", currentRevision}}` when the file changed since; the answer carries the new `revision` (`lib/write-guard.ts`). Without it the last writer wins. |
 | `upload` | single-POST raw octet-stream for files ≤ one part (8 MiB) → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. Aborts never publish a partial file. |
 | `upload-sessions` | chunked + resumable upload for larger files (tus-style). POST opens a session; PATCH `:uploadId` appends sequential ≤8 MiB parts (`X-Upload-Offset` must equal server `receivedBytes`, else 409 + authoritative offset); final part renames atomically. Recovery truth = agent temp's stat size, so a part that died mid-append never double-appends. ≤2 GiB. |
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
 | `download` | chunked stream, `Content-Disposition: attachment`, no size cap. |
 | `thumbnail` | 256px webp via sharp, disk cache keyed by `sha1(path)+mtime`. |
-| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. Deleting a file, or renaming onto an existing one, frees a slot in the owner's file count. |
+| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. Deleting a file, or renaming onto an existing one, frees a slot in the owner's file count. New names (write, upload*, mkdir, rename `to`) may not contain `\` (400). Agent errors map by cause (`lib/agents.js` `agentErrorStatus`): missing 404, name/path too long or invalid 400, device disk full 507, else 502. |
 
 Payments / capabilities:
 

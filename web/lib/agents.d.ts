@@ -24,6 +24,8 @@ export function listConnectedDrives(): string[];
 export function disconnectAgent(driveId: string, code?: number, reason?: string): number;
 /** An agent's list/stat result with entry names and paths in NFC (the server's path identity). */
 export function canonicalAgentResult<R>(result: R): R;
+/** HTTP status for an error message the device agent answered with (404 / 400 / 507 / 502). */
+export function agentErrorStatus(message: string): number;
 /** Ping every interval; terminate a socket whose previous ping got no pong. */
 export function startHeartbeat(
   ws: { on(event: "pong", cb: () => void): unknown; ping(): void; terminate(): void; readyState: number; OPEN: number },

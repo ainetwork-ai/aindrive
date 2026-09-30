@@ -6,6 +6,7 @@ import { normalizePath } from "@/lib/path";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { dropGenerations } from "@/lib/path-generations.js";
+import { BACKSLASH_ERROR, hasBackslash } from "@/lib/write-guard";
 
 /**
  * POST /api/drives/:driveId/fs/upload?path=...
@@ -37,6 +38,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   let path: string;
   try { path = normalizePath(rawPath); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
+  if (hasBackslash(path)) return NextResponse.json({ error: BACKSLASH_ERROR }, { status: 400 });
 
   // Reject oversize uploads before reading a byte when the client declared a
   // length; the streaming loop still enforces the cap for chunked bodies.

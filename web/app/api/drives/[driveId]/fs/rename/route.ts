@@ -5,6 +5,7 @@ import { AgentError, callAgent } from "@/lib/rpc";
 import { bumpOwnerUsage } from "@/lib/storage-usage.js";
 import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
+import { BACKSLASH_ERROR, hasBackslash } from "@/lib/write-guard";
 
 const Body = z.object({ from: zRequiredPath, to: zRequiredPath });
 
@@ -12,6 +13,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const { driveId } = await params;
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
+  // Only the new name is checked: a device-made name with '\' can be renamed away from.
+  if (hasBackslash(body.data.to)) return NextResponse.json({ error: BACKSLASH_ERROR }, { status: 400 });
   const gate = await requireDriveRole(driveId, body.data.from, { min: "editor" });
   if (gate instanceof NextResponse) return gate;
   // The destination is a write too: a path-scoped editor must not move a file

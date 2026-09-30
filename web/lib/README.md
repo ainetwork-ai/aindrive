@@ -70,6 +70,7 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `drives.ts` — drive CRUD, token rotation, payout/token-policy setters, Willow namespace keypair.
 - `payout.ts` — pure path-scoped payout resolution (nearest-ancestor wallet, mirrors role inheritance); `drives.ts` wraps it with DB access.
 - `upload-sessions.ts` — chunked/resumable upload sessions: session rows, agent temp pump (4 MiB RPC re-chunk), per-session lock. Protocol + recovery invariants live in the route: `app/api/drives/[driveId]/fs/upload-sessions/`.
+- `write-guard.ts` — writes that name a path: `withPathLock` (one write of a (drive, path) at a time in this process — agents that write in place never interleave two saves), conditional writes (`baseRevision`/`If-Match`/`base_revision` → 409 `conflict` + `currentRevision`; `none` = create only) and the no-backslash rule for new names (the contract would give `a\b` the id of `a/b`). Used by fs/write and MCP `write_file`; mkdir/rename/upload* apply the name rule.
 - `storage-usage.js` — per-owner cached file/folder counts for tier-cap enforcement (upper bound, not exact). Signed deltas: creates add, deletes subtract; the stored total is clamped at 0.
 - `sqlite-maintenance.js` — periodic WAL checkpoint / VACUUM / optimize.
 - `migrations/` — one-shot idempotent migrations (`run.js` runs all at startup).
