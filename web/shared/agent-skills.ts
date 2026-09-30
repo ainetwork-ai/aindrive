@@ -32,6 +32,7 @@ import {
   revokeShare, shareUrl, tokenPolicyFromList, type SaleErr,
 } from "@/lib/sales";
 import { runPaySkill } from "@/lib/x402-pay-skills";
+import { FILE_LIST_SCOPES, MAX_LIMIT, isFileListScope, listSharedItems } from "@/lib/shared-items";
 import {
   MUTATING, isPaySkill, isSaleSkill, isSkillName, type SaleSkillName,
 } from "./skill-descriptors";
@@ -52,7 +53,7 @@ function splitPath(p: string): { parent: string; base: string } {
 /**
  * `driveId` pins every call to one drive (drive-scoped MCP endpoint /
  * token): `drive_id` defaults to it, any other drive is forbidden, and
- * `list_drives` is unavailable. `scope` is the token's ceiling — "read"
+ * `list_drives` / `list_shared` are unavailable. `scope` is the token's ceiling — "read"
  * forbids write_file regardless of the user's role. Both omitted = the
  * legacy account-wide surface (A2A executor, session-auth /mcp).
  * `sell` (account grant with `drives:sell`) unlocks the sale tools; they
@@ -93,6 +94,32 @@ export async function runSkill(
       ? "(no drives)"
       : rows.map((r) => `${r.id} — ${r.name}`).join("\n");
     return { kind: "ok", structured: { drives: rows }, text };
+  }
+
+  if (name === "list_shared") {
+    if (ctx.driveId) {
+      return { kind: "err", code: "forbidden", message: "list_shared is unavailable on a drive-scoped endpoint" };
+    }
+    const scopeArg = arg(args, "scope") ?? "shared_with_me";
+    if (!isFileListScope(scopeArg)) {
+      return { kind: "err", code: "invalid_params", message: `scope must be one of ${FILE_LIST_SCOPES.join(", ")}` };
+    }
+    const q = arg(args, "q");
+    const cursor = arg(args, "cursor");
+    const limit = arg(args, "limit");
+    if (q !== undefined && typeof q !== "string") return { kind: "err", code: "invalid_params", message: "q must be a string" };
+    if (cursor !== undefined && typeof cursor !== "string") return { kind: "err", code: "invalid_params", message: "cursor must be a string" };
+    if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT)) {
+      return { kind: "err", code: "invalid_params", message: `limit must be an integer from 1 to ${MAX_LIMIT}` };
+    }
+    const page = listSharedItems(ctx.userId, { scope: scopeArg, q, cursor, limit });
+    const text = page.items.length === 0
+      ? `(nothing ${scopeArg === "mine" ? "owned" : "shared"})`
+      : page.items.map((i) => {
+          const tag = i.paid ? (i.paid.entitled ? ", paid" : ", paid — not entitled") : "";
+          return `${i.ref.kind === "folder" ? "📁" : "📄"} ${i.ref.displayName} — ${i.ref.driveId}${i.ref.legacy?.path ?? ""} (${i.role}, ${i.shareOrigin}${tag})`;
+        }).join("\n") + (page.nextCursor ? `\n… more (cursor ${page.nextCursor})` : "");
+    return { kind: "ok", structured: page, text };
   }
 
   if (isPaySkill(name)) {
