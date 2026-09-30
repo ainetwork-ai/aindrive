@@ -98,6 +98,8 @@ const revoked = new Set<string>();
 const unknownJti = new Set<string>();
 let statusMode: "ok" | "fail" = "ok";
 let statusCalls = 0;
+/** Fields a newer AIN SSO might add to the status answer (reader rule: ignored). */
+let statusExtra: Record<string, unknown> = {};
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -113,7 +115,7 @@ beforeAll(async () => {
       const jti = decodeURIComponent(m[1]);
       if (statusMode === "fail") return send(500, { error: "boom" });
       if (unknownJti.has(jti)) return send(404, { error: "not_found" });
-      return send(200, { jti, revoked: revoked.has(jti), checkedAt: new Date().toISOString() });
+      return send(200, { jti, revoked: revoked.has(jti), checkedAt: new Date().toISOString(), ...statusExtra });
     }
     send(404, { error: "not_found" });
   });
@@ -186,6 +188,21 @@ async function rdlg(over: Claims = {}, o: { key?: KeyLike; typ?: string; alg?: s
     .setExpirationTime(exp)
     .sign(o.key ?? sso.privateKey);
 }
+
+/** Exactly these claims, signed by the SSO key (to leave one out). */
+async function rdlgRaw(claims: Claims, typ = "ain-rdlg+jwt"): Promise<string> {
+  const t = await new SignJWT(claims).setProtectedHeader({ alg: "ES256", kid: "k1", typ }).sign(sso.privateKey);
+  minted.push(t);
+  return t;
+}
+const fullClaims = (): Claims => {
+  const iat = nowS();
+  return {
+    iss: ISSUER, sub: SUB_A, aud: [ORIGIN], org: null, agt: AGENT,
+    res: [{ resource: REPORT, actions: ["read"] }], prd: "ainteams", cnf: { jkt: agentA.jkt },
+    iat, exp: iat + 3600, jti: `rdlg_${randomUUID().replace(/-/g, "")}`,
+  };
+};
 
 /** The proof of possession an agent attaches to one request. */
 async function pop(a: Agent, o: { method?: string; url: string; iat?: number; jti?: string; typ?: string; jwk?: JWK | null }): Promise<string> {
@@ -593,6 +610,142 @@ describe("12.5: request ids and log lines on the delegated routes", () => {
     expect(r.status).toBe(200);
     expect(r.headers.get("x-request-id")).toBeNull();
     expect(lines).toEqual([]);
+  });
+});
+
+describe("reader rule (contract 1.2): unknown claims and status fields are ignored, known ones stay strict", () => {
+  // Claims a newer AIN SSO might add, at every level the reader parses.
+  const extras = { ext: { v: 2, note: "ext-value-must-not-be-logged" }, "urn:ain:hint": "x", nbf_hint: 1 };
+  const withExtras = (c: Claims = fullClaims()): Claims => ({
+    ...c,
+    ...extras,
+    res: (c.res as Claims[]).map((r) => ({ ...r, label: "Q3 report" })),
+    cnf: { ...(c.cnf as Claims), "x5t#S256": "ignored-thumbprint" },
+  });
+
+  it("an extra claim (top level, in a grant, in cnf) is accepted and stripped from what the route sees", async () => {
+    const token = await rdlgRaw(withExtras());
+    const r = await call("read", "d1", "docs/report.md", { token });
+    expect(r.status).toBe(200);
+    const claims = await rd.verifyResourceDelegation(token);
+    expect(Object.keys(claims).sort()).toEqual(["agt", "aud", "cnf", "exp", "iat", "iss", "jti", "org", "prd", "res", "sub"]);
+    expect(claims.res).toEqual([{ resource: REPORT, actions: ["read"] }]);
+    expect(claims.cnf).toEqual({ jkt: agentA.jkt });
+    // The same with cnf.jwk and a folder grant used for a listing.
+    const listTok = await rdlgRaw(withExtras({ ...fullClaims(), cnf: { jwk: agentC.jwk }, res: [{ resource: fileKey("d1", "docs"), actions: ["list"] }] }));
+    expect((await call("list", "d1", "docs", { token: listTok, agent: agentC })).status).toBe(200);
+    // Only the dropped paths are logged, never a value.
+    const lines = logs.map((l) => JSON.stringify(l)).filter((l) => l.includes("[rdlg] ignored unknown delegation claims"));
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.join("\n")).toContain("ext");
+    expect(lines.join("\n")).toContain("res[].label");
+    expect(lines.join("\n")).toContain("cnf.x5t#S256");
+    expect(lines.join("\n")).not.toContain("ext-value-must-not-be-logged");
+    expect(lines.join("\n")).not.toContain("Q3 report");
+    expect(lines.join("\n")).not.toContain("ignored-thumbprint");
+  });
+
+  it("each required claim missing is still refused, extras or not", async () => {
+    const expected: Record<string, string> = {
+      iss: "wrong_issuer", sub: "invalid_claims", aud: "wrong_audience", org: "invalid_claims", agt: "invalid_claims",
+      res: "invalid_claims", prd: "invalid_claims", cnf: "invalid_claims", iat: "expired", exp: "invalid_claims", jti: "invalid_claims",
+    };
+    for (const [claim, detail] of Object.entries(expected)) {
+      const c = withExtras();
+      delete c[claim];
+      const r = await call("read", "d1", "docs/report.md", { token: await rdlgRaw(c) });
+      expect(r.status, claim).toBe(401);
+      expect(r.body.error, claim).toMatchObject({ code: "auth_required", detail });
+    }
+  });
+
+  it("each known claim with a bad shape is still refused (invalid_claims)", async () => {
+    const iat = nowS();
+    const bad: Record<string, Claims> = {
+      "sub not an account": { sub: "alice" },
+      "aud not an array": { aud: ORIGIN },
+      "org not a string/null": { org: 5 },
+      "agt too short": { agt: "a" },
+      "res empty": { res: [] },
+      "res unknown action": { res: [{ resource: REPORT, actions: ["delete"] }] },
+      "res wildcard": { res: [{ resource: `${ORIGIN}#d1#*`, actions: ["read"] }] },
+      "res grant missing actions": { res: [{ resource: REPORT, scope: "read" }] },
+      "prd unknown": { prd: "other-product" },
+      "cnf empty": { cnf: {} },
+      "cnf only an unknown binding": { cnf: { "x5t#S256": "abcdefghijklmnopqrstuvwxyz" } },
+      "cnf both bindings": { cnf: { jkt: agentA.jkt, jwk: agentA.jwk } },
+      "cnf.jkt too short": { cnf: { jkt: "short" } },
+      "cnf.jkt null with jwk": { cnf: { jkt: null, jwk: agentA.jwk } },
+      "cnf not an object": { cnf: agentA.jkt },
+      "ttl over an hour": { iat, exp: iat + 3601 },
+      "exp before iat": { iat, exp: iat - 1 },
+      "jti with a slash": { jti: "a/b" },
+    };
+    for (const [name, over] of Object.entries(bad)) {
+      const r = await call("read", "d1", "docs/report.md", { token: await rdlgRaw({ ...withExtras(), ...over }) });
+      expect(r.status, name).toBe(401);
+      expect(r.body.error.detail, name).toBe("invalid_claims");
+    }
+  });
+
+  it("typ, signature, iss, aud, expiry, proof of possession and the three checks are unchanged by extras", async () => {
+    const url = `${ORIGIN}/api/drives/d1/fs/read?path=docs%2Freport.md`;
+    // Another typ (how an authority-narrowing claim would arrive, 2.0) is not a 1.x delegation.
+    await expect(rd.verifyResourceDelegation(await rdlgRaw(withExtras(), "ain-rdlg2+jwt"))).rejects.toMatchObject({ code: "wrong_type" });
+    // Signature: a foreign key.
+    const forged = await new SignJWT(withExtras()).setProtectedHeader({ alg: "ES256", kid: "k1", typ: "ain-rdlg+jwt" }).sign(otherSso.privateKey);
+    minted.push(forged);
+    expect((await call("read", "d1", "docs/report.md", { token: forged })).body.error.detail).toBe("invalid_token");
+    expect((await call("read", "d1", "docs/report.md", { token: await rdlgRaw({ ...withExtras(), iss: "https://evil.test" }) })).body.error.detail).toBe("wrong_issuer");
+    expect((await call("read", "d1", "docs/report.md", { token: await rdlgRaw({ ...withExtras(), aud: ["https://other.test"] }) })).body.error.detail).toBe("wrong_audience");
+    const past = nowS() - 7200;
+    expect((await call("read", "d1", "docs/report.md", { token: await rdlgRaw({ ...withExtras(), iat: past, exp: past + 3600 }) })).body.error.detail).toBe("expired");
+    // PoP: the proof must come from the key in cnf; an ignored cnf member binds nothing.
+    const token = await rdlgRaw(withExtras());
+    expect((await call("read", "d1", "docs/report.md", { token, agent: agentB })).body.error.detail).toBe("pop_invalid");
+    const onlyUnknown = await rdlgRaw({ ...withExtras(), cnf: { "x5t#S256": agentB.jkt } });
+    expect((await call("read", "d1", "docs/report.md", { token: onlyUnknown, pop: await pop(agentB, { url }) })).body.error.detail).toBe("invalid_claims");
+    // The three checks: the grant must name the file, the sub must be linked and may read.
+    expect((await call("read", "d1", "docs/other.md", { token: await rdlgRaw(withExtras()) })).body.error.detail).toBe("not_granted");
+    const unlinked = await call("read", "d1", "docs/report.md", { token: await rdlgRaw({ ...withExtras(), sub: SUB_X }) });
+    expect(unlinked.status).toBe(403);
+    const bob = await call("read", "d1", "docs/report.md", { token: await rdlgRaw({ ...withExtras(), sub: SUB_B }) });
+    expect(bob.status).toBe(403);
+  });
+
+  it("an extra status field is accepted; revocation is still honoured and a malformed status still fails closed", async () => {
+    statusExtra = { reason: "newer-issuer-field", revokedAt: null, v: 2 };
+    try {
+      const ok = await rdlgRaw(withExtras());
+      expect((await call("read", "d1", "docs/report.md", { token: ok })).status).toBe(200);
+      const c = withExtras();
+      revoked.add(c.jti as string);
+      const r = await call("read", "d1", "docs/report.md", { token: await rdlgRaw(c) });
+      expect(r.status).toBe(403);
+      expect(r.body.error.detail).toBe("revoked");
+      const lines = logs.map((l) => JSON.stringify(l)).filter((l) => l.includes("[rdlg] ignored unknown delegation status"));
+      expect(lines.join("\n")).toContain("reason");
+      expect(lines.join("\n")).not.toContain("newer-issuer-field");
+    } finally {
+      statusExtra = {};
+    }
+    // The status client alone: extras are dropped, a missing/mistyped known field is not accepted.
+    let body: unknown = { jti: "rdlg_s1", revoked: false, checkedAt: "2026-09-30T00:00:00Z", extra: { a: 1 } };
+    const client = rd.createDelegationStatusClient({ issuer: ISSUER, fetch: (async () => Response.json(body)) as typeof fetch });
+    expect(await client.check("rdlg_s1")).toEqual({ jti: "rdlg_s1", revoked: false, checkedAt: "2026-09-30T00:00:00Z" });
+    body = { jti: "rdlg_s2", checkedAt: "2026-09-30T00:00:00Z", extra: 1 };
+    await expect(client.check("rdlg_s2")).rejects.toBeInstanceOf(rd.DelegationStatusUnavailable);
+    body = { jti: "rdlg_s3", revoked: "no", checkedAt: "2026-09-30T00:00:00Z" };
+    await expect(client.check("rdlg_s3")).rejects.toBeInstanceOf(rd.DelegationStatusUnavailable);
+    body = { jti: "rdlg_other", revoked: false, checkedAt: "2026-09-30T00:00:00Z", extra: 1 };
+    await expect(client.check("rdlg_s4")).rejects.toBeInstanceOf(rd.DelegationStatusUnavailable);
+  });
+
+  it("unknownDelegationPaths reports names only, bounded", () => {
+    expect(rd.unknownDelegationPaths("claims", withExtras())).toEqual(["ext", "urn?ain?hint", "nbf_hint", "cnf.x5t#S256", "res[].label"]);
+    expect(rd.unknownDelegationPaths("claims", fullClaims())).toEqual([]);
+    expect(rd.unknownDelegationPaths("status", { jti: "a", revoked: false, checkedAt: "x", more: 1 })).toEqual(["more"]);
+    expect(rd.unknownDelegationPaths("claims", null)).toEqual([]);
   });
 });
 

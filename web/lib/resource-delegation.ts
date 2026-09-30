@@ -86,8 +86,25 @@ export type ResourceAction = z.infer<typeof resourceAction>;
 export const resourceGrant = z.object({
   resource: z.string().min(1).max(1024).refine((r) => !r.includes("*"), "wildcards are not allowed"),
   actions: z.array(resourceAction).min(1).max(4),
-}).strict();
+}); // strip: see "Reader rule" below
 export type ResourceGrant = z.infer<typeof resourceGrant>;
+
+/**
+ * Reader rule (contract 1.2, ain-integration docs/20-versioning.md §읽기 규칙):
+ * the claims and the status answer are DOCUMENTS this origin reads, so an
+ * unknown claim or field is ignored and stripped (RFC 7519 §4: "all claims
+ * that are not understood by implementations MUST be ignored") instead of
+ * failing every delegation the day AIN SSO adds one. Every KNOWN claim is
+ * checked exactly as before: all of them are required, with the same shapes,
+ * `exp - iat ≤ 1 h`, no wildcard in `res`, and `cnf` must carry exactly one
+ * binding aindrive knows (`jkt` or `jwk`) — a `cnf` with only unknown members,
+ * or with both, is refused. This is safe only because a claim that NARROWS
+ * authority is never added in a 1.x minor; it comes with a new `typ` (2.0),
+ * which `verifyResourceDelegation` refuses (`wrong_type`).
+ */
+const cnfBinding = z.object({ jkt: z.string().min(16).optional(), jwk: z.record(z.string(), z.unknown()).optional() })
+  .refine((c) => (c.jkt === undefined) !== (c.jwk === undefined), "cnf must carry exactly one known key binding (jkt or jwk)")
+  .transform((c): { jkt: string } | { jwk: Record<string, unknown> } => (c.jkt !== undefined ? { jkt: c.jkt } : { jwk: c.jwk as Record<string, unknown> }));
 
 export const resourceDelegationClaims = z.object({
   iss: issuerUrl,
@@ -97,15 +114,55 @@ export const resourceDelegationClaims = z.object({
   agt: z.string().min(3).max(1024),
   res: z.array(resourceGrant).min(1).max(64),
   prd: z.enum(["ainteams", "ainmem", "aina", "ainspace", "afan", "aindrive", "ainize", "reference"]),
-  cnf: z.union([z.object({ jkt: z.string().min(16) }).strict(), z.object({ jwk: z.record(z.string(), z.unknown()) }).strict()]),
+  cnf: cnfBinding,
   iat: z.number().int().positive(),
   exp: z.number().int().positive(),
   jti: opaqueId,
-}).strict().refine((c) => c.exp > c.iat && c.exp - c.iat <= RESOURCE_DELEGATION_MAX_TTL_S, { message: `exp - iat must be within ${RESOURCE_DELEGATION_MAX_TTL_S}s`, path: ["exp"] });
+}).refine((c) => c.exp > c.iat && c.exp - c.iat <= RESOURCE_DELEGATION_MAX_TTL_S, { message: `exp - iat must be within ${RESOURCE_DELEGATION_MAX_TTL_S}s`, path: ["exp"] });
 export type ResourceDelegationClaims = z.infer<typeof resourceDelegationClaims>;
 
-export const resourceDelegationStatus = z.object({ jti: opaqueId, revoked: z.boolean(), checkedAt: z.string() }).strict();
+export const resourceDelegationStatus = z.object({ jti: opaqueId, revoked: z.boolean(), checkedAt: z.string() }); // strip (reader rule)
 export type ResourceDelegationStatus = z.infer<typeof resourceDelegationStatus>;
+
+const KNOWN_CLAIMS = new Set(Object.keys(resourceDelegationClaims.innerType().shape));
+const KNOWN_GRANT = new Set(Object.keys(resourceGrant.shape));
+const KNOWN_CNF = new Set(["jkt", "jwk"]);
+const KNOWN_STATUS = new Set(Object.keys(resourceDelegationStatus.shape));
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** A key as it may appear in a log line: names only, bounded, never a value. */
+const safeKey = (k: string) => k.replace(/[^A-Za-z0-9_#$.-]/g, "?").slice(0, 64);
+
+/**
+ * The paths (never the values) a reader dropped: top-level claims, members of
+ * `cnf` and of each `res[i]` grant, or status fields. Used only to log that the
+ * issuer is newer than this reader (reader rule 5).
+ */
+export function unknownDelegationPaths(kind: "claims" | "status", input: unknown): string[] {
+  if (!isObj(input)) return [];
+  const out: string[] = [];
+  const known = kind === "claims" ? KNOWN_CLAIMS : KNOWN_STATUS;
+  for (const k of Object.keys(input)) if (!known.has(k)) out.push(safeKey(k));
+  if (kind === "claims") {
+    if (isObj(input.cnf)) for (const k of Object.keys(input.cnf)) if (!KNOWN_CNF.has(k)) out.push(`cnf.${safeKey(k)}`);
+    if (Array.isArray(input.res)) {
+      const seen = new Set<string>();
+      for (const r of input.res) if (isObj(r)) for (const k of Object.keys(r)) if (!KNOWN_GRANT.has(k)) seen.add(`res[].${safeKey(k)}`);
+      out.push(...seen);
+    }
+  }
+  return out.slice(0, 16);
+}
+
+const loggedUnknown = new Set<string>();
+/** Logs each distinct set of dropped paths once per process (paths only; a token never reaches a log). */
+function noteUnknown(kind: "claims" | "status", input: unknown) {
+  const paths = unknownDelegationPaths(kind, input);
+  if (!paths.length) return;
+  const key = `${kind}:${paths.join(",")}`;
+  if (loggedUnknown.has(key) || loggedUnknown.size >= 256) return;
+  loggedUnknown.add(key);
+  console.warn(`[rdlg] ignored unknown delegation ${kind} fields (issuer is newer than this reader): ${paths.join(", ")}`);
+}
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 
@@ -189,6 +246,7 @@ export async function verifyResourceDelegation(token: string, opts: VerifyResour
     throw new ResourceDelegationError("jwks_unavailable", `could not fetch the issuer's keys: ${(err as Error).name}`);
   }
   const parsed = resourceDelegationClaims.safeParse(payload);
+  if (parsed.success) noteUnknown("claims", payload);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     throw new ResourceDelegationError("invalid_claims", `delegation claims invalid: ${first ? `${first.path.join(".")} ${first.message}` : "unknown"}`);
@@ -339,7 +397,9 @@ export function createDelegationStatusClient(opts: DelegationStatusClientOptions
         });
         if (res.status === 404) return remember(jti, t, { jti, revoked: true, checkedAt: now().toISOString() });
         if (!res.ok) throw new DelegationStatusUnavailable(`delegation status unavailable: HTTP ${res.status}`);
-        const status = resourceDelegationStatus.parse(await res.json());
+        const body: unknown = await res.json();
+        const status = resourceDelegationStatus.parse(body);
+        noteUnknown("status", body);
         if (status.jti !== jti) throw new DelegationStatusUnavailable("delegation status mismatch");
         return remember(jti, t, status);
       } catch (err) {
