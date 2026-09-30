@@ -18,6 +18,8 @@ db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, 
 db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)").run("u-carol", "carol@test", "Carol", "x");
 db.prepare("INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?, ?, ?, ?, ?)").run("d1", "u-owner", "d1", "h", "s");
 
+/** One row as a plain record (better-sqlite3 types rows as unknown). */
+const row = (sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as Record<string, number>;
 const share = (type: string, path = "") => core.recordShareEvent({ driveId: "d1", path, type, recipients: ["u-carol"] });
 const R = core.resourceKey("d1", "");
 
@@ -44,7 +46,7 @@ describe("share events after a database restore", () => {
     const backup = join(dir, "backup.sqlite");
     db.pragma("wal_checkpoint(TRUNCATE)");
     copyFileSync(join(dir, "data.sqlite"), backup);
-    const beforeBackupVersion = db.prepare("SELECT version FROM share_event_versions WHERE resource_key = ?").get(R).version;
+    const beforeBackupVersion = row("SELECT version FROM share_event_versions WHERE resource_key = ?", R).version;
 
     // after the backup: revoke + share again; the product follows
     const p = consumer();
@@ -60,7 +62,7 @@ describe("share events after a database restore", () => {
     db.transaction(() => {
       for (const t of ["share_events", "share_event_versions", "share_event_floors", "sqlite_sequence"]) {
         db.prepare(`DELETE FROM ${t}`).run();
-        const rows = snap.prepare(`SELECT * FROM ${t}`).all();
+        const rows = snap.prepare(`SELECT * FROM ${t}`).all() as Record<string, unknown>[];
         for (const r of rows) {
           const cols = Object.keys(r);
           db.prepare(`INSERT INTO ${t} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`).run(...cols.map((k) => r[k]));
@@ -73,7 +75,7 @@ describe("share events after a database restore", () => {
 
     // (a) no reset: new changes pass the product's cursor before it polls again
     const bad = { cursor: withoutReset.cursor, versions: new Map(withoutReset.versions), cache: new Set(withoutReset.cache) };
-    const savepoint = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'share_events'").get().seq;
+    const savepoint = row("SELECT seq FROM sqlite_sequence WHERE name = 'share_events'").seq;
     db.exec("SAVEPOINT a");
     // other accounts' changes move the global seq past the product's cursor (the owner's own file here)…
     for (let i = 0; i < 6; i++) core.recordShareEvent({ driveId: "d1", path: `other-${i}.md`, type: "file.shared", recipients: ["u-owner"] });
@@ -93,9 +95,9 @@ describe("share events after a database restore", () => {
     share("file.shared");
     const first = poll(good, []); // truth at this moment: carol has R again
     expect(first.gap).toBe(true);
-    const seqs = db.prepare("SELECT seq FROM share_events WHERE recipient_user_id = 'u-carol' ORDER BY seq DESC LIMIT 1").get().seq;
+    const seqs = row("SELECT seq FROM share_events WHERE recipient_user_id = 'u-carol' ORDER BY seq DESC LIMIT 1").seq;
     expect(seqs).toBeGreaterThan(1_800_000_000_000);
-    expect(db.prepare("SELECT version FROM share_event_versions WHERE resource_key = ?").get(R).version).toBeGreaterThan(seen);
+    expect(row("SELECT version FROM share_event_versions WHERE resource_key = ?", R).version).toBeGreaterThan(seen);
     share("file.revoked");
     poll(good, []);
     expect([...good.cache]).toEqual([]); // the revoke is applied
@@ -103,13 +105,13 @@ describe("share events after a database restore", () => {
   });
 
   it("dry run changes nothing; a second run only jumps further", () => {
-    const before = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'share_events'").get().seq;
+    const before = row("SELECT seq FROM sqlite_sequence WHERE name = 'share_events'").seq;
     const dry = resetShareEventCursors(db, { dryRun: true, now: 1 });
     expect(dry.dryRun).toBe(true);
-    expect(db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'share_events'").get().seq).toBe(before);
+    expect(row("SELECT seq FROM sqlite_sequence WHERE name = 'share_events'").seq).toBe(before);
     const again = resetShareEventCursors(db, { now: 1 });
     expect(again.base).toBe(before);
-    expect(db.prepare("SELECT pruned_to FROM share_event_floors WHERE recipient_user_id = 'u-owner'").get().pruned_to).toBe(before);
+    expect(row("SELECT pruned_to FROM share_event_floors WHERE recipient_user_id = 'u-owner'").pruned_to).toBe(before);
   });
 
   it("a new account (no floor row) and a fresh cursor still work", () => {
