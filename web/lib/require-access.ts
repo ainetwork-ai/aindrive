@@ -5,8 +5,16 @@ import { resolveAccess, atLeast, type Role, type RoleOrNone } from "@/lib/access
 import { paidAccessDenial, type PaidDenial } from "./sale-access.js";
 import { normalizePath } from "./path";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
+import { HTTP_STATUS_FOR, makeError } from "./shared-items";
+import { bearerOf, isResourceDelegationToken, resolveDelegatedCaller, type DelegatedCaller, type ResourceAction } from "./resource-delegation";
 
-export type DriveGate = { drive: DriveRow; role: Role; userId: string | null };
+export type DriveGate = {
+  drive: DriveRow;
+  role: Role;
+  userId: string | null;
+  /** Set when the caller is an agent acting under a resource delegation (lib/resource-delegation.ts). */
+  delegation?: DelegatedCaller;
+};
 
 export type ReadDenial =
   | { kind: "reserved" }
@@ -52,11 +60,22 @@ export function readDenial(driveId: string, canonicalPath: string, role: RoleOrN
  * hosts that proxy file bytes (AINUI assets, docs/AINUI.md §2). Only session
  * JWTs — not MCP/OAuth tokens — and an invalid bearer is a 401, never a fall
  * back to the cookie. Every check below applies unchanged.
+ *
+ * `opts.delegation` (fs/read, fs/list only) additionally accepts
+ * `Authorization: Bearer <ain-rdlg+jwt>` — an agent reading ON BEHALF of the
+ * delegated account (lib/resource-delegation.ts: signature, audience, proof
+ * of possession, revocation, then the three checks: the linked account may
+ * read here right now, the grant names this file or an ancestor folder with
+ * this action, the token is live). The gate then holds the linked account's
+ * live role, so every check below (paid carve-out, reserved subtree) applies
+ * as for that account; `gate.delegation` carries the claims. Refusals use
+ * the contract error body. Only `read` and `list` can be delegated: no write
+ * route passes this option, and the module refuses other actions.
  */
 export async function requireDriveRole(
   driveId: string,
   targetPath: string,
-  opts: { min: Role; req?: Request },
+  opts: { min: Role; req?: Request; delegation?: { req: Request; action: Extract<ResourceAction, "read" | "list"> } },
 ): Promise<DriveGate | NextResponse> {
   // `.aindrive/` holds the agent token, drive secret and agent API keys: no
   // role, not even owner, reaches it through a drive route. Checked on the
@@ -64,6 +83,21 @@ export async function requireDriveRole(
   let canonical: string;
   try { canonical = normalizePath(targetPath); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
+  if (opts.delegation && isResourceDelegationToken(bearerOf(opts.delegation.req))) {
+    // Delegated read: the account is the token's `sub`, never the cookie. A
+    // delegation only ever reaches a viewer-level read (opts.min is "viewer"
+    // on both routes); the module refuses reserved and paid-unbought paths.
+    const d = await resolveDelegatedCaller(opts.delegation.req, { driveId, path: canonical, action: opts.delegation.action });
+    if (!d.ok) {
+      const extra: Record<string, string> = d.code === "auth_required" ? { "WWW-Authenticate": 'Bearer error="invalid_token"' } : {};
+      return NextResponse.json(makeError(d.code, d.message, { detail: d.reason }), { status: HTTP_STATUS_FOR[d.code], headers: { "Cache-Control": "no-store", ...extra } });
+    }
+    const drive = getDrive(driveId);
+    if (!drive) return NextResponse.json(makeError("forbidden", "the delegation does not grant this action on this file", { detail: "not_granted" }), { status: 403, headers: { "Cache-Control": "no-store" } });
+    if (!atLeast(d.role, opts.min)) return NextResponse.json(makeError("forbidden", "the delegated account may not do this", { detail: "user_forbidden" }), { status: 403, headers: { "Cache-Control": "no-store" } });
+    const { ok: _ok, ...delegation } = d;
+    return { drive, role: d.role, userId: d.userId, delegation };
+  }
   if (isSystemPath(canonical)) return NextResponse.json({ error: "reserved path" }, { status: 403 });
   const user = opts.req ? await getRequestUser(opts.req) : await getUser();
   if (user === "invalid") return NextResponse.json({ error: "invalid bearer token" }, { status: 401 });

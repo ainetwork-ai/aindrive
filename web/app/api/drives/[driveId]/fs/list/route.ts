@@ -3,16 +3,25 @@ import { AgentError, callAgent } from "@/lib/rpc";
 import { normalizePath } from "@/lib/path";
 import { requireDriveRole } from "@/lib/require-access";
 import { paidLocksForListing } from "@/lib/sale-access.js";
+import { delegatedAgentErrorCode } from "@/lib/resource-delegation";
+import { errorResponse } from "@/lib/shared-items";
 
 type Entry = { name: string; [k: string]: unknown };
 
+/**
+ * GET /api/drives/:driveId/fs/list?path=...
+ *
+ * Also accepts `Authorization: Bearer <ain-rdlg+jwt>` + `X-AIN-PoP` (an agent
+ * listing a granted folder on behalf of the delegated account; action `list`,
+ * lib/resource-delegation.ts, R-DLG-READ-001) with contract error bodies.
+ */
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
   const url = new URL(req.url);
   let path: string;
   try { path = normalizePath(url.searchParams.get("path") || ""); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
-  const gate = await requireDriveRole(driveId, path, { min: "viewer" });
+  const gate = await requireDriveRole(driveId, path, { min: "viewer", delegation: { req, action: "list" } });
   if (gate instanceof NextResponse) return gate;
   const { drive, role, userId } = gate;
   try {
@@ -31,6 +40,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     return NextResponse.json({ entries: annotated, role });
   } catch (e) {
     const err = e as AgentError;
+    if (gate.delegation) return errorResponse(delegatedAgentErrorCode(err), err.message);
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
   }
 }
