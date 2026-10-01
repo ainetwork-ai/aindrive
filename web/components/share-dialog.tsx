@@ -234,6 +234,9 @@ export function ShareDialog({
     } else {
       setEmail("");
       toast.success("Collaborator added");
+      // Show the new person (or pending invite) in the People list right away —
+      // without this the panel kept saying "No one else can access … yet".
+      load();
     }
   }
 
