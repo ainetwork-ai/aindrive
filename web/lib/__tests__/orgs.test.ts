@@ -433,3 +433,15 @@ describe("home page data: organization sections", () => {
     orgs.unshareDriveFromOrg({ driveId: tmp, orgId: ACME.id, actor: "test" });
   });
 });
+
+describe('drive listing retains organization provenance for direct access', () => {
+  it('keeps organization metadata for creator and directly invited members', () => {
+    expect(listUserDrives(OWNER).find(d => d.id === DRIVE)?.org_id).toBe(COMCOM.id);
+    expect(listUserDrives(CO).find(d => d.id === DRIVE)?.org_id).toBe(COMCOM.id);
+    expect(listUserDrives(MEMBER).find(d => d.id === DRIVE)?.org_id).toBe(COMCOM.id);
+  });
+  it('does not mark an unshared personal drive as an org drive', () => {
+    db.prepare('DELETE FROM drive_org_shares WHERE drive_id = ?').run(PLAIN_DRIVE);
+    expect(listUserDrives(PLAIN).find(d => d.id === PLAIN_DRIVE)?.org_id).toBeUndefined();
+  });
+});
