@@ -74,7 +74,9 @@ explicit role change (PATCH) can lower a role.
   account (`resolveAccountForWallet`) and writes the grant + an append-only
   `payment_receipts` row. A relaying app may name the buyer's account instead
   by sending its account-grant token (`Authorization: Bearer aind_aat_…`).
-  See `README.md` and `docs/*payment*`.
+  See `README.md` and `docs/*payment*`. An account whose settle answer was
+  lost is never credited from the chain and cannot be charged twice for the
+  same sale: `docs/X402_PAYMENT_PENDING.md`.
 
 ## Organizations (AIN SSO)
 

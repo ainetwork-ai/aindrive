@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { encodePaymentRequiredHeader, decodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentRequirements, PaymentRequired, PaymentPayload } from "@x402/core/types";
-import { canSettle, verifyAndSettle } from "@/lib/x402-facilitator";
+import { DEV_BYPASS, canSettle, verifyAndSettle, type SettleOutcome } from "@/lib/x402-facilitator";
 import { db } from "@/lib/db";
 import { setWalletCookie, resolveAccountForWallet } from "@/lib/wallet";
 import { getUser } from "@/lib/session";
@@ -18,6 +18,11 @@ import { onPaymentSettled } from "@/lib/payment-hooks";
 import { TOKEN_PRESETS, resolveDriveTokens, toAtomicAmount, toCaip2Network, paymentNetwork, policyChainViolation } from "@/lib/payment-tokens";
 import { paymasterEnabled } from "@/lib/paymaster";
 import { onMemberGranted } from "@/lib/share-events";
+import {
+  creditSettlement, eip3009Authorization, findSettlement, getSettlement, isAmbiguousPayload, isSameSale, noteUncertain,
+  openSettlementFor, recordBeforeSettle, releaseSettlement, supportUrl,
+  type Eip3009Authorization, type RecordResult, type SaleRef, type SettlementRow,
+} from "@/lib/x402-account-settlements.js";
 
 // The facilitator (resolution, verify→settle with timeouts and retries, the
 // dev bypass) lives in lib/x402-facilitator.ts, shared with the x402_settle skill.
@@ -212,12 +217,204 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     return paymentGate(402, "invalid PAYMENT-SIGNATURE header");
   }
 
-  const settled = await verifyAndSettle(payload, requirements, `share ${token} token=${tok.symbol} method=${tok.transferMethod}`);
+  // A payload carrying both an EIP-3009 and a Permit2 authorization is
+  // ambiguous: the facilitator picks its path from the payload's shape, so it
+  // could settle a different authorization than the one checked here.
+  if (isAmbiguousPayload(payload)) {
+    return NextResponse.json(
+      { error: "ambiguous_payment_payload", error_description: "the payment payload carries both an EIP-3009 and a Permit2 authorization; send exactly one" },
+      { status: 400 },
+    );
+  }
+
+  const label = `share ${token} token=${tok.symbol} method=${tok.transferMethod}`;
+
+  // After a settle this request is answered for: the payment hook, the Willow
+  // read cap, and the 200 body.
+  async function granted(txHash: string, wallet: string) {
+    await onPaymentSettled({
+      driveId: share!.drive_id,
+      path: share!.path,
+      wallet,
+      txHash,
+      amountUsdc: share!.price_usdc!,
+      currency: tok!.symbol,
+      network: tok!.chain,
+    });
+
+    let capBase64: string | null = null;
+    const ns = getDriveNamespace(share!.drive_id);
+    if (ns) {
+      try {
+        const issued = await issueShareCap({
+          namespacePub: ns.pub,
+          namespaceSecret: ns.secret,
+          pathPrefix: share!.path,
+          accessMode: "read",
+        });
+        capBase64 = issued.capBase64;
+      } catch (e) {
+        console.warn("cap issuance failed:", (e as Error).message);
+      }
+    }
+    return NextResponse.json({ ...okBody, txHash, cap: capBase64 });
+  }
+
+  // Authenticated accounts: no second charge while an earlier settle of theirs
+  // for this sale has no known outcome (lib/x402-account-settlements.js,
+  // docs/X402_PAYMENT_PENDING.md). Nothing here reads the chain or sets the
+  // wallet cookie. Anonymous and wallet-cookie buyers: the flow below, unchanged.
+  if (buyerId) {
+    const sale: SaleRef = { shareId: share.id, driveId: share.drive_id, path: share.path, role: share.role };
+    if (tok.transferMethod === "eip3009") {
+      const auth = eip3009Authorization(payload);
+      // Fail closed: an account's payment this parser cannot read never reaches
+      // the unguarded flow. DEV_BYPASS (local demos, no money) accepts any JSON.
+      if (auth || !DEV_BYPASS) return accountEip3009Purchase(buyerId, sale, auth);
+    } else {
+      // A Permit2 sale records nothing, but an unresolved EIP-3009 attempt for
+      // the same sale (e.g. before the owner changed the currency) still blocks.
+      const open = openSettlementFor(buyerId, sale);
+      if (open) return paymentPending(open);
+    }
+  }
+
+  function paymentPending(row: SettlementRow, reason?: string) {
+    return NextResponse.json(
+      {
+        error: "payment_pending",
+        error_description: "An earlier payment for this purchase has no confirmed result yet, so a new payment is not taken (you are not charged again). Resend the same payment, or contact support with this reference.",
+        reference: row.id,
+        support_url: supportUrl(row.id),
+        payer: row.payer,
+        nonce: row.nonce,
+        ...(reason ? { reason } : {}),
+      },
+      { status: 409 },
+    );
+  }
+
+  async function accountEip3009Purchase(accountId: string, sale: SaleRef, auth: Eip3009Authorization | null) {
+    if (!auth) return paymentGate(402, "invalid PAYMENT-SIGNATURE payload: not an EIP-3009 authorization");
+    const key = { network: requirements.network, asset: tok!.asset, payer: auth.from, nonce: auth.nonce };
+    const inUse = () => NextResponse.json(
+      { error: "authorization_in_use", error_description: "this payment authorization belongs to another purchase; sign a new one" },
+      { status: 409 },
+    );
+    // This server's settle answered success: receipt + membership + credited, in one transaction.
+    const creditAndGrant = async (rowId: string, settled: Extract<SettleOutcome, { ok: true }>) => {
+      let c: ReturnType<typeof creditSettlement>;
+      try {
+        c = creditSettlement({ id: rowId, txHash: settled.transaction, wallet: settled.payer, actor: "server" });
+      } catch (e) {
+        // The transfer happened; the row stays unresolved (blocks a second charge) for support.
+        console.error(`[x402-account] credit failed row=${rowId} tx=${settled.transaction} account=${accountId}`, e);
+        c = { ok: false, reason: "the payment could not be recorded" };
+      }
+      if (!c.ok) {
+        console.error(`[x402-account] settled but not credited row=${rowId} tx=${settled.transaction} account=${accountId} share=${share!.id}: ${c.reason}`);
+        try { noteUncertain(rowId, `settled ${settled.transaction} but not credited: ${c.reason}`); } catch { /* logged above */ }
+        return NextResponse.json(
+          { error: "payment_conflict", error_description: `${c.reason} — contact support with this reference`, txHash: settled.transaction, reference: rowId, support_url: supportUrl(rowId) },
+          { status: 409 },
+        );
+      }
+      if (!c.already) onMemberGranted(c.row.drive_id, accountId, c.row.path);
+      // No wallet cookie: the account's membership is the entitlement.
+      return granted(c.txHash, settled.payer);
+    };
+
+    const existing = findSettlement(key);
+    if (existing) {
+      const mine = existing.account_id === accountId && isSameSale(existing, sale) && existing.envelope_hash === auth.envelopeHash;
+      if (!mine) return inUse();
+      if (existing.status === "credited") {
+        return NextResponse.json(
+          { error: "already_credited", error_description: "this payment was already credited to your account", txHash: existing.tx_hash, reference: existing.id },
+          { status: 409 },
+        );
+      }
+      if (existing.status === "released") {
+        return NextResponse.json(
+          { error: "authorization_released", error_description: "this payment attempt was closed without a charge; sign a new one", reference: existing.id },
+          { status: 409 },
+        );
+      }
+      // The same account resends the same envelope: settling it again cannot
+      // move money twice (one nonce, one transfer). Success credits; anything
+      // else leaves the row unresolved.
+      const again = await verifyAndSettle(payload, requirements, label, {
+        beforeSettle: () => (getSettlement(existing.id)?.status === "unresolved" ? null : "resolved"),
+      });
+      if (again.ok) return creditAndGrant(existing.id, again);
+      const now = getSettlement(existing.id)!;
+      if (now.status === "credited") return NextResponse.json({ ...okBody, txHash: now.tx_hash, cap: null });
+      if (now.status === "released") {
+        return NextResponse.json(
+          { error: "authorization_released", error_description: "this payment attempt was closed without a charge; sign a new one", reference: now.id },
+          { status: 409 },
+        );
+      }
+      if (again.settle !== "not_sent") noteUncertain(now.id, again.reason);
+      return paymentPending(now, again.reason);
+    }
+
+    // A new authorization.
+    const open = openSettlementFor(accountId, sale);
+    if (open) return paymentPending(open);
+    let recorded: RecordResult | null = null;
+    const settled = await verifyAndSettle(payload, requirements, label, {
+      beforeSettle: () => {
+        recorded = recordBeforeSettle(
+          {
+            ...key, accountId, envelopeHash: auth.envelopeHash, validBefore: auth.validBefore,
+            sale: {
+              ...sale, amountUsdc: share!.price_usdc!, currency: tok!.symbol, chain: tok!.chain,
+              payTo: requirements.payTo, amountAtomic: requirements.amount,
+            },
+          },
+          () => holdsPaidShare(share!.drive_id, share!, resolveRoleByUser(share!.drive_id, accountId, share!.path), accountId),
+        );
+        return recorded.kind === "recorded" ? null : recorded.kind;
+      },
+    });
+    const rec = recorded as RecordResult | null;
+    if (settled.ok) {
+      if (rec?.kind !== "recorded") {
+        // Unreachable: the hook runs before every settle. Never credit without a row.
+        console.error(`[x402-account] settled without a recorded attempt tx=${settled.transaction} account=${accountId} share=${share!.id}`);
+        return NextResponse.json(
+          { error: "payment_conflict", error_description: "settled without a recorded attempt — contact support", txHash: settled.transaction, support_url: supportUrl(settled.transaction) },
+          { status: 409 },
+        );
+      }
+      return creditAndGrant(rec.row.id, settled);
+    }
+    if (rec?.kind === "conflict") return inUse();
+    if (rec?.kind === "pending") return paymentPending(rec.row);
+    if (rec?.kind === "held") return NextResponse.json({ ...okBody, role: resolveRoleByUser(share!.drive_id, accountId, share!.path) });
+    if (rec?.kind === "recorded") {
+      if (settled.settle === "refused") {
+        // The facilitator refused the only settle request before broadcasting:
+        // this authorization moved nothing, so a new one may be signed.
+        releaseSettlement({ id: rec.row.id, actor: "server", reason: `settle refused before broadcast: ${settled.reason}` });
+        return paymentGate(402, settled.reason);
+      }
+      noteUncertain(rec.row.id, settled.reason);
+      return paymentPending(getSettlement(rec.row.id) ?? rec.row, settled.reason);
+    }
+    // No row: verify refused or the facilitator was unreachable (nothing was
+    // sent to settle), or recording failed — today's answers.
+    if (settled.status === 503) return NextResponse.json({ error: settled.reason }, { status: 503 });
+    return paymentGate(settled.status === 412 ? 412 : 402, settled.reason);
+  }
+
+  const settled = await verifyAndSettle(payload, requirements, label);
   if (!settled.ok) {
     if (settled.status === 503) return NextResponse.json({ error: settled.reason }, { status: 503 });
     // Spec: missing Permit2 allowance is a precondition failure (412), not a
     // payment rejection — the gate UI answers it with the approve flow.
-    return paymentGate(settled.status, settled.reason);
+    return paymentGate(settled.status === 412 ? 412 : 402, settled.reason);
   }
   const payerWallet = settled.payer;
   const txHash = settled.transaction;
@@ -266,32 +463,5 @@ export async function GET(req: Request, { params }: { params: Promise<{ token: s
     console.warn(`[receipts] tx_hash UNIQUE collision — assuming replay: ${txHash} share=${share.id} payer=${payerWallet}`);
   }
   await setWalletCookie(payerWallet);
-
-  await onPaymentSettled({
-    driveId: share.drive_id,
-    path: share.path,
-    wallet: payerWallet,
-    txHash,
-    amountUsdc: share.price_usdc,
-    currency: tok.symbol,
-    network: tok.chain,
-  });
-
-  let capBase64: string | null = null;
-  const ns = getDriveNamespace(share.drive_id);
-  if (ns) {
-    try {
-      const issued = await issueShareCap({
-        namespacePub: ns.pub,
-        namespaceSecret: ns.secret,
-        pathPrefix: share.path,
-        accessMode: "read",
-      });
-      capBase64 = issued.capBase64;
-    } catch (e) {
-      console.warn("cap issuance failed:", (e as Error).message);
-    }
-  }
-
-  return NextResponse.json({ ...okBody, txHash, cap: capBase64 });
+  return granted(txHash, payerWallet);
 }

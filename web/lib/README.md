@@ -32,6 +32,8 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 - `payment-tokens.ts` — allowed-token presets, network switch, policy parse/rebind, `toAtomicAmount` (BigInt decimal scaling).
 - `sales.ts` — share-link create/edit/revoke, payout-wallet and token-policy validation, receipt paging. One implementation behind the `shares`/`payout`/drive-PATCH routes and the remote-MCP sale tools; returns `{ ok: false, status, error }` with the route's exact message.
 - `x402-ain.ts` — x402 v2 facilitator for AIN on ETH mainnet (build requirements, `verify`, `settle` via on-chain Transfer log).
+- `x402-facilitator.ts` — facilitator resolution + `verifyAndSettle` (`beforeSettle` hook between verify and settle; failures say whether settle was `not_sent`, `refused` before broadcast, or `uncertain`).
+- `x402-account-settlements.js` — accounts' EIP-3009 settle attempts recorded before settle; blocks a second charge while an outcome is unknown; never credits from the chain (`docs/X402_PAYMENT_PENDING.md`). `x402-authorization-chain.js` — read-only chain checks for the support CLI `scripts/x402-settlements.mjs` only.
 - `paid-lifts.js` — `paid_lifts` table: quota/tier lifts bought with AIN + tx-hash anti-replay (`txHashUsed`).
 - `tier.ts` — free/pro/max tiers from active lifts. Rate limits use the caller's tier (wallet cookie); storage caps use the drive owner's (`getOwnerStorageCaps`: lifts on any wallet linked to the owner, or `AINDRIVE_UNLIMITED_OWNERS`), identical for session, PAT and account-token writes.
 - `wallet.ts` — SIWE nonce/cookie, `linkWalletToAccount`, `resolveAccountForWallet` (wallet→durable account bridge).
