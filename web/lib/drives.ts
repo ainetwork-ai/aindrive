@@ -151,10 +151,12 @@ export function listUserDrives(userId: string): (DriveRow & { org_id?: string })
     WHERE d.owner_id = ? OR m.user_id = ?
     GROUP BY d.id
     ORDER BY d.created_at DESC
-  `).all(userId, userId, userId) as DriveRow[];
+  `).all(userId, userId, userId) as (DriveRow & { org_id?: string })[];
   const seen = new Set(direct.map((d) => d.id));
   const viaOrg: OrgDriveRow[] = [];
   for (const d of orgDrivesForUser(userId)) {
+    const existing = direct.find((item) => item.id === d.id);
+    if (existing) { existing.org_id = d.org_id; continue; }
     if (seen.has(d.id)) continue;
     seen.add(d.id);
     viaOrg.push(d);
