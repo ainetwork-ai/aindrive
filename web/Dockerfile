@@ -63,6 +63,8 @@ COPY --from=builder --chown=app:app /app/shared ./shared
 COPY --from=builder --chown=app:app /app/scripts/org-drive.mjs ./scripts/org-drive.mjs
 # Operator command (docs/DEPLOY.md "Backup and restore"): run once after putting a backup of the DB back.
 COPY --from=builder --chown=app:app /app/scripts/after-restore.mjs ./scripts/after-restore.mjs
+# Support command (docs/X402_PAYMENT_PENDING.md): docker exec aindrive-web-1 node scripts/x402-settlements.mjs …
+COPY --from=builder --chown=app:app /app/scripts/x402-settlements.mjs ./scripts/x402-settlements.mjs
 COPY --from=builder --chown=app:app /app/package.json ./package.json
 COPY --from=builder --chown=app:app /app/next.config.ts ./next.config.ts
 
