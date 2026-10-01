@@ -25,7 +25,7 @@ const T_USED = keccak256(toHex("AuthorizationUsed(address,bytes32)"));
 const T_TRANSFER = keccak256(toHex("Transfer(address,address,uint256)"));
 
 // --- fake chain -----------------------------------------------------------------------
-type FakeTx = { hash: string; block: number; status: "0x1" | "0x0"; logs: { topics: string[]; data: string }[] };
+type FakeTx = { hash: string; block: number; time: number; status: "0x1" | "0x0"; logs: { topics: string[]; data: string }[] };
 const fake = { head: 1000, used: new Set<string>(), txs: [] as FakeTx[], calls: [] as string[] };
 const usedLog = (payer: string, nonce: string) => ({ topics: [T_USED, pad(payer as `0x${string}`), nonce], data: "0x" });
 const transferLog = (from: string, to: string, value: bigint) => ({
@@ -33,12 +33,14 @@ const transferLog = (from: string, to: string, value: bigint) => ({
   data: encodeAbiParameters([{ type: "uint256" }], [value]),
 });
 let txSeq = 0;
-function mine(o: { payer: string; nonce: string; to?: string; value?: bigint; status?: "0x1" | "0x0"; withUsed?: boolean }) {
+const nowS = () => Math.floor(Date.now() / 1000);
+// Each tx in its own block; `time` is the block timestamp (unix s, default: now).
+function mine(o: { payer: string; nonce: string; to?: string; value?: bigint; status?: "0x1" | "0x0"; withUsed?: boolean; time?: number }) {
   const hash = `0x${(++txSeq).toString(16).padStart(64, "c")}`;
   const logs = [];
   if (o.withUsed !== false) logs.push(usedLog(o.payer, o.nonce));
   logs.push(transferLog(o.payer, o.to ?? PAY_TO, o.value ?? 500000n));
-  fake.txs.push({ hash, block: fake.head - 10, status: o.status ?? "0x1", logs });
+  fake.txs.push({ hash, block: 500 + txSeq, time: o.time ?? nowS(), status: o.status ?? "0x1", logs });
   if (o.withUsed !== false && (o.status ?? "0x1") === "0x1") fake.used.add(`${o.payer}:${o.nonce}`.toLowerCase());
   return hash;
 }
@@ -75,6 +77,16 @@ function rpc(method: string, params: any[]): unknown {
         transactionHash: tx.hash, transactionIndex: "0x0", blockHash: pad("0x1"), blockNumber: hexn(tx.block),
         from: PAYER, to: ASSET, cumulativeGasUsed: "0x1", gasUsed: "0x1", effectiveGasPrice: "0x1", contractAddress: null,
         logs: tx.logs.map((l, i) => logOf(tx, l, i)), logsBloom: `0x${"0".repeat(512)}`, status: tx.status, type: "0x2",
+      };
+    }
+    case "eth_getBlockByNumber": {
+      const n = parseInt(params[0], 16);
+      const tx = fake.txs.find((t) => t.block === n);
+      return {
+        number: hexn(n), hash: pad(hexn(n) as `0x${string}`), parentHash: pad(hexn(n - 1) as `0x${string}`), timestamp: hexn(tx ? tx.time : nowS()),
+        nonce: "0x0000000000000000", sha3Uncles: pad("0x0"), logsBloom: `0x${"0".repeat(512)}`, transactionsRoot: pad("0x0"),
+        stateRoot: pad("0x0"), receiptsRoot: pad("0x0"), miner: PAY_TO, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x",
+        size: "0x1", gasLimit: "0x1", gasUsed: "0x1", baseFeePerGas: "0x1", mixHash: pad("0x0"), transactions: [], uncles: [],
       };
     }
     default: throw new Error(`unsupported ${method}`);
@@ -205,9 +217,94 @@ describe("support CLI: scripts/x402-settlements.mjs", () => {
     const tx = mine({ payer: PAYER, nonce: row.nonce });
     db.prepare("INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, currency, network, share_id, account_id) VALUES (?,?,?,?,?,?,?,?,?,?)")
       .run(`r-${tx.slice(-6)}`, "cd1", "x.md", PAYER, tx, 0.5, "USDC", "base-sepolia", "another", "w_wallet");
-    const r = await cli(["credit", "--id", row.id, "--tx", tx, "--operator", "alice", "--note", "n", "--skip-chain-check"]);
+    // --force gets past the red flag, never past the server's guard.
+    const r = await cli(["credit", "--id", row.id, "--tx", tx, "--operator", "alice", "--note", "n", "--skip-chain-check", "--force"]);
     expect(r.code).not.toBe(0);
     expect(r.err).toMatch(/another purchase/);
+    expect(status(row.id).status).toBe("unresolved");
+  });
+
+  // A copied envelope: an anonymous buyer's settle was mined but its answer
+  // lost (no receipt anywhere); someone copied the authorization from calldata
+  // and, with a lagging facilitator verify, got a row on THEIR account.
+  it("check: tx mined before the row was recorded → red flag, 'investigate — do not credit', block time next to recorded time", async () => {
+    const row = unresolvedRow();
+    const minedAt = Math.floor(row.created_at / 1000) - 120;
+    const tx = mine({ payer: PAYER, nonce: row.nonce, time: minedAt });
+    const v = JSON.parse((await cli(["check", "--id", row.id, "--rpc", RPC])).out);
+    expect(v.row_recorded_at).toBe(new Date(row.created_at).toISOString());
+    expect(v.uses).toEqual([expect.objectContaining({
+      txHash: tx, pays_this_sale: true, block_time: new Date(minedAt * 1000).toISOString(),
+      red_flags: [expect.stringMatching(/^tx_mined_before_row_recorded/)],
+    })]);
+    expect(v.advice).toMatch(/^investigate — do not credit/);
+    // A larger skew allowance covers it (server clock ahead of the chain).
+    const w = JSON.parse((await cli(["check", "--id", row.id, "--rpc", RPC, "--clock-skew-seconds", "300"])).out);
+    expect(w.uses[0].red_flags).toEqual([]);
+    expect(w.advice).toMatch(/credit with --tx/);
+  });
+
+  it("check: within the default 30 s skew is not a red flag", async () => {
+    const row = unresolvedRow();
+    mine({ payer: PAYER, nonce: row.nonce, time: Math.floor(row.created_at / 1000) - 20 });
+    const v = JSON.parse((await cli(["check", "--id", row.id, "--rpc", RPC])).out);
+    expect(v.uses[0].red_flags).toEqual([]);
+    expect(v.advice).toMatch(/credit with --tx/);
+  });
+
+  it("check: first settle answered nonce_already_used → shown and flagged", async () => {
+    const row = unresolvedRow();
+    S.noteUncertain(row.id, "invalid_exact_evm_nonce_already_used");
+    S.noteUncertain(row.id, "facilitator unavailable, please retry");
+    mine({ payer: PAYER, nonce: row.nonce });
+    const v = JSON.parse((await cli(["check", "--id", row.id, "--rpc", RPC])).out);
+    expect(v.first_settle).toMatchObject({ action: "settle_uncertain", detail: "invalid_exact_evm_nonce_already_used" });
+    expect(v.uses[0].red_flags).toEqual([expect.stringMatching(/^first_settle_nonce_already_used/)]);
+    expect(v.advice).toMatch(/^investigate — do not credit/);
+  });
+
+  it("check: a tx another settlement row or a receipt references → flagged", async () => {
+    const row = unresolvedRow();
+    const tx = mine({ payer: PAYER, nonce: row.nonce });
+    const other = unresolvedRow();
+    S.noteUncertain(other.id, `settled ${tx} but not credited: the payment could not be recorded`);
+    const v = JSON.parse((await cli(["check", "--id", row.id, "--rpc", RPC])).out);
+    expect(v.uses[0].red_flags).toEqual([expect.stringMatching(new RegExp(`^tx_referenced_elsewhere: settlement ${other.id}`))]);
+    expect(v.advice).toMatch(/^investigate — do not credit/);
+
+    const row2 = unresolvedRow();
+    const tx2 = mine({ payer: PAYER, nonce: row2.nonce });
+    db.prepare("INSERT INTO payment_receipts (id, drive_id, path, wallet, tx_hash, amount_usdc, currency, network, share_id, account_id) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(`r-${tx2.slice(-6)}`, "cd1", row2.path, PAYER, tx2, 0.5, "USDC", "base-sepolia", row2.share_id, null);
+    const v2 = JSON.parse((await cli(["check", "--id", row2.id, "--rpc", RPC])).out);
+    expect(v2.uses[0].red_flags).toEqual([expect.stringMatching(/^tx_referenced_elsewhere: receipt\(account=-/)]);
+  });
+
+  it("credit refuses on a red flag; --force credits it with the flags in the note and the log", async () => {
+    const row = unresolvedRow();
+    const tx = mine({ payer: PAYER, nonce: row.nonce, time: Math.floor(row.created_at / 1000) - 3600 });
+    const r = await cli(["credit", "--id", row.id, "--tx", tx, "--operator", "alice", "--note", "ticket 7", "--rpc", RPC]);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toMatch(/investigate — do not credit/);
+    expect(r.err).toMatch(/tx_mined_before_row_recorded/);
+    expect(status(row.id).status).toBe("unresolved");
+    expect(member(row.path)).toBeUndefined();
+
+    const f = await cli(["credit", "--id", row.id, "--tx", tx, "--operator", "alice", "--note", "signer proved key ownership", "--rpc", RPC, "--force"]);
+    expect(f.code).toBe(0);
+    expect(status(row.id)).toMatchObject({ status: "credited", resolution_note: "signer proved key ownership [forced past: tx_mined_before_row_recorded]" });
+    expect(S.settlementEvents(row.id).at(-1)!.detail).toMatch(/forced past: tx_mined_before_row_recorded/);
+  });
+
+  it("credit refuses after a nonce_already_used first settle, even with --skip-chain-check; --skip-chain-check alone needs --force", async () => {
+    const row = unresolvedRow();
+    S.noteUncertain(row.id, "invalid_exact_evm_nonce_already_used");
+    const tx = mine({ payer: PAYER, nonce: row.nonce });
+    const a = await cli(["credit", "--id", row.id, "--tx", tx, "--operator", "alice", "--note", "n", "--rpc", RPC]);
+    expect(a.err).toMatch(/first_settle_nonce_already_used/);
+    const b = await cli(["credit", "--id", row.id, "--tx", tx, "--operator", "alice", "--note", "n", "--skip-chain-check"]);
+    expect(b.code).not.toBe(0);
+    expect(b.err).toMatch(/--force/);
     expect(status(row.id).status).toBe("unresolved");
   });
 
