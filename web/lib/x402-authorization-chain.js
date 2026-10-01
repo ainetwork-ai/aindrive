@@ -93,3 +93,15 @@ export async function checkPaymentTx(client, row, txHash) {
   const head = await client.getBlockNumber();
   return { ok: true, blockNumber: receipt.blockNumber, confirmations: head - receipt.blockNumber + 1n };
 }
+
+/**
+ * When a block was mined (unix seconds) — for the operator's question "was
+ * this transaction mined before the row was recorded?".
+ * @param {any} client
+ * @param {bigint} blockNumber
+ * @returns {Promise<bigint>}
+ */
+export async function blockTime(client, blockNumber) {
+  const b = await client.getBlock({ blockNumber });
+  return b.timestamp;
+}

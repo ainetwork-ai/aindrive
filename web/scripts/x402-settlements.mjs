@@ -8,13 +8,27 @@
 //
 //   list    [--status unresolved|credited|released|all] [--account <id>] [--drive <id>]
 //   show    --id <ref>                       row, its log, the account's receipts/role for the sale
-//   check   --id <ref> [--rpc <url>] [--lookback-blocks <n>] [--from-block <n>]
+//   check   --id <ref> [--rpc <url>] [--lookback-blocks <n>] [--from-block <n>] [--clock-skew-seconds <n>]
 //                                            read-only: authorizationState(payer, nonce), the
-//                                            transactions that used it, and whether each paid this sale
-//   credit  --id <ref> --tx <hash> --operator <name> --note "<why>" [--rpc <url>] [--skip-chain-check]
+//                                            transactions that used it, whether each paid this sale,
+//                                            its block time next to the row's recorded time and first
+//                                            settle outcome, and red flags (see below)
+//   credit  --id <ref> --tx <hash> --operator <name> --note "<why>" [--rpc <url>] [--clock-skew-seconds <n>]
+//           [--skip-chain-check] [--force]
 //                                            receipt + membership (upgrade-only) + 'credited', in one
 //                                            transaction. First re-checks on chain that <hash> used this
-//                                            authorization and paid the sale's payee the recorded amount.
+//                                            authorization and paid the sale's payee the recorded amount,
+//                                            and refuses on a red flag unless --force (logged in the note).
+//
+// Red flags — an EIP-3009 envelope is public in calldata once mined, so a row can
+// be recorded by someone who copied another buyer's mined authorization (and a
+// lagging facilitator verify accepted it). A transaction that paid the sale is
+// NOT proof that this row's account paid when:
+//   tx_mined_before_row_recorded  the block time is earlier than the row's created_at
+//                                 minus --clock-skew-seconds (default 30);
+//   first_settle_nonce_already_used  this row's first settle answer was nonce_already_used;
+//   tx_referenced_elsewhere       a payment receipt or another settlement row already
+//                                 references the transaction.
 //   release --id <ref> --operator <name> --note "<why>" [--rpc <url>] [--force]
 //                                            the authorization did NOT pay: the account may pay again.
 //                                            Refused while the authorization is used on chain (credit it)
@@ -26,8 +40,8 @@
 const USAGE = `usage:
   node scripts/x402-settlements.mjs list    [--status unresolved|credited|released|all] [--account <accountId>] [--drive <driveId>]
   node scripts/x402-settlements.mjs show    --id <ref>
-  node scripts/x402-settlements.mjs check   --id <ref> [--rpc <url>] [--lookback-blocks <n>] [--from-block <n>]
-  node scripts/x402-settlements.mjs credit  --id <ref> --tx <txHash> --operator <name> --note "<reason>" [--rpc <url>] [--skip-chain-check]
+  node scripts/x402-settlements.mjs check   --id <ref> [--rpc <url>] [--lookback-blocks <n>] [--from-block <n>] [--clock-skew-seconds <n>]
+  node scripts/x402-settlements.mjs credit  --id <ref> --tx <txHash> --operator <name> --note "<reason>" [--rpc <url>] [--clock-skew-seconds <n>] [--skip-chain-check] [--force]
   node scripts/x402-settlements.mjs release --id <ref> --operator <name> --note "<reason>" [--rpc <url>] [--force]`;
 
 const FLAGS = new Set(["force", "skip-chain-check", "help"]);
@@ -82,6 +96,60 @@ async function chain() {
   return import("../lib/x402-authorization-chain.js");
 }
 
+/** --clock-skew-seconds: how far the server clock may run ahead of block time. */
+function skewSeconds() {
+  const v = opts["clock-skew-seconds"] ?? "30";
+  if (!/^\d+$/.test(v)) fail(`--clock-skew-seconds must be a non-negative integer, got ${v}`);
+  return Number(v);
+}
+
+/**
+ * The row's first settle outcome: the first event after 'recorded' (the
+ * server's settle answer, or a later resolution if none was logged).
+ * @param {string} id
+ */
+function firstSettle(id) {
+  const e = S.settlementEvents(id).find((x) => x.action !== "recorded");
+  return e ? { action: e.action, actor: e.actor, detail: e.detail, at: iso(e.at) } : null;
+}
+
+/**
+ * Who else in the DB references `txHash`: payment receipts (any), and other
+ * settlement rows (credited with it, or naming it in last_error / their log).
+ * @param {{ id: string }} row @param {string} txHash
+ */
+function otherReferences(row, txHash) {
+  const tx = txHash.toLowerCase();
+  const receipts = db.prepare("SELECT account_id, share_id, drive_id, path, settled_at FROM payment_receipts WHERE lower(tx_hash) = ?").all(tx);
+  const rows = db.prepare(
+    `SELECT id FROM x402_account_settlements WHERE id != ? AND (lower(tx_hash) = ? OR instr(lower(coalesce(last_error, '')), ?) > 0)
+     UNION SELECT settlement_id AS id FROM x402_account_settlement_events WHERE settlement_id != ? AND instr(lower(coalesce(detail, '')), ?) > 0`,
+  ).all(row.id, tx, tx, row.id, tx).map((r) => r.id);
+  return { receipts, settlement_rows: rows };
+}
+
+/**
+ * Reasons NOT to credit `row` with `txHash` on the operator's say-so.
+ * `minedAtSec` is the tx's block time (null: not known — chain check skipped).
+ * @param {any} row @param {string} txHash @param {bigint | null} minedAtSec @param {number} skewS
+ */
+function redFlags(row, txHash, minedAtSec, skewS) {
+  /** @type {string[]} */
+  const flags = [];
+  if (minedAtSec !== null && Number(minedAtSec) * 1000 < row.created_at - skewS * 1000) {
+    flags.push(`tx_mined_before_row_recorded: block time ${iso(Number(minedAtSec) * 1000)} is before the row's created_at ${iso(row.created_at)} (allowed skew ${skewS}s) — this account's request came after the transfer was public`);
+  }
+  const first = firstSettle(row.id);
+  if (first && first.action === "settle_uncertain" && /nonce_already_used/i.test(first.detail ?? "")) {
+    flags.push("first_settle_nonce_already_used: this row's first settle answer said the nonce was already used — someone else may have settled it first");
+  }
+  const refs = otherReferences(row, txHash);
+  if (refs.receipts.length || refs.settlement_rows.length) {
+    flags.push(`tx_referenced_elsewhere: ${refs.receipts.map((r) => `receipt(account=${r.account_id ?? "-"}, share=${r.share_id ?? "-"})`).concat(refs.settlement_rows.map((id) => `settlement ${id}`)).join(", ")}`);
+  }
+  return flags;
+}
+
 if (cmd === "list") {
   const status = opts.status ?? "unresolved";
   if (!["unresolved", "credited", "released", "all"].includes(status)) fail(`bad --status ${status}`);
@@ -109,6 +177,7 @@ if (cmd === "list") {
   });
 } else if (cmd === "check") {
   const row = rowOrFail(opts.id);
+  const skewS = skewSeconds();
   const C = await chain();
   const client = C.clientForNetwork(row.network, opts.rpc);
   const used = await C.authorizationUsed(client, row);
@@ -120,8 +189,15 @@ if (cmd === "list") {
   for (const u of uses) {
     const paid = await C.checkPaymentTx(client, row, u.txHash);
     const receipt = db.prepare("SELECT account_id, share_id FROM payment_receipts WHERE lower(tx_hash) = lower(?)").get(u.txHash);
-    txs.push({ ...u, pays_this_sale: paid.ok, ...(paid.ok ? { confirmations: paid.confirmations } : { why_not: paid.reason }), existing_receipt: receipt ?? null });
+    const minedAt = await C.blockTime(client, u.blockNumber);
+    const flags = redFlags(row, u.txHash, minedAt, skewS);
+    txs.push({
+      ...u, block_time: iso(Number(minedAt) * 1000), row_recorded_at: iso(row.created_at),
+      pays_this_sale: paid.ok, ...(paid.ok ? { confirmations: paid.confirmations } : { why_not: paid.reason }),
+      existing_receipt: receipt ?? null, red_flags: flags,
+    });
   }
+  const paying = txs.filter((t) => t.pays_this_sale);
   const validBefore = row.valid_before ? BigInt(row.valid_before) : null;
   const stillValid = validBefore !== null && validBefore > BigInt(Math.floor(Date.now() / 1000));
   let advice;
@@ -129,26 +205,48 @@ if (cmd === "list") {
     advice = stillValid
       ? `unused but still valid until ${new Date(Number(validBefore) * 1000).toISOString()}: wait until then, check again, then release`
       : "unused and expired: it can never pay — release";
-  } else if (txs.some((t) => t.pays_this_sale)) {
-    advice = "used, and a transaction paid this sale: credit with that --tx (if no other purchase holds its receipt)";
+  } else if (paying.some((t) => t.red_flags.length === 0)) {
+    advice = `used, and a transaction paid this sale with no red flag: credit with --tx ${paying.find((t) => t.red_flags.length === 0).txHash}`;
+  } else if (paying.length) {
+    advice = "investigate — do not credit: a transaction paid this sale, but see red_flags — the envelope may have been copied from "
+      + "another buyer's mined transaction. Find who actually signed and sent it; `credit` refuses unless --force with a --note saying why";
   } else if (uses.length === 0) {
     advice = `used, but no AuthorizationUsed log since block ${fromBlock}: widen --lookback-blocks or --from-block`;
   } else {
     advice = "used, but not by a transfer that paid this sale: investigate before doing anything";
   }
-  out({ id: row.id, status: row.status, network: row.network, head, from_block: fromBlock, authorization_used: used, still_valid: stillValid, uses: txs, advice });
+  out({
+    id: row.id, status: row.status, network: row.network, account_id: row.account_id,
+    row_recorded_at: iso(row.created_at), first_settle: firstSettle(row.id), clock_skew_seconds: skewS,
+    head, from_block: fromBlock, authorization_used: used, still_valid: stillValid, uses: txs, advice,
+  });
 } else if (cmd === "credit") {
   const row = rowOrFail(opts.id);
   const operator = operatorOrFail();
   if (typeof opts.tx !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(opts.tx)) fail("--tx must be a 32-byte 0x transaction hash");
   const txHash = opts.tx.toLowerCase();
+  const skewS = skewSeconds();
   let note = opts.note.trim();
+  let flags;
   if (opts["skip-chain-check"]) {
+    // Without the chain the tx's block time is unknown, so a copied envelope cannot be ruled out.
+    if (!opts.force) fail("--skip-chain-check cannot tell whether the tx was mined before the row was recorded — add --force (and say why in --note)");
     note = `${note} [chain check skipped]`;
+    flags = redFlags(row, txHash, null, skewS);
   } else {
     const C = await chain();
-    const paid = await C.checkPaymentTx(C.clientForNetwork(row.network, opts.rpc), row, txHash);
+    const client = C.clientForNetwork(row.network, opts.rpc);
+    const paid = await C.checkPaymentTx(client, row, txHash);
     if (!paid.ok) fail(`chain check failed: ${paid.reason} (nothing changed)`);
+    flags = redFlags(row, txHash, await C.blockTime(client, paid.blockNumber), skewS);
+  }
+  if (flags.length && row.status !== "credited") {
+    if (!opts.force) {
+      fail(`investigate — do not credit (nothing changed):\n  - ${flags.join("\n  - ")}\n`
+        + "A tx that paid this sale is not proof that this account paid. Credit anyway only with --force and a --note saying why.");
+    }
+    note = `${note} [forced past: ${flags.map((f) => f.split(":")[0]).join(", ")}]`;
+    console.error(`warning: crediting past red flags (logged):\n  - ${flags.join("\n  - ")}`);
   }
   const r = S.creditSettlement({ id: row.id, txHash, wallet: row.payer, actor: `support:${operator}`, note });
   if (!r.ok) fail(`${r.reason} (nothing changed)`);
