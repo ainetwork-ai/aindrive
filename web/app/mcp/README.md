@@ -117,7 +117,7 @@ at once (`lib/oauth.ts` `skipsConsent` + `lib/oauth-authorize.ts`
 For third-party web apps: one token pair for the user, not one drive.
 
 - Request `/oauth/authorize` with **no `resource`** and only account scopes:
-  `profile`, `drives:read`, `drives:write`, `drives:sell` (any non-empty
+  `profile`, `drives:read`, `drives:write`, `drives:share`, `drives:sell` (any non-empty
   subset). Mixing in `drive:*` or any unknown scope is rejected. Consent lists
   one line per requested scope; login redirect as usual.
 - Same DCR, PKCE and `/api/oauth/token` exchange/refresh as the drive flow
@@ -127,7 +127,19 @@ For third-party web apps: one token pair for the user, not one drive.
   `aind_art_…` (30d, rotated; reuse revokes the grant). Hashes only.
 - `GET /api/oauth/userinfo` (`profile`) → `{ sub, email, email_verified, name, wallet_address }`.
   Wallet-only accounts have a placeholder email and `email_verified: false`, so don't show that email.
-- `GET /api/oauth/drives` (`drives:read`) → `{ drives: [{ id, name, online, role }] }`.
+- `GET /api/oauth/drives` (`drives:read`) → `{ drives: [{ id, name, orgId, online, role }] }`.
+- `POST /api/oauth/drives/[id]/access-check` (`drives:read`) — body
+  `{ path?='', emails: string[] (1–100) }` → `{ results: [{ email, access }] }`, access
+  `owner|editor|viewer|pending|none` at that path (an invite covering the path that waits
+  for the address to sign up is `pending`; "no account" and "no access" are both `none`).
+  The token's user needs at least viewer at the path (else 403), so an app only learns
+  about paths its user can see. Mail clients use it to warn before sending a link.
+- `POST /api/oauth/drives/[id]/members` (`drives:share`) — body
+  `{ email, path?='', role: "viewer"|"editor" }` → `{ ok, pending }` (202 + `pending: true`
+  when the address has no account yet: the invite becomes a membership at signup).
+  Same rules as the session route `POST /api/drives/[id]/members` (`lib/drive-sharing.ts`):
+  owner-only (creator or co-owner), upgrade-only, the owner role is never granted via OAuth.
+  Rate limit 60/min per client address (`oauth-share`).
 - `/mcp/d/[id]` accepts the access token on any drive the user is a member of
   (non-member → 403; no `drives:*` scope → 403). Each scope adds its tools, and
   unlisted tools are refused:

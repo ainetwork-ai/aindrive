@@ -19,7 +19,7 @@
 
 /** Mirrors lib/oauth.ts SCOPES_SUPPORTED (oauth-trusted.test.ts keeps them equal). */
 export const KNOWN_OAUTH_SCOPES = Object.freeze([
-  "drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell", "wallet:pay",
+  "drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:share", "drives:sell", "wallet:pay",
 ]);
 
 /** Payment and sale authority: never granted without the consent screen, whatever the list says. */
