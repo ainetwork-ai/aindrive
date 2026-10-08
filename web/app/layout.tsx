@@ -1,22 +1,28 @@
 import type { Metadata, Viewport } from "next";
-import { Instrument_Serif, Inter } from "next/font/google";
+import localFont from "next/font/local";
 import { Toaster } from "sonner";
 import "./globals.css";
 
-const display = Instrument_Serif({
-  subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
+const display = localFont({
+  src: [
+    { path: "../fonts/InstrumentSerif-Regular.ttf", weight: "400", style: "normal" },
+    { path: "../fonts/InstrumentSerif-Italic.ttf", weight: "400", style: "italic" },
+  ],
   variable: "--font-display",
   display: "swap",
+  adjustFontFallback: "Times New Roman",
+  fallback: ["Georgia", "Times New Roman", "serif"],
 });
 
-// sans face is self-hosted by next/font at build time (no remote @font-face /
-// CSP allowance needed). --font-sans is the head of tailwind fontFamily.sans.
-const sans = Inter({
-  subsets: ["latin"],
+// Bundled font files keep QA builds independent of Google Fonts availability.
+// --font-sans is the head of tailwind fontFamily.sans.
+const sans = localFont({
+  src: "../fonts/Inter-Variable.ttf",
+  weight: "100 900",
+  style: "normal",
   variable: "--font-sans",
   display: "swap",
+  fallback: ["Arial", "ui-sans-serif", "system-ui", "sans-serif"],
 });
 
 export const metadata: Metadata = {

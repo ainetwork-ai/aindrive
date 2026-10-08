@@ -25,7 +25,7 @@ export default async function Home() {
     // agent on the device that holds it), so it comes second.
     return (
       <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6 py-12">
-        <div className="max-w-xl w-full">
+        <div className="min-w-0 max-w-xl w-full">
           <h1 className="text-4xl font-semibold tracking-tight">aindrive</h1>
           <p className="mt-3 text-lg text-drive-text">Your files, in any browser.</p>
           <p className="mt-2 text-drive-muted">
@@ -55,7 +55,7 @@ export default async function Home() {
             )}
             <details className="mt-3 text-sm">
               <summary className="cursor-pointer text-drive-muted hover:text-drive-text">Or from a terminal</summary>
-              <pre className="mt-2 rounded-xl bg-white border border-drive-border p-4 text-sm overflow-x-auto">
+              <pre className="mt-2 rounded-xl bg-white border border-drive-border p-4 text-sm whitespace-pre-wrap break-words">
 {`npm i -g aindrive     # install once
 cd ~/Documents
 aindrive              # this folder is now in aindrive`}
