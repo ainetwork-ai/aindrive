@@ -44,7 +44,7 @@ function parse(path: string[]): { repo: string; kind: "info" | Service } | null 
   return null;
 }
 
-const minFor = (svc: Service) => (svc === "receive-pack" ? "editor" : "viewer") as const;
+const minFor = (svc: Service): "editor" | "viewer" => (svc === "receive-pack" ? "editor" : "viewer");
 
 function pktPrefix(svc: Service): Buffer {
   const line = `# service=git-${svc}\n`;
