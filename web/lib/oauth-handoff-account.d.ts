@@ -13,6 +13,7 @@ export function resolveHandoffAccount(db: HandoffDatabase, proof: VerifiedIdenti
   legacyRefusal: (userId: string) => unknown;
   createSsoAccount?: (issuer: string, subject: string) => string | null;
   createWalletAccount?: (address: string) => string | null;
+  createGoogleAccount?: (subject: string) => string | null;
 }): string | null;
 
 export function consumeHandoffNonce(db: HandoffDatabase, proof: VerifiedIdentityHandoff, now?: number): boolean;

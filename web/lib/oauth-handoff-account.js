@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto';
 
 /** Resolve a verified provider subject; never use an email, display name or a requested user id. */
-export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, legacyRefusal, createSsoAccount, createWalletAccount }) {
+export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, legacyRefusal, createSsoAccount, createWalletAccount, createGoogleAccount }) {
   if (typeof accountBlocked !== 'function' || typeof legacyRefusal !== 'function') return null;
   let row;
   if (proof.authType === 'google' && proof.principal.startsWith('google:')) {
     row = db.prepare('SELECT account_id AS id FROM account_google WHERE sub = ?').get(proof.principal.slice(7));
+    if (!row && typeof createGoogleAccount === 'function') {
+      const id = createGoogleAccount(proof.principal.slice(7));
+      if (id) row = { id };
+    }
   } else if (proof.authType === 'wallet' && /^0x[0-9a-f]{40}$/.test(proof.principal)) {
     row = db.prepare('SELECT account_id AS id FROM account_wallets WHERE wallet_address = ? AND login_enabled = 1').get(proof.principal);
     // A payment-only link must never be upgraded into login permission by a handoff.

@@ -6,9 +6,11 @@ import { parseTrustedOAuthClients } from '@/lib/oauth-trusted';
 import { baseUrl, getClient, type AccountScope } from '@/lib/oauth';
 import { issueAccountTokens } from '@/lib/account-tokens';
 import { adapterConfig } from '@/lib/sso/config';
-import { isAccountBlocked, resolveOrCreateUserForSubject } from '@/lib/sso/store.js';
+import { isAccountBlocked, resolveOrCreateUserForSubject, SSO_PLACEHOLDER_DOMAIN } from '@/lib/sso/store.js';
 import { legacyLoginRefusal } from '@/lib/sso/policy';
 import { resolveAccountForWallet } from '@/lib/wallet';
+import { resolveAccountForGoogle } from '@/lib/google-auth';
+import { createHash } from 'node:crypto';
 import { tryConsume, clientKey } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -47,6 +49,12 @@ export async function POST(req: Request) {
     const userId = resolveHandoffAccount(db, proof, {
       ssoIssuer: adapterConfig()?.issuer, accountBlocked: isAccountBlocked, legacyRefusal: legacyLoginRefusal,
       createWalletAccount: resolveAccountForWallet,
+      // The proof attests a Google subject, not an email. Use a reserved placeholder,
+      // never a supplied address or a match against an existing person's email.
+      createGoogleAccount: sub => resolveAccountForGoogle({
+        sub, name: 'AIN user',
+        email: `google-${createHash('sha256').update(sub).digest('hex').slice(0, 40)}@${SSO_PLACEHOLDER_DOMAIN}`,
+      }).id,
       createSsoAccount: (issuer, subject) => resolveOrCreateUserForSubject({
         issuer, subject, name: null, email: null, emailVerified: false,
         method: 'jit', actor: 'aincode-identity-handoff',

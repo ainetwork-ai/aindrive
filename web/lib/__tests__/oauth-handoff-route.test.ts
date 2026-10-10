@@ -54,8 +54,8 @@ it('issues a real account grant without cookies, ignores requested authority, an
   expect(db.prepare('SELECT COUNT(*) AS n FROM account_tokens').get()).toEqual({ n: 1 });
 });
 
-it('refuses unknown provider subjects and insufficient registered scope ceilings', async () => {
-  expect((await POST(request(proof('unknown-sub')))).status).toBe(401);
+it('refuses malformed provider subjects and insufficient registered scope ceilings', async () => {
+  expect((await POST(request(proof('invalid subject')))).status).toBe(401);
   process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${client.client_id}=drives:read`;
   expect((await POST(request(proof()))).status).toBe(401);
   expect(db.prepare('SELECT COUNT(*) AS n FROM account_tokens').get()).toEqual({ n: 1 });
@@ -147,4 +147,25 @@ it('rolls back a new wallet identity when grant persistence fails', async () => 
   db.exec('DROP TRIGGER fail_wallet_handoff');
   expect(db.prepare('SELECT account_id FROM account_wallets WHERE wallet_address = ?').get(address)).toBeUndefined();
   expect(db.prepare('SELECT id FROM users WHERE email = ?').get(address + '@wallet.aindrive.local')).toBeUndefined();
+});
+
+it('prepares and reuses a Google subject without trusting a supplied email', async () => {
+  const response = await POST(request(proof('first-time-google')));
+  expect(response.status).toBe(200);
+  const grant = verifyAccountToken((await response.json()).access_token)!;
+  expect(grant.userId).not.toBe('person');
+  const account = db.prepare('SELECT email FROM users WHERE id = ?').get(grant.userId) as { email: string };
+  expect(account.email).toMatch(/^google-[a-f0-9]{40}@sso\.aindrive\.local$/);
+  const again = await POST(request(proof('first-time-google')));
+  expect(verifyAccountToken((await again.json()).access_token)?.userId).toBe(grant.userId);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM account_google WHERE sub = ?').get('first-time-google')).toEqual({ n: 1 });
+});
+
+it('rolls back a first-time Google account if grant persistence fails', async () => {
+  const before = db.prepare('SELECT COUNT(*) AS n FROM users').get();
+  db.exec("CREATE TRIGGER fail_google_handoff BEFORE INSERT ON account_tokens BEGIN SELECT RAISE(ABORT, 'google grant failure'); END");
+  await expect(POST(request(proof('rollback-google')))).rejects.toThrow('google grant failure');
+  db.exec('DROP TRIGGER fail_google_handoff');
+  expect(db.prepare('SELECT account_id FROM account_google WHERE sub = ?').get('rollback-google')).toBeUndefined();
+  expect(db.prepare('SELECT COUNT(*) AS n FROM users').get()).toEqual(before);
 });
