@@ -262,6 +262,13 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
           if (!filename) return;
           const rel = filename.split(sep).join("/");
           if (rel.startsWith(".aindrive/") || rel === ".aindrive") return;
+          // A git push into a bare repo in the drive churns transient quarantine
+          // and lock files (objects/incoming-*/…, *.lock, tmp_*) that appear and
+          // vanish faster than we can act on them. Broadcasting them is pointless
+          // and the vanished paths are exactly what races the recursive watcher
+          // below, so skip them. The durable result (objects/pack/*, refs/*) is
+          // not matched here and still syncs.
+          if (/(^|\/)objects\/(incoming-|tmp_)/.test(rel) || /(^|\/)tmp_/.test(rel) || rel.endsWith(".lock")) return;
           // afan requests (people/*/agent-requests/*.md) go to the bridge too; it ignores everything else.
           if (afanBridge) afanBridge.notify(rel);
           const existing = recentChanges.get(rel);
@@ -279,6 +286,12 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
           }, FS_DEBOUNCE_MS);
           recentChanges.set(rel, t);
         });
+        // A recursive fs.watch on Linux scandirs subtrees as they change; when git
+        // removes a quarantine dir (objects/incoming-*) mid-push the scandir fails
+        // and the FSWatcher emits 'error'. Without this listener that error is
+        // unhandled and takes the whole agent down (the drive goes offline). Log
+        // and keep watching instead.
+        watcher.on("error", (e) => log.warn({ err: e?.message || String(e) }, "fs.watch error (ignored)"));
       } catch (e) { log.warn({ err: e.message }, "fs.watch unavailable"); }
     });
 
