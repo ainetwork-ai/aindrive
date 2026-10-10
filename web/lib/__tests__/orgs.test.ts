@@ -286,7 +286,7 @@ describe("MCP / agent access", () => {
     const other = await runSkill({ userId: OTHER, driveId: DRIVE, scope: "read" }, "read_file", { path: "handbook.md" });
     expect(other).toMatchObject({ kind: "err", code: "forbidden" });
     const listed = await runSkill({ userId: MEMBER }, "list_drives", {});
-    expect(listed.kind === "ok" && (listed.structured as { drives: { id: string; role: string }[] }).drives).toContainEqual({ id: DRIVE, name: "ComCom", role: "viewer" });
+    expect(listed.kind === "ok" && (listed.structured as { drives: { id: string; role: string }[] }).drives).toContainEqual({ id: DRIVE, name: "ComCom", role: "viewer", orgId: COMCOM.id });
   });
 });
 

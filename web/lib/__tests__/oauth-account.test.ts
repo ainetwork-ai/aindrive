@@ -279,7 +279,7 @@ describe("(d) userinfo", () => {
     expect(owner.drives.map((d: { id: string }) => d.id).sort()).toEqual(["d1", "d2"]);
     expect(owner.drives[0]).toMatchObject({ role: "owner", online: false });
     const viewer = await (await bearerGet(drivesRoute, issue("viewer1", "drives:read").access_token)).json();
-    expect(viewer.drives).toEqual([{ id: "d1", name: "D1", online: false, role: "viewer" }]);
+    expect(viewer.drives).toEqual([{ id: "d1", name: "D1", online: false, role: "viewer", orgId: null }]);
   });
 });
 
