@@ -169,6 +169,21 @@ beforeEach(() => {
   signingIn = "acc_alice";
 });
 
+describe("Ainize account identity for automatic Drive connection", () => {
+  it("skips the screen only for the same verified Google subject and a trusted client", async () => {
+    db.prepare("INSERT OR IGNORE INTO account_google (sub, account_id, email) VALUES ('google-alice', 'u_alice', 'alice@example.com')").run();
+    await signInAs("u_alice");
+    const matching = await flow.authorizeStep(params(teamsId, { login_hint: "google:google-alice" }));
+    expect(matching.kind).toBe("redirect");
+    if (matching.kind === "redirect") expect(new URL(matching.location).searchParams.get("code")).toBeTruthy();
+    expect((await flow.authorizeStep(params(teamsId, { login_hint: "google:another-user" }))).kind).toBe("consent");
+    expect((await flow.authorizeStep(params(otherId, { login_hint: "google:google-alice" }))).kind).toBe("consent");
+    expect((await flow.authorizeStep(params(teamsId, { login_hint: "google:google-alice", scope: "profile drives:read drives:write" }))).kind).toBe("consent");
+    await signInAs("u_bob");
+    expect((await flow.authorizeStep(params(teamsId, { login_hint: "google:google-alice" }))).kind).toBe("consent");
+  });
+});
+
 describe("AINDRIVE_TRUSTED_OAUTH_CLIENTS", () => {
   it("parses ids with their scope ceilings; unset = nobody", () => {
     expect(trusted.parseTrustedOAuthClients(undefined)).toEqual({ clients: new Map(), bad: [] });
