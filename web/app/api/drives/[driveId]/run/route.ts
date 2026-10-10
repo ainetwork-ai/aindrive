@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError } from "@/lib/rpc";
 import { zRequiredPath } from "@/lib/zod-helpers";
-import { collectRepoFiles, languageFor, runActorFor, runOnAinize, runProjectOnAinize } from "@/lib/run-ainize";
+import { collectRepoFiles, languageFor, runActorFor, runOnAinize, runProjectOnAinize, projectSourceOnAinize } from "@/lib/run-ainize";
 import { validateRunEnv } from "@/lib/run-inputs";
 import { gateActingCaller, resolveActingCaller } from "@/lib/ainui-actor";
 
@@ -84,7 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
   }
   if (!files.some((f) => f.path === entry)) return NextResponse.json({ error: "entry file not found in repo" }, { status: 404 });
-  const upstream = await runOnAinize({ language, entry, files, env, actor });
+  const upstream = await runOnAinize({ language, entry, files, env, actor, signal: req.signal });
   if (upstream.status === 503) return NextResponse.json({ error: "runner unavailable" }, { status: 503 });
   if (upstream.status === 401 || upstream.status === 403) {
     const body = await upstream.json().catch(() => ({})) as { error?: string; message?: string };
@@ -98,4 +98,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     status: 200,
     headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" },
   });
+}
+
+/** GET retrieves the form from the immutable commit the Run button will execute. */
+export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
+  const { driveId } = await params;
+  const query = new URL(req.url).searchParams;
+  const parsed = z.object({ repo: zRequiredPath, target: z.enum(['head', 'commit', 'deployed']), sha: z.string().regex(/^[a-f0-9]{40,64}$/).optional() }).safeParse({ repo: query.get('repo'), target: query.get('target') ?? 'head', ...(query.has('sha') ? { sha: query.get('sha') } : {}) });
+  if (!parsed.success) return NextResponse.json({ error: 'invalid source target' }, { status: 400 });
+  const { repo, target, sha } = parsed.data;
+  if ((target === 'commit' && !sha) || (target !== 'commit' && sha)) return NextResponse.json({ error: 'sha is required only for a commit target' }, { status: 400 });
+  const acting = await resolveActingCaller(req);
+  if (acting.kind === 'refused') return NextResponse.json(acting.body, { status: acting.status });
+  if (acting.kind === 'app') return NextResponse.json({ error: 'X-AIN-Actor required' }, { status: 403 });
+  let gate;
+  if (acting.kind === 'actor') {
+    const result = await gateActingCaller(driveId, repo, acting, 'viewer');
+    if ('denied' in result) return NextResponse.json(result.body, { status: result.status });
+    gate = result;
+  } else {
+    const result = await requireDriveRole(driveId, repo, { min: 'viewer' });
+    if (result instanceof NextResponse) return result;
+    gate = result;
+  }
+  const hook = projectHookFor(driveId, repo);
+  if (!hook) return NextResponse.json({ error: 'push this repository to bind its project first' }, { status: 409 });
+  const actor = await runActorFor(gate.userId);
+  if (!actor) return NextResponse.json({ error: 'sign in with AIN SSO to read a repository version' }, { status: 401 });
+  try {
+    const upstream = await projectSourceOnAinize({ projectId: hook.projectId, target, sha, actor, signal: req.signal });
+    return new Response(upstream.body, { status: upstream.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'private, no-store' } });
+  } catch {
+    return NextResponse.json({ error: 'repository source unavailable' }, { status: 503 });
+  }
 }

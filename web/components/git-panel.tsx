@@ -18,7 +18,7 @@ import type { GitChange, GitCommit, GitLayout, GitStatus } from "@/lib/protocol"
 import { apiFetch } from "@/lib/api-client";
 import { relativeTime, shortSha, RUN_IDLE } from "@/lib/git-panel";
 import { deploymentLogUrl, deploymentTime, type DeploymentStatus } from "@/lib/ainize-projects";
-import { inputsStorageKey, inputsToEnv, missingRequired, type ManifestInput } from "@/lib/run-inputs";
+import { inputsStorageKey, inputsToEnv, missingRequired, parseManifestInputs, type ManifestInput } from "@/lib/run-inputs";
 import type { AinizeProjectState } from "./use-ainize-project";
 import { Button } from "@/components/ui";
 import { RunActions, RunOutput, useRunner } from "./run-output";
@@ -103,26 +103,42 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
   // The project's Run row shares the per-file runner (entry path = repo-relative → drive path). The row runs
   // the manifest's entry by default; any runnable file at the root can be picked instead.
   const runner = useRunner(driveId, repo);
-  const choices = Array.from(new Set([...(meta.entry ? [meta.entry] : []), ...(meta.runnable ?? [])]));
-  const [picked, setPicked] = useState<string | null>(null);
-  const entry = picked && choices.includes(picked) ? picked : meta.entry ?? choices[0] ?? null;
-  const entryPath = entry === null ? null : repo ? `${repo}/${entry}` : entry;
-  const run = entryPath !== null ? runner.runs[entryPath] ?? RUN_IDLE : RUN_IDLE;
-  // Inputs (ainize.json `inputs`, the workflow_dispatch shape): one field each, prefilled with the default,
-  // the last answers remembered per repo in this browser, sent as INPUT_<NAME> env with the run.
-  const inputs = meta.manifest?.inputs ?? [];
-  const { values, setValue } = useRunInputs(driveId, repo, inputs);
   const [runTarget, setRunTarget] = useState<"working-tree" | "commit" | "deployed">("working-tree");
   const [runSha, setRunSha] = useState("");
   const selectedSha = runSha || meta.head?.sha || "";
+  type Source = { sha: string; manifest: { entry?: string; inputs?: Record<string, unknown> } };
+  const sourceKey = JSON.stringify([driveId, repo, runTarget, runTarget === 'commit' ? selectedSha : ainize.project?.activeCommit]);
+  const [sourceResult, setSourceResult] = useState<{ key: string; data?: Source; error?: string } | null>(null);
+  const source = sourceResult?.key === sourceKey ? sourceResult.data : undefined;
+  const sourceError = sourceResult?.key === sourceKey ? sourceResult.error : undefined;
+  useEffect(() => {
+    if (runTarget === 'working-tree') return;
+    const controller = new AbortController();
+    const query = new URLSearchParams({ repo, target: runTarget, ...(runTarget === 'commit' ? { sha: selectedSha } : {}) });
+    void apiFetch<Source>(`/api/drives/${encodeURIComponent(driveId)}/run?${query}`, { signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted) return;
+      setSourceResult(result.ok ? { key: sourceKey, data: result.data } : { key: sourceKey, error: result.error });
+    });
+    return () => controller.abort();
+  }, [driveId, repo, runTarget, selectedSha, sourceKey]);
+  const choices = runTarget === 'working-tree'
+    ? Array.from(new Set([...(meta.entry ? [meta.entry] : []), ...(meta.runnable ?? [])]))
+    : source?.manifest.entry ? [source.manifest.entry] : [];
+  const [picked, setPicked] = useState<string | null>(null);
+  const entry = picked && choices.includes(picked) ? picked : choices[0] ?? meta.entry ?? null;
+  const entryPath = entry === null ? null : repo ? `${repo}/${entry}` : entry;
+  const run = entryPath !== null ? runner.runs[entryPath] ?? RUN_IDLE : RUN_IDLE;
+  const inputs = runTarget === 'working-tree' ? meta.manifest?.inputs ?? [] : parseManifestInputs(source?.manifest.inputs);
+  const { values, setValue } = useRunInputs(driveId, repo, inputs);
   const startRun = () => {
     if (!entryPath) return;
+    if (runTarget !== "working-tree" && !source) { toast.error(sourceError ?? "Loading repository version"); return; }
     const missing = missingRequired(inputs, values);
     if (missing.length) { toast.error(`Fill in ${missing.join(", ")}`); return; }
     if (runTarget !== "working-tree" && !ainize.project) { toast.error("Push to bind this repository before running a version"); return; }
     if (runTarget === "commit" && !selectedSha) { toast.error("Select a commit"); return; }
     if (runTarget === "deployed" && !ainize.project?.activeCommit) { toast.error("No successful deployment is available"); return; }
-    runner.run(entryPath, inputsToEnv(inputs, values), { target: runTarget, ...(runTarget === "commit" ? { sha: selectedSha } : {}) });
+    runner.run(entryPath, inputsToEnv(inputs, values), runTarget === "working-tree" ? { target: "working-tree" } : { target: "commit", sha: source!.sha });
   };
 
   async function copy() {
@@ -244,6 +260,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
         </div>
       )}
 
+      {runTarget !== 'working-tree' && <p className="text-caption text-drive-muted" role={sourceError ? 'alert' : 'status'}>{sourceError ?? (source ? `Commit ${shortSha(source.sha)}` : 'Loading repository version')}</p>}
       {/* 3. Run the project's entry */}
       <div className={clsx(rowCls, "sm:flex-wrap [&>span:last-of-type]:min-h-11 sm:[&>span:last-of-type]:min-h-0 [&_button]:min-h-11 sm:[&_button]:min-h-0")} data-testid="git-panel-run">
         <span className={labelCls}>Run</span>
