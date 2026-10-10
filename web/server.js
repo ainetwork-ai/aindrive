@@ -70,7 +70,22 @@ server.listen(port, hostname, () => {
   const shown = hostname === "0.0.0.0" ? "localhost" : hostname;
   log.info({ url: `http://${shown}:${port}` }, "▲ aindrive");
   startRotationSweeper();
+  startGitSsh();
 });
+
+// Git over SSH (ssh-server.ts, bundled to .ssh-server/ by scripts/build-ssh-server.mjs
+// at prebuild/predev): same process, so it reaches the same agent sockets.
+// AINDRIVE_SSH_PORT=0 turns it off; a missing bundle or a bind failure only
+// logs — the web server never depends on it.
+let sshServer = null;
+async function startGitSsh() {
+  try {
+    const mod = await import("./.ssh-server/ssh-server.mjs");
+    sshServer = await mod.startGitSshServer();
+  } catch (e) {
+    log.warn({ err: e?.message || String(e) }, "[git-ssh] not started (run `node scripts/build-ssh-server.mjs`)");
+  }
+}
 
 // Graceful shutdown: stop accepting new connections, drain in-flight
 // requests and WebSocket connections up to 30 s, then exit cleanly.
@@ -81,6 +96,9 @@ function shutdown(signal) {
   server.close(() => {
     log.info("http server closed");
   });
+
+  // Stop taking new SSH connections (in-flight git execs finish or hit their cap).
+  try { sshServer?.close(); } catch {}
 
   // Close the WebSocket server (sends close frames to connected clients).
   wss.close(() => {

@@ -76,6 +76,8 @@ const RPC_METHODS = new Set([
   // Git panel in the web UI: what a repo folder shows (branch, HEAD, recent
   // commits, dirty count) and the one write it offers (commit everything).
   "git-meta", "git-commit",
+  // Git over SSH: the same two services as live bidirectional pipes (git-exec.js).
+  "git-ssh-exec",
 ]);
 
 /** The methods handleRpc answers, sorted (a copy: the set itself stays private). */
@@ -291,7 +293,14 @@ function runGitToFile(args, stdinFd, stdoutFd) {
   });
 }
 
-export async function handleRpc(params, root) {
+/**
+ * @param {object} params  the request's params (method + args, web/lib/protocol.ts)
+ * @param {string} root    absolute drive root
+ * @param {{ gitExecs?: import("./git-exec.js").GitExecs }} [ctx]
+ *   connection-scoped state only agent.js has: `gitExecs` is the registry of
+ *   live git-over-SSH pipes on this WebSocket (git-ssh-exec needs it).
+ */
+export async function handleRpc(params, root, ctx = {}) {
   if (!params || !RPC_METHODS.has(params.method)) throw new Error("unknown method");
 
   switch (params.method) {
@@ -535,6 +544,21 @@ export async function handleRpc(params, root) {
       const head = await runGitCapture(["-C", repo, "rev-parse", "HEAD"]);
       if (head.code !== 0) throw new Error("git rev-parse failed: " + head.stderr.slice(0, 300));
       return { method: "git-commit", sha: head.stdout.toString().trim() };
+    }
+    case "git-ssh-exec": {
+      // Git over SSH (git-exec.js): spawn the service as a live pipe; the bytes
+      // then travel as git-stdin / git-stdout frames on this same connection.
+      // Same path guard and repo check as git-service; never creates a repo
+      // (the server git-inits first, write-gated, exactly as for HTTP).
+      if (!ctx.gitExecs) throw new Error("git-ssh-exec needs a streaming connection");
+      const repo = safeResolve(root, params.repo);
+      const service = _gitService(params.service);
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
+      // GIT_PROTOCOL is the only environment the client may set (git's own
+      // `version=N` negotiation); anything else-shaped is dropped, not passed.
+      const protocol = /^version=\d$/.test(String(params.protocol ?? "")) ? params.protocol : undefined;
+      const { pid } = await ctx.gitExecs.start({ execId: params.execId, repoAbs: repo, service, protocol });
+      return { method: "git-ssh-exec", ok: true, pid };
     }
   }
 }

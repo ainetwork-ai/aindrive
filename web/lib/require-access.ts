@@ -1,37 +1,17 @@
 import { NextResponse } from "next/server";
 import { getRequestUser, getUser } from "@/lib/session";
-import { getDrive, type DriveRow } from "@/lib/drives";
-import { resolveAccess, atLeast, type Role, type RoleOrNone } from "@/lib/access";
-import { paidAccessDenial, type PaidDenial } from "./sale-access.js";
+import { getDrive } from "@/lib/drives";
+import { atLeast, type Role } from "@/lib/access";
 import { normalizePath } from "./path";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import { HTTP_STATUS_FOR, makeError } from "./shared-items";
-import { bearerOf, isResourceDelegationToken, resolveDelegatedCaller, type DelegatedCaller, type ResourceAction } from "./resource-delegation";
+import { bearerOf, isResourceDelegationToken, resolveDelegatedCaller, type ResourceAction } from "./resource-delegation";
 
-export type DriveGate = {
-  drive: DriveRow;
-  role: Role;
-  userId: string | null;
-  /** Set when the caller is an agent acting under a resource delegation (lib/resource-delegation.ts). */
-  delegation?: DelegatedCaller;
-};
-
-export type ReadDenial =
-  | { kind: "reserved" }
-  | ({ kind: "payment" } & PaidDenial);
-
-/**
- * Why a user holding `role` at `canonicalPath` still may not READ it: the
- * reserved `.aindrive/` subtree, or a paid subtree they haven't bought. null =
- * readable. The one read decision beyond the role — shared by the fs/* gate
- * below and the drive page's stat, so the page can't reveal by stat (a file's
- * existence, size, mtime) what the API withholds by 402/403.
- */
-export function readDenial(driveId: string, canonicalPath: string, role: RoleOrNone, userId: string | null): ReadDenial | null {
-  if (isSystemPath(canonicalPath)) return { kind: "reserved" };
-  const paid = paidAccessDenial(driveId, canonicalPath, role, userId);
-  return paid ? { kind: "payment", ...paid } : null;
-}
+// The decision core (DriveGate, readDenial, gateDriveRoleForUser) lives in
+// lib/drive-gate.ts — no Next imports, so the git-over-SSH process can bundle
+// it; this module is its HTTP front (cookie / bearer / delegation → user id).
+export { readDenial, type ReadDenial, type DriveGate } from "./drive-gate";
+import { gateDriveRoleForUser as gateForUser, type DriveGate } from "./drive-gate";
 
 /**
  * Shared authorization gate for drive-scoped API routes (fs/*, yjs).
@@ -98,27 +78,17 @@ export async function requireDriveRole(
     const { ok: _ok, ...delegation } = d;
     return { drive, role: d.role, userId: d.userId, delegation };
   }
+  // Reserved subtree is refused before any identity is read (as it always was:
+  // an invalid bearer on `.aindrive/…` is still a 403, not a 401).
   if (isSystemPath(canonical)) return NextResponse.json({ error: "reserved path" }, { status: 403 });
   const user = opts.req ? await getRequestUser(opts.req) : await getUser();
   if (user === "invalid") return NextResponse.json({ error: "invalid bearer token" }, { status: 401 });
-  const drive = getDrive(driveId);
-  if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
-  const role = await resolveAccess(driveId, targetPath, user?.id ?? null);
-  if (!atLeast(role, opts.min)) {
-    return NextResponse.json({ error: "forbidden" }, { status: user ? 403 : 401 });
-  }
-  // Paid carve-out (read gate): a priced subtree is removed from a bare viewer
-  // grant's reach — editor+ (managers) and entitled buyers pass; an unentitled
-  // viewer is sent to the paywall. Only viewers can be denied here ("none" was
-  // already 401/403 above). See docs/PERMISSIONS_MATRIX.md R-ACC-PAID-*.
-  const denial = readDenial(driveId, canonical, role, user?.id ?? null);
-  if (denial?.kind === "payment") {
-    const { kind: _kind, ...gate } = denial;
-    return NextResponse.json(
-      { error: "payment required", reason: "payment_required", ...gate },
-      { status: 402 },
-    );
-  }
-  // role >= opts.min >= "viewer", so it is a concrete Role, never "none".
-  return { drive, role: role as Role, userId: user?.id ?? null };
+  const gate = await gateForUser(driveId, targetPath, { min: opts.min, userId: user?.id ?? null });
+  if ("denied" in gate) return NextResponse.json(gate.body, { status: gate.status });
+  return gate;
 }
+
+// The identity-free gate lives in lib/drive-gate.ts (no Next imports, so the
+// git-over-SSH process can bundle it); re-exported here for route code.
+export { gateDriveRoleForUser, type GateDenial } from "./drive-gate";
+

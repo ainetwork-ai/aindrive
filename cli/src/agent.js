@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { hostname as osHostname } from "node:os";
 import { join, sep } from "node:path";
 import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite, rpcMethodNames } from "./rpc.js";
+import { GitExecs } from "./git-exec.js";
 import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
 import { log } from "./logger.js";
@@ -243,6 +244,18 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
     let watcher = null;
     const recentChanges = new Map(); // path → debounce timer
 
+    // Git over SSH: live `git upload-pack`/`receive-pack` pipes on this socket
+    // (git-exec.js). Every frame the agent sends is signed like a response.
+    const gitExecs = new GitExecs({
+      log,
+      send: (frame) => {
+        try {
+          const { type: _t, ...payloadForSig } = frame;
+          ws.send(JSON.stringify({ ...frame, sig: signPayload(drive.driveSecret, payloadForSig) }));
+        } catch (e) { log.warn({ err: e.message }, "git stream send failed"); }
+      },
+    });
+
     ws.once("open", () => {
       opened = true;
       activeWs = ws;
@@ -312,6 +325,17 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
         commitRotation({ root, drive }).catch((e) => log.warn({ err: e.message }, "commitRotation failed"));
         return;
       }
+      // Git over SSH stdin frames: signed like a request (sig over every field
+      // but `type`), routed to the live exec; an unknown execId is dropped.
+      if (frame?.type === "git-stdin" && typeof frame.execId === "string") {
+        if (frame.v !== PROTOCOL_VERSION) return;
+        const { sig, type: _t, ...rest } = frame;
+        const ok = typeof sig === "string" && (verifyPayload(drive.driveSecret, rest, sig)
+          || (graceSecret !== null && Date.now() < graceUntil && verifyPayload(graceSecret, rest, sig)));
+        if (!ok) { log.warn("dropped forged git-stdin frame"); return; }
+        gitExecs.stdin(frame);
+        return;
+      }
       if (frame?.type !== "request" || !frame.reqId) { log.debug({ type: frame?.type }, "[agent recv] ignored"); return; }
       if (frame.v !== PROTOCOL_VERSION) { log.debug({ v: frame.v }, "[agent] bad version"); return; }
       const { sig, type, ...rest } = frame;
@@ -366,7 +390,7 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
       inFlightCount++;
       let response;
       try {
-        const result = await handleRpc(frame.params, root);
+        const result = await handleRpc(frame.params, root, { gitExecs });
         log.debug({ entries: result?.entries?.length }, "[agent] handleRpc ok");
         response = { type: "response", reqId: frame.reqId, ok: true, result };
       } catch (e) {
@@ -402,6 +426,7 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
       }
       if (!outcome && refusalOf(code)) outcome = { refused: refusalOf(code), code };
       if (activeWs === ws) activeWs = null;
+      gitExecs.closeAll(); // the server end is gone: no git pipe can finish
       if (watcher) { try { watcher.close(); } catch {} }
       for (const t of recentChanges.values()) clearTimeout(t);
       recentChanges.clear();

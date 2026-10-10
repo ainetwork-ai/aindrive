@@ -27,6 +27,10 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 // after a switch (mirrors cli/src/rotation.js GRACE_MS).
 const ROTATION_GRACE_MS = 60_000;
 const ROTATION_SWEEP_MS = 5 * 60_000;
+// Git over SSH stream frames (lib/protocol.ts GitStreamFrame): sender stops at
+// this many unacknowledged bytes per direction; mirrors cli/src/git-exec.js.
+const GIT_SSH_WINDOW_BYTES = 4 * 1024 * 1024;
+const GIT_SSH_CHUNK_BYTES = 256 * 1024;
 
 /**
  * HTTP status for an error the device agent answered with. The agent relays
@@ -198,7 +202,7 @@ export async function onAgentConnect(ws, req, query) {
   // (isAgentConnected) actually flips — a second device joining an online
   // drive, or a re-connect that replaces the primary, records nothing.
   const wasOnline = agents.has(driveId);
-  const entry = { ws, driveSecret: row.drive_secret, pending: new Map() };
+  const entry = { ws, driveSecret: row.drive_secret, pending: new Map(), gitExecs: new Map() };
   agents.set(driveId, entry);
   db.prepare("UPDATE drives SET last_seen_at = datetime('now') WHERE id = ?").run(driveId);
   if (!wasOnline) {
@@ -260,6 +264,17 @@ export async function onAgentConnect(ws, req, query) {
       }
       return;
     }
+    // Git over SSH stream frames (openGitExec): signed like a response, routed
+    // to the live exec by id; unknown ids (a finished exec) are dropped.
+    if (msg?.type === "git-stdout" || msg?.type === "git-stderr" || msg?.type === "git-exit" || msg?.type === "git-stdin-ack") {
+      if (typeof msg.execId !== "string") return;
+      const { sig, type, ...rest } = msg;
+      const ok = typeof sig === "string" && (verifyPayload(entry.driveSecret, rest, sig)
+        || (entry.prevSecret && Date.now() < entry.prevUntil && verifyPayload(entry.prevSecret, rest, sig)));
+      if (!ok) { log.warn({ drive: driveId, execId: msg.execId, type }, "[agents] dropped git stream frame with bad sig"); return; }
+      entry.gitExecs.get(msg.execId)?.onFrame(msg);
+      return;
+    }
     if (!msg || msg.type !== "response" || !msg.reqId) return;
     const { sig, type, ...rest } = msg;
     const sigOk = verifyPayload(entry.driveSecret, rest, sig)
@@ -301,6 +316,8 @@ export async function onAgentConnect(ws, req, query) {
       reject(e);
     }
     entry.pending.clear();
+    for (const ex of [...entry.gitExecs.values()]) ex.onFrame({ type: "git-exit", execId: ex.execId, code: null, signal: null, error: "agent disconnected" });
+    entry.gitExecs.clear();
     log.info({ drive: driveId }, "agent disconnected");
     try { trace("server", "agent-disconnect", { docId: "agent-" + driveId }); } catch {}
   });
@@ -334,6 +351,82 @@ async function recordFsChange(driveId, path) {
     log.debug({ drive: driveId, err: e?.message || String(e) }, "[path-generations] fs-changed not applied");
   }
   return onFsChanged(driveId, path, info);
+}
+
+/**
+ * Git over SSH (lib/git-ssh/relay.ts): run `git <service> <repo>` on the drive's
+ * agent as a live bidirectional pipe. Sends the `git-ssh-exec` RPC (the agent
+ * spawns git and answers once its stdin is open), then relays bytes as signed
+ * stream frames on the same socket (lib/protocol.ts GitStreamFrame):
+ *   handle.write(buf) / handle.end()  → git's stdin      (git-stdin frames)
+ *   onStdout(buf) / onStderr(buf)     ← git's stdout/err (git-stdout / git-stderr)
+ *   onExit({code, signal, error})     ← git finished, or the agent went away
+ * Flow control: the agent stops sending stdout at GIT_SSH_WINDOW_BYTES
+ * unacknowledged; call handle.ack(n) as the SSH channel consumes bytes.
+ * Symmetrically `handle.inFlight()` is how many stdin bytes the agent has not
+ * yet written to git — the caller pauses its source above the window.
+ * The RPC error (not a repo, cap hit, agent offline) rejects the promise and
+ * registers nothing. `kill()` asks the agent to SIGKILL git (timeout, client gone).
+ */
+export async function openGitExec(driveId, { repo, service, protocol }, { onStdout, onStderr, onExit }) {
+  const entry = agents.get(driveId);
+  if (!entry) { const e = new Error("agent offline"); e.status = 504; throw e; }
+  const execId = randomReqId() + randomReqId();
+  let seq = 0;
+  let inFlight = 0;
+  let finished = false;
+  const ex = {
+    execId,
+    onFrame(msg) {
+      if (finished) return;
+      if (msg.type === "git-stdout") {
+        try { onStdout(Buffer.from(String(msg.data || ""), "base64")); } catch (e) { log.warn({ driveId, execId, err: e?.message }, "[git-ssh] onStdout threw"); }
+      } else if (msg.type === "git-stderr") {
+        try { onStderr(Buffer.from(String(msg.data || ""), "base64")); } catch {}
+      } else if (msg.type === "git-stdin-ack") {
+        inFlight = Math.max(0, inFlight - (Number(msg.ack) || 0));
+        handle.onDrain?.();
+      } else if (msg.type === "git-exit") {
+        finished = true;
+        entry.gitExecs.delete(execId);
+        try { onExit({ code: typeof msg.code === "number" ? msg.code : null, signal: msg.signal ?? null, error: msg.error }); } catch {}
+      }
+    },
+  };
+  const sendStdin = (fields) => {
+    if (finished || entry.ws.readyState !== entry.ws.OPEN) return;
+    const base = { v: PROTOCOL_VERSION, driveId, execId, seq: seq++, ...fields };
+    const sig = signPayload(entry.driveSecret, base);
+    try { entry.ws.send(JSON.stringify({ type: "git-stdin", ...base, sig })); } catch (e) { log.warn({ driveId, execId, err: e?.message }, "[git-ssh] stdin send failed"); }
+  };
+  const handle = {
+    execId,
+    onDrain: null,
+    windowBytes: GIT_SSH_WINDOW_BYTES,
+    write(buf) {
+      for (let off = 0; off < buf.length; off += GIT_SSH_CHUNK_BYTES) {
+        const part = buf.subarray(off, Math.min(buf.length, off + GIT_SSH_CHUNK_BYTES));
+        inFlight += part.length;
+        sendStdin({ data: Buffer.from(part).toString("base64") });
+      }
+      return inFlight < GIT_SSH_WINDOW_BYTES;
+    },
+    inFlight: () => inFlight,
+    ack(n) { if (n > 0) sendStdin({ ack: n }); },
+    end() { sendStdin({ eof: true }); },
+    kill() { sendStdin({ kill: true }); },
+    get finished() { return finished; },
+  };
+  // Register BEFORE the RPC answers: git may write (advertise refs) at once.
+  entry.gitExecs.set(execId, ex);
+  try {
+    await sendRpc(driveId, { method: "git-ssh-exec", repo, service, execId, ...(protocol ? { protocol } : {}) }, { timeoutMs: 15_000 });
+  } catch (e) {
+    finished = true;
+    entry.gitExecs.delete(execId);
+    throw e;
+  }
+  return handle;
 }
 
 function randomReqId() {
