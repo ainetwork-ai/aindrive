@@ -7,6 +7,7 @@ import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-s
 import { runAgentAsk } from "./agent-runner.js";
 import { readHandoff } from "./handoffs.js";
 import { describeGitWrite } from "./git-write-guard.js";
+import { zipFolder, pruneStaleZips, ZipLimitError } from "./zip-folder.js";
 
 import { log, trace as pinoTrace } from "./logger.js";
 
@@ -68,6 +69,9 @@ export function isSelfWrite(path) {
 const RPC_METHODS = new Set([
   "list", "stat", "read", "write", "mkdir", "rename", "delete",
   "upload-chunk", "download-chunk", "thumbnail",
+  // Folder download (web fs/download-folder): zip a folder to a temp file the web then
+  // drains with download-chunk and deletes (zip-folder.js).
+  "zip-folder",
   "yjs-write", "yjs-read", "yjs-stats",
   "agent-ask",
   // Mac app only: bytes of a file the owner handed to another agent (handoffs.js).
@@ -105,6 +109,8 @@ const LIMITS = {
 // willow.db, yjs/ — is refused, as defense in depth behind the web's own
 // reserved-path gate. Mirrors web/shared/domain/policy/system-paths.ts.
 const RPC_ALLOWED_SYSTEM_DIRS = [".aindrive/agents", ".aindrive/uploads"];
+/** Where `zip-folder` may write (lower case: compared like isReservedRpcPath). */
+const ZIP_TMP_DIR = ".aindrive/uploads/zip";
 
 // Compared in lower case: on a case-insensitive filesystem (macOS)
 // ".AINDRIVE/config.json" opens the same file.
@@ -553,6 +559,27 @@ export async function handleRpc(params, root, ctx = {}) {
         // whose file was replaced mid-way instead of splicing two versions.
         return { method: "download-chunk", data: buf.subarray(0, bytesRead).toString("base64"), eof, mtimeMs: st.mtimeMs, size: st.size };
       } finally { await fh.close(); }
+    }
+    case "zip-folder": {
+      // The folder is read with the same rules a listing applies (`.aindrive`, `.git`,
+      // bare remotes hidden) plus `node_modules`; `exclude` names children the web
+      // withholds from this caller (paid locks). `out` must be a temp path in the
+      // zip upload dir — the web names it and deletes it after streaming.
+      const abs = safeResolve(root, params.path || "");
+      const st = await fsp.stat(abs);
+      if (!st.isDirectory()) throw new Error("not a directory");
+      const outAbs = safeResolve(root, params.out);
+      const outRel = toRel(root, outAbs).toLowerCase();
+      if (!outRel.startsWith(ZIP_TMP_DIR + "/") || !outRel.endsWith(".zip")) throw new Error("zip output must be under " + ZIP_TMP_DIR);
+      const exclude = Array.isArray(params.exclude) ? params.exclude.filter((p) => typeof p === "string").slice(0, 10_000) : [];
+      pruneStaleZips(path.join(root, ZIP_TMP_DIR)).catch(() => {});
+      try {
+        const r = await zipFolder(abs, outAbs, { exclude });
+        return { method: "zip-folder", ok: true, ...r };
+      } catch (e) {
+        if (e instanceof ZipLimitError) throw e; // "zip limit: …" → the web answers 413
+        throw new Error("zip failed: " + (e?.message || String(e)).slice(0, 200));
+      }
     }
     case "thumbnail": {
       // Generate a small JPEG thumbnail for image files. Desktop doesn't have

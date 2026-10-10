@@ -4,6 +4,7 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { notifyProjectOfPush } from "@/lib/git-project-hooks";
 import { bareOf } from "@/lib/git-paths";
+import { agentTempFileStream } from "@/lib/agent-stream";
 
 /**
  * Git smart-HTTP for a repo stored inside a drive: `git clone` / `git push`.
@@ -50,7 +51,6 @@ import { bareOf } from "@/lib/git-paths";
  * push never waits for or fails on ainize.
  */
 const UPLOAD_CHUNK = 4 * 1024 * 1024; // == agent LIMITS.maxUploadChunkBytes
-const STREAM_CHUNK = 1024 * 1024;
 
 type Service = "upload-pack" | "receive-pack";
 
@@ -170,7 +170,7 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
 
     // Drop the request temp now; stream the result, delete it on completion.
     callAgent(driveId, secret, { method: "delete", path: inPath }).catch(() => {});
-    const stream = resultStream(driveId, secret, outPath, res.size);
+    const stream = agentTempFileStream(driveId, secret, outPath, res.size);
     return new Response(stream, {
       status: 200,
       headers: {
@@ -258,24 +258,4 @@ async function uploadBody(req: Request, driveId: string, secret: string, destPat
   }
   await flush(); // final partial (or the only, possibly-empty, chunk)
   return Buffer.concat(headParts, headLen);
-}
-
-function resultStream(driveId: string, secret: string, srcPath: string, size: number): ReadableStream<Uint8Array> {
-  let offset = 0;
-  const cleanup = () => { callAgent(driveId, secret, { method: "delete", path: srcPath }).catch(() => {}); };
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (offset >= size) { controller.close(); cleanup(); return; }
-      try {
-        const length = Math.min(STREAM_CHUNK, size - offset);
-        const r = await callAgent(driveId, secret, { method: "download-chunk", path: srcPath, offset, length }, { timeoutMs: 120_000 });
-        const buf = Buffer.from(r.data, "base64");
-        if (buf.length === 0) { controller.close(); cleanup(); return; }
-        offset += buf.length;
-        controller.enqueue(new Uint8Array(buf));
-        if (r.eof || offset >= size) { controller.close(); cleanup(); }
-      } catch (e) { cleanup(); controller.error(e); }
-    },
-    cancel() { cleanup(); },
-  });
 }
