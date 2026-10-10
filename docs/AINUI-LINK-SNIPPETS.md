@@ -242,3 +242,9 @@ actor could see the project's snippet (§4), and 404 otherwise. Both fetches are
 new action options) keep the number; a consumer ignores what it does not know. A
 consumer that sees an unknown `kind` still draws `surface` and offers `actions` it
 understands (`navigate` and plain `POST`s always work).
+
+### Version form replacement
+
+A GET action with `navigate: false, replace: true` asks the consumer to fetch a new snippet for the same producer origin using the current viewer identity, then replace this card. It does not open a browser tab or run code. On failure, keep the previous form and its edited answers. A replacement starts with its own input defaults and empty output. Preserve that selection across refreshes of the original link. Future Run actions must be resolved from the replacement's canonical URL, not from the original URL.
+
+Drive uses `runTarget=head|commit|deployed|working-tree` and `runSha=<SHA>` only for `commit`. The Latest commit and Deployed version buttons resolve an immutable commit through ainize; the returned card URL uses `runTarget=commit&runSha=<resolved SHA>` and its Run body names exactly that SHA. Manifest choices and defaults come from that version. File cards read the same Git commit. An explicit Working tree selection reads the mutable manifest and file and labels it accordingly; it carries no SHA. Its file card omits the committed Raw link. A refused version never falls back to the working tree. Bound repository and file cards offer all three replacement buttons; pasted commit/tree URLs retain their selected commit.

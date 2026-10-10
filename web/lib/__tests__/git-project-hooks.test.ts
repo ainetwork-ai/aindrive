@@ -78,7 +78,7 @@ beforeAll(() => {
   db.prepare("INSERT INTO sso_identities (issuer, subject, user_id, link_method, linked_at) VALUES (?,?,?,?,?)")
     .run("https://sso.example.test", "acc_ed", "ed1", "test", Date.now());
 });
-beforeEach(() => { agent.calls.length = 0; agent.files = {}; agent.root = []; db.prepare("DELETE FROM git_project_hooks").run(); });
+beforeEach(() => { agent.calls.length = 0; agent.files = {}; agent.root = []; db.prepare("DELETE FROM git_project_hooks").run(); db.prepare("DELETE FROM git_project_deliveries").run(); });
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("POST git-connect", () => {
@@ -144,7 +144,7 @@ describe("push → project hook", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://ainize.example.test/api/projects/prj_1/hook");
     const body = init.body as string;
-    expect(JSON.parse(body)).toEqual({ ref: "refs/heads/main", before: OLD, after: NEW, pusher: { subject: "acc_ed", email: "editor@example.com" } });
+    expect(JSON.parse(body)).toMatchObject({ ref: "refs/heads/main", before: OLD, after: NEW, pusher: { subject: "acc_ed", email: "editor@example.com" } });
     const sig = (init.headers as Record<string, string>)["X-Ainize-Signature"];
     expect(sig).toBe("sha256=" + createHmac("sha256", "whsec_topsecret").update(body).digest("hex"));
   });
@@ -156,9 +156,9 @@ describe("push → project hook", () => {
     hooks.storeProjectHook("d1", "proj", "prj_1", "whsec_topsecret", "ed1");
     expect(await hooks.notifyProjectOfPush("d1", "proj", pushBody(), "ed1", fetchMock as unknown as typeof fetch)).toEqual([401]);
     const dead = vi.fn(async () => { throw new TypeError("fetch failed"); });
-    expect(await hooks.notifyProjectOfPush("d1", "proj", pushBody(), null, dead as unknown as typeof fetch)).toEqual([0]);
+    expect(await hooks.notifyProjectOfPush("d1", "proj", pushBody(), "ed1", dead as unknown as typeof fetch)).toEqual([0]);
     const [, init] = dead.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(init.body as string).pusher).toEqual({ subject: null, email: null });
+    expect(JSON.parse(init.body as string).pusher).toEqual({ subject: "acc_ed", email: "editor@example.com" });
   });
 });
 
@@ -206,5 +206,49 @@ describe("GET git-meta: manifest, entry, projectId", () => {
     body = await (await metaRoute.GET(new Request("http://x/api?repo=proj"), ctx)).json();
     expect(body.manifest).toBeNull();
     expect(body.entry).toBeNull();
+  });
+});
+
+
+describe("durable project deliveries", () => {
+  it("retries persisted requests with the same delivery id and captured actor after a worker restart", async () => {
+    hooks.storeProjectHook("d1", "proj", "prj_1", "whsec_topsecret", "ed1");
+    const failed = vi.fn(async () => new Response("offline", { status: 503 }));
+    await hooks.notifyProjectOfPush("d1", "proj", pushBody(), "ed1", failed as typeof fetch);
+    const { drainProjectDeliveries } = await import("../git-project-deliveries");
+    const before = db.prepare("SELECT * FROM git_project_deliveries").get() as { id: string; status: string; payload: string };
+    expect(before.status).toBe("pending");
+    db.prepare("UPDATE users SET email = 'changed@example.com' WHERE id = 'ed1'").run();
+    db.prepare("UPDATE git_project_deliveries SET next_attempt_at = 0").run();
+    const sent: string[] = [];
+    const success = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => { sent.push(String(init?.body)); return new Response("ok", { status: 202 }); });
+    await drainProjectDeliveries(success as typeof fetch);
+    expect(JSON.parse(sent[0])).toMatchObject({ deliveryId: before.id, pusher: { subject: "acc_ed", email: "editor@example.com" } });
+    const after = db.prepare("SELECT status, attempts FROM git_project_deliveries").get();
+    expect(after).toEqual({ status: "delivered", attempts: 2 });
+    await drainProjectDeliveries(success as typeof fetch);
+    expect(success).toHaveBeenCalledTimes(1);
+    db.prepare("UPDATE users SET email = 'editor@example.com' WHERE id = 'ed1'").run();
+  });
+
+  it("holds newer events until the older delivery succeeds and deduplicates repeated notifications", async () => {
+    hooks.storeProjectHook("d1", "proj", "prj_1", "whsec_topsecret", "ed1");
+    const { enqueueProjectDelivery, deliverProjectEvent } = await import("../git-project-deliveries");
+    const first = { ref: "refs/heads/main", before: OLD, after: NEW };
+    const second = { ref: "refs/heads/main", before: NEW, after: "b".repeat(40) };
+    const actor = hooks.pusherOf("ed1");
+    const a = enqueueProjectDelivery("d1", "proj", first, actor, "ed1");
+    expect(enqueueProjectDelivery("d1", "proj", first, actor, "ed1")).toBe(a);
+    const b = enqueueProjectDelivery("d1", "proj", second, actor, "ed1");
+    const sent: string[] = [];
+    const success = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => { sent.push(JSON.parse(String(init?.body)).after); return new Response("ok", { status: 202 }); });
+    expect(await deliverProjectEvent(b, success as typeof fetch, undefined, true)).toBeNull();
+    const lease = db.prepare("UPDATE git_project_deliveries SET lease = 'dead-worker', lease_until = ? WHERE id = ?");
+    lease.run(Date.now() + 60_000, a);
+    expect(await deliverProjectEvent(a, success as typeof fetch, undefined, true)).toBeNull();
+    lease.run(Date.now() - 1, a);
+    expect(await deliverProjectEvent(a, success as typeof fetch, undefined, true)).toBe(202);
+    expect(await deliverProjectEvent(b, success as typeof fetch, undefined, true)).toBe(202);
+    expect(sent).toEqual([NEW, "b".repeat(40)]);
   });
 });

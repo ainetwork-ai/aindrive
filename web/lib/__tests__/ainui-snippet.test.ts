@@ -47,7 +47,7 @@ function checkSurface(s: AinuiSnippet) {
     }
   }
   // Only the vocabulary every consumer renderer already draws (doc §2.1).
-  for (const c of comps) expect(["Column", "Row", "Card", "Text", "Divider", "TextField", "Button"]).toContain(c.component);
+  for (const c of comps) expect(["Column", "Row", "Card", "Text", "Divider", "TextField", "ChoicePicker", "Button"]).toContain(c.component);
   return comps;
 }
 
@@ -102,10 +102,10 @@ describe("repo snippet", () => {
     const comps = checkSurface(s);
     const desc = comps.find((c) => c.id === "run.input.DESC")!;
     expect(desc).toMatchObject({ component: "TextField", label: "작품 묘사 *", value: { path: "/inputs/DESC" } });
-    expect(comps.find((c) => c.id === "run.input.MODEL")).toMatchObject({ label: "MODEL (clef-flash | clef)" });
+    expect(comps.find((c) => c.id === "run.input.MODEL")).toMatchObject({ component: "ChoicePicker", label: "MODEL (clef-flash | clef)", variant: "mutuallyExclusive", options: [{ label: "clef-flash", value: "clef-flash" }, { label: "clef", value: "clef" }] });
     expect(comps.find((c) => c.id === "run.input.TOP_K")).toMatchObject({ variant: "number" });
     const data = (s.surface[2] as { updateDataModel: { value: Record<string, unknown> } }).updateDataModel.value;
-    expect(data).toEqual({ inputs: { DESC: "a quiet harbour", MODEL: "clef-flash", TOP_K: "5" }, run: { status: "idle", output: "" } });
+    expect(data).toEqual({ inputs: { DESC: "a quiet harbour", MODEL: ["clef-flash"], TOP_K: "5" }, run: { status: "idle", output: "" } });
     const button = comps.find((c) => c.id === "run.button")!;
     expect(button.action).toEqual({ event: { name: "run", context: { INPUT_DESC: { path: "/inputs/DESC" }, INPUT_MODEL: { path: "/inputs/MODEL" }, INPUT_TOP_K: { path: "/inputs/TOP_K" } } } });
     expect(s.actions.run).toEqual({ method: "POST", url: RUN.endpoint, body: { repo: "repositories/clef", entry: "art_search.py", env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } });
@@ -189,4 +189,12 @@ describe("runBlock", () => {
     expect(r.components.find((c) => c.id === "run.button")!.action).toEqual({ event: { name: "run", context: {} } });
     expect(r.data).toEqual({ inputs: {}, run: { status: "idle", output: "" } });
   });
+});
+
+
+it('version controls stay in the basic catalog and replace the current card', () => {
+  const snippet = repoSnippet({ org: 'comcom', repo: 'clef', branch: 'main', head: null, pageUrl: 'https://drive.test/comcom/git/clef?runTarget=commit&runSha=' + 'a'.repeat(40), ainize: null, run: RUN, versions: { selected: 'Commit aaaaaaaa', baseUrl: 'https://drive.test/comcom/git/clef' } });
+  const components = checkSurface(snippet);
+  expect(components.some((component) => component.id === 'source')).toBe(true);
+  expect(snippet.actions['select:head']).toEqual({ method: 'GET', url: 'https://drive.test/comcom/git/clef?runTarget=head', navigate: false, replace: true });
 });
