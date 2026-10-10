@@ -481,7 +481,7 @@ function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode
 
 export function FileTable({
   loading, err, paywall, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, onMove, isOwner, onUpload, viewMode,
-  onNewFolder, ctxMenu, setCtxMenu, gitRepo = null, ainizeUrl = "https://ainize.ai",
+  onNewFolder, ctxMenu, setCtxMenu, gitRepo = null, ainizeProjectUrl = null,
 }: {
   loading: boolean;
   err: string | null;
@@ -507,8 +507,10 @@ export function FileTable({
   ctxMenu: { entry: DriveEntry | null; x: number; y: number } | null;
   setCtxMenu: (v: { entry: DriveEntry | null; x: number; y: number } | null) => void;
   /** the listed folder when it is a git repo (git panel shown) — enables ▶ Run on its .py/.js/.mjs files */
+  /** The repo folder this listing belongs to (the folder itself or an ancestor); null = not inside a repo. */
   gitRepo?: string | null;
-  ainizeUrl?: string;
+  /** The bound ainize project's page, for the run output's "Open in ainize"; null hides it. */
+  ainizeProjectUrl?: string | null;
 }) {
   // ▶ Run (components/run-output.tsx): only inside a repo folder, list view.
   const runner = useRunner(driveId, gitRepo);
@@ -730,7 +732,7 @@ export function FileTable({
               {showOutput && run && (
                 <tr>
                   <td colSpan={5} className="px-3 pb-2 pt-1">
-                    <RunOutput state={run} entryName={e.name} ainizeUrl={ainizeUrl} />
+                    <RunOutput state={run} entryName={e.name} openUrl={ainizeProjectUrl} />
                   </td>
                 </tr>
               )}

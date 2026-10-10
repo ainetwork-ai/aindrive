@@ -14,7 +14,7 @@ import { runLanguageFor } from "./git-panel";
  * https://ainize.ai; built alongside this feature, so this module codes against
  * the contract and the tests mock it):
  *   request  JSON { language: "python" | "node", entry: "<path in files>",
- *                   files: [{ path, content }], env: { AINIZE_DECIDE_URL }, timeoutMs }
+ *                   files: [{ path, content }], env: { ...inputs, AINIZE_DECIDE_URL }, timeoutMs }
  *   response text/event-stream with events
  *     stdout {text}  stderr {text}  exit {code, durationMs}  error {message}
  *   503 = runner unavailable (not deployed / no capacity): the route relays it
@@ -78,7 +78,7 @@ export async function collectRepoFiles(driveId: string, driveSecret: string, rep
   return files;
 }
 
-export function runOnAinize(opts: { language: RunLanguage; entry: string; files: RunFile[] }): Promise<Response> {
+export function runOnAinize(opts: { language: RunLanguage; entry: string; files: RunFile[]; env?: Record<string, string> }): Promise<Response> {
   const base = ainizeUrl();
   return fetch(`${base}/api/run`, {
     method: "POST",
@@ -87,7 +87,8 @@ export function runOnAinize(opts: { language: RunLanguage; entry: string; files:
       language: opts.language,
       entry: opts.entry,
       files: opts.files,
-      env: { AINIZE_DECIDE_URL: `${base}/api/decide` },
+      // The person's answers to the manifest's inputs (lib/run-inputs.ts) come first; the decide URL is ours to set.
+      env: { ...(opts.env ?? {}), AINIZE_DECIDE_URL: `${base}/api/decide` },
       timeoutMs: RUN_TIMEOUT_MS,
     }),
   });

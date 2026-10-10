@@ -34,7 +34,9 @@ export interface RelayChannel {
   stderr: { write(buf: Buffer | string): unknown };
 }
 
-export type RelayOutcome = { exit: number; bytesIn: number; bytesOut: number; ms: number; error?: string };
+/** `head`: the first bytes the client sent on a receive-pack (its ref updates), for the project hook. */
+export type RelayOutcome = { exit: number; bytesIn: number; bytesOut: number; ms: number; error?: string; head?: Buffer };
+const HEAD_BYTES = 64 * 1024;
 
 const inflight = new Map<string, number>();
 export function activeExecs(driveId: string): number { return inflight.get(driveId) ?? 0; }
@@ -134,7 +136,13 @@ export async function relayGitExec(opts: RelayOpts): Promise<RelayOutcome> {
 
     // Client → git: stop reading the channel while the agent has a window's
     // worth of stdin unwritten; resume when it acks.
-    channel.on("data", (buf) => { bytesIn += buf.length; if (!handle.write(buf)) channel.pause(); });
+    const headParts: Buffer[] = [];
+    let headLen = 0;
+    channel.on("data", (buf) => {
+      bytesIn += buf.length;
+      if (service === "receive-pack" && headLen < HEAD_BYTES) { const take = buf.subarray(0, HEAD_BYTES - headLen); headParts.push(take); headLen += take.length; }
+      if (!handle.write(buf)) channel.pause();
+    });
     handle.onDrain = () => { if (handle.inFlight() < handle.windowBytes / 2) channel.resume(); };
     channel.on("end", () => handle.end());
     const abort = () => { if (!handle.finished) handle.kill(); };
@@ -155,6 +163,6 @@ export async function relayGitExec(opts: RelayOpts): Promise<RelayOutcome> {
     try { channel.exit(code); } catch {}
     try { channel.end(); } catch {}
     try { channel.close(); } catch {}
-    return { exit: code, bytesIn, bytesOut, ms: Date.now() - started, ...(exit.error ? { error: exit.error } : {}) };
+    return { exit: code, bytesIn, bytesOut, ms: Date.now() - started, ...(exit.error ? { error: exit.error } : {}), ...(service === "receive-pack" ? { head: Buffer.concat(headParts, headLen) } : {}) };
   }
 }

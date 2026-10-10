@@ -26,6 +26,7 @@ import { appCredentials } from "./lib/sso/config";
 import { cachedSshKeyDirectory, createSsoSshKeyDirectory, type SshKeyDirectory } from "./lib/sso-ssh-keys";
 import { loadOrCreateHostKey } from "./lib/git-ssh/host-key";
 import { createGitSshServer } from "./lib/git-ssh/server";
+import { notifyProjectOfPush } from "./lib/git-project-hooks";
 import type { Server } from "ssh2";
 
 export type StartOpts = {
@@ -68,7 +69,11 @@ export async function startGitSshServer(opts: StartOpts = {}): Promise<Server | 
   if (!issuer) throw new Error("startGitSshServer: issuer is required with a custom directory");
 
   const hostKey = loadOrCreateHostKey(opts.hostKeyPath ?? defaultHostKeyPath(), log);
-  const server = createGitSshServer({ hostKeys: [hostKey], identity: { directory, issuer }, log });
+  const server = createGitSshServer({
+    hostKeys: [hostKey], identity: { directory, issuer }, log,
+    // A push over SSH deploys like one over HTTP: auto-bind on ainize.json, then the project hook (fire-and-forget).
+    onPushed: (p) => { void notifyProjectOfPush(p.driveId, p.repo, p.head, p.userId, fetch, { driveSecret: p.driveSecret }).catch(() => {}); },
+  });
   const host = opts.host ?? process.env.AINDRIVE_SSH_HOST ?? "0.0.0.0";
   return new Promise((resolve) => {
     server.once("error", (e: Error) => {

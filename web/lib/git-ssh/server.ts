@@ -45,6 +45,12 @@ export type GitSshServerOpts = {
   relay?: (opts: RelayOpts) => Promise<unknown>;
   /** Per-connection idle/handshake limits. */
   authTimeoutMs?: number;
+  /**
+   * A receive-pack that exited 0: the ref updates the client sent (`head`), for
+   * the ainize project hook (lib/git-project-hooks.ts notifyProjectOfPush — wired
+   * by web/ssh-server.ts, so this module stays free of the web's imports).
+   */
+  onPushed?: (push: { driveId: string; driveSecret: string; repo: string; userId: string; head: Buffer }) => void;
 };
 
 export const SSH_USERNAME = "git";
@@ -133,7 +139,10 @@ export function createGitSshServer(opts: GitSshServerOpts): Server {
     const started = Date.now();
     const out = (await relay({
       driveId, driveSecret: g.drive.drive_secret, repo: target.repo, service, protocol: state.protocol, channel,
-    })) as { exit: number; bytesIn: number; bytesOut: number; ms: number; error?: string } | undefined;
+    })) as { exit: number; bytesIn: number; bytesOut: number; ms: number; error?: string; head?: Buffer } | undefined;
+    if (service === "receive-pack" && out?.exit === 0 && out.head?.length && opts.onPushed) {
+      try { opts.onPushed({ driveId, driveSecret: g.drive.drive_secret, repo: target.repo, userId: identity.userId, head: out.head }); } catch {}
+    }
     log.info({
       user: identity.userId, subject: identity.subject, drive: driveId, repo: target.repo, svc: service,
       bytesIn: out?.bytesIn ?? 0, bytesOut: out?.bytesOut ?? 0, ms: out?.ms ?? Date.now() - started, exit: out?.exit ?? -1,

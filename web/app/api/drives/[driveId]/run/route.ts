@@ -4,15 +4,18 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError } from "@/lib/rpc";
 import { zRequiredPath } from "@/lib/zod-helpers";
 import { collectRepoFiles, languageFor, runOnAinize } from "@/lib/run-ainize";
+import { validateRunEnv } from "@/lib/run-inputs";
 
 const Body = z.object({
   repo: zRequiredPath,
   /** Entry file, relative to `repo` (e.g. "main.py"). */
   entry: z.string().min(1).max(1024),
+  /** Answers to the manifest's `inputs`, as env (lib/run-inputs.ts: ≤ 16 upper-case names, ≤ 2 KiB each). */
+  env: z.unknown().optional(),
 });
 
 /**
- * POST /api/drives/:driveId/run  { repo, entry }  →  text/event-stream
+ * POST /api/drives/:driveId/run  { repo, entry, env? }  →  text/event-stream
  *
  * Runs one `.py` / `.js` / `.mjs` file of a repo folder on ainize and streams
  * the result back unchanged (events `stdout`, `stderr`, `exit`, `error`). The
@@ -28,6 +31,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const { repo, entry } = body.data;
+  const env = validateRunEnv(body.data.env);
+  if (env === null) return NextResponse.json({ error: "invalid env: at most 16 env entries named like ^[A-Za-z_][A-Za-z0-9_]*$, values up to 2 KiB" }, { status: 400 });
   if (entry.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
     return NextResponse.json({ error: "invalid entry" }, { status: 400 });
   }
@@ -43,7 +48,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
   }
   if (!files.some((f) => f.path === entry)) return NextResponse.json({ error: "entry file not found in repo" }, { status: 404 });
-  const upstream = await runOnAinize({ language, entry, files });
+  const upstream = await runOnAinize({ language, entry, files, env });
   if (upstream.status === 503) return NextResponse.json({ error: "runner unavailable" }, { status: 503 });
   if (!upstream.ok || !upstream.body) {
     const text = await upstream.text().catch(() => "");

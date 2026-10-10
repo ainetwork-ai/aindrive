@@ -35,9 +35,10 @@ import { notifyProjectOfPush } from "@/lib/git-project-hooks";
  * file via upload-chunk, git runs with that as stdin and a temp file as stdout,
  * and the result is streamed back via download-chunk, then both temps deleted.
  *
- * After a successful receive-pack on a repo bound to an ainize Project
- * (lib/git-project-hooks.ts), the project's hook is called for each updated ref
- * — fire-and-forget, so the push never waits for or fails on ainize.
+ * After a successful receive-pack (lib/git-project-hooks.ts): a repo with
+ * `ainize.json` at its root is bound to an ainize Project if it is not yet, and
+ * the project's hook is called for each updated ref — fire-and-forget, so the
+ * push never waits for or fails on ainize.
  */
 const UPLOAD_CHUNK = 4 * 1024 * 1024; // == agent LIMITS.maxUploadChunkBytes
 const STREAM_CHUNK = 1024 * 1024;
@@ -138,7 +139,7 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
       { timeoutMs: 300_000 });
 
     if (svc === "receive-pack") {
-      void notifyProjectOfPush(driveId, parsed.repo, head, gate.userId).catch(() => {});
+      void notifyProjectOfPush(driveId, parsed.repo, head, gate.userId, fetch, { driveSecret: secret }).catch(() => {});
     }
 
     // Drop the request temp now; stream the result, delete it on completion.

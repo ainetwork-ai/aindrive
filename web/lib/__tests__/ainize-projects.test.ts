@@ -2,7 +2,7 @@
 // Every failure mode (404 no project, CORS/network error, odd shapes) degrades
 // to null / [] so the panel never shows an error.
 import { describe, it, expect, vi } from "vitest";
-import { fetchProjectByRepo, fetchDeployments, connectProjectUrl, deploymentLogUrl, deploymentTime } from "../ainize-projects";
+import { fetchProjectByRepo, fetchDeployments, projectPageUrl, deploymentLogUrl, deploymentTime } from "../ainize-projects";
 
 const A = "https://ainize.example.test";
 const REPO = "https://drive.example.test/comcom/git/clef";
@@ -33,8 +33,10 @@ describe("fetchDeployments", () => {
 });
 
 describe("links", () => {
-  it("connect, inspect and time", () => {
-    expect(connectProjectUrl(A, REPO)).toBe(`${A}/projects/new?repo=${encodeURIComponent(REPO)}`);
+  it("project page (never the landing page), inspect and time", () => {
+    expect(projectPageUrl(A, { id: "prj 1" })).toBe(`${A}/projects/prj%201`);
+    expect(projectPageUrl(A, { id: "prj_1", pageUrl: "https://ainize.example.test/projects/prj_1" })).toBe("https://ainize.example.test/projects/prj_1");
+    expect(projectPageUrl(A, { id: "prj_1", pageUrl: null })).toBe(`${A}/projects/prj_1`);
     expect(deploymentLogUrl(A, { id: "dep 1", sha: "", status: "ready" })).toBe(`${A}/api/deployments/dep%201/log`);
     expect(deploymentLogUrl(A, { id: "x", sha: "", status: "ready", logUrl: "https://l/og" })).toBe("https://l/og");
     expect(deploymentTime({ id: "x", sha: "", status: "ready", startedAt: "2026-10-10T00:00:00Z", finishedAt: "2026-10-10T00:01:00Z" })).toBe("2026-10-10T00:01:00Z");

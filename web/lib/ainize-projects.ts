@@ -1,7 +1,9 @@
 // Client-safe reader for ainize Projects (ainize-node docs/PROJECTS.md), used
 // by the git panel's Deployments block. Everything here degrades silently: a
 // 404 (no project), CORS refusal or network error answers null / [] — the
-// panel then shows "Connect to ainize" or nothing, never an error.
+// panel then says the repo deploys on its next push, or shows nothing — never an
+// error. There is no "connect" step: a push of a repo with `ainize.json` binds it
+// (lib/git-project-hooks.ts autoBindProject).
 
 export type AinizeProject = {
   id: string;
@@ -12,6 +14,8 @@ export type AinizeProject = {
   kind: string;
   status: string;
   url?: string | null;
+  /** The project's page on ainize (`${ainizeUrl}/projects/<id>` when absent). */
+  pageUrl?: string | null;
   lastDeployment?: AinizeDeployment | null;
 };
 
@@ -37,8 +41,9 @@ export const projectDeploymentsUrl = (ainizeUrl: string, projectId: string) =>
   `${ainizeUrl}/api/projects/${encodeURIComponent(projectId)}/deployments`;
 export const deploymentLogUrl = (ainizeUrl: string, d: AinizeDeployment) =>
   d.logUrl || `${ainizeUrl}/api/deployments/${encodeURIComponent(d.id)}/log`;
-export const connectProjectUrl = (ainizeUrl: string, cloneUrl: string) =>
-  `${ainizeUrl}/projects/new?repo=${encodeURIComponent(cloneUrl)}`;
+/** Where "Open in ainize" goes: the bound project's page, never the landing page. */
+export const projectPageUrl = (ainizeUrl: string, p: Pick<AinizeProject, "id" | "pageUrl">) =>
+  p.pageUrl || `${ainizeUrl}/projects/${encodeURIComponent(p.id)}`;
 
 async function getJson<T>(url: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<T | null> {
   try {

@@ -153,6 +153,21 @@ describe("POST run", () => {
     expect(agent.calls.filter((c) => c.method === "list").map((c) => c.path)).toEqual(["proj", "proj/lib"]);
   });
 
+  it("forwards the person's answers to the manifest's inputs as env (INPUT_<NAME> first, the decide URL ours); refuses bad env", async () => {
+    await as("vw1");
+    const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py", env: { INPUT_DESC: "해질녘 바다", INPUT_TOP_K: 5, INPUT_DRY: true, AINIZE_DECIDE_URL: "https://evil" } }), ctx);
+    expect(res.status).toBe(200);
+    const sent = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(sent.env).toEqual({ INPUT_DESC: "해질녘 바다", INPUT_TOP_K: "5", INPUT_DRY: "true", AINIZE_DECIDE_URL: "https://ainize.example.test/api/decide" });
+    for (const env of [{ "bad-name": "x" }, { A: "x".repeat(2049) }, Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`I${i}`, "v"])), [1], "x", { A: { nested: 1 } }]) {
+      const bad = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py", env }), ctx);
+      expect(bad.status, JSON.stringify(env).slice(0, 40)).toBe(400);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("relays ainize 503 as 'runner unavailable', and refuses bad entries / strangers before contacting ainize", async () => {
     const fetchMock = vi.fn(async () => new Response("no runner", { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);

@@ -325,6 +325,29 @@ describe("relayGitExec", () => {
     expect(inits).toBe(0); expect(ch2.err.join("")).toMatch(/repository not found/);
   });
 
+  it("a receive-pack keeps the client's first bytes (the ref updates) as `head` for the project hook; upload-pack does not", async () => {
+    const open = async (_d: string, _t: unknown, h: Handlers) => ({
+      execId: "e", onDrain: null, windowBytes: 1024, write: () => true, inFlight: () => 0, ack() {},
+      end() { setTimeout(() => h.onExit({ code: 0, signal: null }), 5); }, kill() {}, finished: false,
+    });
+    const ch = fakeChannel();
+    const p = relayGitExec({ driveId: "d1", driveSecret: "s", repo: "r", service: "receive-pack", channel: ch, open: open as never });
+    await new Promise((r) => setTimeout(r, 10));
+    const cmd = `${"0".repeat(40)} ${"a".repeat(40)} refs/heads/main\0report-status\n`;
+    ch.emit("data", Buffer.from((Buffer.byteLength(cmd) + 4).toString(16).padStart(4, "0") + cmd + "0000"));
+    ch.emit("data", Buffer.from("PACKfake"));
+    ch.emit("end");
+    const out = await p;
+    expect(out.exit).toBe(0);
+    expect(out.head?.toString()).toContain("refs/heads/main");
+    expect(out.head?.toString()).toContain("PACKfake");
+    const ch2 = fakeChannel();
+    const p2 = relayGitExec({ driveId: "d1", driveSecret: "s", repo: "r", service: "upload-pack", channel: ch2, open: open as never });
+    await new Promise((r) => setTimeout(r, 10));
+    ch2.emit("data", Buffer.from("want x")); ch2.emit("end");
+    expect((await p2).head).toBeUndefined();
+  });
+
   it("kills git when the channel closes early or the time cap is hit", async () => {
     let killed = 0;
     const open = async (_d: string, _t: unknown, h: Handlers) => ({

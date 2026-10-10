@@ -163,15 +163,34 @@ describe("push → project hook", () => {
 });
 
 describe("GET git-meta: manifest, entry, projectId", () => {
+  it("exposes the manifest's inputs (workflow_dispatch shape) for the Run panel", async () => {
+    await as("vw1");
+    agent.files["proj/ainize.json"] = JSON.stringify({ kind: "script", entry: "a.py", inputs: {
+      DESC: { description: "작품 묘사 (description)", type: "string", required: true, default: "해질녘 바다" },
+      MODEL: { description: "모델", type: "choice", options: ["clef-flash", "clef"], default: "clef-flash" },
+      top_k: { type: "number", default: 5 },
+      dry: { type: "boolean" },
+      "bad-name": {},
+      NOOPTS: { type: "choice" },
+    } });
+    const body = await (await metaRoute.GET(new Request("http://x/api?repo=proj"), ctx)).json();
+    expect(body.manifest.inputs).toEqual([
+      { name: "DESC", description: "작품 묘사 (description)", type: "string", required: true, options: null, default: "해질녘 바다" },
+      { name: "MODEL", description: "모델", type: "choice", required: false, options: ["clef-flash", "clef"], default: "clef-flash" },
+      { name: "top_k", description: null, type: "number", required: false, options: null, default: "5" },
+      { name: "dry", description: null, type: "boolean", required: false, options: null, default: null },
+    ]);
+  });
+
   it("reads ainize.json for entry/kind/name and the bound project id", async () => {
     await as("vw1");
     agent.files["proj/ainize.json"] = JSON.stringify({ name: "Clef search", kind: "script", entry: "src/app.py" });
     hooks.storeProjectHook("d1", "proj", "prj_9", "whsec_topsecret", "ed1");
     const body = await (await metaRoute.GET(new Request("http://x/api?repo=proj"), ctx)).json();
-    expect(body.manifest).toEqual({ entry: "src/app.py", kind: "script", name: "Clef search" });
+    expect(body.manifest).toEqual({ entry: "src/app.py", kind: "script", name: "Clef search", inputs: [] });
     expect(body.entry).toBe("src/app.py");
     expect(body.projectId).toBe("prj_9");
-    expect(agent.calls.some((c) => c.method === "list")).toBe(false); // the manifest named the entry
+    expect(body.runnable).toEqual([]); // the root's runnable files are listed for the Run row's selector
   });
 
   it("falls back to the root's first runnable file (main.* first), null when none", async () => {
@@ -180,6 +199,7 @@ describe("GET git-meta: manifest, entry, projectId", () => {
     let body = await (await metaRoute.GET(new Request("http://x/api?repo=proj"), ctx)).json();
     expect(body.manifest).toBeNull();
     expect(body.entry).toBe("main.py");
+    expect(body.runnable).toEqual(["main.py", "util.py"]);
     expect(body.projectId).toBeNull();
     agent.root = ["README.md"];
     agent.files["proj/ainize.json"] = "{ not json";
