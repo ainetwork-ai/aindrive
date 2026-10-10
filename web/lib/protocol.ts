@@ -7,7 +7,9 @@ export type RpcMethod =
   | "agent-ask"
   // Device-only (mobile/): bytes of one file the owner registered for a handoff link (lib/handoff.ts).
   | "handoff-read"
-  | "thumbnail";
+  | "thumbnail"
+  // Git smart-HTTP (clone/push): the agent runs real git on a bare repo in the drive FS.
+  | "git-advertise" | "git-init" | "git-service";
 
 export type RpcParams =
   | { method: "list"; path: string }
@@ -23,7 +25,14 @@ export type RpcParams =
   | { method: "yjs-read"; docId: string }
   | { method: "agent-ask"; agentId: string; query: string }
   | { method: "handoff-read"; key: string; offset: number; length: number }
-  | { method: "thumbnail"; path: string; px?: number };
+  | { method: "thumbnail"; path: string; px?: number }
+  // Git smart-HTTP. `service` is "upload-pack" (clone/fetch) or "receive-pack" (push).
+  // `repo` is a drive-relative path to a bare repo; in/out are drive-relative temp
+  // files under .aindrive/uploads/git/ (an allowed system dir) that web fills via
+  // upload-chunk and drains via download-chunk, so large packs never cross as one JSON.
+  | { method: "git-advertise"; repo: string; service: "upload-pack" | "receive-pack" }
+  | { method: "git-init"; repo: string }
+  | { method: "git-service"; repo: string; service: "upload-pack" | "receive-pack"; in: string; out: string };
 
 export type AskSource = {
   path: string;
@@ -70,7 +79,10 @@ export type RpcResult =
   | { method: "yjs-read"; data: string; bytes: number }
   | { method: "agent-ask"; answer: string; sources: AskSource[]; action?: Record<string, unknown> }
   | { method: "handoff-read"; data: string; eof: boolean; size: number }
-  | { method: "thumbnail"; data: string; mime: string };
+  | { method: "thumbnail"; data: string; mime: string }
+  | { method: "git-advertise"; exists: boolean; data: string }
+  | { method: "git-init"; ok: true }
+  | { method: "git-service"; ok: true; size: number };
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;
