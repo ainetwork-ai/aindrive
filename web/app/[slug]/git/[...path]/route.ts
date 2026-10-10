@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { gitHttpGET, gitHttpPOST } from "@/lib/git-http";
 import { resolveGitSlug } from "@/lib/git-slug";
 
+/** Repos live under this drive folder; the pretty URL names only the repo. */
+export const GIT_REPOS_DIR = "repositories";
+const inReposDir = (path: string[]) => (path[0] === GIT_REPOS_DIR ? path : [GIT_REPOS_DIR, ...path]);
+
 /**
  * Friendly git smart-HTTP URL for a repo stored inside a drive:
  *   https://<host>/<org-slug>/git/<repo-path>[.git]
@@ -36,12 +40,12 @@ export async function GET(req: Request, { params }: Params) {
   const { slug, path } = await params;
   const driveId = resolveGitSlug(slug);
   if (!driveId) return notFound();
-  return gitHttpGET(driveId, path, req);
+  return gitHttpGET(driveId, inReposDir(path), req);
 }
 
 export async function POST(req: Request, { params }: Params) {
   const { slug, path } = await params;
   const driveId = resolveGitSlug(slug);
   if (!driveId) return notFound();
-  return gitHttpPOST(driveId, path, req);
+  return gitHttpPOST(driveId, inReposDir(path), req);
 }
