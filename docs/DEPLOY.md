@@ -166,6 +166,88 @@ members (their rows are in `sso_memberships`).
    sign-in lands on its drive on a person's first sign-in or while they have no
    personal drive of their own.
 
+## Git over SSH
+
+`git clone git@aindrive.ainetwork.ai:<org-slug>/<repo>` / `git push …` reach an
+SSH server that runs **inside the web container** (`web/ssh-server.ts`,
+started by `server.js`; docs in `web/lib/git-ssh/server.ts`). It listens on
+`AINDRIVE_SSH_PORT` (2222) and Compose publishes it on **loopback only**
+(`127.0.0.1:2222`), the same way the HTTP port is published on `3738`. Nothing
+in the repo binds port 22: the host's front door does, and that is operator
+work outside this repo.
+
+What it needs in `web/.env.production`:
+
+- `AINDRIVE_SSO_ISSUER`, `AINDRIVE_SSO_CLIENT_ID`, `AINDRIVE_SSO_CLIENT_SECRET`
+  — the SSH server asks AIN SSO which account owns an offered key
+  (`GET {ISSUER}/api/apps/ssh-keys/lookup?fingerprint=SHA256:…`, app-authenticated
+  with these credentials; `web/lib/sso-ssh-keys.ts`). **Without all three the
+  SSH server logs a warning and does not start**; HTTP git keeps working.
+- `AINDRIVE_SSH_PORT` (default 2222; `0` turns it off), optional
+  `AINDRIVE_SSH_HOST_KEY_PATH` (default `/data/ssh_host_ed25519_key`).
+
+The Ed25519 host key is generated on first start into `/data` (the volume), so
+it survives redeploys. Back it up with the DB ("Backup and restore"): a new host
+key makes every user's `known_hosts` entry fail. Publish its fingerprint
+(`docker compose exec web cat /data/ssh_host_ed25519_key.pub`) where users can
+check it.
+
+### Exposing port 22 → container 2222
+
+Pick ONE; both keep sshd (the host's own SSH) untouched.
+
+**A. nginx `stream` block** (the host already runs nginx for TLS). sshd must
+not be listening on the public IP's port 22 — move the host's sshd to another
+port or bind it to a management address first, or git over SSH and host
+administration fight for the same socket.
+
+```nginx
+# /etc/nginx/nginx.conf — top level, next to the `http {}` block (NOT inside it)
+stream {
+    upstream aindrive_git_ssh { server 127.0.0.1:2222; }
+    server {
+        listen 22;                 # add `listen [::]:22;` for IPv6
+        proxy_pass aindrive_git_ssh;
+        proxy_connect_timeout 10s;
+        proxy_timeout 10m;         # ≥ the 300 s per-exec cap, plus slow clients
+    }
+}
+```
+
+`nginx -t && systemctl reload nginx`. The server sees connections from
+127.0.0.1 (nginx); per-IP rate limiting, if wanted, belongs in this block
+(`limit_conn`), not in the app.
+
+**B. Port forward** when nginx should stay HTTP-only:
+
+```sh
+# IPv4 DNAT, persistent via your firewall tooling (ufw before.rules / nftables)
+iptables -t nat -A PREROUTING  -p tcp --dport 22 -j REDIRECT --to-port 2222
+# traffic from the host itself to its own :22 (optional)
+iptables -t nat -A OUTPUT -o lo -p tcp --dport 22 -j REDIRECT --to-port 2222
+```
+
+and change the Compose publish from `127.0.0.1:2222:2222` to `2222:2222` in a
+`docker-compose.override.yml` (REDIRECT delivers to the host's interface, not
+loopback). With B, the host's sshd must likewise move off port 22.
+
+**Keep port 22 for sshd instead?** Then publish git on another port and tell
+users `ssh://git@aindrive.ainetwork.ai:2222/comcom/repo` — clone URLs lose the
+short scp-like form, nothing else changes.
+
+### Checks
+
+```sh
+ssh -T git@aindrive.ainetwork.ai                 # "aindrive: only git-upload-pack … available" → wired up
+git ls-remote git@aindrive.ainetwork.ai:comcom/some-repo
+docker compose logs web | grep '"\[git-ssh\]'  # one line per exec: user, drive, repo, svc, bytes, ms, exit
+```
+
+Authentication is **public key only**, user `git`, keys registered at AIN SSO;
+the drive gate is the same one HTTP uses (clone needs viewer, push needs editor
+on the repo path; `.aindrive/` is refused). A push to a path with no repo
+creates one (non-bare, `updateInstead`), as over HTTP.
+
 ## CDP facilitator — verified facts (2026-06)
 
 Checked against a live `getSupported()` call with the prod CDP key:

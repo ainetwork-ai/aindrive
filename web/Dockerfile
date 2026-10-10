@@ -40,6 +40,7 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=3737 \
+    AINDRIVE_SSH_PORT=2222 \
     AINDRIVE_DATA_DIR=/data \
     NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK=$NEXT_PUBLIC_AINDRIVE_PAYMENT_NETWORK
 
@@ -55,6 +56,8 @@ COPY --from=builder --chown=app:app /app/.next ./.next
 # The custom server.js serves it same-origin so the CSP (script-src 'self') allows it.
 COPY --from=builder --chown=app:app /app/public ./public
 COPY --from=builder --chown=app:app /app/server.js ./server.js
+# Git over SSH (ssh-server.ts → bundled by prebuild; docs/DEPLOY.md "Git over SSH").
+COPY --from=builder --chown=app:app /app/.ssh-server ./.ssh-server
 COPY --from=builder --chown=app:app /app/lib ./lib
 COPY --from=builder --chown=app:app /app/drizzle ./drizzle
 COPY --from=builder --chown=app:app /app/src ./src
@@ -69,7 +72,7 @@ COPY --from=builder --chown=app:app /app/package.json ./package.json
 COPY --from=builder --chown=app:app /app/next.config.ts ./next.config.ts
 
 USER app
-EXPOSE 3737
+EXPOSE 3737 2222
 VOLUME ["/data"]
 
 CMD ["node", "server.js"]
