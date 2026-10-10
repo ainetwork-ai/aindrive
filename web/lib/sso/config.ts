@@ -75,6 +75,18 @@ export function attestConfig(): SsoLoginConfig | null {
   return base && clientSecret ? { ...base, clientSecret } : null;
 }
 
+/**
+ * aindrive's app credentials for AIN SSO's app-authenticated APIs that are not
+ * a sign-in and not an attestation (client_secret_basic): the SSH key lookup
+ * (lib/sso-ssh-keys.ts). Issuer + client id + secret, or null when any is
+ * missing — independent of AINDRIVE_SSO_ENABLED and AINDRIVE_SSO_ATTEST.
+ */
+export function appCredentials(): SsoLoginConfig | null {
+  const base = adapterConfig();
+  const clientSecret = val("AINDRIVE_SSO_CLIENT_SECRET");
+  return base && clientSecret ? { ...base, clientSecret } : null;
+}
+
 export const DEFAULT_ATTEST_EMAIL_DOMAINS = ["comcom.ai"];
 
 /** Company domains whose verified addresses aindrive attests (lower-case, exact match). */

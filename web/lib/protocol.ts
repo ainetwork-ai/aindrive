@@ -13,7 +13,11 @@ export type RpcMethod =
   // non-bare, so pushed files show up in the drive; legacy bare repos still serve).
   | "git-advertise" | "git-init" | "git-service"
   // Git panel (components/git-panel.tsx): repo summary, and commit-all as the signed-in user.
-  | "git-meta" | "git-commit";
+  | "git-meta" | "git-commit"
+  // Git over SSH (lib/git-ssh/*): the same two services as a live bidirectional
+  // pipe on the agent WebSocket — git speaks its stateful protocol over SSH, so
+  // the stateless one-request/one-result shape above cannot serve it.
+  | "git-ssh-exec";
 
 export type RpcParams =
   | { method: "list"; path: string }
@@ -38,7 +42,12 @@ export type RpcParams =
   | { method: "git-init"; repo: string }
   | { method: "git-service"; repo: string; service: "upload-pack" | "receive-pack"; in: string; out: string }
   | { method: "git-meta"; repo: string }
-  | { method: "git-commit"; repo: string; message: string; authorName: string; authorEmail: string };
+  | { method: "git-commit"; repo: string; message: string; authorName: string; authorEmail: string }
+  // Git over SSH: spawn `git <service> <repo>` as a live pipe identified by `execId`
+  // (cli/src/git-exec.js). The answer means "running, stdin open"; the bytes then
+  // travel as GitStreamFrame frames on the same socket, never as RPC payloads.
+  // `protocol` is the client's GIT_PROTOCOL (e.g. "version=2"), passed to git's environment.
+  | { method: "git-ssh-exec"; repo: string; service: "upload-pack" | "receive-pack"; execId: string; protocol?: string };
 
 /** One commit as the agent's `git log` reports it (`date` is ISO 8601, author date). */
 export type GitCommit = { sha: string; subject: string; author: string; date: string };
@@ -98,7 +107,28 @@ export type RpcResult =
   | { method: "git-init"; ok: true }
   | { method: "git-service"; ok: true; size: number }
   | GitMeta
-  | { method: "git-commit"; sha: string };
+  | { method: "git-commit"; sha: string }
+  | { method: "git-ssh-exec"; ok: true; pid?: number };
+
+/**
+ * Git over SSH stream frames, sharing the agent WebSocket with request/response
+ * (lib/agents.js openGitExec ↔ cli/src/git-exec.js). Every frame is HMAC-signed
+ * with the drive secret over all fields but `type` (lib/sig.js), like a request
+ * or response. `data` is base64. Flow control is a byte window per direction:
+ * the receiver acks consumed bytes (`ack`) and the sender stops at
+ * GIT_SSH_WINDOW_BYTES unacknowledged.
+ */
+export type GitStdinFrame = {
+  type: "git-stdin"; v: typeof PROTOCOL_VERSION; driveId: string; execId: string; seq: number;
+  data?: string; eof?: true; kill?: true; ack?: number; sig: string;
+};
+export type GitStreamFrame =
+  | { type: "git-stdout"; execId: string; seq: number; data: string; sig: string }
+  | { type: "git-stderr"; execId: string; data: string; sig: string }
+  | { type: "git-stdin-ack"; execId: string; ack: number; sig: string }
+  | { type: "git-exit"; execId: string; code: number | null; signal: string | null; error?: string; sig: string };
+export const GIT_SSH_WINDOW_BYTES = 4 * 1024 * 1024;
+export const GIT_SSH_CHUNK_BYTES = 256 * 1024;
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;

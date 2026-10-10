@@ -37,3 +37,25 @@ export function onAgentConnect(
   req: { headers: Record<string, string | string[] | undefined> },
   query: { driveId?: string } | undefined,
 ): Promise<void>;
+
+/** Git over SSH: a live `git <service> <repo>` pipe on the drive's agent (see agents.js openGitExec). */
+export type GitExecHandle = {
+  execId: string;
+  /** Set by the caller: fired when the agent acknowledged stdin bytes (inFlight() dropped). */
+  onDrain: (() => void) | null;
+  windowBytes: number;
+  /** Queue bytes for git's stdin; false when the window is full (pause the source until onDrain). */
+  write(buf: Uint8Array): boolean;
+  inFlight(): number;
+  /** Tell the agent `n` stdout bytes were consumed (it stops at windowBytes unacknowledged). */
+  ack(n: number): void;
+  end(): void;
+  kill(): void;
+  readonly finished: boolean;
+};
+export type GitExecExit = { code: number | null; signal: string | null; error?: string };
+export function openGitExec(
+  driveId: string,
+  target: { repo: string; service: "upload-pack" | "receive-pack"; protocol?: string },
+  handlers: { onStdout: (buf: Buffer) => void; onStderr: (buf: Buffer) => void; onExit: (exit: GitExecExit) => void },
+): Promise<GitExecHandle>;
