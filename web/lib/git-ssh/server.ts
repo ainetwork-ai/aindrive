@@ -28,6 +28,7 @@ import ssh2, { type Server, type Connection, type AuthContext, type Session, typ
 const { Server: SshServer, utils } = ssh2;
 import { log as defaultLog } from "../logger.js";
 import { resolveGitSlug } from "../git-slug";
+import { bareOf, workingCopyPath } from "../git-paths";
 import { gateDriveRoleForUser } from "../drive-gate";
 import { minRoleFor, parseGitCommand, parseRepoTarget } from "./command";
 import { resolveSshIdentity, type IdentityDeps, type SshIdentity } from "./identity";
@@ -131,20 +132,23 @@ export function createGitSshServer(opts: GitSshServerOpts): Server {
       log.info({ user: identity.userId, path: rawPath, service }, "[git-ssh] no drive for path");
       return refuse(channel, "repository not found");
     }
-    const g = await gate(driveId, target.repo, { min: minRoleFor(service), userId: identity.userId });
+    // `<org>/<repo>` is the working copy `repositories/<repo>` (lib/git-paths.ts): the gate
+    // runs there; git's pipe runs on the bare sibling `<wc>.git`, as over HTTP.
+    const repo = target.kind === "slug" ? workingCopyPath(target.repo) : target.repo;
+    const g = await gate(driveId, repo, { min: minRoleFor(service), userId: identity.userId });
     if ("denied" in g) {
-      log.info({ user: identity.userId, drive: driveId, repo: target.repo, service, status: g.status }, "[git-ssh] gate refused");
+      log.info({ user: identity.userId, drive: driveId, repo, service, status: g.status }, "[git-ssh] gate refused");
       return refuse(channel, denialMessage(g.status, service));
     }
     const started = Date.now();
     const out = (await relay({
-      driveId, driveSecret: g.drive.drive_secret, repo: target.repo, service, protocol: state.protocol, channel,
+      driveId, driveSecret: g.drive.drive_secret, repo: bareOf(repo), service, protocol: state.protocol, channel,
     })) as { exit: number; bytesIn: number; bytesOut: number; ms: number; error?: string; head?: Buffer } | undefined;
     if (service === "receive-pack" && out?.exit === 0 && out.head?.length && opts.onPushed) {
-      try { opts.onPushed({ driveId, driveSecret: g.drive.drive_secret, repo: target.repo, userId: identity.userId, head: out.head }); } catch {}
+      try { opts.onPushed({ driveId, driveSecret: g.drive.drive_secret, repo, userId: identity.userId, head: out.head }); } catch {}
     }
     log.info({
-      user: identity.userId, subject: identity.subject, drive: driveId, repo: target.repo, svc: service,
+      user: identity.userId, subject: identity.subject, drive: driveId, repo, svc: service,
       bytesIn: out?.bytesIn ?? 0, bytesOut: out?.bytesOut ?? 0, ms: out?.ms ?? Date.now() - started, exit: out?.exit ?? -1,
       ...(out?.error ? { error: out.error } : {}),
     }, "[git-ssh] exec");

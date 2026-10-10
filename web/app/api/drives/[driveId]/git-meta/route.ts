@@ -6,7 +6,7 @@ import { requestOrigin } from "@/lib/shared-items";
 import { gitCloneUrl } from "@/lib/git-clone-url";
 import { ainizeUrl, languageFor } from "@/lib/run-ainize";
 import { projectIdFor } from "@/lib/git-project-hooks";
-import type { DriveEntry } from "@/lib/protocol";
+import type { DriveEntry, GitStatus } from "@/lib/protocol";
 import { parseManifestInputs, type ManifestInput } from "@/lib/run-inputs";
 
 /** `ainize.json` at the repo root: what the project is and what to run. Absent / malformed → null. */
@@ -44,7 +44,11 @@ async function runnableFiles(driveId: string, secret: string, repo: string): Pro
  * root's first runnable file as `entry` for the panel's Run row (`runnable` lists
  * every root `.py`/`.js`/`.mjs`, the row's file selector),
  * and the ainize project bound to the repo (`projectId`, lib/git-project-hooks.ts)
- * when one was connected here. Viewer-gated at the folder, like fs/list — also
+ * when one was connected here, and `status` (agent `git-status`: staged / unstaged /
+ * untracked, ahead/behind the bare remote — the panel's Source Control; absent
+ * for a bare or unreadable repo). `layout` says whether the folder is a working
+ * copy with its bare sibling, a legacy non-bare repo, or bare (lib/git-paths.ts).
+ * Viewer-gated at the folder, like fs/list — also
  * for a trusted first-party application's machine token (lib/sso/service-principal.ts).
  * A plain folder answers `{ exists: false }` so the panel simply stays hidden.
  */
@@ -65,8 +69,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
     const manifest = await readManifest(driveId, secret, repo);
     const runnable = await runnableFiles(driveId, secret, repo);
     const entry = manifest?.entry ?? runnable[0] ?? null;
+    let status: Omit<GitStatus, "method"> | null = null;
+    if (meta.layout !== "bare") {
+      try { const { method: _s, ...st } = await callAgent(driveId, secret, { method: "git-status", repo }, { timeoutMs: 15_000 }); status = st; } catch { status = null; }
+    }
     return NextResponse.json({
       ...rest,
+      status,
       cloneUrl: gitCloneUrl(requestOrigin(req), driveId, repo),
       ainizeUrl: ainizeUrl(),
       manifest,

@@ -28,15 +28,36 @@ Browser shell:
   grid+list, selection, sort/search, showcase section. Its location (listed
   folder + open file) is mirrored in `?path` and history state.
 - `git-panel` — shown above the listing when the folder is a git repo
-  (`GET git-meta` answers `exists:true`). Top to bottom: branch + HEAD (+
-  `ainize.json` name/kind) · clone URL + copy · **Run** (the project's entry:
-  manifest `entry`, else the root's first runnable file; shares `useRunner`, output
-  right under the panel) · **Deployments** (ainize Projects read from the browser,
+  (`GET git-meta` answers `exists:true`); the folder is the repo's **working
+  copy** (`lib/git-paths.ts`). Top to bottom: branch + HEAD (+ `ainize.json`
+  name/kind) + **Push N / Pull N** (vs the bare remote; Pull only when clean) ·
+  clone URL + copy · legacy-layout hint · **Run** (the project's entry: manifest
+  `entry`, else the root's first runnable file; shares `useRunner`, output right
+  under the panel) · **Deployments** (ainize Projects read from the browser,
   `lib/ainize-projects.ts`: Vercel-style rows with status dot / sha / time /
-  Inspect / Visit, or "ainize에 연결 (Connect to ainize)" when no project; silent
-  on any failure; re-read when HEAD moves, polled while building) · recent commits
-  (toggle) · commit box (editors, dirty tree). git-meta lives in the shell (one
-  fetch per folder, refetched after a commit / a save).
+  Inspect / Visit; silent on any failure; re-read when HEAD moves, polled while
+  building) · recent commits (toggle; links to `/commit/<sha>` on repo pages) ·
+  **Source Control** (editors; VS Code-like: Staged Changes / Changes rows with
+  M A D U badges, click opens the file, +/− per row, Stage all, Discard with
+  confirm) · commit box ("stage all & commit" checkbox when something is staged;
+  a commit deploys nothing — Push does, via `POST git-sc`). git-meta lives in the
+  shell (one fetch per folder, refetched after every action / a save). `urls`
+  switches its links to the pretty form on repo pages.
+- `git-site-parts` (server-renderable) + `git-site` (client) — the GitHub-like
+  repo pages (`app/d/by-slug`, `lib/git-urls.ts`): `GitPageFrame` (`org / repo /
+  path` breadcrumb, `RefSwitcher`, Code · Commits · Deployments tabs, read-only
+  banner for a ref that is not the checked-out branch), `GitTreeTable`,
+  `GitBlobView` (lines, Raw · History), `GitCommitList`, `GitCommitDetailView` +
+  `GitPatch`, `GitDeploymentsPage`. The checked-out branch is not rendered here:
+  it is `DriveShell` with the `git` prop (pretty URLs in the address bar,
+  `org / repo` crumbs, ref bar), so editing keeps working there.
+- `viewer` — the file viewer/editor. In a repo, **▶ Run** sits next to Save for a
+  runnable file (`.py`/`.js`/`.mjs` or the manifest's `entry`): first click opens
+  the manifest's `inputs` inline under the header, output streams under the editor
+  (`useRunner`); while the buffer has unsaved edits the button reads **Save & Run**
+  and saves first — the run route reads the working tree at click time. Text-by-
+  name (`lib/text-kind.ts`) and a Range-request NUL sniff decide what opens as code
+  (`Dockerfile`, `.gitignore`, extensionless files). `links` adds Raw · History.
 - `run-output` — ▶ Run for `.py`/`.js`/`.mjs` rows inside such a folder:
   `useRunner` streams `POST run` (ainize) into one state per file
   (`lib/git-panel.ts` reducer); `RunActions` = Vercel-style inline links + status

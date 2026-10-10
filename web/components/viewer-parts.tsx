@@ -2,13 +2,14 @@
 // Presentational header for the file Viewer: filename, connection status,
 // presence avatars, save/download/close actions. Pure props — no effects,
 // no Yjs. The Viewer shell owns all state and the collab lifecycle.
+import type { ReactNode } from "react";
 import { X, Save, Download, Wifi, WifiOff } from "lucide-react";
 import { IconButton } from "@/components/ui";
 
 type Presence = { id: number; name: string; color: string };
 
 export function ViewerHeader({
-  name, collaborative, showSave, status, presence, canEdit, saving, onSave, downloadUrl, onDownload, onClose,
+  name, collaborative, showSave, status, presence, canEdit, saving, onSave, downloadUrl, onDownload, onClose, actions, links,
 }: {
   name: string;
   /** Show collab chrome (status dot, presence avatars, view-only badge) — text + rich-text. */
@@ -26,6 +27,10 @@ export function ViewerHeader({
       drop the session cookie on a bare attachment navigation. */
   onDownload: () => void;
   onClose: () => void;
+  /** Extra buttons rendered right before Save, in Save's style — the ▶ Run of a runnable repo file. */
+  actions?: ReactNode;
+  /** GitHub-like links after the name (Raw · History) when the file is shown at its repo URL. */
+  links?: { label: string; href: string }[] | null;
 }) {
   return (
     <header className="flex items-center justify-between gap-2 p-3 border-b border-drive-border">
@@ -56,11 +61,17 @@ export function ViewerHeader({
             )}
           </div>
         )}
+        {links && links.length > 0 && (
+          <span className="hidden sm:inline-flex items-center gap-2 shrink-0 ml-1 text-xs">
+            {links.map((l) => <a key={l.href} href={l.href} className="text-drive-muted hover:text-drive-text hover:underline">{l.label}</a>)}
+          </span>
+        )}
         {collaborative && !canEdit && (
           <span className="text-[10px] uppercase tracking-wide text-drive-muted bg-drive-sidebar rounded px-1.5 py-0.5 shrink-0">view-only</span>
         )}
       </div>
       <div className="flex items-center gap-1">
+        {actions}
         {showSave && canEdit && (
           <button onClick={onSave} disabled={saving} className="rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1">
             <Save className="w-4 h-4" /> {saving ? "Saving…" : "Save"}

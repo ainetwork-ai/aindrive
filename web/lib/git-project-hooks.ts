@@ -156,7 +156,7 @@ export type AutoBindResult =
   | { bound: true; projectId: string; created: boolean }
   | { bound: false; reason: "no_manifest" | "no_org_url" | "no_credentials" | "refused" | "exists_without_secret" | "error"; detail?: string };
 
-/** `ainize.json` at the repo root as the drive holds it after the push (receive.denyCurrentBranch=updateInstead). */
+/** `ainize.json` at the root of the WORKING COPY as the drive holds it after the push (the agent fast-forwarded it; lib/git-paths.ts). */
 async function readManifest(driveId: string, secret: string, repo: string): Promise<{ kind: string | null; name: string | null } | null> {
   const p = repo ? `${repo}/ainize.json` : "ainize.json";
   try {
@@ -227,7 +227,16 @@ export async function autoBindProject(driveId: string, repo: string, update: Ref
  * updated ref of a bound repo (fire-and-forget). Resolves to the hook statuses.
  */
 export async function notifyProjectOfPush(driveId: string, repo: string, head: Buffer, userId: string | null, fetchImpl: typeof fetch = fetch, ctx?: PushContext): Promise<number[]> {
-  const updates = parseReceivePackRefs(head);
+  return notifyProjectOfRefUpdates(driveId, repo, parseReceivePackRefs(head), userId, fetchImpl, ctx);
+}
+
+/**
+ * The same, from ref updates already known: the git panel's Push (agent
+ * `git-push` from the working copy into the bare remote) is a push for
+ * deployment purposes exactly like one over HTTP/SSH — a UI commit alone
+ * deploys nothing, as on GitHub.
+ */
+export async function notifyProjectOfRefUpdates(driveId: string, repo: string, updates: RefUpdate[], userId: string | null, fetchImpl: typeof fetch = fetch, ctx?: PushContext): Promise<number[]> {
   if (updates.length === 0) return [];
   let hook: ProjectHook | null = null;
   try { hook = projectHookFor(driveId, repo); } catch { hook = null; }

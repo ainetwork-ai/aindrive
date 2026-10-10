@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import dynamic from "next/dynamic";
-import { Loader2 } from "lucide-react";
+import { Loader2, Play, Square } from "lucide-react";
 import * as Y from "yjs";
 import { MonacoBinding } from "y-monaco";
 import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
@@ -13,6 +13,12 @@ import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFo
 import { decideOnOpen, hashText, loadKnownDiskHash, markLoaded, shouldReloadFromDisk } from "@/lib/doc-disk-sync";
 import { openSession, sessionLoaded, sessionUpdate, writeVerdict, type EditorSession } from "@/lib/editor-session";
 import { ViewerHeader } from "./viewer-parts";
+import { isTextByName, looksLikeText, needsSniff, textLanguageByName, SNIFF_BYTES } from "@/lib/text-kind";
+import { RUN_IDLE, runLanguageFor } from "@/lib/git-panel";
+import { inputsToEnv, missingRequired } from "@/lib/run-inputs";
+import { InputField, useRunInputs, type GitPanelMeta } from "./git-panel";
+import { RunDot, RunOutput, useRunner } from "./run-output";
+import { toast } from "sonner";
 import { fileIconForName } from "./file-icons";
 import { RichTextEditor } from "./editors/rich-text-editor";
 import { loader } from "@monaco-editor/react";
@@ -30,16 +36,28 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.
 });
 
 export function Viewer({
-  driveId, entry, canEdit, onClose, onSaved,
+  driveId, entry, canEdit, onClose, onSaved, gitRepo = null, repoMeta = null, ainizeProjectUrl = null, links = null,
 }: {
   driveId: string;
   entry: DriveEntry;
   canEdit: boolean;
   onClose: () => void;
   onSaved: () => void;
+  /** the repo folder this file is in (null outside a repo) — ▶ Run needs it (the run route takes repo + entry) */
+  gitRepo?: string | null;
+  /** that repo's git-meta: the manifest's `entry` and `inputs` (the fields Run asks for) */
+  repoMeta?: Pick<GitPanelMeta, "manifest" | "entry"> | null;
+  ainizeProjectUrl?: string | null;
+  /** Raw · History links (repo pages) */
+  links?: { raw: string; history: string } | null;
 }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Unsaved edits: what the editor holds vs. the last content written to disk (seed, autosave, Save).
+  // Run executes the file ON DISK (the route reads the working tree through the agent at click time),
+  // so while dirty the primary action is "Save & Run" — never a run of stale bytes.
+  const [dirty, setDirty] = useState(false);
+  const savedTextRef = useRef<string | null>(null);
   const [status, setStatus] = useState<"connecting" | "connected" | "offline">("connecting");
   const [peers, setPeers] = useState(1);
   // Touch devices: Monaco's IME + soft keyboard interplay is fragile, so we
@@ -59,11 +77,27 @@ export function Viewer({
   // (getXmlFragment) from the Monaco/Y.Text path, so the two never collide. All
   // other text/code stays on Monaco. (See editor-framework-design.md.)
   const isRichText = entry.ext === "md" || entry.ext === "markdown" || entry.mime === "text/markdown";
-  const isText = !isRichText && (entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext));
   const isImage = entry.mime.startsWith("image/");
   const isPdf = entry.mime === "application/pdf";
   const isVideo = entry.mime.startsWith("video/");
   const isAudio = entry.mime.startsWith("audio/");
+  // Text by name (extension, or `Dockerfile`/`Makefile`/`.gitignore`/… — lib/text-kind.ts), else — for a
+  // name that says nothing — by content: the first 8 KiB without a NUL byte, read with one Range request.
+  const textByName = !isRichText && (entry.mime.startsWith("text/") || entry.mime === "application/json" || TEXT_EXT.has(entry.ext) || isTextByName(entry.path));
+  const sniff = !isRichText && !textByName && !isImage && !isPdf && !isVideo && !isAudio && needsSniff(entry.path, entry.mime);
+  const [sniffed, setSniffed] = useState<boolean | null>(null);
+  useEffect(() => {
+    setSniffed(null);
+    if (!sniff) return;
+    const ctrl = new AbortController();
+    fetch(`/api/drives/${driveId}/fs/stream?path=${encodeURIComponent(entry.path)}&v=${entry.mtimeMs}`, { headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` }, signal: ctrl.signal })
+      .then(async (r) => (r.ok ? looksLikeText(new Uint8Array(await r.arrayBuffer())) : false))
+      .then((t) => { if (!ctrl.signal.aborted) setSniffed(t); })
+      .catch(() => { if (!ctrl.signal.aborted) setSniffed(false); });
+    return () => ctrl.abort();
+  }, [driveId, entry.path, entry.mtimeMs, sniff]);
+  const isText = textByName || sniffed === true;
+  const sniffing = sniff && sniffed === null;
 
   const providerRef = useRef<AindriveProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
@@ -119,6 +153,7 @@ export function Viewer({
       try {
         const w = await writeToDisk(s, text, "autosave");
         if (w === null) return; // refused: not dirty / unchanged / stale / cross-file
+        if (w.ok && sessionRef.current === s) markSaved(text);
         await fetch(`/api/drives/${s.driveId}/yjs`, {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ path: s.path, data: bytesToBase64(update) }),
@@ -234,6 +269,15 @@ export function Viewer({
               { byteLen: new TextEncoder().encode(disk).byteLength });
           }
         }
+        // Whatever the editor holds now is what the next autosave/Save will write; until then it is
+        // "saved" relative to the disk only if it matches it — the disk read says.
+        if (savedTextRef.current === null) {
+          try {
+            const r = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
+            savedTextRef.current = r.ok ? String((await r.json()).content ?? "") : provider.doc.getText("content").toString();
+          } catch { savedTextRef.current = provider.doc.getText("content").toString(); }
+          setDirty(provider.doc.getText("content").toString() !== savedTextRef.current);
+        }
         setLoading(false);
       }
     });
@@ -267,6 +311,7 @@ export function Viewer({
       sessionUpdate(session, kind);
       if (kind !== "local") return;
       tracer?.("autosave-trigger", { reason: "tick" });
+      if (savedTextRef.current !== null) setDirty(provider.doc.getText("content").toString() !== savedTextRef.current);
       void debouncedAutosave();
     };
     provider.doc.on("update", triggerSave);
@@ -276,6 +321,7 @@ export function Viewer({
     };
     window.addEventListener("beforeunload", onUnload);
 
+    savedTextRef.current = null; setDirty(false);
     return () => {
       cancelled = true;
       // Flush while THIS session is still active: a pending edit of this file is
@@ -299,10 +345,10 @@ export function Viewer({
   const streamUrl = `/api/drives/${driveId}/fs/stream?path=${encodeURIComponent(entry.path)}&v=${entry.mtimeMs}`;
   const downloadUrl = `/api/drives/${driveId}/fs/download?path=${encodeURIComponent(entry.path)}`;
   useEffect(() => {
-    if (isText || isRichText) return;
+    if (isText || isRichText || sniffing) return;
     // Nothing to prefetch — the media elements load from streamUrl themselves.
     setLoading(false);
-  }, [isText, isRichText]);
+  }, [isText, isRichText, sniffing]);
 
   function onMonacoMount(editor: unknown, monaco: unknown) {
     if (!isText || !providerRef.current) return;
@@ -316,17 +362,69 @@ export function Viewer({
     void monaco;
   }
 
-  async function save() {
+  // The text now on disk (as far as this editor knows); the editor is clean when it matches.
+  function markSaved(text: string) {
+    savedTextRef.current = text;
+    const cur = sessionRef.current?.provider.doc.getText("content").toString();
+    setDirty(cur !== undefined && cur !== text);
+  }
+
+  async function save(): Promise<boolean> {
     const s = sessionRef.current;
-    if (!canEdit || !s) return;
+    if (!canEdit || !s) return false;
     setSaving(true);
     const text = s.provider.doc.getText("content").toString();
     const res = await writeToDisk(s, text, "user-save");
     setSaving(false);
-    if (res === null) alert("Save refused: this content belongs to another file or the file changed. Reload and try again.");
-    else if (!res.ok) alert((await res.json()).error);
-    else onSaved();
+    if (res === null) { alert("Save refused: this content belongs to another file or the file changed. Reload and try again."); return false; }
+    if (!res.ok) { alert((await res.json()).error); return false; }
+    markSaved(text);
+    onSaved();
+    return true;
   }
+
+  // ▶ Run — next to Save, for a runnable file of a repo (`.py`/`.js`/`.mjs`, or the manifest's entry).
+  // The same runner/inputs as the git panel's Run row (components/git-panel.tsx): the inputs open
+  // inline under the header, the output streams under the editor. Dirty editor → "Save & Run": the
+  // run route reads the working tree through the agent, so the save lands first, then the run.
+  const manifest = repoMeta?.manifest ?? null;
+  const manifestEntryPath = manifest?.entry && gitRepo !== null ? (gitRepo ? `${gitRepo}/${manifest.entry}` : manifest.entry) : null;
+  const runnable = gitRepo !== null && !entry.locked && (runLanguageFor(entry.path) !== null || entry.path === manifestEntryPath);
+  const runner = useRunner(driveId, gitRepo);
+  const inputs = manifest?.inputs ?? [];
+  const { values, setValue } = useRunInputs(driveId, gitRepo ?? "", inputs);
+  const [runBarOpen, setRunBarOpen] = useState(false);
+  const run = runner.runs[entry.path] ?? RUN_IDLE;
+  const running = run.status === "running";
+  async function startRun() {
+    if (!runnable) return;
+    const missing = missingRequired(inputs, values);
+    if (missing.length) { setRunBarOpen(true); toast.error(`Fill in ${missing.join(", ")}`); return; }
+    if (dirty && canEdit && isText) { if (!(await save())) return; }
+    runner.run(entry.path, inputsToEnv(inputs, values));
+  }
+  const onRunClick = () => {
+    if (running) { runner.stop(entry.path); return; }
+    // With inputs, the first click opens the fields; the bar's own ▶ Run (or a second click) runs.
+    if (inputs.length > 0 && !runBarOpen) { setRunBarOpen(true); return; }
+    void startRun();
+  };
+  const runLabel = running ? "Stop" : dirty && canEdit && isText ? "Save & Run" : "Run";
+  const runButton = runnable ? (
+    <button
+      type="button"
+      onClick={onRunClick}
+      disabled={saving || (loading && isText)}
+      aria-label={running ? "Stop run" : dirty && canEdit && isText ? "Save and run file" : "Run file"}
+      title={dirty && canEdit && isText && !running ? "Unsaved edits are saved first, then the file runs" : undefined}
+      data-testid="viewer-run"
+      data-dirty={dirty || undefined}
+      className={clsx("rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1 disabled:opacity-50", running ? "text-red-600" : dirty && canEdit && isText ? "text-drive-accent font-medium" : "")}
+    >
+      {run.status !== "idle" && <RunDot status={run.status} />}
+      {running ? <Square className="w-4 h-4" aria-hidden="true" /> : <Play className="w-4 h-4" aria-hidden="true" />} {runLabel}
+    </button>
+  ) : null;
 
   // Download via a short-lived signed URL instead of a bare <a href> to
   // fs/download. In-app mobile webviews (Base App) hand an attachment
@@ -360,10 +458,27 @@ export function Viewer({
         canEdit={canEdit}
         saving={saving}
         onSave={save}
-        downloadUrl={isText || isRichText ? null : downloadUrl}
+        downloadUrl={isText || isRichText || sniffing ? null : downloadUrl}
         onDownload={onDownload}
         onClose={onClose}
+        actions={runButton}
+        links={links ? [{ label: "Raw", href: links.raw }, { label: "History", href: links.history }] : null}
       />
+      {runnable && runBarOpen && (
+        <div className="border-b border-drive-border bg-drive-panel px-3 py-2" data-testid="viewer-run-inputs">
+          {inputs.length > 0 && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {inputs.map((i) => <InputField key={i.name} input={i} value={values[i.name] ?? ""} onChange={(v) => setValue(i.name, v)} />)}
+            </div>
+          )}
+          <div className="mt-2 flex items-center gap-2">
+            <button type="button" onClick={() => void startRun()} disabled={running || saving} className="rounded bg-drive-accent text-white px-3 py-1 text-sm hover:bg-drive-accentHover disabled:opacity-50 inline-flex items-center gap-1">
+              <Play className="w-3.5 h-3.5" aria-hidden="true" /> {dirty && canEdit && isText ? "Save & Run" : "Run"}
+            </button>
+            <button type="button" onClick={() => setRunBarOpen(false)} className="text-sm text-drive-muted hover:text-drive-text">Hide</button>
+          </div>
+        </div>
+      )}
       {isRichText ? (
         // Rich-text manages its own loading + scroll; keep it outside the
         // binary/text loading gate (neither viewer effect fires for .md).
@@ -379,7 +494,7 @@ export function Viewer({
         </div>
       ) : (
       <div className="flex-1 min-h-0 overflow-auto">
-        {loading ? (
+        {loading || sniffing ? (
           <div className="h-full flex items-center justify-center text-drive-muted">
             <Loader2 className="w-4 h-4 animate-spin" />
           </div>
@@ -400,7 +515,7 @@ export function Viewer({
             key={entry.path}
             path={entry.path}
             height="100%"
-            defaultLanguage={languageFor(entry)}
+            defaultLanguage={textLanguageByName(entry.path) ?? languageFor(entry)}
             onMount={onMonacoMount}
             options={{
               readOnly: !canEdit || touchOnly,
@@ -414,6 +529,11 @@ export function Viewer({
           <UnsupportedPreview entry={entry} canDownload={true} />
         )}
       </div>
+      )}
+      {runnable && run.status !== "idle" && (
+        <div className="border-t border-drive-border p-2 max-h-[45%] overflow-auto" data-testid="viewer-run-output">
+          <RunOutput state={run} entryName={entry.name} openUrl={ainizeProjectUrl} />
+        </div>
       )}
     </aside>
   );

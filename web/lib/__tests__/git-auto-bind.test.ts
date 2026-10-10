@@ -107,7 +107,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-async function push(driveId: string, repo = "proj", body = pushBody()) {
+async function push(driveId: string, repo = "repositories/proj", body = pushBody()) {
   const jwt = await sign("ed1");
   const req = new Request(`http://x/api/drives/${driveId}/git/${repo}/git-receive-pack`, {
     method: "POST", headers: { authorization: `Bearer ${jwt}`, "content-type": "application/x-git-receive-pack-request" },
@@ -123,7 +123,7 @@ const calls = (re: RegExp) => seen.filter((s) => re.test(s.url));
 
 describe("push of a repo with ainize.json", () => {
   it("binds the project as aindrive (machine token for the ainize origin) and fires the hook for that push", async () => {
-    agent.files["proj/ainize.json"] = JSON.stringify({ kind: "script", entry: "art_search.py", name: "Clef search" });
+    agent.files["repositories/proj/ainize.json"] = JSON.stringify({ kind: "script", entry: "art_search.py", name: "Clef search" });
     await push("d1");
     await vi.waitFor(() => expect(calls(/\/hook$/)).toHaveLength(1));
 
@@ -137,8 +137,8 @@ describe("push of a repo with ainize.json", () => {
       repo: "https://drive.example.test/comcom/git/proj", branch: "main",
       pusher: { subject: "acc_ed", email: "editor@example.com" }, manifest: { kind: "script", name: "Clef search" },
     });
-    expect(hooks.projectHookFor("d1", "proj")).toEqual({ projectId: "prj_auto", secret: "whsec_from_ainize_once" });
-    expect(db.prepare("SELECT created_by FROM git_project_hooks WHERE drive_id='d1' AND repo='proj'").get()).toEqual({ created_by: "ed1" });
+    expect(hooks.projectHookFor("d1", "repositories/proj")).toEqual({ projectId: "prj_auto", secret: "whsec_from_ainize_once" });
+    expect(db.prepare("SELECT created_by FROM git_project_hooks WHERE drive_id='d1' AND repo='repositories/proj'").get()).toEqual({ created_by: "ed1" });
 
     const hook = calls(/\/hook$/)[0]!;
     expect(hook.url).toBe("https://ainize.example.test/api/projects/prj_auto/hook");
@@ -147,19 +147,19 @@ describe("push of a repo with ainize.json", () => {
   });
 
   it("a bound repo only hooks: no token, no auto call; the cached token serves a later binding", async () => {
-    agent.files["proj/ainize.json"] = JSON.stringify({ kind: "script" });
-    hooks.storeProjectHook("d1", "proj", "prj_manual", "whsec_manual_______", "ed1");
+    agent.files["repositories/proj/ainize.json"] = JSON.stringify({ kind: "script" });
+    hooks.storeProjectHook("d1", "repositories/proj", "prj_manual", "whsec_manual_______", "ed1");
     await push("d1");
     await vi.waitFor(() => expect(calls(/\/hook$/)).toHaveLength(1));
     expect(calls(/\/auto$|\/oidc\/token$/)).toHaveLength(0);
     expect(calls(/\/hook$/)[0]!.url).toContain("prj_manual");
     // another repo in the same drive: one token request serves it (the client caches per resource)
-    agent.files["other/ainize.json"] = JSON.stringify({ kind: "nextjs" });
-    await push("d1", "other");
+    agent.files["repositories/other/ainize.json"] = JSON.stringify({ kind: "nextjs" });
+    await push("d1", "repositories/other");
     await vi.waitFor(() => expect(calls(/\/hook$/)).toHaveLength(2));
     expect(calls(/\/oidc\/token$/)).toHaveLength(1);
-    await push("d1", "proj"); // bound in the first step
-    await push("d1", "other"); // bound by the auto call above
+    await push("d1", "repositories/proj"); // bound in the first step
+    await push("d1", "repositories/other"); // bound by the auto call above
     await vi.waitFor(() => expect(calls(/\/hook$/)).toHaveLength(4));
     expect(calls(/\/oidc\/token$/)).toHaveLength(1);
     expect(calls(/\/auto$/)).toHaveLength(1);
@@ -167,21 +167,21 @@ describe("push of a repo with ainize.json", () => {
 
   it("binds nothing without ainize.json, for a drive without an organization URL, for a branch deletion, or without credentials — and the push succeeds", async () => {
     await push("d1"); // no manifest
-    agent.files["proj/ainize.json"] = JSON.stringify({ kind: "script" });
+    agent.files["repositories/proj/ainize.json"] = JSON.stringify({ kind: "script" });
     await push("d2"); // /api/drives/d2/git/proj: no org
-    await push("d1", "proj", pushBody("refs/heads/main", "0".repeat(40))); // deletion
-    await push("d1", "proj", pushBody("refs/tags/v1")); // not a branch
+    await push("d1", "repositories/proj", pushBody("refs/heads/main", "0".repeat(40))); // deletion
+    await push("d1", "repositories/proj", pushBody("refs/tags/v1")); // not a branch
     const secret = process.env.AINDRIVE_SSO_CLIENT_SECRET;
     delete process.env.AINDRIVE_SSO_CLIENT_SECRET;
     try { await push("d1"); } finally { process.env.AINDRIVE_SSO_CLIENT_SECRET = secret; }
     await new Promise((r) => setTimeout(r, 50));
     expect(calls(/\/auto$|\/hook$|\/oidc\/token$/)).toHaveLength(0);
-    expect(hooks.projectIdFor("d1", "proj")).toBeNull();
-    expect(hooks.projectIdFor("d2", "proj")).toBeNull();
+    expect(hooks.projectIdFor("d1", "repositories/proj")).toBeNull();
+    expect(hooks.projectIdFor("d2", "repositories/proj")).toBeNull();
   });
 
   it("an existing project without a secret here, a refusal, or a token the issuer will not mint: logged, nothing stored, push fine", async () => {
-    agent.files["proj/ainize.json"] = JSON.stringify({ kind: "script" });
+    agent.files["repositories/proj/ainize.json"] = JSON.stringify({ kind: "script" });
     autoAnswer = () => Response.json({ id: "prj_elsewhere", pageUrl: "x", created: false }, { status: 200 });
     await push("d1");
     await vi.waitFor(() => expect(calls(/\/auto$/)).toHaveLength(1));
@@ -194,17 +194,17 @@ describe("push of a repo with ainize.json", () => {
     await vi.waitFor(() => expect(calls(/\/oidc\/token$/)).toHaveLength(2));
     await new Promise((r) => setTimeout(r, 50));
     expect(calls(/\/hook$/)).toHaveLength(0);
-    expect(hooks.projectIdFor("d1", "proj")).toBeNull();
+    expect(hooks.projectIdFor("d1", "repositories/proj")).toBeNull();
   });
 
   it("autoBindProject reports why", async () => {
     const update = { ref: "refs/heads/main", before: OLD, after: NEW };
-    expect(await hooks.autoBindProject("d1", "proj", update, "ed1", { driveSecret: "s" })).toEqual({ bound: false, reason: "no_manifest" });
-    agent.files["proj/ainize.json"] = "{ not json";
-    expect(await hooks.autoBindProject("d1", "proj", update, "ed1", { driveSecret: "s" })).toEqual({ bound: false, reason: "no_manifest" });
-    agent.files["proj/ainize.json"] = JSON.stringify({ kind: "script" });
-    expect(await hooks.autoBindProject("d2", "proj", update, "ed1", { driveSecret: "s" })).toEqual({ bound: false, reason: "no_org_url" });
-    expect(await hooks.autoBindProject("d1", "proj", update, null, { driveSecret: "s" })).toEqual({ bound: true, projectId: "prj_auto", created: true });
+    expect(await hooks.autoBindProject("d1", "repositories/proj", update, "ed1", { driveSecret: "s" })).toEqual({ bound: false, reason: "no_manifest" });
+    agent.files["repositories/proj/ainize.json"] = "{ not json";
+    expect(await hooks.autoBindProject("d1", "repositories/proj", update, "ed1", { driveSecret: "s" })).toEqual({ bound: false, reason: "no_manifest" });
+    agent.files["repositories/proj/ainize.json"] = JSON.stringify({ kind: "script" });
+    expect(await hooks.autoBindProject("d2", "repositories/proj", update, "ed1", { driveSecret: "s" })).toEqual({ bound: false, reason: "no_org_url" });
+    expect(await hooks.autoBindProject("d1", "repositories/proj", update, null, { driveSecret: "s" })).toEqual({ bound: true, projectId: "prj_auto", created: true });
     expect(calls(/\/auto$/)[0]!.json).toMatchObject({ pusher: { subject: null, email: null } });
   });
 });

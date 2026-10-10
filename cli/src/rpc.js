@@ -77,6 +77,12 @@ const RPC_METHODS = new Set([
   // Git panel in the web UI: what a repo folder shows (branch, HEAD, recent
   // commits, dirty count) and the one write it offers (commit everything).
   "git-meta", "git-commit",
+  // GitHub-like repo pages (web/lib/git-urls.ts): read-only views of any ref —
+  // branches, a tree, a file, the log, one commit with its diff.
+  "git-refs", "git-ls-tree", "git-show", "git-log", "git-commit-detail",
+  // Source control on the working copy (VS Code-like): changes, stage/unstage,
+  // discard, push to the bare remote, fast-forward pull from it.
+  "git-status", "git-stage", "git-discard", "git-push", "git-pull",
   // Git over SSH: the same two services as live bidirectional pipes (git-exec.js).
   "git-ssh-exec",
 ]);
@@ -265,6 +271,113 @@ function _isGitRepo(abs) {
   const nonBare = existsSync(path.join(abs, ".git", "HEAD")) && existsSync(path.join(abs, ".git", "objects"));
   return bare || nonBare;
 }
+// ---- repo layout: bare remote + working copy ----
+// A repo in a drive is TWO directories (owner's decision, 2026-10: the freely
+// editable drive state and the pushed state must not be one directory):
+//   <dir>/<repo>.git   the bare remote every clone/push targets (http.receivepack=true)
+//   <dir>/<repo>/      the working copy — origin = ../<repo>.git — what the drive
+//                      shows and edits, what ▶ Run executes, what the panel commits
+// After a successful receive-pack into the bare (HTTP `git-service`, SSH
+// git-exec.js), postReceive() fast-forwards the working copy — only when it is
+// clean; a dirty copy is never touched, the panel shows it behind and offers
+// Pull (ff-only) once it is clean. A repo's "push" from the panel is
+// `git push origin HEAD` from the working copy into the bare (`git-push`),
+// which runs the same postReceive — commit alone deploys nothing, exactly as on GitHub.
+// Legacy: a non-bare repo with no `.git` sibling (made by the old updateInstead
+// git-init) still serves clone/views; `git-meta` reports `layout: "legacy"`.
+const _isBareName = (name) => name.endsWith(".git") && name.length > 4;
+const _workingCopyOf = (bareAbs) => (_isBareName(path.basename(bareAbs)) ? bareAbs.slice(0, -".git".length) : null);
+/** Does the working copy have changes `git status --porcelain` would list? */
+async function _isDirty(wcAbs) {
+  const st = await runGitCapture(["-C", wcAbs, "status", "--porcelain"]);
+  if (st.code !== 0) throw new Error("git status failed: " + st.stderr.slice(0, 300));
+  return st.stdout.toString().trim().length > 0;
+}
+async function _currentBranch(wcAbs) {
+  const br = await runGitCapture(["-C", wcAbs, "symbolic-ref", "--short", "-q", "HEAD"]);
+  return br.code === 0 ? br.stdout.toString().trim() : "";
+}
+/** ahead/behind of the working copy's branch vs origin/<branch>, after a (local, cheap) fetch. null = no remote branch yet. */
+async function _aheadBehind(wcAbs, branch) {
+  if (!branch) return null;
+  await runGitCapture(["-C", wcAbs, "fetch", "-q", "origin"]);
+  const r = await runGitCapture(["-C", wcAbs, "rev-list", "--left-right", "--count", `${branch}...origin/${branch}`]);
+  if (r.code !== 0) return null;
+  const [ahead, behind] = r.stdout.toString().trim().split(/\s+/).map((n) => Number(n) || 0);
+  return { ahead, behind };
+}
+/**
+ * After a push landed in the bare: fast-forward the working copy if it is clean.
+ * Resolves to what happened (never throws — a push must not fail on this).
+ */
+export async function postReceive(bareAbs) {
+  const wc = _workingCopyOf(bareAbs);
+  if (!wc || !existsSync(path.join(wc, ".git"))) return { updated: false, reason: "no working copy" };
+  try {
+    if (await _isDirty(wc)) return { updated: false, reason: "working copy has changes" };
+    let branch = await _currentBranch(wc);
+    if (!branch) {
+      // detached: nothing to fast-forward onto
+      return { updated: false, reason: "detached HEAD" };
+    }
+    // Does the remote have that branch? (first push may create `main` while the unborn clone is on `main` too)
+    const remote = await runGitCapture(["-C", bareAbs, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch]);
+    if (remote.code !== 0) {
+      const head = await runGitCapture(["-C", bareAbs, "symbolic-ref", "--short", "-q", "HEAD"]);
+      const remoteHead = head.code === 0 ? head.stdout.toString().trim() : "";
+      const local = await runGitCapture(["-C", wc, "rev-parse", "--verify", "--quiet", "HEAD"]);
+      // an unborn working copy follows whatever branch the bare's HEAD names (the first push decides)
+      if (local.code !== 0 && remoteHead) {
+        await runGitCapture(["-C", wc, "symbolic-ref", "HEAD", "refs/heads/" + remoteHead]);
+        branch = remoteHead;
+      } else return { updated: false, reason: "remote has no " + branch };
+    }
+    const pull = await runGitCapture(["-C", wc, "pull", "-q", "--ff-only", "origin", branch]);
+    if (pull.code !== 0) return { updated: false, reason: "not a fast-forward: " + pull.stderr.slice(0, 200) };
+    await runGitCapture(["-C", wc, "branch", "-q", "--set-upstream-to=origin/" + branch, branch]);
+    return { updated: true, branch };
+  } catch (e) {
+    return { updated: false, reason: e.message };
+  }
+}
+// Working-copy paths for stage/discard: repo-relative, no `..`, no absolute.
+function _wcPaths(v) {
+  const list = Array.isArray(v) ? v : [];
+  if (list.length === 0 || list.length > 500) throw new Error("paths required");
+  return list.map((p) => {
+    const parts = String(p).split("/").filter((x) => x !== "");
+    if (!parts.length || parts.some((x) => x === "." || x === "..") || String(p).startsWith("-")) throw new Error("invalid path");
+    return parts.join("/");
+  });
+}
+// `git status --porcelain=v2 -z --branch` → VS Code-like lists.
+function parseStatusV2(buf) {
+  const out = { staged: [], unstaged: [], untracked: [], branch: "", ahead: 0, behind: 0 };
+  const recs = buf.toString().split("\0");
+  for (let i = 0; i < recs.length; i++) {
+    const rec = recs[i];
+    if (!rec) continue;
+    if (rec.startsWith("# branch.head ")) { out.branch = rec.slice("# branch.head ".length); continue; }
+    if (rec.startsWith("# branch.ab ")) { const m = /\+(\d+) -(\d+)/.exec(rec); if (m) { out.ahead = Number(m[1]); out.behind = Number(m[2]); } continue; }
+    if (rec.startsWith("# ")) continue;
+    const kind = rec[0];
+    if (kind === "?") { out.untracked.push({ path: rec.slice(2), status: "U" }); continue; }
+    if (kind === "!") continue;
+    if (kind === "1" || kind === "2") {
+      const f = rec.split(" ");
+      const xy = f[1];
+      // "2": rename/copy — the path is the 9th field, the original follows as the NEXT record
+      const p = kind === "2" ? f.slice(9).join(" ") : f.slice(8).join(" ");
+      if (kind === "2") i++;
+      if (xy[0] !== ".") out.staged.push({ path: p, status: xy[0] });
+      if (xy[1] !== ".") out.unstaged.push({ path: p, status: xy[1] });
+      continue;
+    }
+    if (kind === "u") { const f = rec.split(" "); out.unstaged.push({ path: f.slice(10).join(" "), status: "C" }); }
+  }
+  return out;
+}
+
 // `%x1f` (unit separator) between fields: a subject can hold anything but a
 // newline, so splitting on \x1f then \n is unambiguous.
 const GIT_LOG_FORMAT = "%H%x1f%s%x1f%an%x1f%aI";
@@ -294,6 +407,39 @@ function runGitToFile(args, stdinFd, stdoutFd) {
   });
 }
 
+
+// ---- read-only views of a ref (web repo pages) ----
+// A ref the pages may name: a branch, a tag or a sha — never an option (a
+// leading `-` would reach git as a flag) and never a revision *expression*
+// (`..`, `^`, `~`, `:` compose other revisions; the URL names one ref).
+function _gitRef(v) {
+  const ref = String(v ?? "HEAD").trim() || "HEAD";
+  if (ref.startsWith("-") || /[\s~^:?*[\\]/.test(ref) || ref.includes("..") || ref.length > 256) throw new Error("invalid ref");
+  return ref;
+}
+// A path inside the repo as git spells it (`a/b.txt`, "" = root). Not a
+// filesystem path — git reads it from the object store — but the same shape
+// rules keep it from naming anything outside the tree.
+function _gitPath(v) {
+  const parts = String(v ?? "").split("/").filter((x) => x !== "");
+  if (parts.some((x) => x === "." || x === "..") || parts.join("/").length > LIMITS.maxPathBytes) throw new Error("invalid path");
+  return parts.join("/");
+}
+async function _gitResolve(repo, ref) {
+  const r = await runGitCapture(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", ref + "^{commit}"]);
+  if (r.code !== 0) throw new Error("unknown ref");
+  return r.stdout.toString().trim();
+}
+const GIT_FULL_LOG_FORMAT = "%H%x1f%P%x1f%s%x1f%an%x1f%ae%x1f%aI%x1f%b%x1e";
+function parseFullGitLog(text) {
+  return text.split("\x1e").map((rec) => rec.replace(/^\n/, "")).filter(Boolean).map((rec) => {
+    const [sha, parents, subject, author, authorEmail, date, body] = rec.split("\x1f");
+    return { sha, parents: (parents ?? "").split(" ").filter(Boolean), subject: subject ?? "", author: author ?? "", authorEmail: authorEmail ?? "", date: date ?? "", body: (body ?? "").replace(/\n+$/, "") };
+  });
+}
+const GIT_LS_MAX_LAST_COMMITS = 200;
+const GIT_PATCH_MAX_BYTES = 512 * 1024;
+
 /**
  * @param {object} params  the request's params (method + args, web/lib/protocol.ts)
  * @param {string} root    absolute drive root
@@ -311,6 +457,8 @@ export async function handleRpc(params, root, ctx = {}) {
       const out = [];
       for (const e of entries) {
         if (HIDDEN.has(e.name)) continue;
+        // A bare remote (`repositories/<repo>.git`, see git-init) is git's, not the user's: hidden like `.git`.
+        if (e.isDirectory() && _isBareName(e.name)) continue;
         const full = path.join(abs, e.name);
         try { out.push(await toEntry(root, full)); } catch {}
       }
@@ -479,18 +627,27 @@ export async function handleRpc(params, root, ctx = {}) {
       return { method: "agent-ask", ...result };
     }
     case "git-init": {
-      // Non-bare, with receive.denyCurrentBranch=updateInstead: a push to the
-      // checked-out branch updates the ref AND the working tree, so the pushed
-      // files appear in the drive as ordinary files (`.git` is in HIDDEN).
-      const repo = safeResolve(root, params.repo);
-      await fsp.mkdir(repo, { recursive: true });
-      const r = await runGitCapture(["init", "--initial-branch=main", repo]);
+      // A new repo = the bare remote `<repo>.git` AND its working copy `<repo>/`
+      // (layout note above). `repo` names the bare: it must end in `.git`; a
+      // name without it (an old caller) is given the suffix. The working copy
+      // is an empty clone until the first push lands and postReceive fills it.
+      const given = String(params.repo ?? "");
+      const bareRel = _isBareName(path.basename(given)) ? given : given + ".git";
+      const bare = safeResolve(root, bareRel);
+      const wc = _workingCopyOf(bare);
+      if (existsSync(bare)) throw new Error("repository exists");
+      if (existsSync(path.join(wc, ".git"))) throw new Error("a working copy already exists there — migrate it (scripts/migrate-repo-layout.mjs)");
+      await fsp.mkdir(path.dirname(bare), { recursive: true });
+      const r = await runGitCapture(["init", "-q", "--bare", "--initial-branch=main", bare]);
       if (r.code !== 0) throw new Error("git init failed: " + r.stderr.slice(0, 300));
-      for (const [k, v] of [["receive.denyCurrentBranch", "updateInstead"], ["http.receivepack", "true"]]) {
-        const c = await runGitCapture(["-C", repo, "config", k, v]);
-        if (c.code !== 0) throw new Error("git config failed: " + c.stderr.slice(0, 300));
-      }
-      return { method: "git-init", ok: true };
+      const c = await runGitCapture(["-C", bare, "config", "http.receivepack", "true"]);
+      if (c.code !== 0) throw new Error("git config failed: " + c.stderr.slice(0, 300));
+      const cl = await runGitCapture(["clone", "-q", "--no-hardlinks", bare, wc]);
+      if (cl.code !== 0) throw new Error("git clone failed: " + cl.stderr.slice(0, 300));
+      // origin as a RELATIVE path, so the drive folder can move (or sync to another machine) intact
+      await runGitCapture(["-C", wc, "remote", "set-url", "origin", "../" + path.basename(bare)]);
+      await runGitCapture(["-C", wc, "symbolic-ref", "HEAD", "refs/heads/main"]);
+      return { method: "git-init", ok: true, bare: bareRel, workingCopy: bareRel.slice(0, -".git".length) };
     }
     case "git-advertise": {
       const repo = safeResolve(root, params.repo);
@@ -513,7 +670,9 @@ export async function handleRpc(params, root, ctx = {}) {
         const r = await runGitToFile([service, "--stateless-rpc", repo], inFd, outFd);
         if (r.code !== 0) throw new Error("git " + service + " failed: " + r.stderr.slice(0, 300));
       } finally { try { closeSync(inFd); } catch {} try { closeSync(outFd); } catch {} }
-      return { method: "git-service", ok: true, size: statSync(outAbs).size };
+      // A push landed: bring a clean working copy up to date (never a dirty one).
+      const sync = service === "receive-pack" ? await postReceive(repo) : undefined;
+      return { method: "git-service", ok: true, size: statSync(outAbs).size, ...(sync ? { workingCopy: sync } : {}) };
     }
     case "git-meta": {
       // Read-only summary for the web git panel. An unborn branch (fresh
@@ -531,7 +690,12 @@ export async function handleRpc(params, root, ctx = {}) {
       const commits = log.code === 0 ? parseGitLog(log.stdout.toString()) : [];
       const st = await runGitCapture(["-C", repo, "status", "--porcelain"]);
       const dirty = st.code === 0 ? st.stdout.toString().split("\n").filter(Boolean).length : 0;
-      return { method: "git-meta", exists: true, branch, head: commits[0] ?? null, dirty, commits };
+      // Layout: a working copy whose `origin` is the bare sibling, or a legacy non-bare repo (no sibling).
+      const isWc = existsSync(path.join(repo, ".git"));
+      const hasBare = isWc && existsSync(path.join(repo + ".git", "HEAD"));
+      const layout = !isWc ? "bare" : hasBare ? "working-copy" : "legacy";
+      const ab = layout === "working-copy" ? await _aheadBehind(repo, br.code === 0 ? branch : "") : null;
+      return { method: "git-meta", exists: true, branch, head: commits[0] ?? null, dirty, commits, layout, ahead: ab?.ahead ?? 0, behind: ab?.behind ?? 0 };
     }
     case "git-commit": {
       // Commit everything in the working tree as the signed-in web user. The
@@ -544,11 +708,18 @@ export async function handleRpc(params, root, ctx = {}) {
       const authorName = String(params.authorName || "").trim() || "aindrive";
       const authorEmail = String(params.authorEmail || "").trim() || "noreply@aindrive.ainetwork.ai";
       if (/[\r\n]/.test(authorName + authorEmail)) throw new Error("invalid author");
-      const add = await runGitCapture(["-C", repo, "add", "-A"]);
-      if (add.code !== 0) throw new Error("git add failed: " + add.stderr.slice(0, 300));
+      // `all` (the panel's "stage all & commit", VS Code's default): stage everything first.
+      // Otherwise only what is staged is committed; nothing staged = nothing to commit.
+      if (params.all !== false) {
+        const add = await runGitCapture(["-C", repo, "add", "-A"]);
+        if (add.code !== 0) throw new Error("git add failed: " + add.stderr.slice(0, 300));
+      }
       const st = await runGitCapture(["-C", repo, "status", "--porcelain"]);
       if (st.code !== 0) throw new Error("git status failed: " + st.stderr.slice(0, 300));
       if (!st.stdout.toString().trim()) throw new Error("nothing to commit");
+      const staged = await runGitCapture(["-C", repo, "diff", "--cached", "--quiet"]);
+      const unborn = (await runGitCapture(["-C", repo, "rev-parse", "--verify", "--quiet", "HEAD"])).code !== 0;
+      if (staged.code === 0 && !unborn) throw new Error("nothing staged — stage changes first, or commit all");
       const c = await runGitCapture([
         "-C", repo, "-c", "user.name=" + authorName, "-c", "user.email=" + authorEmail,
         "commit", "-q", "-m", message,
@@ -557,6 +728,169 @@ export async function handleRpc(params, root, ctx = {}) {
       const head = await runGitCapture(["-C", repo, "rev-parse", "HEAD"]);
       if (head.code !== 0) throw new Error("git rev-parse failed: " + head.stderr.slice(0, 300));
       return { method: "git-commit", sha: head.stdout.toString().trim() };
+    }
+    case "git-refs": {
+      // Branches + the checked-out one (what the repo pages call the default
+      // branch). An unborn HEAD (fresh git-init) has a name but no sha.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) return { method: "git-refs", exists: false };
+      const br = await runGitCapture(["-C", repo, "symbolic-ref", "--short", "-q", "HEAD"]);
+      const head = br.code === 0 ? br.stdout.toString().trim() : "";
+      const sha = await runGitCapture(["-C", repo, "rev-parse", "--verify", "--quiet", "HEAD"]);
+      const ls = await runGitCapture(["-C", repo, "for-each-ref", "--format=%(refname:short)%1f%(objectname)", "refs/heads/"]);
+      const branches = ls.code === 0
+        ? ls.stdout.toString().split("\n").filter(Boolean).map((l) => { const [name, s] = l.split("\x1f"); return { name, sha: s ?? "" }; })
+        : [];
+      return { method: "git-refs", exists: true, head: head || (sha.code === 0 ? "detached@" + sha.stdout.toString().trim().slice(0, 7) : "HEAD"), headSha: sha.code === 0 ? sha.stdout.toString().trim() : null, branches };
+    }
+    case "git-ls-tree": {
+      // One folder of the tree at a ref, with each entry's last commit (one
+      // `git log -1` per entry, so a huge folder lists without them).
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
+      const ref = _gitRef(params.ref);
+      const dir = _gitPath(params.path);
+      const sha = await _gitResolve(repo, ref);
+      const spec = dir ? sha + ":" + dir : sha;
+      const ls = await runGitCapture(["-C", repo, "ls-tree", "-l", "-z", spec]);
+      if (ls.code !== 0) throw new Error(/not a tree|does not exist|not a valid object name|exists on disk, but not in/i.test(ls.stderr) ? "no such path at ref" : "git ls-tree failed: " + ls.stderr.slice(0, 300));
+      const entries = ls.stdout.toString().split("\0").filter(Boolean).map((line) => {
+        // "<mode> <type> <sha> <size>\t<name>"
+        const tab = line.indexOf("\t");
+        const [mode, type, , size] = line.slice(0, tab).split(/\s+/);
+        const name = line.slice(tab + 1);
+        return { name, type: type === "tree" ? "tree" : type === "commit" ? "commit" : "blob", mode, size: size === "-" ? 0 : Number(size) || 0 };
+      });
+      if (entries.length <= GIT_LS_MAX_LAST_COMMITS) {
+        for (const e of entries) {
+          const p = dir ? dir + "/" + e.name : e.name;
+          const l = await runGitCapture(["-C", repo, "log", "-n", "1", "--format=" + GIT_LOG_FORMAT, sha, "--", p]);
+          if (l.code === 0) e.lastCommit = parseGitLog(l.stdout.toString())[0] ?? null;
+        }
+      }
+      entries.sort((a, b) => (a.type !== b.type ? (a.type === "tree" ? -1 : b.type === "tree" ? 1 : 0) : a.name.localeCompare(b.name)));
+      return { method: "git-ls-tree", sha, entries };
+    }
+    case "git-show": {
+      // A file's bytes at a ref, base64, capped like `read`.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
+      const ref = _gitRef(params.ref);
+      const file = _gitPath(params.path);
+      if (!file) throw new Error("path required");
+      const sha = await _gitResolve(repo, ref);
+      const kind = await runGitCapture(["-C", repo, "cat-file", "-t", sha + ":" + file]);
+      if (kind.code !== 0) throw new Error("no such path at ref");
+      if (kind.stdout.toString().trim() !== "blob") throw new Error("is a directory");
+      const sz = await runGitCapture(["-C", repo, "cat-file", "-s", sha + ":" + file]);
+      const size = Number(sz.stdout.toString().trim()) || 0;
+      const maxBytes = Math.min(params.maxBytes ?? LIMITS.maxReadBytes, LIMITS.maxReadBytes);
+      const r = await runGitCapture(["-C", repo, "cat-file", "blob", sha + ":" + file]);
+      if (r.code !== 0) throw new Error("git cat-file failed: " + r.stderr.slice(0, 300));
+      const truncated = r.stdout.length > maxBytes;
+      return { method: "git-show", sha, size, content: (truncated ? r.stdout.subarray(0, maxBytes) : r.stdout).toString("base64"), truncated };
+    }
+    case "git-log": {
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
+      const ref = _gitRef(params.ref);
+      const p = _gitPath(params.path);
+      const n = Math.max(1, Math.min(Number(params.n) || 50, 200));
+      const sha = await _gitResolve(repo, ref);
+      const args = ["-C", repo, "log", "-n", String(n), "--format=" + GIT_FULL_LOG_FORMAT, sha];
+      if (p) args.push("--", p);
+      const l = await runGitCapture(args);
+      if (l.code !== 0) throw new Error("git log failed: " + l.stderr.slice(0, 300));
+      return { method: "git-log", sha, commits: parseFullGitLog(l.stdout.toString()) };
+    }
+    case "git-commit-detail": {
+      // Message, author, changed files with +/−, and the patch (capped).
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
+      const sha = await _gitResolve(repo, _gitRef(params.sha));
+      const meta = await runGitCapture(["-C", repo, "log", "-n", "1", "--format=" + GIT_FULL_LOG_FORMAT, sha]);
+      if (meta.code !== 0) throw new Error("git log failed: " + meta.stderr.slice(0, 300));
+      const commit = parseFullGitLog(meta.stdout.toString())[0];
+      // --root: a first commit diffs against the empty tree. -m keeps a merge to its first parent.
+      const stat = await runGitCapture(["-C", repo, "show", "--format=", "--numstat", "--root", "--first-parent", "-m", sha]);
+      const files = stat.code === 0 ? stat.stdout.toString().split("\n").filter(Boolean).map((line) => {
+        const [a, d, ...rest] = line.split("\t");
+        return { path: rest.join("\t"), additions: a === "-" ? null : Number(a), deletions: d === "-" ? null : Number(d) };
+      }) : [];
+      const diff = await runGitCapture(["-C", repo, "show", "--format=", "--patch", "--root", "--first-parent", "-m", "--no-color", sha]);
+      const patchBuf = diff.code === 0 ? diff.stdout : Buffer.alloc(0);
+      const truncated = patchBuf.length > GIT_PATCH_MAX_BYTES;
+      return { method: "git-commit-detail", ...commit, files, patch: (truncated ? patchBuf.subarray(0, GIT_PATCH_MAX_BYTES) : patchBuf).toString("utf8"), truncated };
+    }
+    case "git-status": {
+      // VS Code-like source control state of the working copy.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo) || !existsSync(path.join(repo, ".git"))) throw new Error("not a git repository");
+      const st = await runGitCapture(["-C", repo, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"]);
+      if (st.code !== 0) throw new Error("git status failed: " + st.stderr.slice(0, 300));
+      const parsed = parseStatusV2(st.stdout);
+      const hasBare = existsSync(path.join(repo + ".git", "HEAD"));
+      const ab = hasBare ? await _aheadBehind(repo, parsed.branch && parsed.branch !== "(detached)" ? parsed.branch : "") : null;
+      return { method: "git-status", ...parsed, ahead: ab?.ahead ?? parsed.ahead, behind: ab?.behind ?? parsed.behind, hasRemote: hasBare };
+    }
+    case "git-stage": {
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo) || !existsSync(path.join(repo, ".git"))) throw new Error("not a git repository");
+      const paths = _wcPaths(params.paths);
+      const r = params.unstage
+        ? await runGitCapture(["-C", repo, "reset", "-q", "--", ...paths])
+        : await runGitCapture(["-C", repo, "add", "-A", "--", ...paths]);
+      if (r.code !== 0) throw new Error("git " + (params.unstage ? "reset" : "add") + " failed: " + r.stderr.slice(0, 300));
+      return { method: "git-stage", ok: true };
+    }
+    case "git-discard": {
+      // Throw away working-tree changes to these paths: tracked → back to the index/HEAD, untracked → removed.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo) || !existsSync(path.join(repo, ".git"))) throw new Error("not a git repository");
+      const paths = _wcPaths(params.paths);
+      const tracked = [], untracked = [];
+      for (const p of paths) {
+        const ls = await runGitCapture(["-C", repo, "ls-files", "--error-unmatch", "--", p]);
+        (ls.code === 0 ? tracked : untracked).push(p);
+      }
+      if (tracked.length) {
+        const r = await runGitCapture(["-C", repo, "checkout", "-q", "--", ...tracked]);
+        if (r.code !== 0) throw new Error("git checkout failed: " + r.stderr.slice(0, 300));
+      }
+      if (untracked.length) {
+        const r = await runGitCapture(["-C", repo, "clean", "-q", "-f", "-d", "--", ...untracked]);
+        if (r.code !== 0) throw new Error("git clean failed: " + r.stderr.slice(0, 300));
+      }
+      return { method: "git-discard", ok: true, tracked: tracked.length, untracked: untracked.length };
+    }
+    case "git-push": {
+      // The working copy's HEAD into the bare remote (= a push for deployment: the caller fires the hook).
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo) || !existsSync(path.join(repo, ".git"))) throw new Error("not a git repository");
+      if (!existsSync(path.join(repo + ".git", "HEAD"))) throw new Error("no remote: this repository has the legacy layout — migrate it (scripts/migrate-repo-layout.mjs)");
+      const branch = await _currentBranch(repo);
+      if (!branch) throw new Error("detached HEAD: check out a branch first");
+      const before = await runGitCapture(["-C", repo + ".git", "rev-parse", "--verify", "--quiet", "refs/heads/" + branch]);
+      const r = await runGitCapture(["-C", repo, "push", "-q", "origin", "HEAD:refs/heads/" + branch]);
+      if (r.code !== 0) throw new Error("git push failed: " + r.stderr.slice(0, 300));
+      await runGitCapture(["-C", repo, "branch", "-q", "--set-upstream-to=origin/" + branch, branch]);
+      const after = await runGitCapture(["-C", repo, "rev-parse", "HEAD"]);
+      return {
+        method: "git-push", ok: true, ref: "refs/heads/" + branch,
+        before: before.code === 0 ? before.stdout.toString().trim() : "0".repeat(40),
+        after: after.stdout.toString().trim(),
+      };
+    }
+    case "git-pull": {
+      // Fast-forward the working copy from the bare; refused while it has changes.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo) || !existsSync(path.join(repo, ".git"))) throw new Error("not a git repository");
+      if (!existsSync(path.join(repo + ".git", "HEAD"))) throw new Error("no remote: legacy layout");
+      if (await _isDirty(repo)) throw new Error("working copy has changes — commit or discard them first");
+      const sync = await postReceive(repo + ".git");
+      if (!sync.updated) throw new Error("pull failed: " + sync.reason);
+      const head = await runGitCapture(["-C", repo, "rev-parse", "HEAD"]);
+      return { method: "git-pull", ok: true, sha: head.stdout.toString().trim() };
     }
     case "git-ssh-exec": {
       // Git over SSH (git-exec.js): spawn the service as a live pipe; the bytes

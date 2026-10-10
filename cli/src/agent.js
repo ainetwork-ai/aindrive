@@ -3,7 +3,7 @@ import { watch } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname as osHostname } from "node:os";
 import { join, sep } from "node:path";
-import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite, rpcMethodNames } from "./rpc.js";
+import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite, rpcMethodNames, postReceive } from "./rpc.js";
 import { GitExecs } from "./git-exec.js";
 import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
@@ -248,6 +248,7 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
     // (git-exec.js). Every frame the agent sends is signed like a response.
     const gitExecs = new GitExecs({
       log,
+      afterReceive: postReceive,
       send: (frame) => {
         try {
           const { type: _t, ...payloadForSig } = frame;

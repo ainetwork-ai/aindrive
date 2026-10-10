@@ -38,9 +38,11 @@ export class GitExecs {
    * @param {{ send: (frame: object) => void, log?: { warn: Function, info: Function } }} io
    *   `send` signs and writes one agent→server frame (type + fields, no sig yet).
    */
-  constructor({ send, log = console }) {
+  constructor({ send, log = console, afterReceive = null }) {
     this._send = send;
     this._log = log;
+    /** called with the repo path after a receive-pack exited 0 (rpc.js postReceive: fast-forward the working copy) */
+    this._afterReceive = afterReceive;
     /** @type {Map<string, object>} */
     this._execs = new Map();
   }
@@ -83,7 +85,10 @@ export class GitExecs {
     });
     child.stdin.on("error", () => {}); // EPIPE when git exits before the client stops sending
     child.on("close", (code, signal) => {
-      this._finish(ex, { code, signal });
+      // The git-exit frame waits for the working copy sync, so a client that
+      // reloads the drive right after `git push` sees the pushed files.
+      const after = service === "receive-pack" && code === 0 && this._afterReceive ? this._afterReceive(repoAbs) : null;
+      Promise.resolve(after).catch(() => null).then(() => this._finish(ex, { code, signal }));
     });
     ex.timer = setTimeout(() => {
       this._log.warn?.({ execId, service }, "git exec hit the time cap — killing");

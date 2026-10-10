@@ -167,6 +167,26 @@ members (their rows are in `sso_memberships`).
    sign-in lands on its drive on a person's first sign-in or while they have no
    personal drive of their own.
 
+## Repositories in a drive (bare remote + working copy)
+
+A repo in a drive is two folders under `repositories/` (`web/lib/git-paths.ts`,
+`cli/src/rpc.js` layout note): `repositories/<repo>.git` is the **bare remote**
+every clone/push targets — `https://<host>/<org>/git/<repo>` and
+`git@<host>:<org>/<repo>` both mean it — and `repositories/<repo>/` is the
+**working copy** (`origin = ../<repo>.git`) that the drive shows and edits, that
+▶ Run executes, and that the git panel commits (VS Code-like Source Control:
+stage/unstage/discard, commit staged or all). After a push lands in the bare, the
+agent fast-forwards the working copy **only if it is clean**; a dirty copy is
+left alone and the panel shows it behind with a Pull (ff-only) button. A commit
+in the panel deploys nothing; **Push** (working copy → bare) is the deploy
+trigger and fires the ainize project hook exactly like a push over HTTP/SSH.
+The browser pages `/<org>/git/<repo>[/tree|blob|raw|commits|commit|deployments/…]`
+(`web/lib/git-urls.ts`) show the working copy at the checked-out branch and the
+object store (read-only) at any other ref. A repo made before this layout (one
+non-bare `updateInstead` directory) is still cloned from and shown with a
+"migrate" hint; `node scripts/migrate-repo-layout.mjs <drive root> <repo>` on
+the agent's machine splits it in place without losing history or edits.
+
 ## Git over SSH
 
 `git clone git@aindrive.ainetwork.ai:<org-slug>/<repo>` / `git push …` reach an

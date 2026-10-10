@@ -110,9 +110,28 @@ export default async function middleware(
 // middleware like /api does. (A git client never trips the silent-SSO redirect
 // — not a browser navigation — but the body cap alone would break pushes.)
 // `config` must be a literal (Next analyses it statically at build time); the
-// test keeps MIDDLEWARE_MATCHER and the literal in step.
+// test keeps MIDDLEWARE_MATCHER / GIT_PAGE_MATCHER and the literals in step.
+//
+// The second matcher lets the GitHub-like repo PAGES back in: a browser opening
+// /<org>/git/<repo>/… (Accept: text/html, no ?service=) is rewritten by
+// next.config.ts to app/d/by-slug — but middleware runs on the ORIGINAL path,
+// before rewrites, so without this entry those pages would render with no CSP
+// and no silent SSO. The same three conditions as the rewrite (html Accept, no
+// service query, not a smart-HTTP tail) keep git clients out as before.
 export const MIDDLEWARE_MATCHER = "/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)|[^/]+/git(?:/|$)).*)";
+export const GIT_PAGE_MATCHER = {
+  source: "/:slug/git/:rest((?!.*(?:^|/)(?:info/refs|git-upload-pack|git-receive-pack)$).+)",
+  has: [{ type: "header", key: "accept", value: "(?<acc>.*text/html.*)" }],
+  missing: [{ type: "query", key: "service" }],
+};
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)|[^/]+/git(?:/|$)).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)|[^/]+/git(?:/|$)).*)",
+    {
+      source: "/:slug/git/:rest((?!.*(?:^|/)(?:info/refs|git-upload-pack|git-receive-pack)$).+)",
+      has: [{ type: "header", key: "accept", value: "(?<acc>.*text/html.*)" }],
+      missing: [{ type: "query", key: "service" }],
+    },
+  ],
 };

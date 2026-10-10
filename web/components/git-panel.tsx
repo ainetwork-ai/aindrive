@@ -1,16 +1,20 @@
 "use client";
 // The git panel shown above a folder's listing when that folder is a git repo
-// (GET /api/drives/:id/git-meta). Top to bottom: branch + HEAD · clone URL
-// (copy) · Run (the project's entry — `ainize.json` `entry`, else the root's
-// first runnable file) · Deployments (ainize Projects, read from the browser)
-// · recent commits (toggle) · commit box (editors, dirty tree). Data loading
-// for git-meta stays in the shell (one fetch per folder, refetched after a
-// commit); the ainize reads live here and degrade silently.
+// (GET /api/drives/:id/git-meta). Top to bottom: branch + HEAD + Push/Pull ·
+// clone URL (copy) · Run (the project's entry — `ainize.json` `entry`, else the
+// root's first runnable file) · Deployments (ainize Projects, read from the
+// browser) · recent commits (toggle) · Source Control (VS Code-like: staged /
+// changes / untracked rows with M A D U badges, +/− per row, Stage all, Discard,
+// and the commit box — editors only). The folder is the repo's WORKING COPY
+// (lib/git-paths.ts): a commit lands there; Push moves it into the bare remote
+// and is what deploys (POST git-sc). Data loading for git-meta stays in the
+// shell (one fetch per folder, refetched after every action); the ainize reads
+// live here and degrade silently.
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { GitBranch, GitCommitHorizontal, Copy, Check, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
+import { GitBranch, GitCommitHorizontal, Copy, Check, ChevronDown, ChevronUp, ExternalLink, ArrowUp, ArrowDown, Plus, Minus, Undo2 } from "lucide-react";
 import { toast } from "sonner";
-import type { GitCommit } from "@/lib/protocol";
+import type { GitChange, GitCommit, GitLayout, GitStatus } from "@/lib/protocol";
 import { apiFetch } from "@/lib/api-client";
 import { relativeTime, shortSha, RUN_IDLE } from "@/lib/git-panel";
 import { deploymentLogUrl, deploymentTime, type DeploymentStatus } from "@/lib/ainize-projects";
@@ -36,12 +40,24 @@ export type GitPanelMeta = {
   runnable?: string[];
   /** ainize project bound here (its hook fires on push) */
   projectId?: string | null;
+  /** working copy with its bare remote, a legacy non-bare repo, or bare (lib/git-paths.ts) */
+  layout?: GitLayout;
+  ahead?: number;
+  behind?: number;
+  /** agent `git-status` of the working copy — the Source Control lists; null when it could not be read */
+  status?: Omit<GitStatus, "method"> | null;
 };
 
-export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: {
+/** Pretty-URL links (lib/git-urls.ts) the panel uses when the repo is shown at `/<org>/git/<repo>`; absent on /d/<id>. */
+export type GitPanelUrls = { commit: (sha: string) => string; commits: string; deployments: string };
+
+export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, urls, onOpenFile }: {
   driveId: string;
   repo: string;
   meta: GitPanelMeta;
+  urls?: GitPanelUrls;
+  /** a Source Control row was clicked: open that file (drive path) in the viewer */
+  onOpenFile?: (path: string) => void;
   /** the bound ainize project (components/use-ainize-project.ts), shared with the file rows */
   ainize: AinizeProjectState;
   canEdit: boolean;
@@ -52,7 +68,37 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
   const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const head = meta.head;
+  const status = meta.status ?? null;
+  const staged = status?.staged ?? [];
+  const changes = [...(status?.unstaged ?? []), ...(status?.untracked ?? [])];
+  const changeCount = staged.length + changes.length;
+  const isWorkingCopy = meta.layout === "working-copy";
+  const ahead = meta.ahead ?? status?.ahead ?? 0;
+  const behind = meta.behind ?? status?.behind ?? 0;
+  // VS Code's default: with nothing staged, the commit takes everything; with a staged set, only that.
+  const [commitAll, setCommitAll] = useState(true);
+  const effectiveAll = staged.length === 0 ? true : commitAll;
+
+  async function sc(action: "stage" | "unstage" | "discard" | "push" | "pull", paths?: string[]) {
+    setBusy(action);
+    const res = await apiFetch<{ ok: true; moved?: boolean }>(`/api/drives/${driveId}/git-sc`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repo, action, ...(paths ? { paths } : {}) }),
+    });
+    setBusy(null);
+    if (!res.ok) { toast.error(res.error || `${action} failed`); return false; }
+    if (action === "push") toast.success(res.data.moved ? "Pushed — the remote is up to date" : "Nothing to push");
+    if (action === "pull") toast.success("Pulled (fast-forward)");
+    onCommitted();
+    return true;
+  }
+  const discard = (paths: string[]) => {
+    const what = paths.length === 1 ? `"${paths[0]}"` : `${paths.length} files`;
+    if (!confirm(`Discard changes to ${what}? Edits are lost; new files are deleted.`)) return;
+    void sc("discard", paths);
+  };
 
   // The project's Run row shares the per-file runner (entry path = repo-relative → drive path). The row runs
   // the manifest's entry by default; any runnable file at the root can be picked instead.
@@ -65,21 +111,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
   // Inputs (ainize.json `inputs`, the workflow_dispatch shape): one field each, prefilled with the default,
   // the last answers remembered per repo in this browser, sent as INPUT_<NAME> env with the run.
   const inputs = meta.manifest?.inputs ?? [];
-  const [values, setValues] = useState<Record<string, string>>({});
-  useEffect(() => {
-    let saved: Record<string, string> = {};
-    try { saved = JSON.parse(localStorage.getItem(inputsStorageKey(driveId, repo)) ?? "{}") as Record<string, string>; } catch {}
-    const next: Record<string, string> = {};
-    for (const i of inputs) next[i.name] = typeof saved[i.name] === "string" ? saved[i.name] : i.default ?? (i.type === "boolean" ? "false" : "");
-    setValues(next);
-  }, [driveId, repo, meta.manifest]); // eslint-disable-line react-hooks/exhaustive-deps
-  const setValue = (name: string, v: string) => {
-    setValues((prev) => {
-      const next = { ...prev, [name]: v };
-      try { localStorage.setItem(inputsStorageKey(driveId, repo), JSON.stringify(next)); } catch {}
-      return next;
-    });
-  };
+  const { values, setValue } = useRunInputs(driveId, repo, inputs);
   const startRun = () => {
     if (!entryPath) return;
     const missing = missingRequired(inputs, values);
@@ -101,11 +133,11 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
     setCommitting(true);
     const res = await apiFetch<{ sha: string }>(`/api/drives/${driveId}/git-commit`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ repo, message: m }),
+      body: JSON.stringify({ repo, message: m, all: effectiveAll }),
     });
     setCommitting(false);
     if (!res.ok) { toast.error(res.error || "commit failed"); return; }
-    toast.success(`Committed ${shortSha(res.data.sha)}`);
+    toast.success(isWorkingCopy ? `Committed ${shortSha(res.data.sha)} — Push to deploy` : `Committed ${shortSha(res.data.sha)}`);
     setMessage("");
     onCommitted();
   }
@@ -142,10 +174,28 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
         )}
         <span className="ml-auto inline-flex items-center gap-3 text-caption">
           {meta.dirty > 0 && (
-            <span className="inline-flex items-center gap-1.5 text-drive-muted" title="Uncommitted changes in the working tree">
+            <span className="inline-flex items-center gap-1.5 text-drive-muted" title="Uncommitted changes in the working copy">
               <span className="inline-block h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
               {meta.dirty} changed {meta.dirty === 1 ? "file" : "files"}
             </span>
+          )}
+          {isWorkingCopy && canEdit && (ahead > 0 || behind > 0) && (
+            <span className="inline-flex items-center gap-2" data-testid="git-panel-sync">
+              {ahead > 0 && (
+                <Button size="sm" variant="filled" loading={busy === "push"} onClick={() => sc("push")} icon={<ArrowUp className="w-3.5 h-3.5" aria-hidden="true" />} title="Push the committed changes into the remote — this deploys">
+                  Push {ahead}
+                </Button>
+              )}
+              {behind > 0 && (
+                <Button size="sm" variant="outline" loading={busy === "pull"} disabled={meta.dirty > 0} onClick={() => sc("pull")} icon={<ArrowDown className="w-3.5 h-3.5" aria-hidden="true" />}
+                  title={meta.dirty > 0 ? "Commit or discard your changes first — a pull never overwrites them" : "Fast-forward the working copy to the remote"}>
+                  Pull {behind}
+                </Button>
+              )}
+            </span>
+          )}
+          {isWorkingCopy && canEdit && ahead === 0 && behind === 0 && meta.dirty === 0 && head && (
+            <span className="text-drive-muted" title="The working copy and the remote are the same">up to date</span>
           )}
           {meta.commits.length > 0 && (
             <button
@@ -157,6 +207,9 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
               {meta.commits.length} {meta.commits.length === 1 ? "commit" : "commits"}
               {showLog ? <ChevronUp className="w-3 h-3" aria-hidden="true" /> : <ChevronDown className="w-3 h-3" aria-hidden="true" />}
             </button>
+          )}
+          {urls && (
+            <a href={urls.commits} className="font-medium text-drive-muted hover:text-drive-text" data-testid="git-panel-history">History</a>
           )}
         </span>
       </div>
@@ -175,6 +228,15 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
+
+      {meta.layout === "legacy" && (
+        <div className={clsx(rowCls, "text-amber-800 bg-amber-50")} data-testid="git-panel-legacy" role="note">
+          <span className={labelCls}>Layout</span>
+          <span>
+            Legacy repository (no bare remote): clone works, push and Pull do not. Run <code className="font-mono">scripts/migrate-repo-layout.mjs</code> on the drive to split it into <code className="font-mono">{repo}.git</code> + this working copy.
+          </span>
+        </div>
+      )}
 
       {/* 3. Run the project's entry */}
       <div className={rowCls} data-testid="git-panel-run">
@@ -231,7 +293,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
           without a manifest has nothing for ainize to build, so nothing is shown. With one and no project yet, the
           next push binds and deploys it (lib/git-project-hooks.ts) — there is no step to take. */}
       {meta.manifest?.kind && (
-        <Deployments ainizeUrl={meta.ainizeUrl} ainize={ainize} rowCls={rowCls} labelCls={labelCls} />
+        <Deployments ainizeUrl={meta.ainizeUrl} ainize={ainize} rowCls={rowCls} labelCls={labelCls} allHref={urls?.deployments} />
       )}
 
       {showLog && (
@@ -239,23 +301,53 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
           {meta.commits.map((c) => (
             <li key={c.sha} className="flex items-center gap-3 px-4 h-9 text-caption min-w-0">
               <GitCommitHorizontal className="w-3.5 h-3.5 text-drive-muted shrink-0" aria-hidden="true" />
-              <span className="font-mono text-drive-muted shrink-0">{shortSha(c.sha)}</span>
-              <span className="truncate text-drive-text flex-1">{c.subject}</span>
+              {urls
+                ? <a href={urls.commit(c.sha)} className="font-mono text-drive-muted shrink-0 hover:underline">{shortSha(c.sha)}</a>
+                : <span className="font-mono text-drive-muted shrink-0">{shortSha(c.sha)}</span>}
+              {urls
+                ? <a href={urls.commit(c.sha)} className="truncate text-drive-text flex-1 hover:underline">{c.subject}</a>
+                : <span className="truncate text-drive-text flex-1">{c.subject}</span>}
               <span className="text-drive-muted whitespace-nowrap">{c.author} · {relativeTime(c.date)}</span>
             </li>
           ))}
         </ol>
       )}
 
+      {/* 5. Source Control (editors): staged · changes, like VS Code; rows open the file */}
+      {canEdit && status && changeCount > 0 && (
+        <section className="border-t border-drive-border" aria-label="Source control" data-testid="git-panel-changes">
+          {staged.length > 0 && (
+            <ChangeList
+              title="Staged Changes" items={staged} repo={repo} onOpen={onOpenFile} busy={!!busy}
+              rowAction={{ label: "Unstage", icon: <Minus className="w-3.5 h-3.5" aria-hidden="true" />, run: (p) => void sc("unstage", [p]) }}
+              headerActions={<button type="button" className="text-caption font-medium text-drive-muted hover:text-drive-text" disabled={!!busy} onClick={() => void sc("unstage", staged.map((f) => f.path))}>Unstage all</button>}
+            />
+          )}
+          {changes.length > 0 && (
+            <ChangeList
+              title="Changes" items={changes} repo={repo} onOpen={onOpenFile} busy={!!busy}
+              rowAction={{ label: "Stage", icon: <Plus className="w-3.5 h-3.5" aria-hidden="true" />, run: (p) => void sc("stage", [p]) }}
+              rowDiscard={(p) => discard([p])}
+              headerActions={(
+                <>
+                  <button type="button" className="text-caption font-medium text-drive-muted hover:text-drive-text" disabled={!!busy} onClick={() => void sc("stage", changes.map((f) => f.path))}>Stage all</button>
+                  <button type="button" className="text-caption font-medium text-red-600 hover:text-red-700" disabled={!!busy} onClick={() => discard(changes.map((f) => f.path))}>Discard all</button>
+                </>
+              )}
+            />
+          )}
+        </section>
+      )}
+
       {canEdit && meta.dirty > 0 && (
         <form
-          className="flex items-center gap-2 px-4 py-2 border-t border-drive-border"
+          className="flex flex-wrap items-center gap-2 px-4 py-2 border-t border-drive-border"
           onSubmit={(e) => { e.preventDefault(); commit(); }}
         >
           <input
             value={message}
             onChange={(e) => setMessage(e.target.value)}
-            placeholder={`Commit ${meta.dirty} changed ${meta.dirty === 1 ? "file" : "files"}…`}
+            placeholder={effectiveAll ? `Commit ${meta.dirty} changed ${meta.dirty === 1 ? "file" : "files"}…` : `Commit ${staged.length} staged ${staged.length === 1 ? "file" : "files"}…`}
             aria-label="Commit message"
             maxLength={4000}
             disabled={committing}
@@ -264,9 +356,93 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: 
           <Button type="submit" size="sm" variant="outline" loading={committing} disabled={!message.trim()} icon={<GitCommitHorizontal className="w-3.5 h-3.5" aria-hidden="true" />}>
             Commit
           </Button>
+          {staged.length > 0 && (
+            <label className="inline-flex items-center gap-1.5 text-caption text-drive-muted whitespace-nowrap">
+              <input type="checkbox" checked={commitAll} onChange={(e) => setCommitAll(e.target.checked)} /> stage all &amp; commit
+            </label>
+          )}
         </form>
       )}
     </section>
+  );
+}
+
+/**
+ * The answers to a manifest's `inputs` (lib/run-inputs.ts): one value per field, prefilled with the
+ * default, the last answers remembered per repo in this browser. Shared by the panel's Run row and
+ * the file viewer's ▶ Run (components/viewer.tsx), so both ask the same questions and remember the
+ * same answers.
+ */
+export function useRunInputs(driveId: string, repo: string, inputs: ManifestInput[]) {
+  const [values, setValues] = useState<Record<string, string>>({});
+  // keyed by content, not identity: callers pass `manifest?.inputs ?? []`, a fresh array each render
+  const inputsKey = JSON.stringify(inputs);
+  useEffect(() => {
+    let saved: Record<string, string> = {};
+    try { saved = JSON.parse(localStorage.getItem(inputsStorageKey(driveId, repo)) ?? "{}") as Record<string, string>; } catch {}
+    const next: Record<string, string> = {};
+    for (const i of inputs) next[i.name] = typeof saved[i.name] === "string" ? saved[i.name] : i.default ?? (i.type === "boolean" ? "false" : "");
+    setValues(next);
+  }, [driveId, repo, inputsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setValue = (name: string, v: string) => {
+    setValues((prev) => {
+      const next = { ...prev, [name]: v };
+      try { localStorage.setItem(inputsStorageKey(driveId, repo), JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  return { values, setValue };
+}
+
+const BADGE: Record<string, { label: string; cls: string; title: string }> = {
+  M: { label: "M", cls: "text-amber-600", title: "modified" },
+  A: { label: "A", cls: "text-emerald-600", title: "added" },
+  D: { label: "D", cls: "text-red-600", title: "deleted" },
+  R: { label: "R", cls: "text-sky-600", title: "renamed" },
+  C: { label: "C", cls: "text-fuchsia-600", title: "conflict" },
+  U: { label: "U", cls: "text-emerald-600", title: "untracked" },
+  T: { label: "T", cls: "text-amber-600", title: "type changed" },
+};
+
+/** One Source Control list (Staged Changes / Changes): rows with a status badge, +/− and discard, like VS Code. */
+function ChangeList({ title, items, repo, onOpen, rowAction, rowDiscard, headerActions, busy }: {
+  title: string; items: GitChange[]; repo: string; onOpen?: (path: string) => void; busy: boolean;
+  rowAction: { label: string; icon: React.ReactNode; run: (path: string) => void };
+  rowDiscard?: (path: string) => void;
+  headerActions: React.ReactNode;
+}) {
+  return (
+    <div data-testid={`git-changes-${title.toLowerCase().replace(/\s+/g, "-")}`}>
+      <div className="flex items-center gap-3 px-4 h-8 text-label uppercase text-drive-muted">
+        <span>{title}</span>
+        <span className="rounded-full bg-drive-hover px-1.5 text-drive-text normal-case">{items.length}</span>
+        <span className="ml-auto inline-flex items-center gap-3 normal-case">{headerActions}</span>
+      </div>
+      <ul className="divide-y divide-drive-border/60">
+        {items.map((f) => {
+          const b = BADGE[f.status] ?? { label: f.status, cls: "text-drive-muted", title: f.status };
+          const drivePath = repo ? `${repo}/${f.path}` : f.path;
+          return (
+            <li key={f.path} className="group flex items-center gap-2 px-4 h-8 text-caption min-w-0 hover:bg-drive-hover" data-status={f.status}>
+              <button type="button" className="flex-1 min-w-0 text-left truncate font-mono text-drive-text hover:underline disabled:no-underline" onClick={() => onOpen?.(drivePath)} disabled={!onOpen || f.status === "D"} title={f.path}>
+                {f.path}
+              </button>
+              <span className={clsx("font-mono font-semibold w-4 text-center", b.cls)} title={b.title} aria-label={b.title}>{b.label}</span>
+              <span className="inline-flex items-center gap-1">
+                {rowDiscard && (
+                  <button type="button" className="rounded p-1 text-drive-muted hover:text-red-600 hover:bg-white" onClick={() => rowDiscard(f.path)} disabled={busy} aria-label={`Discard changes to ${f.path}`} title="Discard changes">
+                    <Undo2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                )}
+                <button type="button" className="rounded p-1 text-drive-muted hover:text-drive-text hover:bg-white" onClick={() => rowAction.run(f.path)} disabled={busy} aria-label={`${rowAction.label} ${f.path}`} title={rowAction.label}>
+                  {rowAction.icon}
+                </button>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -278,7 +454,7 @@ const DEPLOY_DOT: Record<DeploymentStatus, string> = {
 };
 
 /** One field of the manifest's `inputs`: text / select / checkbox / number, labelled by `description`. */
-function InputField({ input, value, onChange }: { input: ManifestInput; value: string; onChange: (v: string) => void }) {
+export function InputField({ input, value, onChange }: { input: ManifestInput; value: string; onChange: (v: string) => void }) {
   const id = `run-input-${input.name}`;
   const field = "w-full rounded border border-drive-border bg-drive-panel px-2 py-1 text-caption text-drive-text";
   const label = <label htmlFor={id} className="text-label text-drive-muted truncate" title={input.name}>{input.description ?? input.name}{input.required ? " *" : ""}</label>;
@@ -309,8 +485,10 @@ function InputField({ input, value, onChange }: { input: ManifestInput; value: s
  * No project yet → one quiet line: the next push binds and deploys the repo
  * (lib/git-project-hooks.ts autoBindProject). Any failure → nothing.
  */
-function Deployments({ ainizeUrl, ainize, rowCls, labelCls }: {
+export function Deployments({ ainizeUrl, ainize, rowCls, labelCls, allHref }: {
   ainizeUrl: string; ainize: AinizeProjectState; rowCls: string; labelCls: string;
+  /** the full-page `/<org>/git/<repo>/deployments` (repo pages only) */
+  allHref?: string;
 }) {
   const { project, deployments, active } = ainize;
   if (project === undefined) return null;
@@ -328,8 +506,9 @@ function Deployments({ ainizeUrl, ainize, rowCls, labelCls }: {
       <div className="flex items-center gap-2 px-4 h-9 text-caption">
         <span className={labelCls}>Deployments</span>
         <span className="text-drive-muted truncate">{project.kind} · {project.branch}</span>
+        {allHref && <a href={allHref} className={clsx(link, "ml-auto")}>All deployments</a>}
         {project.url && (
-          <a href={project.url} target="_blank" rel="noreferrer" className={clsx(link, "ml-auto")}>
+          <a href={project.url} target="_blank" rel="noreferrer" className={clsx(link, !allHref && "ml-auto")}>
             Project <ExternalLink className="w-3 h-3" aria-hidden="true" />
           </a>
         )}
