@@ -3,6 +3,7 @@
 // the file row, the Vercel-style status dot, and the output panel rendered
 // under the row. State per entry file lives in useRunner (one reducer over the
 // run route's SSE events, lib/git-panel.ts); the components only render it.
+import { AinizeMark, ainizeLinkClass } from "./ainize-brand";
 import { useCallback, useEffect, useRef, useState } from "react";
 import clsx from "clsx";
 import { Play, Square, ExternalLink, ChevronDown, ChevronUp } from "lucide-react";
@@ -129,8 +130,8 @@ export function RunActions({ state, isOpen, onRun, onStop, onToggle }: {
           <Square className="w-3 h-3" aria-hidden="true" /> Stop
         </button>
       ) : (
-        <button type="button" className={link} onClick={onRun} aria-label="Run file">
-          <Play className="w-3 h-3" aria-hidden="true" /> Run
+        <button type="button" className={ainizeLinkClass} onClick={onRun} aria-label="Run file on ainize" title="Run on ainize">
+          <AinizeMark className="w-3.5 h-3.5" /> <Play className="w-3 h-3" aria-hidden="true" /> Run
         </button>
       )}
       {state.status !== "idle" && (
