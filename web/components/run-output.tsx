@@ -159,22 +159,22 @@ export function RunOutput({ state, entryName, openUrl }: { state: RunState; entr
     : state.error ?? "Failed";
   return (
     <div className="rounded-lg border border-drive-border bg-drive-panel text-caption overflow-hidden" data-run-status={state.status}>
-      <div className="flex items-center gap-2 px-3 h-8 border-b border-drive-border text-drive-muted">
+      <div className="flex flex-wrap items-center gap-2 px-3 min-h-11 sm:min-h-8 py-2 sm:py-0 border-b border-drive-border text-drive-muted">
         <RunDot status={state.status} />
-        <span className="font-mono text-drive-text truncate">{entryName}</span>
+        <span className="min-w-0 max-w-full font-mono text-drive-text truncate">{entryName}</span>
         <span className="truncate">{summary}</span>
         {openUrl && (
           <a
             href={openUrl}
             target="_blank"
             rel="noreferrer"
-            className="ml-auto inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
+            className="min-h-11 sm:min-h-0 sm:ml-auto inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
           >
             Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
           </a>
         )}
       </div>
-      <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap wrap-break-word text-drive-text">
+      <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-drive-text">
         {state.chunks.length === 0 && state.status === "running" && <span className="text-drive-muted">waiting for output…</span>}
         {state.chunks.map((c, i) => (
           <span key={i} className={c.stream === "stderr" ? "text-red-600" : undefined}>{c.text}</span>
