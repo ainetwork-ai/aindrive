@@ -21,7 +21,7 @@ import { lookupMime } from "./mime";
 import type { GitMeta } from "./protocol";
 import { callAgent } from "./rpc";
 import { ainizeUrl, languageFor } from "./run-ainize";
-import { pinnedSnippetSource } from "./ainui-snippet-source";
+import { selectedSnippetSource } from "./ainui-snippet-source";
 import { projectIdFor } from "./git-project-hooks";
 import { serviceToken } from "./sso/service-token";
 import { requestOrigin } from "./shared-items";
@@ -64,43 +64,73 @@ export async function answerAinuiSnippet(req: Request, slug: string, path: strin
   if (!meta.exists) return notFound();
 
   const boundProject = projectIdFor(driveId, repoPath);
-  const manifest = boundProject ? null : await readManifest(driveId, drive.drive_secret, repoPath);
+  const query = new URL(req.url).searchParams;
+  const selection = query.get('runTarget');
+  const requestedSha = query.get('runSha') ?? undefined;
+  if (selection && !['head', 'commit', 'deployed', 'working-tree'].includes(selection)) return json(400, { error: 'invalid run target' });
+  if ((selection === 'commit' && (!requestedSha || !/^[a-f0-9]{40,64}$/.test(requestedSha))) || (selection !== 'commit' && requestedSha)) return json(400, { error: 'runSha is required only for a commit target' });
+  const working = selection === 'working-tree' || (!boundProject && !selection);
+  if (!working && !boundProject) return json(409, { error: 'push this repository to bind its project first' });
+  const chosen = boundProject && selection && selection !== 'working-tree'
+    ? await selectedSnippetSource(boundProject, gate.userId, selection as 'head' | 'commit' | 'deployed', requestedSha, req.signal) : null;
+  if (selection && !working && !chosen) return json(503, { error: 'selected repository version unavailable' });
+  const manifest = working ? await readManifest(driveId, drive.drive_secret, repoPath) : null;
   const runEndpoint = `${origin}/api/drives/${encodeURIComponent(driveId)}/run`;
   const inputs = manifest?.inputs ?? [];
-
-  if (target.view === "blob" || target.view === "raw") {
-    // `HEAD` names the checked-out branch: a consumer that only knows the drive path (AIN Teams' drive view asks for
-    // `…/blob/HEAD/<file>`) gets the same snippet — and the same ▶ Run — as the branch URL.
-    const ref = target.ref && target.ref !== "HEAD" ? target.ref : meta.branch;
+  const pin = (url: string, sha?: string) => {
+    if (!boundProject || (!working && !sha)) return url;
+    const selected = new URL(url);
+    selected.searchParams.set('runTarget', working ? 'working-tree' : 'commit');
+    if (sha) selected.searchParams.set('runSha', sha); else selected.searchParams.delete('runSha');
+    return selected.href;
+  };
+  const versions = (sha?: string) => boundProject ? { baseUrl: pageUrl, selected: working ? 'Working tree' : `${selection === 'deployed' ? 'Deployed' : selection === 'head' ? 'Latest commit' : 'Commit'} ${sha?.slice(0, 8) ?? ''}` } : undefined;
+  if (target.view === 'blob' || target.view === 'raw') {
+    const ref = chosen?.sha ?? (target.ref && target.ref !== 'HEAD' ? target.ref : meta.branch);
     let shown;
-    try { shown = await callAgent(driveId, drive.drive_secret, { method: "git-show", repo: repoPath, ref, path: target.path, maxBytes: 64 * 1024 }, { timeoutMs: 20_000 }); }
-    catch (e) {
-      const msg = (e as Error).message || "";
-      return /no such path|unknown ref|is a directory|not a git repository/.test(msg) ? notFound() : json(503, { error: "drive offline" });
+    try {
+      if (working && boundProject) {
+        const read = await callAgent(driveId, drive.drive_secret, { method: 'read', path: `${repoPath}/${target.path}`, encoding: 'base64', maxBytes: 64 * 1024 }, { timeoutMs: 20_000 });
+        shown = { sha: '', content: read.content, size: Buffer.from(read.content, 'base64').length };
+      } else shown = await callAgent(driveId, drive.drive_secret, { method: 'git-show', repo: repoPath, ref, path: target.path, maxBytes: 64 * 1024 }, { timeoutMs: 20_000 });
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      return /no such path|unknown ref|is a directory|not a git repository/.test(msg) ? notFound() : json(503, { error: 'drive offline' });
     }
-    const bytes = Buffer.from(shown.content, "base64");
+    const bytes = Buffer.from(shown.content, 'base64');
     const mime = lookupMime(target.path);
     const isText = isTextByName(target.path) || (!mime && looksLikeText(bytes)) || (!!mime && /^text\/|json|javascript|xml/.test(mime));
-    // Bound projects execute the exact displayed commit, with its own input form.
-    const source = boundProject ? await pinnedSnippetSource(boundProject, gate.userId, shown.sha, req.signal) : null;
-    const runnable = !!languageFor(target.path) && (boundProject ? !!source : ref === meta.branch);
+    const source = chosen ?? (boundProject && !working ? await selectedSnippetSource(boundProject, gate.userId, 'commit', shown.sha, req.signal) : null);
+    const runnable = !!languageFor(target.path) && (boundProject ? working || source?.kind === 'script' : ref === meta.branch);
     return snippetResponse(fileSnippet({
-      org: slug, repo: target.repo, ref, path: target.path, size: shown.size,
-      content: isText ? bytes.toString("utf8") : null,
-      // The page and raw links name the resolved ref, so a `HEAD` request yields the branch's canonical URLs.
-      pageUrl: `${origin}${gitUrl(site, { view: "blob", ref, path: target.path })}`,
-      rawUrl: `${origin}${gitUrl(site, { view: "raw", ref, path: target.path })}`,
-      run: runnable ? { inputs: source?.inputs ?? inputs, endpoint: runEndpoint, repoPath, ...(source ? { sha: source.sha } : {}) } : null,
+      org: slug, repo: target.repo, ref: working && boundProject ? 'Working tree' : ref, path: target.path, size: shown.size,
+      content: isText ? bytes.toString('utf8') : null,
+      pageUrl: pin(`${origin}${gitUrl(site, { view: 'blob', ref, path: target.path })}`, source?.sha),
+      rawUrl: working && boundProject ? null : `${origin}${gitUrl(site, { view: 'raw', ref, path: target.path })}`,
+      versions: versions(source?.sha),
+      run: runnable ? { inputs: source?.inputs ?? inputs, endpoint: runEndpoint, repoPath, ...(source ? { sha: source.sha } : {}), ...(working && boundProject ? { target: 'working-tree' as const } : {}) } : null,
     }));
   }
-
-  const source = boundProject && meta.head ? await pinnedSnippetSource(boundProject, gate.userId, meta.head.sha, req.signal) : null;
-  const entry = boundProject ? source?.entry ?? null : manifest?.entry ?? (await runnableFiles(driveId, drive.drive_secret, repoPath))[0] ?? null;
-  const ainize = await ainizeBlock(driveId, repoPath, origin, caller.kind === "actor" ? caller.subject : null);
+  const requestedRef = target.view === 'commit' ? target.sha : 'ref' in target ? target.ref : null;
+  let defaultSha = meta.head?.sha;
+  if (boundProject && !working && !selection && requestedRef && requestedRef !== 'HEAD' && requestedRef !== meta.branch) {
+    if (/^[a-f0-9]{40,64}$/.test(requestedRef)) defaultSha = requestedRef;
+    else {
+      try {
+        const refs = await callAgent(driveId, drive.drive_secret, { method: 'git-refs', repo: repoPath }, { timeoutMs: 15_000 });
+        defaultSha = refs.exists ? refs.branches.find((branch) => branch.name === requestedRef)?.sha : undefined;
+      } catch { return json(503, { error: 'drive offline' }); }
+      if (!defaultSha) return notFound();
+    }
+  }
+  const source = chosen ?? (boundProject && !working && defaultSha ? await selectedSnippetSource(boundProject, gate.userId, 'commit', defaultSha, req.signal) : null);
+  const entry = working ? manifest?.entry ?? (await runnableFiles(driveId, drive.drive_secret, repoPath))[0] ?? null : source?.kind === 'script' ? source.entry : null;
+  const ainize = await ainizeBlock(driveId, repoPath, origin, caller.kind === 'actor' ? caller.subject : null);
   return snippetResponse(repoSnippet({
-    org: slug, repo: target.repo, branch: meta.branch, head: meta.head,
-    pageUrl: `${origin}${gitUrl(site, { view: "tree", ref: null, path: "" })}`,
-    run: entry ? { entry, inputs: source?.inputs ?? inputs, endpoint: runEndpoint, repoPath, ...(source ? { sha: source.sha } : {}) } : null,
+    org: slug, repo: target.repo, branch: meta.branch, head: source && meta.head ? { ...meta.head, sha: source.sha, ...(source.sha !== meta.head.sha ? { subject: 'Selected version' } : {}) } : meta.head,
+    pageUrl: pin(`${origin}${gitUrl(site, { view: 'tree', ref: null, path: '' })}`, source?.sha),
+    versions: versions(source?.sha),
+    run: entry ? { entry, inputs: source?.inputs ?? inputs, endpoint: runEndpoint, repoPath, ...(source ? { sha: source.sha } : {}), ...(working && boundProject ? { target: 'working-tree' as const } : {}) } : null,
     ainize,
   }));
 }

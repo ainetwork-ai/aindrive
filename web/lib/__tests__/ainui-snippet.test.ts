@@ -190,3 +190,11 @@ describe("runBlock", () => {
     expect(r.data).toEqual({ inputs: {}, run: { status: "idle", output: "" } });
   });
 });
+
+
+it('version controls stay in the basic catalog and replace the current card', () => {
+  const snippet = repoSnippet({ org: 'comcom', repo: 'clef', branch: 'main', head: null, pageUrl: 'https://drive.test/comcom/git/clef?runTarget=commit&runSha=' + 'a'.repeat(40), ainize: null, run: RUN, versions: { selected: 'Commit aaaaaaaa', baseUrl: 'https://drive.test/comcom/git/clef' } });
+  const components = checkSurface(snippet);
+  expect(components.some((component) => component.id === 'source')).toBe(true);
+  expect(snippet.actions['select:head']).toEqual({ method: 'GET', url: 'https://drive.test/comcom/git/clef?runTarget=head', navigate: false, replace: true });
+});
