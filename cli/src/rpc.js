@@ -73,6 +73,9 @@ const RPC_METHODS = new Set([
   "handoff-read",
   // Git smart-HTTP: real git over a repo in the drive FS (clone/push).
   "git-advertise", "git-init", "git-service",
+  // Git panel in the web UI: what a repo folder shows (branch, HEAD, recent
+  // commits, dirty count) and the one write it offers (commit everything).
+  "git-meta", "git-commit",
 ]);
 
 /** The methods handleRpc answers, sorted (a copy: the set itself stays private). */
@@ -258,6 +261,15 @@ function _isGitRepo(abs) {
   const bare = existsSync(path.join(abs, "HEAD")) && existsSync(path.join(abs, "objects"));
   const nonBare = existsSync(path.join(abs, ".git", "HEAD")) && existsSync(path.join(abs, ".git", "objects"));
   return bare || nonBare;
+}
+// `%x1f` (unit separator) between fields: a subject can hold anything but a
+// newline, so splitting on \x1f then \n is unambiguous.
+const GIT_LOG_FORMAT = "%H%x1f%s%x1f%an%x1f%aI";
+function parseGitLog(text) {
+  return text.split("\n").filter(Boolean).map((line) => {
+    const [sha, subject, author, date] = line.split("\x1f");
+    return { sha, subject: subject ?? "", author: author ?? "", date: date ?? "" };
+  });
 }
 function runGitCapture(args, stdinFd = "ignore") {
   return new Promise((resolve, reject) => {
@@ -480,6 +492,49 @@ export async function handleRpc(params, root) {
         if (r.code !== 0) throw new Error("git " + service + " failed: " + r.stderr.slice(0, 300));
       } finally { try { closeSync(inFd); } catch {} try { closeSync(outFd); } catch {} }
       return { method: "git-service", ok: true, size: statSync(outAbs).size };
+    }
+    case "git-meta": {
+      // Read-only summary for the web git panel. An unborn branch (fresh
+      // git-init, nothing pushed yet) has no HEAD commit: log fails, so the
+      // branch comes from symbolic-ref and commits stay empty.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) return { method: "git-meta", exists: false };
+      const br = await runGitCapture(["-C", repo, "symbolic-ref", "--short", "-q", "HEAD"]);
+      let branch = br.code === 0 ? br.stdout.toString().trim() : "";
+      if (!branch) {
+        const det = await runGitCapture(["-C", repo, "rev-parse", "--short", "HEAD"]);
+        branch = det.code === 0 ? "detached@" + det.stdout.toString().trim() : "HEAD";
+      }
+      const log = await runGitCapture(["-C", repo, "log", "-n", "10", "--format=" + GIT_LOG_FORMAT]);
+      const commits = log.code === 0 ? parseGitLog(log.stdout.toString()) : [];
+      const st = await runGitCapture(["-C", repo, "status", "--porcelain"]);
+      const dirty = st.code === 0 ? st.stdout.toString().split("\n").filter(Boolean).length : 0;
+      return { method: "git-meta", exists: true, branch, head: commits[0] ?? null, dirty, commits };
+    }
+    case "git-commit": {
+      // Commit everything in the working tree as the signed-in web user. The
+      // identity comes per-invocation (-c), never written into the repo config.
+      const repo = safeResolve(root, params.repo);
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
+      if (!existsSync(path.join(repo, ".git"))) throw new Error("bare repository has no working tree");
+      const message = String(params.message ?? "").trim();
+      if (!message) throw new Error("commit message required");
+      const authorName = String(params.authorName || "").trim() || "aindrive";
+      const authorEmail = String(params.authorEmail || "").trim() || "noreply@aindrive.ainetwork.ai";
+      if (/[\r\n]/.test(authorName + authorEmail)) throw new Error("invalid author");
+      const add = await runGitCapture(["-C", repo, "add", "-A"]);
+      if (add.code !== 0) throw new Error("git add failed: " + add.stderr.slice(0, 300));
+      const st = await runGitCapture(["-C", repo, "status", "--porcelain"]);
+      if (st.code !== 0) throw new Error("git status failed: " + st.stderr.slice(0, 300));
+      if (!st.stdout.toString().trim()) throw new Error("nothing to commit");
+      const c = await runGitCapture([
+        "-C", repo, "-c", "user.name=" + authorName, "-c", "user.email=" + authorEmail,
+        "commit", "-q", "-m", message,
+      ]);
+      if (c.code !== 0) throw new Error("git commit failed: " + c.stderr.slice(0, 300));
+      const head = await runGitCapture(["-C", repo, "rev-parse", "HEAD"]);
+      if (head.code !== 0) throw new Error("git rev-parse failed: " + head.stderr.slice(0, 300));
+      return { method: "git-commit", sha: head.stdout.toString().trim() };
     }
   }
 }

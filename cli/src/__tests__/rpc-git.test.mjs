@@ -140,3 +140,71 @@ describe("handleRpc — git-service (receive-pack)", () => {
       .rejects.toThrow("not a git repository");
   });
 });
+
+// Web git panel: git-meta (read-only summary) and git-commit (commit all as
+// the signed-in user), on a real repo in the drive.
+describe("handleRpc — git-meta", () => {
+  it("reports exists:false for a plain folder", async () => {
+    mkdirSync(path.join(root, "folder"));
+    expect(await handleRpc({ method: "git-meta", repo: "folder" }, root)).toEqual({ method: "git-meta", exists: false });
+  });
+
+  it("describes an unborn repo (fresh git-init) without a HEAD commit", async () => {
+    await handleRpc({ method: "git-init", repo: "proj" }, root);
+    const r = await handleRpc({ method: "git-meta", repo: "proj" }, root);
+    expect(r).toEqual({ method: "git-meta", exists: true, branch: "main", head: null, dirty: 0, commits: [] });
+  });
+
+  it("returns branch, HEAD, the last 10 commits (newest first) and the dirty count", async () => {
+    const repo = path.join(root, "proj"); mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    for (let i = 1; i <= 12; i++) {
+      writeFileSync(path.join(repo, "f.txt"), `v${i}\n`);
+      git(repo, "add", "-A"); git(repo, "commit", "-q", "-m", `commit ${i}`);
+    }
+    writeFileSync(path.join(repo, "dirty-a.txt"), "a\n");
+    writeFileSync(path.join(repo, "f.txt"), "changed\n");
+    const r = await handleRpc({ method: "git-meta", repo: "proj" }, root);
+    expect(r.exists).toBe(true);
+    expect(r.branch).toBe("main");
+    expect(r.commits).toHaveLength(10);
+    expect(r.commits[0].subject).toBe("commit 12");
+    expect(r.commits[9].subject).toBe("commit 3");
+    expect(r.head.sha).toBe(git(repo, "rev-parse", "HEAD"));
+    expect(r.head.author).toBe("t");
+    expect(r.head.date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(r.dirty).toBe(2);
+  });
+
+  it("refuses a path that escapes the drive", async () => {
+    await expect(handleRpc({ method: "git-meta", repo: "../x" }, root)).rejects.toThrow(/escapes/);
+  });
+});
+
+describe("handleRpc — git-commit", () => {
+  it("commits all changes with the given identity and returns the sha", async () => {
+    await handleRpc({ method: "git-init", repo: "proj" }, root);
+    const repo = path.join(root, "proj");
+    writeFileSync(path.join(repo, "a.py"), "print(1)\n");
+    const r = await handleRpc({ method: "git-commit", repo: "proj", message: "first", authorName: "Min Kim", authorEmail: "min@example.com" }, root);
+    expect(r.method).toBe("git-commit");
+    expect(r.sha).toBe(git(repo, "rev-parse", "HEAD"));
+    expect(git(repo, "log", "-1", "--format=%an <%ae> %s")).toBe("Min Kim <min@example.com> first");
+    expect(git(repo, "status", "--porcelain")).toBe("");
+    // The identity was passed per-invocation, not written into the repo.
+    expect(() => git(repo, "config", "--local", "user.name")).toThrow();
+    const meta = await handleRpc({ method: "git-meta", repo: "proj" }, root);
+    expect(meta.head.sha).toBe(r.sha);
+    expect(meta.dirty).toBe(0);
+  });
+
+  it("refuses an empty message, a clean tree and a non-repo with clear errors", async () => {
+    await handleRpc({ method: "git-init", repo: "proj" }, root);
+    writeFileSync(path.join(root, "proj", "a.txt"), "x\n");
+    await expect(handleRpc({ method: "git-commit", repo: "proj", message: "   " }, root)).rejects.toThrow("commit message required");
+    await handleRpc({ method: "git-commit", repo: "proj", message: "ok" }, root);
+    await expect(handleRpc({ method: "git-commit", repo: "proj", message: "again" }, root)).rejects.toThrow("nothing to commit");
+    mkdirSync(path.join(root, "plain"));
+    await expect(handleRpc({ method: "git-commit", repo: "plain", message: "m" }, root)).rejects.toThrow("not a git repository");
+  });
+});

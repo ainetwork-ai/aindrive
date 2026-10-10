@@ -11,7 +11,9 @@ export type RpcMethod =
   // Git smart-HTTP (clone/push): the agent runs real git on a repo in the drive FS
   // (non-bare with receive.denyCurrentBranch=updateInstead since git-init went
   // non-bare, so pushed files show up in the drive; legacy bare repos still serve).
-  | "git-advertise" | "git-init" | "git-service";
+  | "git-advertise" | "git-init" | "git-service"
+  // Git panel (components/git-panel.tsx): repo summary, and commit-all as the signed-in user.
+  | "git-meta" | "git-commit";
 
 export type RpcParams =
   | { method: "list"; path: string }
@@ -34,7 +36,17 @@ export type RpcParams =
   // upload-chunk and drains via download-chunk, so large packs never cross as one JSON.
   | { method: "git-advertise"; repo: string; service: "upload-pack" | "receive-pack" }
   | { method: "git-init"; repo: string }
-  | { method: "git-service"; repo: string; service: "upload-pack" | "receive-pack"; in: string; out: string };
+  | { method: "git-service"; repo: string; service: "upload-pack" | "receive-pack"; in: string; out: string }
+  | { method: "git-meta"; repo: string }
+  | { method: "git-commit"; repo: string; message: string; authorName: string; authorEmail: string };
+
+/** One commit as the agent's `git log` reports it (`date` is ISO 8601, author date). */
+export type GitCommit = { sha: string; subject: string; author: string; date: string };
+
+/** What a drive folder that is a git repo shows in the web git panel. */
+export type GitMeta =
+  | { method: "git-meta"; exists: false }
+  | { method: "git-meta"; exists: true; branch: string; head: GitCommit | null; dirty: number; commits: GitCommit[] };
 
 export type AskSource = {
   path: string;
@@ -84,7 +96,9 @@ export type RpcResult =
   | { method: "thumbnail"; data: string; mime: string }
   | { method: "git-advertise"; exists: boolean; data: string }
   | { method: "git-init"; ok: true }
-  | { method: "git-service"; ok: true; size: number };
+  | { method: "git-service"; ok: true; size: number }
+  | GitMeta
+  | { method: "git-commit"; sha: string };
 
 export type RpcRequest = {
   v: typeof PROTOCOL_VERSION;

@@ -13,6 +13,7 @@ import {
   DriveSidebar, DriveHeader, FileTable, ShowcaseSection, LockedPreview,
   type DriveSummary, type ShareSummary, type ViewMode,
 } from "./drive-shell-parts";
+import { GitPanel, type GitPanelMeta } from "./git-panel";
 
 // These four are only rendered on user action (open a file, open chat, open
 // the share/agent modal), so we load them on demand instead of bundling them
@@ -224,6 +225,17 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
     setShowcase(res.ok ? res.data.items : []);
   }, [driveId, isOwner]);
 
+  // Git panel: is the listed folder a git repo? One fetch per folder view
+  // (null while unknown / not a repo), refetched after a commit. The synthetic
+  // root is a listing of grants, never a folder on disk.
+  const [gitMeta, setGitMeta] = useState<GitPanelMeta | null>(null);
+  const loadGitMeta = useCallback(async () => {
+    if (isSyntheticRoot) { setGitMeta(null); return; }
+    const res = await apiFetch<GitPanelMeta | { exists: false }>(`/api/drives/${driveId}/git-meta?repo=${encodeURIComponent(path)}`);
+    setGitMeta(res.ok && res.data.exists ? res.data : null);
+  }, [driveId, path, isSyntheticRoot]);
+  useEffect(() => { setGitMeta(null); loadGitMeta(); }, [loadGitMeta]);
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadDrives(); }, [loadDrives]);
   useEffect(() => { loadShares(); }, [loadShares]);
@@ -423,6 +435,15 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
 
         <section className="flex-1 flex min-h-0">
           <div className="flex-1 overflow-auto scrollbar-thin p-3 sm:p-6">
+            {gitMeta && (
+              <GitPanel
+                driveId={driveId}
+                repo={path}
+                meta={gitMeta}
+                canEdit={canEdit}
+                onCommitted={() => { loadGitMeta(); load(); }}
+              />
+            )}
             <FileTable
               loading={loading}
               err={err}
@@ -446,6 +467,8 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
               onNewFolder={onNewFolder}
               ctxMenu={ctxMenu}
               setCtxMenu={setCtxMenu}
+              gitRepo={gitMeta ? path : null}
+              ainizeUrl={gitMeta?.ainizeUrl ?? "https://ainize.ai"}
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}
@@ -463,7 +486,7 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
               entry={selected}
               canEdit={canEdit}
               onClose={() => setSelected(null)}
-              onSaved={load}
+              onSaved={() => { load(); if (gitMeta) loadGitMeta(); }}
             />
           ))}
           {chatOpen && (
