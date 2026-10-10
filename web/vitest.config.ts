@@ -7,6 +7,9 @@ export default defineConfig({
       "@": path.resolve(__dirname, "."),
     },
   },
+  // Page tests render .tsx server components: Next's tsconfig keeps `jsx: preserve`, so vitest compiles JSX itself.
+  esbuild: { jsx: "automatic", jsxImportSource: "react", tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } } },
+  oxc: { jsx: { runtime: "automatic", importSource: "react" } },
   test: {
     include: [
       "scenarios/*.test.mjs",

@@ -14,6 +14,12 @@ export type RpcMethod =
   | "git-advertise" | "git-init" | "git-service"
   // Git panel (components/git-panel.tsx): repo summary, and commit-all as the signed-in user.
   | "git-meta" | "git-commit"
+  // GitHub-like repo pages (lib/git-urls.ts, app/d/by-slug): read-only views of any ref —
+  // branches, one folder of a tree, one file, the log, one commit with its diff.
+  | "git-refs" | "git-ls-tree" | "git-show" | "git-log" | "git-commit-detail"
+  // Source control on the working copy (components/git-panel.tsx, lib/git-paths.ts for the layout):
+  // changes, stage/unstage, discard, push into the bare remote, fast-forward pull from it.
+  | "git-status" | "git-stage" | "git-discard" | "git-push" | "git-pull"
   // Git over SSH (lib/git-ssh/*): the same two services as a live bidirectional
   // pipe on the agent WebSocket — git speaks its stateful protocol over SSH, so
   // the stateless one-request/one-result shape above cannot serve it.
@@ -42,7 +48,20 @@ export type RpcParams =
   | { method: "git-init"; repo: string }
   | { method: "git-service"; repo: string; service: "upload-pack" | "receive-pack"; in: string; out: string }
   | { method: "git-meta"; repo: string }
-  | { method: "git-commit"; repo: string; message: string; authorName: string; authorEmail: string }
+  // `all` (default true): `git add -A` first; false commits only what is staged.
+  | { method: "git-commit"; repo: string; message: string; authorName: string; authorEmail: string; all?: boolean }
+  | { method: "git-status"; repo: string }
+  | { method: "git-stage"; repo: string; paths: string[]; unstage?: boolean }
+  | { method: "git-discard"; repo: string; paths: string[] }
+  | { method: "git-push"; repo: string }
+  | { method: "git-pull"; repo: string }
+  // Repo pages. `ref` is a branch, tag or sha (never an option or a revision expression — the agent
+  // refuses those); `path` is repo-relative as git spells it ("" = root). All read the object store.
+  | { method: "git-refs"; repo: string }
+  | { method: "git-ls-tree"; repo: string; ref: string; path: string }
+  | { method: "git-show"; repo: string; ref: string; path: string; maxBytes?: number }
+  | { method: "git-log"; repo: string; ref: string; path?: string; n?: number }
+  | { method: "git-commit-detail"; repo: string; sha: string }
   // Git over SSH: spawn `git <service> <repo>` as a live pipe identified by `execId`
   // (cli/src/git-exec.js). The answer means "running, stdin open"; the bytes then
   // travel as GitStreamFrame frames on the same socket, never as RPC payloads.
@@ -52,10 +71,37 @@ export type RpcParams =
 /** One commit as the agent's `git log` reports it (`date` is ISO 8601, author date). */
 export type GitCommit = { sha: string; subject: string; author: string; date: string };
 
-/** What a drive folder that is a git repo shows in the web git panel. */
+/**
+ * What a drive folder that is a git repo shows in the web git panel. `layout`:
+ * "working-copy" (origin = the bare sibling, lib/git-paths.ts), "legacy" (a
+ * non-bare repo with no bare sibling — read, but nothing to push to), "bare".
+ * `ahead`/`behind` are vs origin/<branch> (0 without a remote).
+ */
+export type GitLayout = "working-copy" | "legacy" | "bare";
 export type GitMeta =
   | { method: "git-meta"; exists: false }
-  | { method: "git-meta"; exists: true; branch: string; head: GitCommit | null; dirty: number; commits: GitCommit[] };
+  | { method: "git-meta"; exists: true; branch: string; head: GitCommit | null; dirty: number; commits: GitCommit[]; layout: GitLayout; ahead: number; behind: number };
+/** One changed path as VS Code shows it: M modified, A added, D deleted, R renamed, U untracked, C conflict. */
+export type GitChange = { path: string; status: string };
+export type GitStatus = {
+  method: "git-status"; branch: string; staged: GitChange[]; unstaged: GitChange[]; untracked: GitChange[];
+  ahead: number; behind: number; hasRemote: boolean;
+};
+
+/** `git log` with parents, author email and body (repo pages' commit list / detail). */
+export type GitCommitFull = GitCommit & { parents: string[]; authorEmail: string; body: string };
+/** One row of `git ls-tree -l` at a ref; `lastCommit` is omitted for very large folders. */
+export type GitTreeEntry = { name: string; type: "blob" | "tree" | "commit"; mode: string; size: number; lastCommit?: GitCommit | null };
+export type GitRefs =
+  | { method: "git-refs"; exists: false }
+  | { method: "git-refs"; exists: true; head: string; headSha: string | null; branches: { name: string; sha: string }[] };
+export type GitCommitDetail = GitCommitFull & {
+  method: "git-commit-detail";
+  files: { path: string; additions: number | null; deletions: number | null }[];
+  /** `git show --patch`, UTF-8, cut at 512 KiB (`truncated`) */
+  patch: string;
+  truncated: boolean;
+};
 
 export type AskSource = {
   path: string;
@@ -104,10 +150,20 @@ export type RpcResult =
   | { method: "handoff-read"; data: string; eof: boolean; size: number }
   | { method: "thumbnail"; data: string; mime: string }
   | { method: "git-advertise"; exists: boolean; data: string }
-  | { method: "git-init"; ok: true }
-  | { method: "git-service"; ok: true; size: number }
+  | { method: "git-init"; ok: true; bare: string; workingCopy: string }
+  | { method: "git-service"; ok: true; size: number; workingCopy?: { updated: boolean; reason?: string; branch?: string } }
   | GitMeta
   | { method: "git-commit"; sha: string }
+  | GitRefs
+  | { method: "git-ls-tree"; sha: string; entries: GitTreeEntry[] }
+  | { method: "git-show"; sha: string; size: number; content: string; truncated: boolean }
+  | { method: "git-log"; sha: string; commits: GitCommitFull[] }
+  | GitCommitDetail
+  | GitStatus
+  | { method: "git-stage"; ok: true }
+  | { method: "git-discard"; ok: true; tracked: number; untracked: number }
+  | { method: "git-push"; ok: true; ref: string; before: string; after: string }
+  | { method: "git-pull"; ok: true; sha: string }
   | { method: "git-ssh-exec"; ok: true; pid?: number };
 
 /**

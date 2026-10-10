@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { handleRpc, rpcMethodNames } from "../rpc.js";
+import { handleRpc, rpcMethodNames, postReceive } from "../rpc.js";
 import { GitExecs, GIT_EXEC_LIMITS } from "../git-exec.js";
 
 process.env.AINDRIVE_TRACE = "off";
@@ -104,8 +104,8 @@ describe("GitExecs — upload-pack pipe", () => {
     expect(gitExecs.stdin({ execId: "exec0002", data: b64("x") })).toBe(false);
   });
 
-  it("receive-pack: a real push payload lands files in the working tree (updateInstead)", async () => {
-    await handleRpc({ method: "git-init", repo: "dst" }, root);
+  it("receive-pack: a real push payload lands in the bare, and afterReceive fast-forwards the working copy before git-exit", async () => {
+    await handleRpc({ method: "git-init", repo: "dst.git" }, root);
     const src = path.join(tmp, "src"); mkdirSync(src);
     git(src, "init", "-q", "-b", "main"); writeFileSync(path.join(src, "f.txt"), "pushed\n");
     git(src, "add", "."); git(src, "commit", "-qm", "c");
@@ -113,8 +113,8 @@ describe("GitExecs — upload-pack pipe", () => {
     const pack = execFileSync("git", ["pack-objects", "--stdout", "--revs"], { cwd: src, input: `${head}\n` });
 
     const c = collector();
-    const gitExecs = new GitExecs({ send: c.send });
-    await handleRpc({ method: "git-ssh-exec", repo: "dst", service: "receive-pack", execId: "exec0003" }, root, { gitExecs });
+    const gitExecs = new GitExecs({ send: c.send, afterReceive: postReceive });
+    await handleRpc({ method: "git-ssh-exec", repo: "dst.git", service: "receive-pack", execId: "exec0003" }, root, { gitExecs });
     await new Promise((res) => { const t = setInterval(() => { if (c.stdout().length) { clearInterval(t); res(); } }, 20); });
     const cmd = `${"0".repeat(40)} ${head} refs/heads/main\0report-status\n`;
     const body = Buffer.concat([Buffer.from(pkt(cmd)), Buffer.from("0000"), pack]);
@@ -123,6 +123,7 @@ describe("GitExecs — upload-pack pipe", () => {
     const exit = await c.exit;
     expect(exit.code).toBe(0);
     expect(c.stdout().toString("latin1")).toMatch(/unpack ok/);
+    expect(git(path.join(root, "dst.git"), "rev-parse", "HEAD")).toBe(head);
     expect(existsSync(path.join(root, "dst", "f.txt"))).toBe(true);
     expect(readFileSync(path.join(root, "dst", "f.txt"), "utf8")).toBe("pushed\n");
   });

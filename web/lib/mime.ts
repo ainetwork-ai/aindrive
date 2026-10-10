@@ -1,4 +1,5 @@
 import mimeTypes from "mime-types";
+import { isTextByName } from "./text-kind";
 
 /**
  * Classify a path/filename into "text" (UTF-8 readable in an editor) or
@@ -18,7 +19,8 @@ export function lookupMime(path: string): string | null {
 
 export function classifyKind(path: string): { kind: "text" | "binary"; mime: string } {
   const mime = lookupMime(path);
-  if (!mime) return { kind: "binary", mime: "application/octet-stream" };
+  // `Dockerfile`, `Makefile`, `.gitignore`, `LICENSE`, … have no mime type but are text (lib/text-kind.ts).
+  if (!mime) return isTextByName(path) ? { kind: "text", mime: "text/plain" } : { kind: "binary", mime: "application/octet-stream" };
   if (mime.startsWith("text/")) return { kind: "text", mime };
   if (TEXT_EXTRA_PREFIXES.some((p) => mime === p || mime.startsWith(p + ";"))) {
     return { kind: "text", mime };

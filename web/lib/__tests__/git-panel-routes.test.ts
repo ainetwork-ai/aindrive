@@ -20,7 +20,7 @@ vi.mock("next/headers", () => ({
 }));
 
 type Call = Record<string, unknown>;
-const agent = { calls: [] as Call[], meta: null as Call | null, dirty: 2 };
+const agent = { calls: [] as Call[], meta: null as Call | null, dirty: 2, files: {} as Record<string, string>, status: null as Call | null, pushMoves: true };
 vi.mock("../rpc", () => ({
   AgentError: class extends Error { status: number; constructor(m: string, s = 502) { super(m); this.status = s; } },
   callAgent: async (_d: string, _s: string, req: Call) => {
@@ -31,7 +31,23 @@ vi.mock("../rpc", () => ({
       case "git-commit":
         if (!String(req.message).trim()) throw new Error("commit message required");
         if (agent.dirty === 0) throw new Error("nothing to commit");
+        if (req.all === false && !(agent.status?.staged as unknown[] | undefined)?.length) throw new Error("nothing staged — stage changes first, or commit all");
         return { method: "git-commit", sha: "abc1234abc1234abc1234abc1234abc1234abc12" };
+      case "git-status":
+        if (!agent.status) throw new Error("not a git repository");
+        return { method: "git-status", ...agent.status };
+      case "git-stage": return { method: "git-stage", ok: true };
+      case "git-discard": return { method: "git-discard", ok: true, tracked: 1, untracked: 0 };
+      case "git-push":
+        return { method: "git-push", ok: true, ref: "refs/heads/main", before: agent.pushMoves ? "1".repeat(40) : "2".repeat(40), after: "2".repeat(40) };
+      case "git-pull":
+        if (agent.dirty > 0) throw new Error("working copy has changes — commit or discard them first");
+        return { method: "git-pull", ok: true, sha: "2".repeat(40) };
+      case "stat":
+        return { method: "stat", entry: (req.path as string) in agent.files ? { name: String(req.path).split("/").pop(), path: req.path, isDir: false, size: agent.files[req.path as string].length, mtimeMs: 1, ext: "py", mime: "text/x-python" } : null };
+      case "write":
+        agent.files[req.path as string] = String(req.content);
+        return { method: "write", ok: true, bytes: String(req.content).length };
       case "list":
         if (req.path === "proj") return { entries: [
           { name: "main.py", path: "proj/main.py", isDir: false, size: 12 },
@@ -42,7 +58,7 @@ vi.mock("../rpc", () => ({
         if (req.path === "proj/lib") return { entries: [{ name: "util.py", path: "proj/lib/util.py", isDir: false, size: 3 }] };
         return { entries: [] };
       case "read":
-        return { method: "read", content: `# ${req.path}\n`, encoding: "utf8" };
+        return { method: "read", content: agent.files[req.path as string] ?? `# ${req.path}\n`, encoding: "utf8" };
     }
     return { ok: true };
   },
@@ -53,6 +69,9 @@ const { sign } = await import("../session.js");
 const metaRoute = await import("../../app/api/drives/[driveId]/git-meta/route");
 const commitRoute = await import("../../app/api/drives/[driveId]/git-commit/route");
 const runRoute = await import("../../app/api/drives/[driveId]/run/route");
+const scRoute = await import("../../app/api/drives/[driveId]/git-sc/route");
+const writeRoute = await import("../../app/api/drives/[driveId]/fs/write/route");
+const hooks = await import("../git-project-hooks");
 
 const ctx = { params: Promise.resolve({ driveId: "d1" }) };
 const post = (url: string, body: unknown) =>
@@ -60,7 +79,8 @@ const post = (url: string, body: unknown) =>
 const as = async (userId: string | null) => { if (userId) cookieJar.set("aindrive_session", await sign(userId)); else cookieJar.delete("aindrive_session"); };
 
 const HEAD = { sha: "0123456789abcdef0123456789abcdef01234567", subject: "feat: thing", author: "Min", date: "2026-10-09T12:00:00Z" };
-const META = { method: "git-meta", exists: true, branch: "main", head: HEAD, dirty: 2, commits: [HEAD] };
+const META = { method: "git-meta", exists: true, branch: "main", head: HEAD, dirty: 2, commits: [HEAD], layout: "working-copy", ahead: 0, behind: 0 };
+const STATUS = { branch: "main", staged: [], unstaged: [{ path: "main.py", status: "M" }], untracked: [{ path: "new.txt", status: "U" }], ahead: 0, behind: 0, hasRemote: true };
 
 beforeAll(() => {
   const u = db.prepare("INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)");
@@ -73,7 +93,7 @@ beforeAll(() => {
   m.run("m1", "d1", "ed1", "", "editor");
   m.run("m2", "d1", "vw1", "", "viewer");
 });
-beforeEach(() => { agent.calls.length = 0; agent.meta = { ...META }; agent.dirty = 2; });
+beforeEach(() => { agent.calls.length = 0; agent.meta = { ...META }; agent.dirty = 2; agent.files = {}; agent.status = { ...STATUS }; agent.pushMoves = true; db.prepare("DELETE FROM git_project_hooks").run(); });
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("GET git-meta", () => {
@@ -82,7 +102,7 @@ describe("GET git-meta", () => {
     const res = await metaRoute.GET(new Request("http://x/api?repo=proj"), ctx);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ exists: true, branch: "main", dirty: 2, head: HEAD, commits: [HEAD] });
+    expect(body).toMatchObject({ exists: true, branch: "main", dirty: 2, head: HEAD, commits: [HEAD], layout: "working-copy", status: STATUS });
     expect(body.cloneUrl).toBe("https://drive.example.test/api/drives/d1/git/proj");
     expect(body.ainizeUrl).toBe("https://ainize.example.test");
     // git-meta first; then the manifest read / root list for the panel's Run row.
@@ -110,7 +130,11 @@ describe("POST git-commit", () => {
     const res = await commitRoute.POST(post("http://x/api", { repo: "proj", message: "  fix typo " }), ctx);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sha: "abc1234abc1234abc1234abc1234abc1234abc12" });
-    expect(agent.calls).toEqual([{ method: "git-commit", repo: "proj", message: "fix typo", authorName: "Ed Itor", authorEmail: "editor@example.com" }]);
+    expect(agent.calls).toEqual([{ method: "git-commit", repo: "proj", message: "fix typo", all: true, authorName: "Ed Itor", authorEmail: "editor@example.com" }]);
+    // staged-only: the agent refuses when nothing is staged
+    const none = await commitRoute.POST(post("http://x/api", { repo: "proj", message: "staged only", all: false }), ctx);
+    expect(none.status).toBe(400);
+    expect((await none.json()).error).toMatch(/nothing staged/);
   });
 
   it("a viewer cannot commit; an empty message or a clean tree is a 400", async () => {
@@ -238,5 +262,81 @@ describe("POST run", () => {
     await as("nobody");
     expect((await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx)).status).toBe(403);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("edit → save → run", () => {
+  const sse = "event: exit\ndata: {\"code\":0}\n\n";
+  it("Run executes what was just saved: the run route gathers the working tree through the agent at click time", async () => {
+    await as("ed1");
+    const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    // first run: the file as the stub serves it
+    await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx);
+    let sent = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(sent.files.find((f: { path: string }) => f.path === "main.py").content).toBe("# proj/main.py\n");
+    // the editor saves new content (fs/write → agent `write`) …
+    const w = await writeRoute.POST(post("http://x/api", { path: "proj/main.py", content: "print('edited')\n", encoding: "utf8" }), ctx);
+    expect(w.status).toBe(200);
+    // … and the next Run ships exactly that — no snapshot, no last commit
+    await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx);
+    sent = JSON.parse((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body as string);
+    expect(sent.files.find((f: { path: string }) => f.path === "main.py").content).toBe("print('edited')\n");
+    const reads = agent.calls.filter((c) => c.method === "read" && c.path === "proj/main.py");
+    expect(reads).toHaveLength(2); // one live read per run
+  });
+});
+
+describe("git-sc (source control)", () => {
+  it("GET answers the working copy's status to a viewer; a stranger is refused", async () => {
+    await as("vw1");
+    const res = await scRoute.GET(new Request("http://x/api?repo=proj"), ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(STATUS);
+    agent.status = null;
+    expect((await scRoute.GET(new Request("http://x/api?repo=plain"), ctx)).status).toBe(404);
+    await as("nobody");
+    expect((await scRoute.GET(new Request("http://x/api?repo=proj"), ctx)).status).toBe(403);
+  });
+
+  it("stage / unstage / discard forward the paths to the agent (editors only; paths required)", async () => {
+    await as("ed1");
+    expect((await scRoute.POST(post("http://x/api", { repo: "proj", action: "stage", paths: ["main.py", "new.txt"] }), ctx)).status).toBe(200);
+    expect((await scRoute.POST(post("http://x/api", { repo: "proj", action: "unstage", paths: ["main.py"] }), ctx)).status).toBe(200);
+    const d = await scRoute.POST(post("http://x/api", { repo: "proj", action: "discard", paths: ["main.py"] }), ctx);
+    expect(await d.json()).toEqual({ ok: true, tracked: 1, untracked: 0 });
+    expect(agent.calls).toEqual([
+      { method: "git-stage", repo: "proj", paths: ["main.py", "new.txt"], unstage: false },
+      { method: "git-stage", repo: "proj", paths: ["main.py"], unstage: true },
+      { method: "git-discard", repo: "proj", paths: ["main.py"] },
+    ]);
+    expect((await scRoute.POST(post("http://x/api", { repo: "proj", action: "stage" }), ctx)).status).toBe(400);
+    await as("vw1");
+    expect((await scRoute.POST(post("http://x/api", { repo: "proj", action: "stage", paths: ["x"] }), ctx)).status).toBe(403);
+  });
+
+  it("push moves the working copy into the bare remote and fires the bound project's hook — the deploy trigger; pull fast-forwards only a clean copy", async () => {
+    await as("ed1");
+    hooks.storeProjectHook("d1", "proj", "prj_1", "whsec_test_secret_x", "ed1");
+    const hookFetch = vi.fn(async () => new Response("{}", { status: 202 }));
+    vi.stubGlobal("fetch", hookFetch);
+    const res = await scRoute.POST(post("http://x/api", { repo: "proj", action: "push" }), ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, ref: "refs/heads/main", before: "1".repeat(40), after: "2".repeat(40), moved: true });
+    await vi.waitFor(() => expect(hookFetch).toHaveBeenCalledTimes(1));
+    const [url, init] = hookFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://ainize.example.test/api/projects/prj_1/hook");
+    expect(JSON.parse(init.body as string)).toMatchObject({ ref: "refs/heads/main", before: "1".repeat(40), after: "2".repeat(40) });
+    // nothing moved → no hook
+    agent.pushMoves = false;
+    expect((await (await scRoute.POST(post("http://x/api", { repo: "proj", action: "push" }), ctx)).json()).moved).toBe(false);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(hookFetch).toHaveBeenCalledTimes(1);
+    // pull: refused while dirty (the agent's message), fine when clean
+    const dirty = await scRoute.POST(post("http://x/api", { repo: "proj", action: "pull" }), ctx);
+    expect(dirty.status).toBe(400);
+    expect((await dirty.json()).error).toMatch(/has changes/);
+    agent.dirty = 0;
+    expect(await (await scRoute.POST(post("http://x/api", { repo: "proj", action: "pull" }), ctx)).json()).toEqual({ ok: true, sha: "2".repeat(40) });
   });
 });

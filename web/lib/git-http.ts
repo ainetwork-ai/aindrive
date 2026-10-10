@@ -3,12 +3,21 @@ import { randomUUID } from "node:crypto";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { notifyProjectOfPush } from "@/lib/git-project-hooks";
+import { bareOf } from "@/lib/git-paths";
 
 /**
  * Git smart-HTTP for a repo stored inside a drive: `git clone` / `git push`.
  * Two URL shapes reach this code, both thin route delegates:
  *   https://<host>/api/drives/<driveId>/git/<repo-path>[.git]   (app/api/drives/[driveId]/git/[...path])
  *   https://<host>/<org-slug>/git/<repo-path>[.git]              (app/[slug]/git/[...path], lib/git-slug.ts)
+ *
+ * `<repo-path>` names the repo's WORKING COPY folder (`repositories/<repo>` for the
+ * friendly URL — lib/git-paths.ts); git's transport runs against the BARE sibling
+ * `<repo-path>.git` (bareOf), while the role gate runs on the working copy — the
+ * folder members see and are granted on. A push into the bare fast-forwards a
+ * clean working copy on the agent (cli/src/rpc.js postReceive). A legacy repo
+ * (non-bare at `<repo-path>`, no bare sibling) is still cloned from; a push to it
+ * is refused with the migration hint until scripts/migrate-repo-layout.mjs runs.
  *
  * The real git runs on the drive's agent (it owns the filesystem); this module is
  * only the authenticated, scoped HTTP front for it — the same shape and reasoning
@@ -59,6 +68,7 @@ function parse(path: string[]): { repo: string; kind: "info" | Service } | null 
 }
 
 const minFor = (svc: Service): "editor" | "viewer" => (svc === "receive-pack" ? "editor" : "viewer");
+export const LEGACY_PUSH = "this repository has the legacy layout (no bare remote); run scripts/migrate-repo-layout.mjs on the drive, then push again";
 
 function pktPrefix(svc: Service): Buffer {
   const line = `# service=git-${svc}\n`;
@@ -88,11 +98,19 @@ export async function gitHttpGET(driveId: string, path: string[], req: Request):
   const { drive } = gate;
 
   try {
-    let adv = await callAgent(driveId, drive.drive_secret, { method: "git-advertise", repo: parsed.repo, service: svc });
+    const bare = bareOf(parsed.repo);
+    let adv = await callAgent(driveId, drive.drive_secret, { method: "git-advertise", repo: bare, service: svc });
     if (!adv.exists) {
-      if (svc !== "receive-pack") return deny(404, "repository not found");
-      await callAgent(driveId, drive.drive_secret, { method: "git-init", repo: parsed.repo });
-      adv = await callAgent(driveId, drive.drive_secret, { method: "git-advertise", repo: parsed.repo, service: svc });
+      // Legacy layout: the repo itself is non-bare at the working-copy path. Readable; not pushable.
+      const legacy = await callAgent(driveId, drive.drive_secret, { method: "git-advertise", repo: parsed.repo, service: svc });
+      if (legacy.exists) {
+        if (svc === "receive-pack") return deny(409, LEGACY_PUSH);
+        adv = legacy;
+      } else {
+        if (svc !== "receive-pack") return deny(404, "repository not found");
+        await callAgent(driveId, drive.drive_secret, { method: "git-init", repo: bare });
+        adv = await callAgent(driveId, drive.drive_secret, { method: "git-advertise", repo: bare, service: svc });
+      }
     }
     const body = Buffer.concat([pktPrefix(svc), Buffer.from(adv.data, "base64")]);
     return new Response(body, {
@@ -123,10 +141,18 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
   const outPath = `${base}.out`;
 
   try {
-    // Ensure the repo exists on a push (first push targets a fresh path).
-    if (svc === "receive-pack") {
-      const adv = await callAgent(driveId, secret, { method: "git-advertise", repo: parsed.repo, service: svc });
-      if (!adv.exists) await callAgent(driveId, secret, { method: "git-init", repo: parsed.repo });
+    // The bare remote; a legacy non-bare repo serves upload-pack only.
+    let target = bareOf(parsed.repo);
+    const adv = await callAgent(driveId, secret, { method: "git-advertise", repo: target, service: svc });
+    if (!adv.exists) {
+      const legacy = await callAgent(driveId, secret, { method: "git-advertise", repo: parsed.repo, service: svc });
+      if (legacy.exists) {
+        if (svc === "receive-pack") return deny(409, LEGACY_PUSH);
+        target = parsed.repo;
+      } else if (svc === "receive-pack") {
+        // Ensure the repo exists on a push (first push targets a fresh path).
+        await callAgent(driveId, secret, { method: "git-init", repo: target });
+      }
     }
 
     // Stream the request body to an agent temp file, 4 MiB per upload-chunk.
@@ -135,7 +161,7 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
 
     // Run git; stdout lands in the agent temp out file.
     const res = await callAgent(driveId, secret,
-      { method: "git-service", repo: parsed.repo, service: svc, in: inPath, out: outPath },
+      { method: "git-service", repo: target, service: svc, in: inPath, out: outPath },
       { timeoutMs: 300_000 });
 
     if (svc === "receive-pack") {

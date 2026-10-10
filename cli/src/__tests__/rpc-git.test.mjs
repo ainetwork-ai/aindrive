@@ -33,22 +33,30 @@ function receivePackInput(srcRepo, head) {
 }
 
 describe("handleRpc — git-init", () => {
-  it("creates a non-bare repo on main with updateInstead + http.receivepack", async () => {
-    const r = await handleRpc({ method: "git-init", repo: "proj" }, root);
-    expect(r).toEqual({ method: "git-init", ok: true });
-    const repo = path.join(root, "proj");
-    expect(existsSync(path.join(repo, ".git", "HEAD"))).toBe(true);
-    expect(existsSync(path.join(repo, "HEAD"))).toBe(false); // not bare
-    expect(git(repo, "config", "receive.denyCurrentBranch")).toBe("updateInstead");
-    expect(git(repo, "config", "http.receivepack")).toBe("true");
-    expect(git(repo, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+  it("creates the bare remote <repo>.git (main, http.receivepack) AND an empty working copy <repo>/ with origin = ../<repo>.git", async () => {
+    const r = await handleRpc({ method: "git-init", repo: "repositories/proj.git" }, root);
+    expect(r).toEqual({ method: "git-init", ok: true, bare: "repositories/proj.git", workingCopy: "repositories/proj" });
+    const bare = path.join(root, "repositories/proj.git");
+    const wc = path.join(root, "repositories/proj");
+    expect(existsSync(path.join(bare, "HEAD"))).toBe(true);
+    expect(existsSync(path.join(bare, "objects"))).toBe(true);
+    expect(git(bare, "config", "core.bare")).toBe("true");
+    expect(git(bare, "config", "http.receivepack")).toBe("true");
+    expect(git(bare, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    expect(existsSync(path.join(wc, ".git", "HEAD"))).toBe(true);
+    expect(git(wc, "remote", "get-url", "origin")).toBe("../proj.git");
+    expect(git(wc, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+    // a name without the suffix gets it
+    await handleRpc({ method: "git-init", repo: "repositories/other" }, root);
+    expect(existsSync(path.join(root, "repositories/other.git", "HEAD"))).toBe(true);
+    await expect(handleRpc({ method: "git-init", repo: "repositories/proj.git" }, root)).rejects.toThrow(/exists/);
   });
 
-  it("is hidden from `list` as .git while the folder itself shows", async () => {
-    await handleRpc({ method: "git-init", repo: "proj" }, root);
-    const top = await handleRpc({ method: "list", path: "" }, root);
+  it("hides the bare remote and `.git` from `list`; the working copy shows", async () => {
+    await handleRpc({ method: "git-init", repo: "repositories/proj.git" }, root);
+    const top = await handleRpc({ method: "list", path: "repositories" }, root);
     expect(top.entries.map((e) => e.name)).toEqual(["proj"]);
-    const inside = await handleRpc({ method: "list", path: "proj" }, root);
+    const inside = await handleRpc({ method: "list", path: "repositories/proj" }, root);
     expect(inside.entries).toEqual([]);
   });
 });
@@ -114,15 +122,38 @@ describe("handleRpc — git-service (receive-pack)", () => {
     return head;
   }
 
-  it("into a git-init repo: the ref AND the working tree update (files visible in the drive)", async () => {
-    await handleRpc({ method: "git-init", repo: "proj" }, root);
-    const head = await pushInto("proj");
-    const repo = path.join(root, "proj");
-    expect(git(repo, "rev-parse", "HEAD")).toBe(head);
-    expect(readFileSync(path.join(repo, "README.md"), "utf8")).toBe("hello drive\n");
-    expect(git(repo, "status", "--porcelain")).toBe("");
-    const listed = await handleRpc({ method: "list", path: "proj" }, root);
+  it("into a git-init bare: the bare's ref updates and the CLEAN working copy fast-forwards (files visible in the drive)", async () => {
+    await handleRpc({ method: "git-init", repo: "repositories/proj.git" }, root);
+    const head = await pushInto("repositories/proj.git");
+    const bare = path.join(root, "repositories/proj.git");
+    const wc = path.join(root, "repositories/proj");
+    expect(git(bare, "rev-parse", "HEAD")).toBe(head);
+    expect(git(wc, "rev-parse", "HEAD")).toBe(head);
+    expect(readFileSync(path.join(wc, "README.md"), "utf8")).toBe("hello drive\n");
+    expect(git(wc, "status", "--porcelain")).toBe("");
+    expect(git(wc, "rev-parse", "--abbrev-ref", "main@{upstream}")).toBe("origin/main");
+    const listed = await handleRpc({ method: "list", path: "repositories/proj" }, root);
     expect(listed.entries.map((e) => e.name)).toEqual(["README.md"]);
+  });
+
+  it("a DIRTY working copy is never touched by a push: it stays as it was and git-status says behind", async () => {
+    await handleRpc({ method: "git-init", repo: "repositories/proj.git" }, root);
+    const wc = path.join(root, "repositories/proj");
+    writeFileSync(path.join(wc, "draft.txt"), "unsaved work\n");
+    const head = await pushInto("repositories/proj.git");
+    expect(git(path.join(root, "repositories/proj.git"), "rev-parse", "HEAD")).toBe(head);
+    expect(existsSync(path.join(wc, "README.md"))).toBe(false);
+    expect(readFileSync(path.join(wc, "draft.txt"), "utf8")).toBe("unsaved work\n");
+    // unborn HEAD: no ahead/behind can be counted yet, but the remote is known
+    const st = await handleRpc({ method: "git-status", repo: "repositories/proj" }, root);
+    expect(st.untracked).toEqual([{ path: "draft.txt", status: "U" }]);
+    expect(st.hasRemote).toBe(true);
+    // discard the draft → pull fast-forwards
+    await handleRpc({ method: "git-discard", repo: "repositories/proj", paths: ["draft.txt"] }, root);
+    expect(existsSync(path.join(wc, "draft.txt"))).toBe(false);
+    const pulled = await handleRpc({ method: "git-pull", repo: "repositories/proj" }, root);
+    expect(pulled.sha).toBe(head);
+    expect(readFileSync(path.join(wc, "README.md"), "utf8")).toBe("hello drive\n");
   });
 
   it("into a legacy bare repo: the ref updates, no working tree appears", async () => {
@@ -149,10 +180,17 @@ describe("handleRpc — git-meta", () => {
     expect(await handleRpc({ method: "git-meta", repo: "folder" }, root)).toEqual({ method: "git-meta", exists: false });
   });
 
-  it("describes an unborn repo (fresh git-init) without a HEAD commit", async () => {
-    await handleRpc({ method: "git-init", repo: "proj" }, root);
+  it("describes an unborn working copy (fresh git-init) without a HEAD commit", async () => {
+    await handleRpc({ method: "git-init", repo: "repositories/proj.git" }, root);
+    const r = await handleRpc({ method: "git-meta", repo: "repositories/proj" }, root);
+    expect(r).toEqual({ method: "git-meta", exists: true, branch: "main", head: null, dirty: 0, commits: [], layout: "working-copy", ahead: 0, behind: 0 });
+  });
+
+  it("calls a non-bare repo without a bare sibling `legacy`", async () => {
+    const repo = path.join(root, "proj"); mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
     const r = await handleRpc({ method: "git-meta", repo: "proj" }, root);
-    expect(r).toEqual({ method: "git-meta", exists: true, branch: "main", head: null, dirty: 0, commits: [] });
+    expect(r.layout).toBe("legacy");
   });
 
   it("returns branch, HEAD, the last 10 commits (newest first) and the dirty count", async () => {

@@ -133,7 +133,8 @@ describe("git smart-HTTP", () => {
     const adv = await idRoute.GET(new Request(refs(ID_REPO), auth(token)), idCtx(["site", "info", "refs"]));
     expect(adv.status).toBe(200);
     expect(adv.headers.get("content-type")).toBe("application/x-git-upload-pack-advertisement");
-    expect(agent.calls[0]).toMatchObject({ method: "git-advertise", repo: "site", service: "upload-pack" });
+    // the id URL names the working copy `site`; git's transport runs on the bare sibling (lib/git-paths.ts)
+    expect(agent.calls[0]).toMatchObject({ method: "git-advertise", repo: "site.git", service: "upload-pack" });
     const pack = await idRoute.POST(new Request(`${ID_REPO}/git-upload-pack`, { method: "POST", body: "0032want 0123456789abcdef0123456789abcdef01234567\n0000", ...auth(token, { "content-type": "application/x-git-upload-pack-request" }) }), idCtx(["site", "git-upload-pack"]));
     expect(pack.status).toBe(200);
     expect(Buffer.from(await pack.arrayBuffer()).equals(PACK)).toBe(true);
@@ -143,7 +144,8 @@ describe("git smart-HTTP", () => {
   it("clones over the friendly /<org>/git/<repo> URL too", async () => {
     const res = await slugRoute.GET(new Request(refs(SLUG_REPO), auth(await serviceToken())), slugCtx("comcom", ["site", "info", "refs"]));
     expect(res.status).toBe(200);
-    expect(agent.calls[0]).toMatchObject({ method: "git-advertise", repo: "site" });
+    // /<org>/git/<name> is the working copy repositories/<name>, transport on repositories/<name>.git
+    expect(agent.calls[0]).toMatchObject({ method: "git-advertise", repo: "repositories/site.git" });
   });
 
   it("also takes the token as the HTTP Basic password a plain git client sends", async () => {
@@ -211,7 +213,8 @@ describe("git-meta", () => {
   it("answers the agent's summary to a service principal, and 401/403 like the git routes", async () => {
     const ok = await metaRoute.GET(new Request(`${PUBLIC_URL}/api/drives/d1/git-meta?repo=site`, auth(await serviceToken())), { params: Promise.resolve({ driveId: "d1" }) });
     expect(ok.status).toBe(200);
-    expect(await ok.json()).toMatchObject({ exists: true, branch: "main", cloneUrl: expect.stringContaining("/comcom/git/site") });
+    // `site` is not under repositories/, so its clone URL is the drive-id form
+    expect(await ok.json()).toMatchObject({ exists: true, branch: "main", cloneUrl: expect.stringContaining("/api/drives/d1/git/site") });
     const other = await metaRoute.GET(new Request(`${PUBLIC_URL}/api/drives/d2/git-meta?repo=site`, auth(await serviceToken())), { params: Promise.resolve({ driveId: "d2" }) });
     expect(other.status).toBe(403);
     const bad = await metaRoute.GET(new Request(`${PUBLIC_URL}/api/drives/d1/git-meta?repo=site`, auth(await serviceToken({ aud: "https://x.example.test" }))), { params: Promise.resolve({ driveId: "d1" }) });

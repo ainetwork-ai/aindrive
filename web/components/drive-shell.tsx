@@ -9,11 +9,14 @@ import { apiFetch } from "@/lib/api-client";
 import { paidLockFrom, type PaidLock } from "@/lib/paid-lock";
 import { sortEntries, type SortKey, type SortState } from "@/lib/sort-entries";
 import { locationPath, viewerHistory } from "@/lib/drive-location";
+import { gitUrl, parseGitPathname, repoRelative } from "@/lib/git-urls";
 import {
   DriveSidebar, DriveHeader, FileTable, ShowcaseSection, LockedPreview,
   type DriveSummary, type ShareSummary, type ViewMode,
 } from "./drive-shell-parts";
-import { GitPanel, type GitPanelMeta } from "./git-panel";
+import { GitPanel, type GitPanelMeta, type GitPanelUrls } from "./git-panel";
+import { RefSwitcher } from "./git-site";
+import { History, Rocket } from "lucide-react";
 import { useAinizeProject } from "@/components/use-ainize-project";
 
 // These four are only rendered on user action (open a file, open chat, open
@@ -39,12 +42,20 @@ type Props = {
   initialRole?: string;
   /** Grant-listing member's accessible entries; "" renders these instead of fs/list (synthetic root). */
   entryItems?: DriveEntry[];
+  /**
+   * Shown at the repo's pretty URL (`/<org>/git/<repo>/…`, app/d/by-slug, lib/git-urls.ts): the
+   * shell keeps the address bar in that form (tree/<ref>/<dir>, blob/<ref>/<file>), the breadcrumb
+   * reads `org / repo / …` and tops out at the repo (`scopeRoot` is the repo), and a ref switcher +
+   * Commits/Deployments links sit above the git panel. `ref` is always the checked-out branch here —
+   * other refs are read-only pages of their own.
+   */
+  git?: { org: string; repo: string; ref: string; defaultBranch: string; branches: string[] };
 };
 
 type Loc = { folder: string; open: DriveEntry | null };
 const HISTORY_KEY = "aindriveLoc";
 
-export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initialOpen, initialRole, entryItems }: Props) {
+export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initialOpen, initialRole, entryItems, git }: Props) {
   // Location = the listed folder + the open file. ?path mirrors whichever the
   // user is looking at (the file when one is open), so links, reloads and the
   // back button all land on the same view. See lib/drive-location.ts.
@@ -66,10 +77,23 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
     // A locked (unpaid) entry stays out of the URL: the page can't open a
     // paywalled file, so a reload would land on a payment-required listing
     // instead of this preview.
-    const p = locationPath(next.folder, next.open && !next.open.locked ? next.open.path : null);
+    const open = next.open && !next.open.locked ? next.open.path : null;
+    if (git) {
+      // Pretty form: blob/<ref>/<file> for an open file, tree/<ref>/<dir> for a folder (the repo
+      // root at the default branch is the bare repo URL). A location outside the repo (not
+      // reachable from here, but a stale history entry could say so) falls back to /d/<id>?path=.
+      const site = { org: git.org, repo: git.repo };
+      const rel = repoRelative(git.repo, open ?? next.folder);
+      if (rel !== null) {
+        return new URL(gitUrl(site, open ? { view: "blob", ref: git.ref, path: rel } : { view: "tree", ref: git.ref, path: rel }, { defaultBranch: git.defaultBranch }), url.origin).toString();
+      }
+      const p = locationPath(next.folder, open);
+      return new URL(`/d/${driveId}${p ? `?path=${encodeURIComponent(p)}` : ""}`, url.origin).toString();
+    }
+    const p = locationPath(next.folder, open);
     if (p) url.searchParams.set("path", p); else url.searchParams.delete("path");
     return url.toString();
-  }, []);
+  }, [git, driveId]);
   // Folder navigation (closes any open file — the URL names one location)
   // pushes a history entry so the back button walks the folder hierarchy.
   const setPath = useCallback((folder: string) => {
@@ -95,11 +119,15 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
     const onPop = (ev: PopStateEvent) => {
       openPushedRef.current = false;
       const saved = (ev.state as Record<string, unknown> | null)?.[HISTORY_KEY] as Loc | undefined;
-      setLoc(saved ?? { folder: new URL(window.location.href).searchParams.get("path") || "", open: null });
+      if (saved) { setLoc(saved); return; }
+      const here = new URL(window.location.href);
+      const pretty = git ? parseGitPathname(here.pathname) : null;
+      if (pretty && pretty.target.view === "tree") { setLoc({ folder: pretty.target.path ? `${git!.repo}/${pretty.target.path}` : git!.repo, open: null }); return; }
+      setLoc({ folder: here.searchParams.get("path") || "", open: null });
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [git]);
   const [entries, setEntries] = useState<DriveEntry[]>([]);
   const [drives, setDrives] = useState<DriveSummary[]>([]);
   const [role, setRole] = useState<string>(initialRole ?? "viewer");
@@ -233,25 +261,45 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   // Inside a repo but below its root (a subfolder): no panel, but every runnable
   // file row still gets ▶ Run — `gitRepo` is the nearest ancestor that is a repo.
   const [gitRepo, setGitRepo] = useState<string | null>(null);
+  // The meta of `gitRepo` itself (= gitMeta at the repo root): the viewer's ▶ Run reads the
+  // manifest's entry + inputs from it for a file anywhere inside the repo.
+  const [repoMeta, setRepoMeta] = useState<GitPanelMeta | null>(null);
   const loadGitMeta = useCallback(async () => {
-    if (isSyntheticRoot) { setGitMeta(null); setGitRepo(null); return; }
+    if (isSyntheticRoot) { setGitMeta(null); setGitRepo(null); setRepoMeta(null); return; }
     const meta = async (p: string) => {
       const res = await apiFetch<GitPanelMeta | { exists: false }>(`/api/drives/${driveId}/git-meta?repo=${encodeURIComponent(p)}`);
       return res.ok && res.data.exists ? res.data : null;
     };
     const here = await meta(path);
     setGitMeta(here);
-    if (here) { setGitRepo(path); return; }
+    if (here) { setGitRepo(path); setRepoMeta(here); return; }
     // Walk up (a few levels) for the repo this folder belongs to.
     const parts = path.split("/").filter(Boolean);
     for (let i = parts.length - 1; i >= 0 && parts.length - i <= 6; i--) {
       const anc = parts.slice(0, i).join("/");
-      if (await meta(anc)) { setGitRepo(anc); return; }
+      const m = await meta(anc);
+      if (m) { setGitRepo(anc); setRepoMeta(m); return; }
       if (anc === "") break;
     }
-    setGitRepo(null);
+    setGitRepo(null); setRepoMeta(null);
   }, [driveId, path, isSyntheticRoot]);
-  useEffect(() => { setGitMeta(null); setGitRepo(null); loadGitMeta(); }, [loadGitMeta]);
+  useEffect(() => { setGitMeta(null); setGitRepo(null); setRepoMeta(null); loadGitMeta(); }, [loadGitMeta]);
+  // Pretty-URL links for the panel, the viewer and the ref bar (repo pages only).
+  const gitUrls = useMemo<GitPanelUrls | undefined>(() => git ? {
+    commit: (sha: string) => gitUrl({ org: git.org, repo: git.repo }, { view: "commit", sha }),
+    commits: gitUrl({ org: git.org, repo: git.repo }, { view: "commits", ref: git.ref }, { defaultBranch: git.defaultBranch }),
+    deployments: gitUrl({ org: git.org, repo: git.repo }, { view: "deployments" }),
+  } : undefined, [git]);
+  const viewerLinks = useMemo(() => {
+    if (!git || !selected) return null;
+    const rel = repoRelative(git.repo, selected.path);
+    if (rel === null) return null;
+    const site = { org: git.org, repo: git.repo };
+    return {
+      raw: gitUrl(site, { view: "raw", ref: git.ref, path: rel }, { defaultBranch: git.defaultBranch }),
+      history: `${gitUrl(site, { view: "commits", ref: git.ref }, { defaultBranch: git.defaultBranch })}?path=${encodeURIComponent(rel)}`,
+    };
+  }, [git, selected]);
   // The ainize project bound to this repo (one lookup, shared by the panel and the file rows).
   const ainize = useAinizeProject(gitMeta?.ainizeUrl ?? null, gitMeta?.cloneUrl ?? null, gitMeta?.head?.sha ?? null, !!gitMeta?.manifest?.kind);
 
@@ -304,11 +352,14 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
       ? path.slice(scopeRoot.length + 1)
       : path === scopeRoot ? "" : path;
     const parts = rel.split("/").filter(Boolean);
-    const acc: { label: string; path: string }[] = [{ label: driveName, path: scopeRoot }];
+    // Repo pages read `org / repo / …`: the org crumb leaves the repo for the drive itself.
+    const acc: { label: string; path: string; href?: string }[] = git
+      ? [{ label: git.org, path: "", href: `/d/${driveId}` }, { label: git.repo, path: scopeRoot }]
+      : [{ label: driveName, path: scopeRoot }];
     let cur = scopeRoot;
     for (const p of parts) { cur = cur ? `${cur}/${p}` : p; acc.push({ label: p, path: cur }); }
     return acc;
-  }, [path, driveName, scopeRoot, entryItems]);
+  }, [path, driveName, scopeRoot, entryItems, git, driveId]);
 
   async function onNewFolder() {
     const name = prompt("New folder name");
@@ -454,6 +505,20 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
 
         <section className="flex-1 flex min-h-0">
           <div className="flex-1 overflow-auto scrollbar-thin p-3 sm:p-6">
+            {git && (
+              <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="git-ref-bar">
+                <RefSwitcher
+                  site={{ org: git.org, repo: git.repo }} gitRef={git.ref} defaultBranch={git.defaultBranch} branches={git.branches}
+                  path={repoRelative(git.repo, selected?.path ?? path) ?? ""} view={selected ? "blob" : "tree"}
+                />
+                <a href={gitUrls!.commits} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-drive-muted hover:text-drive-text hover:bg-drive-hover">
+                  <History className="w-3.5 h-3.5" aria-hidden="true" /> Commits
+                </a>
+                <a href={gitUrls!.deployments} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-drive-muted hover:text-drive-text hover:bg-drive-hover">
+                  <Rocket className="w-3.5 h-3.5" aria-hidden="true" /> Deployments
+                </a>
+              </div>
+            )}
             {gitMeta && (
               <GitPanel
                 driveId={driveId}
@@ -462,6 +527,14 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
                 ainize={ainize}
                 canEdit={canEdit}
                 onCommitted={() => { loadGitMeta(); load(); }}
+                urls={gitUrls}
+                onOpenFile={(p) => {
+                  // The row's file is in this listing when it sits at the repo root; deeper files open from a stat-less entry.
+                  const here = entries.find((e) => e.path === p);
+                  const name = p.slice(p.lastIndexOf("/") + 1);
+                  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+                  setSelected(here ?? { name, path: p, isDir: false, size: 0, mtimeMs: 0, ext, mime: "application/octet-stream" });
+                }}
               />
             )}
             <FileTable
@@ -506,7 +579,11 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
               entry={selected}
               canEdit={canEdit}
               onClose={() => setSelected(null)}
-              onSaved={() => { load(); if (gitMeta) loadGitMeta(); }}
+              onSaved={() => { load(); if (gitRepo !== null) loadGitMeta(); }}
+              gitRepo={gitRepo}
+              repoMeta={repoMeta}
+              ainizeProjectUrl={ainize.projectUrl}
+              links={viewerLinks}
             />
           ))}
           {chatOpen && (

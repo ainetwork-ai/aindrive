@@ -42,7 +42,8 @@ export type ShareSummary = {
 
 export type ViewMode = "list" | "grid";
 
-type Crumb = { label: string; path: string };
+/** `href`: a crumb that leaves this shell (the org crumb of a repo page → the drive) — a plain link, not setPath. */
+type Crumb = { label: string; path: string; href?: string };
 
 export function DriveSidebar({
   sidebarOpen, setSidebarOpen, onNewFolder, onUpload, canEdit, drives, driveId, role, onCreateAgent, onOpenMcp,
@@ -332,13 +333,16 @@ export function DriveHeader({
               )}
               {isLastHidden && (
                 <button
-                  onClick={() => setPath(c.path)}
+                  onClick={() => { if (c.href) window.location.assign(c.href); else setPath(c.path); }}
                   title={`Go to ${c.label}`}
                   className="sm:hidden px-1.5 rounded hover:bg-drive-hover text-drive-muted"
                 >
                   …
                 </button>
               )}
+              {c.href ? (
+                <a href={c.href} className={clsx("truncate hover:underline rounded px-1 -mx-1", hideOnMobile && "hidden sm:inline")}>{c.label}</a>
+              ) : (
               <button
                 onClick={() => setPath(c.path)}
                 className={clsx(
@@ -352,6 +356,7 @@ export function DriveHeader({
               >
                 {c.label}
               </button>
+              )}
             </span>
           );
         })}
