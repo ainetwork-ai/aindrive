@@ -21,6 +21,8 @@ import { lookupMime } from "./mime";
 import type { GitMeta } from "./protocol";
 import { callAgent } from "./rpc";
 import { ainizeUrl, languageFor } from "./run-ainize";
+import { pinnedSnippetSource } from "./ainui-snippet-source";
+import { projectIdFor } from "./git-project-hooks";
 import { serviceToken } from "./sso/service-token";
 import { requestOrigin } from "./shared-items";
 import { log } from "./logger.js";
@@ -61,7 +63,8 @@ export async function answerAinuiSnippet(req: Request, slug: string, path: strin
   catch { return json(503, { error: "drive offline" }); }
   if (!meta.exists) return notFound();
 
-  const manifest = await readManifest(driveId, drive.drive_secret, repoPath);
+  const boundProject = projectIdFor(driveId, repoPath);
+  const manifest = boundProject ? null : await readManifest(driveId, drive.drive_secret, repoPath);
   const runEndpoint = `${origin}/api/drives/${encodeURIComponent(driveId)}/run`;
   const inputs = manifest?.inputs ?? [];
 
@@ -78,24 +81,26 @@ export async function answerAinuiSnippet(req: Request, slug: string, path: strin
     const bytes = Buffer.from(shown.content, "base64");
     const mime = lookupMime(target.path);
     const isText = isTextByName(target.path) || (!mime && looksLikeText(bytes)) || (!!mime && /^text\/|json|javascript|xml/.test(mime));
-    // The run executes the working tree: only the checked-out branch's file can be ▶ Run.
-    const runnable = !!languageFor(target.path) && ref === meta.branch;
+    // Bound projects execute the exact displayed commit, with its own input form.
+    const source = boundProject ? await pinnedSnippetSource(boundProject, gate.userId, shown.sha, req.signal) : null;
+    const runnable = !!languageFor(target.path) && (boundProject ? !!source : ref === meta.branch);
     return snippetResponse(fileSnippet({
       org: slug, repo: target.repo, ref, path: target.path, size: shown.size,
       content: isText ? bytes.toString("utf8") : null,
       // The page and raw links name the resolved ref, so a `HEAD` request yields the branch's canonical URLs.
       pageUrl: `${origin}${gitUrl(site, { view: "blob", ref, path: target.path })}`,
       rawUrl: `${origin}${gitUrl(site, { view: "raw", ref, path: target.path })}`,
-      run: runnable ? { inputs, endpoint: runEndpoint, repoPath } : null,
+      run: runnable ? { inputs: source?.inputs ?? inputs, endpoint: runEndpoint, repoPath, ...(source ? { sha: source.sha } : {}) } : null,
     }));
   }
 
-  const entry = manifest?.entry ?? (await runnableFiles(driveId, drive.drive_secret, repoPath))[0] ?? null;
+  const source = boundProject && meta.head ? await pinnedSnippetSource(boundProject, gate.userId, meta.head.sha, req.signal) : null;
+  const entry = boundProject ? source?.entry ?? null : manifest?.entry ?? (await runnableFiles(driveId, drive.drive_secret, repoPath))[0] ?? null;
   const ainize = await ainizeBlock(driveId, repoPath, origin, caller.kind === "actor" ? caller.subject : null);
   return snippetResponse(repoSnippet({
     org: slug, repo: target.repo, branch: meta.branch, head: meta.head,
     pageUrl: `${origin}${gitUrl(site, { view: "tree", ref: null, path: "" })}`,
-    run: entry ? { entry, inputs, endpoint: runEndpoint, repoPath } : null,
+    run: entry ? { entry, inputs: source?.inputs ?? inputs, endpoint: runEndpoint, repoPath, ...(source ? { sha: source.sha } : {}) } : null,
     ainize,
   }));
 }

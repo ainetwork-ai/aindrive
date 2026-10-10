@@ -81,7 +81,7 @@ function surface(surfaceId: string, components: A2uiComponent[], data: Record<st
  * entry named, ▶ Run → `run` with the answers as `INPUT_<NAME>` context (what the
  * run route takes as `env`), status and output bound to `/run/*`.
  */
-export function runBlock(entry: string, inputs: ManifestInput[]): { components: A2uiComponent[]; data: Record<string, unknown>; context: Record<string, unknown> } {
+export function runBlock(entry: string, inputs: ManifestInput[], sha?: string): { components: A2uiComponent[]; data: Record<string, unknown>; context: Record<string, unknown> } {
   const comps: A2uiComponent[] = [];
   const fields: string[] = [];
   const inputsData: Record<string, string | string[]> = {};
@@ -100,11 +100,12 @@ export function runBlock(entry: string, inputs: ManifestInput[]): { components: 
     context[inputEnvName(i.name)] = bind(path);
   }
   comps.push(text("run.entry", `▶ Run ${entry}`, "h5"));
+  if (sha) comps.push(text("run.commit", `Commit ${shortSha(sha)}`, "caption"));
   comps.push(...button("run.button", "Run", "run", { context, variant: "primary" }));
   comps.push(row("run.controls", ["run.entry", "run.button", "run.status"]));
   comps.push(text("run.status", bind("/run/status"), "caption"));
   comps.push(text("run.output", bind("/run/output"), "body"));
-  comps.push(column("run.body", [...fields, "run.controls", "run.output"]));
+  comps.push(column("run.body", [...fields, ...(sha ? ["run.commit"] : []), "run.controls", "run.output"]));
   comps.push(card("run", "run.body"));
   return { components: comps, data: { inputs: inputsData, run: { status: "idle", output: "" } }, context };
 }
@@ -150,7 +151,7 @@ export type RepoSnippetInput = {
   /** canonical page URL of the repo (absolute) */
   pageUrl: string;
   /** the Run block, when `ainize.json` (or a runnable root file) says what to run */
-  run: { entry: string; inputs: ManifestInput[]; endpoint: string; repoPath: string } | null;
+  run: { entry: string; inputs: ManifestInput[]; endpoint: string; repoPath: string; sha?: string } | null;
   /** the bound ainize project and its newest deployments, when known */
   ainize: { project: AinizeProject; deployments: AinizeDeployment[]; pageUrl: string } | null;
   now?: number;
@@ -164,10 +165,10 @@ export function repoSnippet(i: RepoSnippetInput): AinuiSnippet {
   comps.push(text("header.title", `${i.org}/${i.repo}`, "h4"), text("header.sub", `${i.branch} · ${headSub}`, "caption"), row("header", ["header.title", "header.sub"]));
   let data: Record<string, unknown> = {};
   if (i.run) {
-    const r = runBlock(i.run.entry, i.run.inputs);
+    const r = runBlock(i.run.entry, i.run.inputs, i.run.sha);
     comps.push(...r.components);
     data = { ...data, ...r.data };
-    actions.run = { method: "POST", url: i.run.endpoint, body: { repo: i.run.repoPath, entry: i.run.entry, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
+    actions.run = { method: "POST", url: i.run.endpoint, body: { ...(i.run.sha ? { target: "commit", sha: i.run.sha } : {}), repo: i.run.repoPath, entry: i.run.entry, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
     sections.push("run");
   }
   if (i.ainize) {
@@ -213,7 +214,7 @@ export type FileSnippetInput = {
   size: number;
   pageUrl: string;
   rawUrl: string;
-  run: { inputs: ManifestInput[]; endpoint: string; repoPath: string } | null;
+  run: { inputs: ManifestInput[]; endpoint: string; repoPath: string; sha?: string } | null;
 };
 
 export function fileSnippet(i: FileSnippetInput): AinuiSnippet {
@@ -232,10 +233,10 @@ export function fileSnippet(i: FileSnippetInput): AinuiSnippet {
   }
   let data: Record<string, unknown> = {};
   if (i.run) {
-    const r = runBlock(i.path, i.run.inputs);
+    const r = runBlock(i.path, i.run.inputs, i.run.sha);
     comps.push(...r.components);
     data = { ...data, ...r.data };
-    actions.run = { method: "POST", url: i.run.endpoint, body: { repo: i.run.repoPath, entry: i.path, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
+    actions.run = { method: "POST", url: i.run.endpoint, body: { ...(i.run.sha ? { target: "commit", sha: i.run.sha } : {}), repo: i.run.repoPath, entry: i.path, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
     sections.push("run");
   }
   comps.push(...button("links.aindrive", "Open", "open:aindrive", { variant: "borderless" }), ...button("links.raw", "Raw", "open:raw", { variant: "borderless" }), divider("links.divider"), row("links", ["links.aindrive", "links.raw"]));
