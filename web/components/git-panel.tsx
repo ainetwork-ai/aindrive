@@ -178,8 +178,11 @@ export function GitPanel({ driveId, repo, meta, canEdit, onCommitted }: {
         </div>
       )}
 
-      {/* 4. Deployments (ainize Projects) */}
-      <Deployments ainizeUrl={meta.ainizeUrl} cloneUrl={meta.cloneUrl} headSha={head?.sha ?? null} rowCls={rowCls} labelCls={labelCls} />
+      {/* 4. Deployments (ainize Projects) — only for a repo that declares how it deploys (ainize.json). A repo
+          without a manifest has nothing for ainize to build, so no "Connect to ainize" nudge either. */}
+      {meta.manifest?.kind && (
+        <Deployments ainizeUrl={meta.ainizeUrl} cloneUrl={meta.cloneUrl} headSha={head?.sha ?? null} rowCls={rowCls} labelCls={labelCls} />
+      )}
 
       {showLog && (
         <ol className="border-t border-drive-border divide-y divide-drive-border" aria-label="Recent commits">

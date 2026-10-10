@@ -1,7 +1,7 @@
 // lib/git-panel.ts: the pure state behind the git panel and the ▶ Run output —
 // the reducer's running / success / failed / unavailable states, SSE parsing,
 // which files are runnable, and the relative-time / duration labels.
-import { describe, it, expect } from "vitest";
+import { parseRunEvent, describe, it, expect } from "vitest";
 import {
   RUN_IDLE, reduceRun, parseRunEvent, splitSse, runLanguageFor, relativeTime, formatDuration, shortSha, type RunEvent,
 } from "../git-panel";
@@ -32,9 +32,9 @@ describe("reduceRun", () => {
 
 describe("SSE parsing", () => {
   it("accepts ainize's JSON-string chunks, {code, ms} exits and string errors", () => {
-    expect(parseSseEvent('event: stdout\ndata: "=== rank ===\\n  1. 0.69 a6\\n"')).toEqual({ type: "stdout", text: "=== rank ===\n  1. 0.69 a6\n" });
-    expect(parseSseEvent('event: exit\ndata: {"code":0,"ms":1315}')).toEqual({ type: "exit", code: 0, durationMs: 1315 });
-    expect(parseSseEvent('event: error\ndata: "timeout after 120000ms"')).toEqual({ type: "error", message: "timeout after 120000ms" });
+    expect(parseRunEvent('event: stdout\ndata: "=== rank ===\\n  1. 0.69 a6\\n"')).toEqual({ type: "stdout", text: "=== rank ===\n  1. 0.69 a6\n" });
+    expect(parseRunEvent('event: exit\ndata: {"code":0,"ms":1315}')).toEqual({ type: "exit", code: 0, durationMs: 1315 });
+    expect(parseRunEvent('event: error\ndata: "timeout after 120000ms"')).toEqual({ type: "error", message: "timeout after 120000ms" });
   });
   it("splits complete blocks and keeps the partial tail", () => {
     const { blocks, rest } = splitSse("event: stdout\ndata: {\"text\":\"x\"}\n\nevent: exit\ndata: {\"co");
