@@ -31,7 +31,6 @@ export function GET(req: Request) {
     orgId: d.org_id ?? null,
     online: isOnline(d.id),
     role: maxRoleInDrive(d.id, userId),
-    orgId: d.org_id ?? null,
   }));
   return Response.json({ drives }, { headers: ACCOUNT_API_HEADERS });
 }
