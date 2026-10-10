@@ -10,7 +10,7 @@
 // and is what deploys (POST git-sc). Data loading for git-meta stays in the
 // shell (one fetch per folder, refetched after every action); the ainize reads
 // live here and degrade silently.
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import clsx from "clsx";
 import { GitBranch, GitCommitHorizontal, Copy, Check, ChevronDown, ChevronUp, ExternalLink, ArrowUp, ArrowDown, Plus, Minus, Undo2 } from "lucide-react";
 import { toast } from "sonner";
@@ -21,7 +21,7 @@ import { deploymentLogUrl, deploymentTime, type DeploymentStatus } from "@/lib/a
 import { inputsStorageKey, inputsToEnv, missingRequired, parseManifestInputs, type ManifestInput } from "@/lib/run-inputs";
 import type { AinizeProjectState } from "./use-ainize-project";
 import { Button } from "@/components/ui";
-import { RunActions, RunOutput, useRunner } from "./run-output";
+import { RunActions, RunDot, RunOutput, useRunner } from "./run-output";
 
 /** What GET git-meta answers for a folder that is a repo (the route strips `method`). */
 export type GitPanelMeta = {
@@ -103,6 +103,11 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
   // The project's Run row shares the per-file runner (entry path = repo-relative → drive path). The row runs
   // the manifest's entry by default; any runnable file at the root can be picked instead.
   const runner = useRunner(driveId, repo);
+  const runOptionsId = useId();
+  const [runExpanded, setRunExpanded] = useState(false);
+  useEffect(() => {
+    setRunExpanded(window.matchMedia('(min-width: 640px)').matches);
+  }, [driveId, repo]);
   const [runTarget, setRunTarget] = useState<"working-tree" | "commit" | "deployed">("working-tree");
   const [runSha, setRunSha] = useState("");
   const selectedSha = runSha || meta.head?.sha || "";
@@ -138,6 +143,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
     if (runTarget !== "working-tree" && !ainize.project) { toast.error("Push to bind this repository before running a version"); return; }
     if (runTarget === "commit" && !selectedSha) { toast.error("Select a commit"); return; }
     if (runTarget === "deployed" && !ainize.project?.activeCommit) { toast.error("No successful deployment is available"); return; }
+    setRunExpanded(true);
     runner.run(entryPath, inputsToEnv(inputs, values), runTarget === "working-tree" ? { target: "working-tree" } : { target: "commit", sha: source!.sha });
   };
 
@@ -260,10 +266,23 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
         </div>
       )}
 
-      {runTarget !== 'working-tree' && <p className="text-caption text-drive-muted" role={sourceError ? 'alert' : 'status'}>{sourceError ?? (source ? `Commit ${shortSha(source.sha)}` : 'Loading repository version')}</p>}
       {/* 3. Run the project's entry */}
+      <button
+        type="button"
+        aria-label="Run options"
+        aria-expanded={runExpanded}
+        aria-controls={runOptionsId}
+        onClick={() => setRunExpanded((open) => !open)}
+        className="flex w-full min-w-0 items-center gap-3 border-t border-drive-border px-4 min-h-11 text-caption text-left hover:bg-drive-hover"
+      >
+        <span className="text-label uppercase text-drive-muted shrink-0">Run</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-drive-text">{entry ?? 'Execution options'}</span>
+        {run.status !== 'idle' && <RunDot status={run.status} />}
+        {runExpanded ? <ChevronUp className="w-4 h-4 shrink-0 text-drive-muted" aria-hidden="true" /> : <ChevronDown className="w-4 h-4 shrink-0 text-drive-muted" aria-hidden="true" />}
+      </button>
+      <div id={runOptionsId} hidden={!runExpanded}>
+      {runTarget !== 'working-tree' && <p className="px-4 py-2 text-caption text-drive-muted" role={sourceError ? 'alert' : 'status'}>{sourceError ?? (source ? `Commit ${shortSha(source.sha)}` : 'Loading repository version')}</p>}
       <div className={clsx(rowCls, "sm:flex-wrap [&>span:last-of-type]:min-h-11 sm:[&>span:last-of-type]:min-h-0 [&_button]:min-h-11 sm:[&_button]:min-h-0")} data-testid="git-panel-run">
-        <span className={labelCls}>Run</span>
         {entryPath !== null && entry !== null ? (
           <>
             {choices.length > 1 ? (
@@ -319,6 +338,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
           <RunOutput state={run} entryName={entry} openUrl={ainize.projectUrl} />
         </div>
       )}
+      </div>
 
       {/* 4. Deployments (ainize Projects) — only for a repo that declares how it deploys (ainize.json). A repo
           without a manifest has nothing for ainize to build, so nothing is shown. With one and no project yet, the
