@@ -142,8 +142,8 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
     onCommitted();
   }
 
-  const rowCls = "flex items-center gap-2 px-4 min-h-10 py-1.5 border-t border-drive-border text-caption";
-  const labelCls = "text-label uppercase text-drive-muted shrink-0 w-20";
+  const rowCls = "flex flex-wrap sm:flex-nowrap items-center gap-2 px-4 min-h-11 sm:min-h-10 py-2 sm:py-1.5 border-t border-drive-border text-caption";
+  const labelCls = "text-label uppercase text-drive-muted shrink-0 w-full sm:w-24";
 
   return (
     <section
@@ -152,27 +152,27 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
       data-testid="git-panel"
     >
       {/* 1. branch + HEAD */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 h-11 min-h-11">
-        <span className="inline-flex items-center gap-1.5 font-medium">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 min-h-11">
+        <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 font-medium">
           <GitBranch className="w-4 h-4 text-drive-muted" aria-hidden="true" />
-          <span className="font-mono text-caption">{meta.branch}</span>
+          <span className="font-mono text-caption truncate" title={meta.branch}>{meta.branch}</span>
         </span>
         {meta.manifest?.name && (
-          <span className="text-caption text-drive-text font-medium truncate">{meta.manifest.name}</span>
+          <span className="text-caption text-drive-text font-medium truncate min-w-0 max-w-full">{meta.manifest.name}</span>
         )}
         {meta.manifest?.kind && (
           <span className="rounded-full bg-drive-hover px-2 py-0.5 text-label uppercase text-drive-muted">{meta.manifest.kind}</span>
         )}
         {head ? (
-          <span className="flex items-center gap-2 min-w-0 text-caption text-drive-muted">
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 w-full sm:w-auto sm:flex-1 text-caption text-drive-muted">
             <span className="font-mono text-drive-text">{shortSha(head.sha)}</span>
-            <span className="truncate text-drive-text">{head.subject}</span>
-            <span className="whitespace-nowrap">{head.author} · {relativeTime(head.date)}</span>
+            <span className="truncate min-w-0 flex-1 text-drive-text" title={head.subject}>{head.subject}</span>
+            <span className="w-full sm:w-auto truncate">{head.author} · {relativeTime(head.date)}</span>
           </span>
         ) : (
           <span className="text-caption text-drive-muted">No commits yet</span>
         )}
-        <span className="ml-auto inline-flex items-center gap-3 text-caption">
+        <span className="w-full sm:w-auto sm:ml-auto inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
           {meta.dirty > 0 && (
             <span className="inline-flex items-center gap-1.5 text-drive-muted" title="Uncommitted changes in the working copy">
               <span className="inline-block h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
@@ -200,7 +200,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
           {meta.commits.length > 0 && (
             <button
               type="button"
-              className="inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
+              className="min-h-11 sm:min-h-0 inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
               onClick={() => setShowLog((v) => !v)}
               aria-expanded={showLog}
             >
@@ -209,7 +209,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
             </button>
           )}
           {urls && (
-            <a href={urls.commits} className="font-medium text-drive-muted hover:text-drive-text" data-testid="git-panel-history">History</a>
+            <a href={urls.commits} className="min-h-11 sm:min-h-0 inline-flex items-center font-medium text-drive-muted hover:text-drive-text" data-testid="git-panel-history">History</a>
           )}
         </span>
       </div>
@@ -222,7 +222,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
           type="button"
           onClick={copy}
           aria-label="Copy clone URL"
-          className={clsx("inline-flex items-center gap-1 text-caption font-medium transition-colors", copied ? "text-emerald-600" : "text-drive-muted hover:text-drive-text")}
+          className={clsx("min-h-11 sm:min-h-0 shrink-0 inline-flex items-center gap-1 text-caption font-medium transition-colors", copied ? "text-emerald-600" : "text-drive-muted hover:text-drive-text")}
         >
           {copied ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Copy className="w-3.5 h-3.5" aria-hidden="true" />}
           {copied ? "Copied" : "Copy"}
@@ -239,7 +239,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
       )}
 
       {/* 3. Run the project's entry */}
-      <div className={rowCls} data-testid="git-panel-run">
+      <div className={clsx(rowCls, "[&>span:last-of-type]:min-h-11 sm:[&>span:last-of-type]:min-h-0 [&_button]:min-h-11 sm:[&_button]:min-h-0")} data-testid="git-panel-run">
         <span className={labelCls}>Run</span>
         {entryPath !== null && entry !== null ? (
           <>
@@ -248,7 +248,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
                 aria-label="File to run"
                 value={entry}
                 onChange={(e) => setPicked(e.target.value)}
-                className="flex-1 min-w-0 truncate rounded border border-drive-border bg-drive-panel px-1.5 py-0.5 font-mono text-caption text-drive-text"
+                className="w-full sm:w-auto sm:flex-1 min-w-0 h-11 sm:h-auto truncate rounded border border-drive-border bg-drive-panel px-2 sm:px-1.5 py-2 sm:py-0.5 font-mono text-base sm:text-caption text-drive-text"
                 title={entry === meta.manifest?.entry ? "entry from ainize.json" : "a runnable file in the repo root"}
               >
                 {choices.map((c) => <option key={c} value={c}>{c}{c === meta.manifest?.entry ? " · entry" : ""}</option>)}
@@ -268,7 +268,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
                 href={ainize.projectUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-caption font-medium text-drive-muted hover:text-drive-text"
+                className="min-h-11 sm:min-h-0 inline-flex items-center gap-1 text-caption font-medium text-drive-muted hover:text-drive-text"
               >
                 Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
               </a>
@@ -299,7 +299,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
       {showLog && (
         <ol className="border-t border-drive-border divide-y divide-drive-border" aria-label="Recent commits">
           {meta.commits.map((c) => (
-            <li key={c.sha} className="flex items-center gap-3 px-4 h-9 text-caption min-w-0">
+            <li key={c.sha} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 min-h-11 sm:min-h-9 py-2 text-caption min-w-0">
               <GitCommitHorizontal className="w-3.5 h-3.5 text-drive-muted shrink-0" aria-hidden="true" />
               {urls
                 ? <a href={urls.commit(c.sha)} className="font-mono text-drive-muted shrink-0 hover:underline">{shortSha(c.sha)}</a>
@@ -307,7 +307,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
               {urls
                 ? <a href={urls.commit(c.sha)} className="truncate text-drive-text flex-1 hover:underline">{c.subject}</a>
                 : <span className="truncate text-drive-text flex-1">{c.subject}</span>}
-              <span className="text-drive-muted whitespace-nowrap">{c.author} · {relativeTime(c.date)}</span>
+              <span className="w-full sm:w-auto text-drive-muted truncate">{c.author} · {relativeTime(c.date)}</span>
             </li>
           ))}
         </ol>
@@ -351,7 +351,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
             aria-label="Commit message"
             maxLength={4000}
             disabled={committing}
-            className="h-8 flex-1 min-w-0 rounded-md border border-drive-border bg-drive-panel px-2.5 text-caption text-drive-text placeholder:text-drive-muted focus:border-drive-accent outline-hidden"
+            className="h-11 sm:h-8 basis-full sm:basis-auto flex-1 min-w-0 rounded-md border border-drive-border bg-drive-panel px-2.5 text-base sm:text-caption text-drive-text placeholder:text-drive-muted focus:border-drive-accent outline-hidden"
           />
           <Button type="submit" size="sm" variant="outline" loading={committing} disabled={!message.trim()} icon={<GitCommitHorizontal className="w-3.5 h-3.5" aria-hidden="true" />}>
             Commit
@@ -413,7 +413,7 @@ function ChangeList({ title, items, repo, onOpen, rowAction, rowDiscard, headerA
 }) {
   return (
     <div data-testid={`git-changes-${title.toLowerCase().replace(/\s+/g, "-")}`}>
-      <div className="flex items-center gap-3 px-4 h-8 text-label uppercase text-drive-muted">
+      <div className="flex flex-wrap items-center gap-3 px-4 min-h-11 sm:min-h-8 py-1 text-label uppercase text-drive-muted">
         <span>{title}</span>
         <span className="rounded-full bg-drive-hover px-1.5 text-drive-text normal-case">{items.length}</span>
         <span className="ml-auto inline-flex items-center gap-3 normal-case">{headerActions}</span>
@@ -423,18 +423,18 @@ function ChangeList({ title, items, repo, onOpen, rowAction, rowDiscard, headerA
           const b = BADGE[f.status] ?? { label: f.status, cls: "text-drive-muted", title: f.status };
           const drivePath = repo ? `${repo}/${f.path}` : f.path;
           return (
-            <li key={f.path} className="group flex items-center gap-2 px-4 h-8 text-caption min-w-0 hover:bg-drive-hover" data-status={f.status}>
+            <li key={f.path} className="group flex items-center gap-2 px-4 min-h-11 sm:min-h-8 text-caption min-w-0 hover:bg-drive-hover" data-status={f.status}>
               <button type="button" className="flex-1 min-w-0 text-left truncate font-mono text-drive-text hover:underline disabled:no-underline" onClick={() => onOpen?.(drivePath)} disabled={!onOpen || f.status === "D"} title={f.path}>
                 {f.path}
               </button>
               <span className={clsx("font-mono font-semibold w-4 text-center", b.cls)} title={b.title} aria-label={b.title}>{b.label}</span>
               <span className="inline-flex items-center gap-1">
                 {rowDiscard && (
-                  <button type="button" className="rounded p-1 text-drive-muted hover:text-red-600 hover:bg-white" onClick={() => rowDiscard(f.path)} disabled={busy} aria-label={`Discard changes to ${f.path}`} title="Discard changes">
+                  <button type="button" className="rounded min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 p-1 inline-flex items-center justify-center text-drive-muted hover:text-red-600 hover:bg-white" onClick={() => rowDiscard(f.path)} disabled={busy} aria-label={`Discard changes to ${f.path}`} title="Discard changes">
                     <Undo2 className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 )}
-                <button type="button" className="rounded p-1 text-drive-muted hover:text-drive-text hover:bg-white" onClick={() => rowAction.run(f.path)} disabled={busy} aria-label={`${rowAction.label} ${f.path}`} title={rowAction.label}>
+                <button type="button" className="rounded min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 p-1 inline-flex items-center justify-center text-drive-muted hover:text-drive-text hover:bg-white" onClick={() => rowAction.run(f.path)} disabled={busy} aria-label={`${rowAction.label} ${f.path}`} title={rowAction.label}>
                   {rowAction.icon}
                 </button>
               </span>
@@ -456,11 +456,11 @@ const DEPLOY_DOT: Record<DeploymentStatus, string> = {
 /** One field of the manifest's `inputs`: text / select / checkbox / number, labelled by `description`. */
 export function InputField({ input, value, onChange }: { input: ManifestInput; value: string; onChange: (v: string) => void }) {
   const id = `run-input-${input.name}`;
-  const field = "w-full rounded border border-drive-border bg-drive-panel px-2 py-1 text-caption text-drive-text";
-  const label = <label htmlFor={id} className="text-label text-drive-muted truncate" title={input.name}>{input.description ?? input.name}{input.required ? " *" : ""}</label>;
+  const field = "w-full min-w-0 min-h-11 sm:min-h-0 text-base sm:text-caption rounded border border-drive-border bg-drive-panel px-2 py-2 sm:py-1 text-drive-text";
+  const label = <label htmlFor={id} className="text-label text-drive-muted break-words" title={input.name}>{input.description ?? input.name}{input.required ? " *" : ""}</label>;
   if (input.type === "boolean") {
     return (
-      <div className="flex items-center gap-2 text-caption">
+      <div className="flex items-center gap-2 min-h-11 text-caption">
         <input id={id} type="checkbox" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} />
         {label}
       </div>
@@ -500,13 +500,13 @@ export function Deployments({ ainizeUrl, ainize, rowCls, labelCls, allHref }: {
       </div>
     );
   }
-  const link = "inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text whitespace-nowrap";
+  const link = "min-h-11 sm:min-h-0 shrink-0 inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text whitespace-nowrap";
   return (
     <div className="border-t border-drive-border" data-testid="git-panel-deployments" data-active={active || undefined}>
-      <div className="flex items-center gap-2 px-4 h-9 text-caption">
+      <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 px-4 min-h-11 sm:min-h-9 py-2 sm:py-0 text-caption">
         <span className={labelCls}>Deployments</span>
-        <span className="text-drive-muted truncate">{project.kind} · {project.branch}</span>
-        {allHref && <a href={allHref} className={clsx(link, "ml-auto")}>All deployments</a>}
+        <span className="text-drive-muted min-w-0 truncate">{project.kind} · {project.branch}</span>
+        {allHref && <a href={allHref} className={clsx(link, "sm:ml-auto")}>All deployments</a>}
         {project.url && (
           <a href={project.url} target="_blank" rel="noreferrer" className={clsx(link, !allHref && "ml-auto")}>
             Project <ExternalLink className="w-3 h-3" aria-hidden="true" />
@@ -518,7 +518,7 @@ export function Deployments({ ainizeUrl, ainize, rowCls, labelCls, allHref }: {
       ) : (
         <ol className="divide-y divide-drive-border border-t border-drive-border" aria-label="Deployments">
           {deployments.map((d) => (
-            <li key={d.id} className="flex items-center gap-3 px-4 h-9 text-caption min-w-0" data-status={d.status}>
+            <li key={d.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 min-h-11 sm:min-h-9 py-2 text-caption min-w-0" data-status={d.status}>
               <span
                 role="status"
                 aria-label={d.status}
@@ -526,7 +526,7 @@ export function Deployments({ ainizeUrl, ainize, rowCls, labelCls, allHref }: {
                 className={clsx("inline-block h-2 w-2 shrink-0 rounded-full", DEPLOY_DOT[d.status] ?? "bg-drive-border")}
               />
               <span className="font-mono text-drive-text shrink-0">{shortSha(d.sha || "")}</span>
-              <span className="text-drive-muted truncate flex-1">
+              <span className="text-drive-muted min-w-0 break-words flex-1">
                 {d.status}{d.status === "error" && d.exitCode !== undefined && d.exitCode !== null ? ` (exit ${d.exitCode})` : ""}
                 {deploymentTime(d) ? ` · ${relativeTime(deploymentTime(d))}` : ""}
               </span>
