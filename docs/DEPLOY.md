@@ -8,7 +8,33 @@ this runbook is the release/payment layer on top of it. For the tag + GitHub
 Release convention after a deploy (`web-YYYY.MM.DD`), see
 [`RELEASING.md`](RELEASING.md).
 
-## One command (recommended)
+> **The normal way to ship is to merge to `main`.** You do not run a deploy
+> command — merging a PR to `main` deploys itself (see below). The by-hand
+> paths further down are for debugging a failed auto-deploy or for a release
+> you want to drive step by step.
+
+## Automatic: merge to `main` ships it (recommended)
+
+**Merge a PR into `main` and it goes live on its own — no deploy command.**
+On the lab host, cron runs `/mnt/newdata/git/.autodeploy/autodeploy.sh aindrive`
+every 2 minutes. When `origin/main` moved and something under `web/` changed, it
+checks the commit out in its own clean worktree (`/mnt/newdata/git/.autodeploy/aindrive`,
+`web/.env.production` symlinked from the main checkout) and runs
+`scripts/deploy.sh --no-pull` — the same gates, rollback snapshot, health check
+and `web-YYYY.MM.DD` Release as by hand. A merge is live within ~2 min plus the
+build. A failed deploy is retried with exponential backoff (2, 4, 8, 16, 32 min;
+given up after 6 failures until the next merge); `rm ~/.autodeploy/aindrive.retry`
+retries now. Rollback snapshots (`aindrive-web:predeploy-*`) are pruned to the
+newest 5. Log: `~/.autodeploy/aindrive.log`.
+
+If nothing under `web/` changed (docs, `cli/`, `mobile/`, other packages), the
+poller advances the deployed marker without rebuilding — so such a merge is
+"deployed" instantly and the site is untouched.
+
+## By hand (`scripts/deploy.sh`)
+
+Reach for this to debug a failed auto-deploy, or to drive a mainnet release
+step by step. It is the same script the poller runs.
 
 ```bash
 scripts/deploy.sh            # pull origin/main → gated build → swap → tag + Release
@@ -22,19 +48,6 @@ refuses to deploy on lockfile drift, a non-mainnet / non-https / DEV_BYPASS-on
 bake `mainnet`; it snapshots the old image for rollback, health-checks through
 the recreate 502, and cuts the `web-YYYY.MM.DD` tag + Release. The manual steps
 below are what it runs — reach for them to debug or to deploy by hand.
-
-## Automatic: every merge to `main`
-
-On the lab host, cron runs `/mnt/newdata/git/.autodeploy/autodeploy.sh aindrive`
-every 2 minutes. When `origin/main` moved and something under `web/` changed, it
-checks the commit out in its own clean worktree (`/mnt/newdata/git/.autodeploy/aindrive`,
-`web/.env.production` symlinked from the main checkout) and runs
-`scripts/deploy.sh --no-pull` — the same gates, rollback snapshot, health check
-and `web-YYYY.MM.DD` Release as by hand. A merge is live within ~2 min plus the
-build. A failed deploy is retried with exponential backoff (2, 4, 8, 16, 32 min;
-given up after 6 failures until the next merge); `rm ~/.autodeploy/aindrive.retry`
-retries now. Rollback snapshots (`aindrive-web:predeploy-*`) are pruned to the
-newest 5. Log: `~/.autodeploy/aindrive.log`.
 
 ## TL;DR (mainnet release)
 

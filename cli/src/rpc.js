@@ -1,4 +1,5 @@
-import { promises as fsp, existsSync, readdirSync } from "node:fs";
+import { promises as fsp, existsSync, readdirSync, statSync, openSync, closeSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as Y from "yjs";
@@ -70,6 +71,8 @@ const RPC_METHODS = new Set([
   "agent-ask",
   // Mac app only: bytes of a file the owner handed to another agent (handoffs.js).
   "handoff-read",
+  // Git smart-HTTP: real git over a bare repo in the drive FS (clone/push).
+  "git-advertise", "git-init", "git-service",
 ]);
 
 /** The methods handleRpc answers, sorted (a copy: the set itself stays private). */
@@ -243,6 +246,31 @@ export function parentPortAskBridge(port, timeoutMs = 60_000) {
   });
 }
 
+// ---- git smart-HTTP helpers (real git; we never hand-roll the pack protocol) ----
+// Only these two services are ever spawned, and always with --stateless-rpc, so
+// this is a scoped CGI host for git, nothing more.
+function _gitService(v) { return v === "receive-pack" ? "receive-pack" : "upload-pack"; }
+function _isBareRepo(abs) { return existsSync(path.join(abs, "HEAD")) && existsSync(path.join(abs, "objects")); }
+function runGitCapture(args, stdinFd = "ignore") {
+  return new Promise((resolve, reject) => {
+    const p = spawn("git", args, { stdio: [stdinFd, "pipe", "pipe"] });
+    const out = [], err = [];
+    p.stdout.on("data", (d) => out.push(d));
+    p.stderr.on("data", (d) => err.push(d));
+    p.on("error", reject);
+    p.on("close", (code) => resolve({ code, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString() }));
+  });
+}
+function runGitToFile(args, stdinFd, stdoutFd) {
+  return new Promise((resolve, reject) => {
+    const p = spawn("git", args, { stdio: [stdinFd, stdoutFd, "pipe"] });
+    const err = [];
+    p.stderr.on("data", (d) => err.push(d));
+    p.on("error", reject);
+    p.on("close", (code) => resolve({ code, stderr: Buffer.concat(err).toString() }));
+  });
+}
+
 export async function handleRpc(params, root) {
   if (!params || !RPC_METHODS.has(params.method)) throw new Error("unknown method");
 
@@ -407,6 +435,37 @@ export async function handleRpc(params, root) {
       // the plain CLI keeps the LLM agent in .aindrive/agents.
       const result = askBridge ? await askBridge({ root, query, agentId }) : await runAgentAsk({ root, agentId, query });
       return { method: "agent-ask", ...result };
+    }
+    case "git-init": {
+      const repo = safeResolve(root, params.repo);
+      await fsp.mkdir(repo, { recursive: true });
+      const r = await runGitCapture(["init", "--bare", "--initial-branch=main", repo]);
+      if (r.code !== 0) throw new Error("git init failed: " + r.stderr.slice(0, 300));
+      await runGitCapture(["--git-dir=" + repo, "config", "http.receivepack", "true"]);
+      return { method: "git-init", ok: true };
+    }
+    case "git-advertise": {
+      const repo = safeResolve(root, params.repo);
+      const service = _gitService(params.service);
+      if (!_isBareRepo(repo)) return { method: "git-advertise", exists: false, data: "" };
+      const r = await runGitCapture([service, "--stateless-rpc", "--advertise-refs", repo]);
+      if (r.code !== 0) throw new Error("git " + service + " advertise failed: " + r.stderr.slice(0, 300));
+      return { method: "git-advertise", exists: true, data: r.stdout.toString("base64") };
+    }
+    case "git-service": {
+      const repo = safeResolve(root, params.repo);
+      const service = _gitService(params.service);
+      if (!_isBareRepo(repo)) throw new Error("not a git repository");
+      const inAbs = safeResolve(root, params.in);
+      const outAbs = safeResolve(root, params.out);
+      await fsp.mkdir(path.dirname(outAbs), { recursive: true });
+      const inFd = openSync(inAbs, "r");
+      const outFd = openSync(outAbs, "w");
+      try {
+        const r = await runGitToFile([service, "--stateless-rpc", repo], inFd, outFd);
+        if (r.code !== 0) throw new Error("git " + service + " failed: " + r.stderr.slice(0, 300));
+      } finally { try { closeSync(inFd); } catch {} try { closeSync(outFd); } catch {} }
+      return { method: "git-service", ok: true, size: statSync(outAbs).size };
     }
   }
 }
