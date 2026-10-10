@@ -19,6 +19,13 @@ checkout and ainmem render this surface; wallet signing stays in the host.
 AIN-UI release changes must be made in the package repository, published,
 and then consumed by updating `web/package.json` and its lockfile.
 
+## Link snippets
+
+A repo or file URL of this aindrive pasted into a chat is asked for with
+`Accept: application/vnd.ain.ui+json` and answered with an A2UI surface plus the
+actions its buttons fire — see [AINUI-LINK-SNIPPETS.md](AINUI-LINK-SNIPPETS.md)
+(the contract shared with ainize and the AIN Teams consumer).
+
 ## Drive hosts: phone protocol v2 (aindrive only)
 
 Not part of the ain-ui package: how the device holding a folder talks to aindrive

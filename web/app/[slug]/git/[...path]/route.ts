@@ -5,6 +5,8 @@ import { getUser } from "@/lib/session";
 import { parseGitUrlPath } from "@/lib/git-urls";
 import { resolveGitSite, serveGitRaw } from "@/lib/git-site";
 import { workingCopyPath } from "@/lib/git-paths";
+import { wantsAinui } from "@/lib/ainui-snippet";
+import { answerAinuiSnippet } from "@/lib/ainui-snippet-server";
 
 /**
  * Friendly git smart-HTTP URL for a repo stored inside a drive:
@@ -24,7 +26,10 @@ import { workingCopyPath } from "@/lib/git-paths";
  *
  * The same prefix is the repo's PAGES for a browser (lib/git-urls.ts): a request
  * with `text/html` in Accept is rewritten by next.config.ts to app/d/by-slug
- * before it reaches here. One page URL is served by this route as well:
+ * before it reaches here. A request with `application/vnd.ain.ui+json` in Accept
+ * (a chat that had the URL pasted; docs/AINUI-LINK-SNIPPETS.md) is answered here
+ * with the repo's or file's AIN-UI snippet for the actor the consumer names
+ * (lib/ainui-snippet-server.ts) — never with HTML or git data. One page URL is served by this route as well:
  * `…/raw/<ref>/<file>` asked for by a non-browser client (curl, a script —
  * no text/html Accept) answers the file's bytes, like raw.githubusercontent.
  *
@@ -51,6 +56,7 @@ function drivePath(path: string[]): string[] | null {
 
 export async function GET(req: Request, { params }: Params) {
   const { slug, path } = await params;
+  if (wantsAinui(req.headers.get("accept"))) return answerAinuiSnippet(req, slug, path);
   const driveId = resolveGitSlug(slug);
   if (!driveId) return notFound();
   if (parseGitUrlPath(path)?.view === "raw") {
