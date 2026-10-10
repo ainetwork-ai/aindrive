@@ -541,17 +541,17 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
         />
 
         <section className="flex-1 flex min-h-0">
-          <div className="flex-1 overflow-auto scrollbar-thin p-3 sm:p-6">
+          <div className="flex-1 min-w-0 overflow-auto scrollbar-thin p-3 sm:p-6">
             {git && (
               <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="git-ref-bar">
                 <RefSwitcher
                   site={{ org: git.org, repo: git.repo }} gitRef={git.ref} defaultBranch={git.defaultBranch} branches={git.branches}
                   path={repoRelative(git.repo, selected?.path ?? path) ?? ""} view={selected ? "blob" : "tree"}
                 />
-                <a href={gitUrls!.commits} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-drive-muted hover:text-drive-text hover:bg-drive-hover">
+                <a href={gitUrls!.commits} className="min-h-11 sm:min-h-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-drive-muted hover:text-drive-text hover:bg-drive-hover">
                   <History className="w-3.5 h-3.5" aria-hidden="true" /> Commits
                 </a>
-                <a href={gitUrls!.deployments} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-drive-muted hover:text-drive-text hover:bg-drive-hover">
+                <a href={gitUrls!.deployments} className="min-h-11 sm:min-h-0 inline-flex items-center gap-1 rounded-md px-2 py-1 text-caption font-medium text-drive-muted hover:text-drive-text hover:bg-drive-hover">
                   <Rocket className="w-3.5 h-3.5" aria-hidden="true" /> Deployments
                 </a>
               </div>
