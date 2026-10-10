@@ -26,7 +26,7 @@ export const Card = forwardRef<HTMLDivElement | HTMLButtonElement, CardProps | I
           type="button"
           className={clsx(
             BASE,
-            "text-left w-full transition-shadow duration-150 outline-none",
+            "text-left w-full transition-shadow duration-150 outline-hidden",
             "hover:shadow-e2 active:shadow-e1",
             "focus-visible:ring-2 focus-visible:ring-drive-accent/40",
             padded && "p-4",

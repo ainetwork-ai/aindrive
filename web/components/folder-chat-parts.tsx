@@ -225,7 +225,7 @@ export function ChatInput({
       <textarea
         ref={ref}
         className="flex-1 rounded-md border border-drive-border bg-drive-panel px-3 py-2 text-body text-drive-text
-                   placeholder:text-drive-muted resize-none outline-none transition-colors duration-150
+                   placeholder:text-drive-muted resize-none outline-hidden transition-colors duration-150
                    focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent
                    disabled:opacity-50"
         rows={2}

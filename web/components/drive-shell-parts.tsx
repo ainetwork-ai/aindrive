@@ -367,7 +367,7 @@ export function DriveHeader({
             onChange={(e) => onQuery(e.target.value)}
             placeholder="Search in this folder"
             aria-label="Search in this folder"
-            className="w-40 md:w-56 rounded-full border border-drive-border bg-drive-sidebar/60 pl-8 pr-7 py-1.5 text-sm text-drive-text placeholder:text-drive-muted focus:outline-none focus:ring-2 focus:ring-drive-accent/40 focus:bg-white [&::-webkit-search-cancel-button]:hidden"
+            className="w-40 md:w-56 rounded-full border border-drive-border bg-drive-sidebar/60 pl-8 pr-7 py-1.5 text-sm text-drive-text placeholder:text-drive-muted focus:outline-hidden focus:ring-2 focus:ring-drive-accent/40 focus:bg-white [&::-webkit-search-cancel-button]:hidden"
           />
           {query && (
             <button
@@ -835,7 +835,7 @@ function ContextMenu({
       role="menu"
       tabIndex={-1}
       style={{ left: pos.x, top: pos.y }}
-      className="fixed z-50 min-w-[12rem] py-1 bg-drive-panel rounded-md shadow-e2 border border-drive-border animate-[menu-in_120ms_ease-out] origin-top-left"
+      className="fixed z-50 min-w-48 py-1 bg-drive-panel rounded-md shadow-e2 border border-drive-border animate-[menu-in_120ms_ease-out] origin-top-left"
       onKeyDown={(e) => {
         if (e.key === "Escape") { e.preventDefault(); onClose(); }
         else if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
@@ -857,7 +857,7 @@ function ContextMenu({
           onMouseEnter={() => !item.disabled && setActive(i)}
           onClick={() => { if (!item.disabled) { item.onClick(); onClose(); } }}
           className={clsx(
-            "flex w-full items-center gap-2.5 px-3 h-9 text-body text-left outline-none transition-colors",
+            "flex w-full items-center gap-2.5 px-3 h-9 text-body text-left outline-hidden transition-colors",
             "disabled:opacity-50 disabled:cursor-not-allowed",
             item.danger ? "text-red-600" : "text-drive-text",
             active === i && !item.disabled && (item.danger ? "bg-red-50" : "bg-drive-hover"),
@@ -916,7 +916,7 @@ function FileGrid({
             tabIndex={0}
             aria-current={isSelected || undefined}
             className={clsx(
-              "relative flex flex-col items-center gap-2 p-4 pt-6 cursor-pointer outline-none",
+              "relative flex flex-col items-center gap-2 p-4 pt-6 cursor-pointer outline-hidden",
               "transition-shadow duration-150 hover:shadow-e2 active:shadow-e1",
               "focus-visible:ring-2 focus-visible:ring-drive-accent/40",
               isSelected && "ring-2 ring-drive-accent/50 bg-drive-selected/40",
@@ -948,7 +948,7 @@ function FileGrid({
                 otherwise a failed thumbnail's `broken` state would stick to the
                 reused instance and pin the icon fallback forever. */}
             <GridVisual key={`${e.path}-${e.mtimeMs}`} driveId={driveId} entry={e} Icon={Icon} tone={tone} locked={!!e.locked} />
-            <span className="w-full text-center text-caption text-drive-text line-clamp-2 break-words" title={e.name}>
+            <span className="w-full text-center text-caption text-drive-text line-clamp-2 wrap-break-word" title={e.name}>
               {e.name}
             </span>
             {paid && (
@@ -986,7 +986,7 @@ function GridVisual({ driveId, entry, Icon, tone, locked }: {
         loading="lazy"
         onError={() => setBroken(true)}
         draggable={false}
-        className="w-full aspect-[4/3] object-cover rounded-md bg-drive-sidebar"
+        className="w-full aspect-4/3 object-cover rounded-md bg-drive-sidebar"
       />
     );
   }

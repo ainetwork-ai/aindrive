@@ -43,7 +43,7 @@ export function ViewerHeader({
               <span
                 key={p.id}
                 title={p.name}
-                className="w-6 h-6 rounded-full border-2 border-white text-[10px] font-semibold text-white flex items-center justify-center shadow-sm"
+                className="w-6 h-6 rounded-full border-2 border-white text-[10px] font-semibold text-white flex items-center justify-center shadow-xs"
                 style={{ background: p.color }}
               >
                 {p.name.replace(/^0x/, "").slice(0, 2).toUpperCase()}

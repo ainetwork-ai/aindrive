@@ -93,7 +93,7 @@ export function DriveOrgAccess({ driveId, busy, setBusy }: { driveId: string; bu
                       value={s.role}
                       disabled={busy}
                       onChange={(e) => share(s.orgId, e.target.value as OrgRole)}
-                      className="bg-transparent text-drive-text font-medium focus:outline-none"
+                      className="bg-transparent text-drive-text font-medium focus:outline-hidden"
                       aria-label={`Role for ${s.name}`}
                     >
                       <option value="viewer">viewer</option>

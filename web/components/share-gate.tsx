@@ -642,7 +642,7 @@ export function ShareGate({ token }: { token: string }) {
  */
 function GateShell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen min-h-[100dvh] flex flex-col items-center justify-center px-4 bg-drive-sidebar">
+    <main className="min-h-screen min-h-dvh flex flex-col items-center justify-center px-4 bg-drive-sidebar">
       <div className="mb-5 flex items-center gap-2 text-subtitle font-semibold text-drive-text">
         <HardDrive className="w-5 h-5 text-drive-accent" /> aindrive
       </div>

@@ -206,7 +206,7 @@ export function GitPanel({ driveId, repo, meta, canEdit, onCommitted }: {
             aria-label="Commit message"
             maxLength={4000}
             disabled={committing}
-            className="h-8 flex-1 min-w-0 rounded-md border border-drive-border bg-drive-panel px-2.5 text-caption text-drive-text placeholder:text-drive-muted focus:border-drive-accent outline-none"
+            className="h-8 flex-1 min-w-0 rounded-md border border-drive-border bg-drive-panel px-2.5 text-caption text-drive-text placeholder:text-drive-muted focus:border-drive-accent outline-hidden"
           />
           <Button type="submit" size="sm" variant="outline" loading={committing} disabled={!message.trim()} icon={<GitCommitHorizontal className="w-3.5 h-3.5" aria-hidden="true" />}>
             Commit

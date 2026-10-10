@@ -24,7 +24,7 @@ export default async function Home() {
     // Installing is only for putting a folder IN (the Mac app or the terminal
     // agent on the device that holds it), so it comes second.
     return (
-      <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6 py-12">
+      <main className="min-h-screen min-h-dvh flex items-center justify-center px-6 py-12">
         <div className="max-w-xl w-full">
           <h1 className="text-4xl font-semibold tracking-tight">aindrive</h1>
           <p className="mt-3 text-lg text-drive-text">Your files, in any browser.</p>
@@ -80,7 +80,7 @@ aindrive              # this folder is now in aindrive`}
   const sectionState = (o: (typeof orgs)[number]) =>
     orgSectionState({ drives: o.drives.length, pausedDrives: o.pausedDrives, hasPersonalDrives: drives.length > 0 });
   return (
-    <main className="min-h-screen min-h-[100dvh] max-w-5xl mx-auto px-4 sm:px-6 py-10">
+    <main className="min-h-screen min-h-dvh max-w-5xl mx-auto px-4 sm:px-6 py-10">
       <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 mb-8">
         <h1 className="text-2xl font-semibold">My drives</h1>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">

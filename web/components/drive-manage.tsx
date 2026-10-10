@@ -252,7 +252,7 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-drive-muted" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search"
-            className="w-32 rounded-full border border-drive-border bg-white pl-7 pr-2 py-1 text-caption focus:outline-none focus:ring-2 focus:ring-drive-accent/40" />
+            className="w-32 rounded-full border border-drive-border bg-white pl-7 pr-2 py-1 text-caption focus:outline-hidden focus:ring-2 focus:ring-drive-accent/40" />
         </div>
       }
     >
@@ -310,7 +310,7 @@ function MembersSection({ driveId, members, pending, busy, setBusy, reload }: {
                               value={g.role}
                               disabled={busy}
                               onChange={(e) => changeRole(g.id, e.target.value as Role)}
-                              className="bg-transparent text-drive-text font-medium focus:outline-none"
+                              className="bg-transparent text-drive-text font-medium focus:outline-hidden"
                               aria-label={`Role at ${prettyPath(g.path)}`}
                             >
                               <option value="viewer">viewer</option>

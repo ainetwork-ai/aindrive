@@ -26,13 +26,13 @@
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@earthstar/meadowcap": "npm:@jsr/earthstar__meadowcap@^0.6.4",
     "@earthstar/willow": "npm:@jsr/earthstar__willow@^0.6.1",
     "@earthstar/willow-utils": "npm:@jsr/earthstar__willow-utils@^2.0.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "commander": "^14.0.3",
     "esbuild": "^0.28.1",
     "mime-types": "^2.1.35",

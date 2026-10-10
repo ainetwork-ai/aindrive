@@ -14,7 +14,7 @@ const PERSONA_PLACEHOLDER =
 // token chrome so the form reads consistently).
 const TEXTAREA_CLASS =
   "w-full rounded-md border border-drive-border bg-drive-panel px-3 py-2 text-body text-drive-text " +
-  "placeholder:text-drive-muted resize-y transition-colors duration-150 outline-none " +
+  "placeholder:text-drive-muted resize-y transition-colors duration-150 outline-hidden " +
   "focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent";
 
 export const PROVIDERS = [

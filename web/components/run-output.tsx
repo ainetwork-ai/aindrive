@@ -166,7 +166,7 @@ export function RunOutput({ state, entryName, ainizeUrl }: { state: RunState; en
           Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
         </a>
       </div>
-      <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap break-words text-drive-text">
+      <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap wrap-break-word text-drive-text">
         {state.chunks.length === 0 && state.status === "running" && <span className="text-drive-muted">waiting for output…</span>}
         {state.chunks.map((c, i) => (
           <span key={i} className={c.stream === "stderr" ? "text-red-600" : undefined}>{c.text}</span>
