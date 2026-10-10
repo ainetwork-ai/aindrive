@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,10 +6,21 @@ import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 
 process.env.AINDRIVE_DATA_DIR = mkdtempSync(join(tmpdir(), 'drive-handoff-route-'));
 process.env.AINDRIVE_PUBLIC_URL = 'https://drive.test';
+vi.mock('next/headers', () => ({ cookies: () => Promise.resolve({ get: () => undefined }) }));
+const agent = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[] }));
+vi.mock('../rpc', () => ({
+  AgentError: class extends Error {},
+  callAgent: async (_drive: string, _secret: string, req: Record<string, unknown>) => {
+    agent.calls.push(req);
+    if (req.method !== 'git-advertise') throw new Error('unexpected agent operation');
+    return { exists: true, data: Buffer.from('0000').toString('base64') };
+  },
+}));
 const { db } = await import('../db.js');
 const { registerClient } = await import('../oauth');
 const { verifyAccountToken } = await import('../account-tokens');
 const { POST } = await import('../../app/api/oauth/handoff/route');
+const { gitHttpGET } = await import('../git-http');
 const { privateKey, publicKey } = generateKeyPairSync('ed25519');
 const client = registerClient('AinCode practice', ['https://ainize.ai/code/_practice/drive/callback']);
 process.env.AINDRIVE_IDENTITY_HANDOFF_CLIENTS = JSON.stringify({
@@ -89,4 +100,27 @@ it('rolls back a newly prepared SSO account if grant persistence fails', async (
   db.exec('DROP TRIGGER fail_new_handoff');
   expect(db.prepare('SELECT user_id FROM sso_identities WHERE issuer = ? AND subject = ?')
     .get('https://auth.test', 'rollback-sso')).toBeUndefined();
+});
+
+it('uses the cookie-free handoff grant at the actual Git HTTP route and enforces live revocation', async () => {
+  db.prepare('INSERT INTO drives (id, owner_id, name, agent_token_hash, drive_secret) VALUES (?, ?, ?, ?, ?)')
+    .run('handoff-drive', 'person', 'Practice', 'unused', 'test-secret');
+  const pair = await (await POST(request(proof()))).json();
+  const gitRequest = (service: string, basic = false) => new Request(
+    `https://drive.test/api/drives/handoff-drive/git/repositories/docs/info/refs?service=git-${service}`,
+    { headers: { authorization: basic
+      ? `Basic ${Buffer.from('x-access-token:' + pair.access_token).toString('base64')}`
+      : `Bearer ${pair.access_token}` } },
+  );
+  for (const [service, basic] of [['upload-pack', false], ['receive-pack', true]] as const) {
+    const response = await gitHttpGET('handoff-drive', ['repositories', 'docs', 'info', 'refs'], gitRequest(service, basic));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(`application/x-git-${service}-advertisement`);
+    expect(await response.text()).toContain(`# service=git-${service}`);
+    expect(agent.calls.at(-1)).toMatchObject({ method: 'git-advertise', repo: 'repositories/docs.git', service });
+  }
+  const calls = agent.calls.length;
+  db.prepare('UPDATE account_tokens SET revoked_at = ? WHERE user_id = ?').run(Date.now(), 'person');
+  expect((await gitHttpGET('handoff-drive', ['repositories', 'docs', 'info', 'refs'], gitRequest('receive-pack'))).status).toBe(401);
+  expect(agent.calls).toHaveLength(calls);
 });
