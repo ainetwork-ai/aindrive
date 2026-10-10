@@ -10,6 +10,10 @@ import { traceClient, SESSION_ID } from "@/lib/yjs/trace-client";
 import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
 import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
+import {
+  createDiskSync, decideOnOpen, hashText, loadKnownDiskHash, markLoaded, noteUpdate,
+  shouldReloadFromDisk, shouldWriteBack, storeKnownDiskHash, type DiskSyncState,
+} from "@/lib/doc-disk-sync";
 import { ViewerHeader } from "./viewer-parts";
 import { fileIconForName } from "./file-icons";
 import { RichTextEditor } from "./editors/rich-text-editor";
@@ -66,7 +70,36 @@ export function Viewer({
   const providerRef = useRef<AindriveProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
   const docIdRef = useRef<string>("");
+  // Disk ↔ doc reconciliation (lib/doc-disk-sync.ts): what the disk held when
+  // we last loaded/wrote it, and whether a LOCAL edit happened since. The disk
+  // is written only on a real edit; an external change (git push, another
+  // tool) replaces the doc instead of being overwritten by it.
+  const diskSyncRef = useRef<DiskSyncState>(createDiskSync());
   const [presence, setPresence] = useState<Array<{ id: number; name: string; color: string }>>([]);
+
+  // Replace the whole Y.Text with disk content, origin = provider so the
+  // update is tagged "remote" (not a local edit → does not arm autosave).
+  function replaceFromDisk(provider: AindriveProvider, text: string, replaced: boolean) {
+    const ytext = provider.doc.getText("content");
+    provider.doc.transact(() => {
+      if (ytext.length > 0) ytext.delete(0, ytext.length);
+      if (text.length > 0) ytext.insert(0, text);
+    }, provider);
+    diskSyncRef.current = markLoaded(diskSyncRef.current, text, { replaced });
+    storeKnownDiskHash(driveId, entry.path, diskSyncRef.current.lastDiskHash);
+  }
+
+  async function writeToDisk(text: string, source: "autosave" | "user-save"): Promise<Response> {
+    const res = await fetch(`/api/drives/${driveId}/fs/write`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8", source }),
+    });
+    if (res.ok) {
+      diskSyncRef.current = markLoaded(diskSyncRef.current, text);
+      storeKnownDiskHash(driveId, entry.path, diskSyncRef.current.lastDiskHash);
+    }
+    return res;
+  }
 
   // Debounced autosave: trailing edge after 5s of no typing, max 15s between saves.
   const debouncedAutosave = useDebouncedCallback(
@@ -74,13 +107,13 @@ export function Viewer({
       if (!canEdit || !providerRef.current || !docIdRef.current) return;
       const provider = providerRef.current;
       const text = provider.doc.getText("content").toString();
+      // Only a doc that a user edited since the last load/write, and whose text
+      // differs from the disk, is written. A restore/sync/reload is never a reason.
+      if (!shouldWriteBack(diskSyncRef.current, text)) return;
       const update = Y.encodeStateAsUpdate(provider.doc);
       try {
         await Promise.all([
-          fetch(`/api/drives/${driveId}/fs/write`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
-          }),
+          writeToDisk(text, "autosave"),
           fetch(`/api/drives/${driveId}/yjs`, {
             method: "POST", headers: { "content-type": "application/json" },
             body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
@@ -108,24 +141,21 @@ export function Viewer({
         void payload;
       }
       if (ev === "reload") {
-        // External tool changed the file on disk — re-fetch and replace Y.Doc state.
-        // CRITICAL: skip if disk content already matches our ytext, otherwise
-        // our own autosave triggers fs.watch → reload → loop.
+        // External tool changed the file on disk — re-fetch and replace Y.Doc
+        // state. The disk is authoritative: a pending local edit is dropped in
+        // favor of what the external writer put there (it already won on disk).
+        // Skipped when the disk already matches the doc (our own autosave
+        // echoing through fs.watch → reload → loop).
         try {
           const res = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
           if (res.ok) {
             const data = await res.json();
-            const ytext = provider.doc.getText("content");
-            const current = ytext.toString();
+            const current = provider.doc.getText("content").toString();
             const incoming = data.content as string;
-            if (current === incoming) {
-              // No-op: this reload was caused by our own autosave.
-              return;
-            }
-            provider.doc.transact(() => {
-              ytext.delete(0, ytext.length);
-              ytext.insert(0, incoming);
-            }, provider);
+            if (!shouldReloadFromDisk(diskSyncRef.current, incoming, current === incoming)) return;
+            debouncedAutosave.cancel(); // a scheduled write of the now-stale doc must not fire
+            replaceFromDisk(provider, incoming, true);
+            tracer?.("disk-reload-apply", { byteLen: new TextEncoder().encode(incoming).byteLength });
           }
         } catch (e) { console.warn("external reload failed:", e); }
       }
@@ -152,12 +182,8 @@ export function Viewer({
         // Wait for full readiness (IndexedDB + WS sync) before deciding whether to seed
         await provider.whenReady;
         const ytext = provider.doc.getText("content");
-        // Only seed if BOTH IndexedDB and the server-side Willow Store are empty.
-        // Otherwise the existing CRDT state is authoritative — re-seeding would
-        // duplicate content on every reload.
-        if (ytext.length > 0) {
-          tracer?.("disk-seed-skip");
-        } else {
+        if (ytext.length === 0) {
+          // Nothing local: try the server-side Willow Store before the file.
           const yjsRes = await fetch(`/api/drives/${driveId}/yjs?path=${encodeURIComponent(entry.path)}`);
           if (yjsRes.ok) {
             const { data } = await yjsRes.json();
@@ -170,16 +196,33 @@ export function Viewer({
               catch (e) { console.warn("y-apply-update failed:", e); }
             }
           }
-          if (provider.doc.getText("content").length === 0) {
-            const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
-            if (fileRes.ok) {
-              const fdata = await fileRes.json();
-              if (provider.doc.getText("content").length === 0) {
-                const seedContent = fdata.content as string;
-                provider.doc.transact(() => ytext.insert(0, seedContent), provider);
-                tracer?.("disk-seed-apply", { byteLen: new TextEncoder().encode(seedContent).byteLength });
-              }
-            }
+        }
+        // The file on disk is consulted on EVERY open. A stored CRDT (IndexedDB
+        // or Willow) is kept only when it agrees with the disk, or when the disk
+        // still holds what this browser last loaded/wrote (so the difference is
+        // our own unsaved edit). A disk changed by anything else — a git push
+        // into the working tree, another tool — wins and replaces the doc.
+        // Before this check the stored CRDT was treated as authoritative and
+        // the stale text was autosaved over the new file (incident 2026-10-10).
+        const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
+        if (fileRes.ok && !cancelled) {
+          const fdata = await fileRes.json();
+          const disk = fdata.content as string;
+          const current = provider.doc.getText("content").toString();
+          const decision = decideOnOpen({
+            docEmpty: current.length === 0,
+            docEqualsDisk: current === disk,
+            diskHash: hashText(disk),
+            lastKnownDiskHash: loadKnownDiskHash(driveId, entry.path),
+          });
+          if (decision === "keep-doc") {
+            // The disk is the baseline; with unsaved offline edits the doc is dirty.
+            diskSyncRef.current = { ...markLoaded(diskSyncRef.current, disk), dirty: current !== disk };
+            tracer?.("disk-seed-skip");
+          } else {
+            replaceFromDisk(provider, disk, decision === "replace-from-disk");
+            tracer?.(decision === "seed-from-disk" ? "disk-seed-apply" : "disk-reload-apply",
+              { byteLen: new TextEncoder().encode(disk).byteLength });
           }
         }
         setLoading(false);
@@ -207,7 +250,13 @@ export function Viewer({
     refreshPresence();
 
     // Autosave: trailing-edge 5s debounce with maxWait 15s (via useDebouncedCallback above).
-    const triggerSave = () => {
+    // Armed by LOCAL updates only: the IndexedDB restore, the server sync and
+    // our own disk reload/seed (origin = provider) are not edits, and before
+    // this gate each of them scheduled a write of whatever the doc held.
+    const triggerSave = (_update: Uint8Array, origin: unknown) => {
+      const kind = provider.originOf(origin);
+      diskSyncRef.current = noteUpdate(diskSyncRef.current, kind);
+      if (kind !== "local") return;
       tracer?.("autosave-trigger", { reason: "tick" });
       void debouncedAutosave();
     };
@@ -257,10 +306,7 @@ export function Viewer({
     if (!canEdit || !providerRef.current) return;
     setSaving(true);
     const text = providerRef.current.doc.getText("content").toString();
-    const res = await fetch(`/api/drives/${driveId}/fs/write`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
-    });
+    const res = await writeToDisk(text, "user-save");
     setSaving(false);
     if (!res.ok) alert((await res.json()).error);
     else onSaved();

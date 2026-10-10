@@ -6,6 +6,7 @@ import * as Y from "yjs";
 import { appendUpdate, listEntries, statsForDoc, maybeCompact } from "./willow-store.js";
 import { runAgentAsk } from "./agent-runner.js";
 import { readHandoff } from "./handoffs.js";
+import { describeGitWrite } from "./git-write-guard.js";
 
 import { log, trace as pinoTrace } from "./logger.js";
 
@@ -339,10 +340,22 @@ export async function handleRpc(params, root, ctx = {}) {
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       const encoding = params.encoding === "base64" ? "base64" : "utf8";
       const data = Buffer.from(params.content, encoding);
+      // Who is writing: the editors declare "autosave" / "user-save"; anything
+      // else (older clients, API callers) is "unknown". Diagnostic only.
+      const source = typeof params.source === "string" ? params.source.slice(0, 32) : "unknown";
       // Suppress fs-changed for 2s after our own write so reload loop doesn't fire
       try { _suppressFsChange(params.path); } catch {}
+      // Diagnostics (never blocks): a write inside a git working tree that
+      // makes the file differ from HEAD is what turned a `git push` into
+      // "Working directory has unstaged changes" — log it with its source so
+      // the next incident names the writer.
+      describeGitWrite(root, abs, data).then((g) => {
+        if (g && g.differsFromHead) {
+          log.warn({ path: params.path, source, workTree: g.workTree, tracked: g.tracked, byteLen: data.length }, "[write] file in a git working tree now differs from HEAD");
+        }
+      }).catch(() => {});
       await writeFileSerialized(abs, data);
-      try { cliTrace(root, docIdFor(root, params.path), "disk-write", { extra: { path: params.path, byteLen: data.length } }); } catch {}
+      try { cliTrace(root, docIdFor(root, params.path), "disk-write", { extra: { path: params.path, byteLen: data.length, source } }); } catch {}
       return { method: "write", ok: true, bytes: data.length };
     }
     case "mkdir": {
