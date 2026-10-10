@@ -71,7 +71,7 @@ const RPC_METHODS = new Set([
   "agent-ask",
   // Mac app only: bytes of a file the owner handed to another agent (handoffs.js).
   "handoff-read",
-  // Git smart-HTTP: real git over a bare repo in the drive FS (clone/push).
+  // Git smart-HTTP: real git over a repo in the drive FS (clone/push).
   "git-advertise", "git-init", "git-service",
 ]);
 
@@ -250,7 +250,15 @@ export function parentPortAskBridge(port, timeoutMs = 60_000) {
 // Only these two services are ever spawned, and always with --stateless-rpc, so
 // this is a scoped CGI host for git, nothing more.
 function _gitService(v) { return v === "receive-pack" ? "receive-pack" : "upload-pack"; }
-function _isBareRepo(abs) { return existsSync(path.join(abs, "HEAD")) && existsSync(path.join(abs, "objects")); }
+// A repo the agent can serve: bare (HEAD + objects at the path — repos created
+// before non-bare pushes, still served) or non-bare (.git/ inside it, what
+// `git-init` creates now). `git upload-pack <abs>` / `git receive-pack <abs>`
+// find `.git` inside a non-bare path themselves.
+function _isGitRepo(abs) {
+  const bare = existsSync(path.join(abs, "HEAD")) && existsSync(path.join(abs, "objects"));
+  const nonBare = existsSync(path.join(abs, ".git", "HEAD")) && existsSync(path.join(abs, ".git", "objects"));
+  return bare || nonBare;
+}
 function runGitCapture(args, stdinFd = "ignore") {
   return new Promise((resolve, reject) => {
     const p = spawn("git", args, { stdio: [stdinFd, "pipe", "pipe"] });
@@ -437,17 +445,23 @@ export async function handleRpc(params, root) {
       return { method: "agent-ask", ...result };
     }
     case "git-init": {
+      // Non-bare, with receive.denyCurrentBranch=updateInstead: a push to the
+      // checked-out branch updates the ref AND the working tree, so the pushed
+      // files appear in the drive as ordinary files (`.git` is in HIDDEN).
       const repo = safeResolve(root, params.repo);
       await fsp.mkdir(repo, { recursive: true });
-      const r = await runGitCapture(["init", "--bare", "--initial-branch=main", repo]);
+      const r = await runGitCapture(["init", "--initial-branch=main", repo]);
       if (r.code !== 0) throw new Error("git init failed: " + r.stderr.slice(0, 300));
-      await runGitCapture(["--git-dir=" + repo, "config", "http.receivepack", "true"]);
+      for (const [k, v] of [["receive.denyCurrentBranch", "updateInstead"], ["http.receivepack", "true"]]) {
+        const c = await runGitCapture(["-C", repo, "config", k, v]);
+        if (c.code !== 0) throw new Error("git config failed: " + c.stderr.slice(0, 300));
+      }
       return { method: "git-init", ok: true };
     }
     case "git-advertise": {
       const repo = safeResolve(root, params.repo);
       const service = _gitService(params.service);
-      if (!_isBareRepo(repo)) return { method: "git-advertise", exists: false, data: "" };
+      if (!_isGitRepo(repo)) return { method: "git-advertise", exists: false, data: "" };
       const r = await runGitCapture([service, "--stateless-rpc", "--advertise-refs", repo]);
       if (r.code !== 0) throw new Error("git " + service + " advertise failed: " + r.stderr.slice(0, 300));
       return { method: "git-advertise", exists: true, data: r.stdout.toString("base64") };
@@ -455,7 +469,7 @@ export async function handleRpc(params, root) {
     case "git-service": {
       const repo = safeResolve(root, params.repo);
       const service = _gitService(params.service);
-      if (!_isBareRepo(repo)) throw new Error("not a git repository");
+      if (!_isGitRepo(repo)) throw new Error("not a git repository");
       const inAbs = safeResolve(root, params.in);
       const outAbs = safeResolve(root, params.out);
       await fsp.mkdir(path.dirname(outAbs), { recursive: true });

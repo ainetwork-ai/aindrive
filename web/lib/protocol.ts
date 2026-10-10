@@ -8,7 +8,9 @@ export type RpcMethod =
   // Device-only (mobile/): bytes of one file the owner registered for a handoff link (lib/handoff.ts).
   | "handoff-read"
   | "thumbnail"
-  // Git smart-HTTP (clone/push): the agent runs real git on a bare repo in the drive FS.
+  // Git smart-HTTP (clone/push): the agent runs real git on a repo in the drive FS
+  // (non-bare with receive.denyCurrentBranch=updateInstead since git-init went
+  // non-bare, so pushed files show up in the drive; legacy bare repos still serve).
   | "git-advertise" | "git-init" | "git-service";
 
 export type RpcParams =
@@ -27,7 +29,7 @@ export type RpcParams =
   | { method: "handoff-read"; key: string; offset: number; length: number }
   | { method: "thumbnail"; path: string; px?: number }
   // Git smart-HTTP. `service` is "upload-pack" (clone/fetch) or "receive-pack" (push).
-  // `repo` is a drive-relative path to a bare repo; in/out are drive-relative temp
+  // `repo` is a drive-relative path to a repo (bare or non-bare); in/out are drive-relative temp
   // files under .aindrive/uploads/git/ (an allowed system dir) that web fills via
   // upload-chunk and drains via download-chunk, so large packs never cross as one JSON.
   | { method: "git-advertise"; repo: string; service: "upload-pack" | "receive-pack" }
