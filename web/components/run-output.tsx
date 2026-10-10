@@ -11,11 +11,13 @@ import {
   RUN_IDLE, reduceRun, parseRunEvent, splitSse, formatDuration, type RunState, type RunStatus,
 } from "@/lib/git-panel";
 
+export type RunTarget = { target: "working-tree" | "head" | "commit" | "deployed"; sha?: string };
+
 export type Runner = {
   runs: Record<string, RunState>;
   open: Record<string, boolean>;
   /** `env`: the answers to the manifest's inputs, already as `INPUT_<NAME>` (lib/run-inputs.ts inputsToEnv). */
-  run: (entryPath: string, env?: Record<string, string>) => void;
+  run: (entryPath: string, env?: Record<string, string>, target?: RunTarget) => void;
   stop: (entryPath: string) => void;
   toggle: (entryPath: string) => void;
 };
@@ -42,7 +44,7 @@ export function useRunner(driveId: string, repo: string | null): Runner {
     aborts.current.delete(p);
   }, []);
 
-  const run = useCallback(async (entryPath: string, env?: Record<string, string>) => {
+  const run = useCallback(async (entryPath: string, env?: Record<string, string>, target?: RunTarget) => {
     if (repo === null) return;
     stop(entryPath);
     const ctrl = new AbortController();
@@ -54,12 +56,12 @@ export function useRunner(driveId: string, repo: string | null): Runner {
     try {
       const res = await fetch(`/api/drives/${driveId}/run`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repo, entry, ...(env && Object.keys(env).length ? { env } : {}) }), signal: ctrl.signal,
+        body: JSON.stringify({ repo, entry, ...(target ?? { target: "working-tree" }), ...(env && Object.keys(env).length ? { env } : {}) }), signal: ctrl.signal,
       });
       if (res.status === 503) { dispatch(entryPath, { type: "unavailable" }); return; }
       if (!res.ok || !res.body) {
         let msg = `run failed (${res.status})`;
-        try { const j = await res.json(); if (j?.error) msg = j.error; } catch {}
+        try { const j = await res.json(); if (j?.error) msg = typeof j.error === "string" ? j.error : j.error.message ?? msg; } catch {}
         dispatch(entryPath, { type: "error", message: msg });
         return;
       }

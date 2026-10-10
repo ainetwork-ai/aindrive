@@ -3,11 +3,15 @@ import { z } from "zod";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError } from "@/lib/rpc";
 import { zRequiredPath } from "@/lib/zod-helpers";
-import { collectRepoFiles, languageFor, runActorFor, runOnAinize } from "@/lib/run-ainize";
+import { collectRepoFiles, languageFor, runActorFor, runOnAinize, runProjectOnAinize } from "@/lib/run-ainize";
 import { validateRunEnv } from "@/lib/run-inputs";
 import { gateActingCaller, resolveActingCaller } from "@/lib/ainui-actor";
 
+import { projectHookFor } from "@/lib/git-project-hooks";
+
 const Body = z.object({
+  target: z.enum(["working-tree", "head", "commit", "deployed"]).default("working-tree"),
+  sha: z.string().regex(/^[0-9a-f]{40,64}$/).optional(),
   repo: zRequiredPath,
   /** Entry file, relative to `repo` (e.g. "main.py"). */
   entry: z.string().min(1).max(1024),
@@ -62,6 +66,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     if (g instanceof NextResponse) return g;
     gate = g;
   }
+  const actor = await runActorFor(gate.userId);
+  if (body.data.target !== "working-tree") {
+    const hook = projectHookFor(driveId, repo);
+    if (!hook) return NextResponse.json({ error: "push this repository to bind its project first" }, { status: 409 });
+    if (!actor) return NextResponse.json({ error: "sign in with AIN SSO to run a repository version" }, { status: 401 });
+    if (body.data.target === "commit" && !body.data.sha) return NextResponse.json({ error: "select a commit to run" }, { status: 400 });
+    if (body.data.target !== "commit" && body.data.sha) return NextResponse.json({ error: "sha is only used for a commit run" }, { status: 400 });
+    const upstream = await runProjectOnAinize({ projectId: hook.projectId, target: body.data.target, sha: body.data.sha, entry, env, actor, signal: req.signal });
+    return new Response(upstream.body, { status: upstream.status, headers: { "Content-Type": upstream.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store", "X-Accel-Buffering": "no", ...(upstream.headers.get("x-ainize-execution") ? { "X-Ainize-Execution": upstream.headers.get("x-ainize-execution")! } : {}) } });
+  }
   let files;
   try {
     files = await collectRepoFiles(driveId, gate.drive.drive_secret, repo);
@@ -70,7 +84,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
   }
   if (!files.some((f) => f.path === entry)) return NextResponse.json({ error: "entry file not found in repo" }, { status: 404 });
-  const actor = await runActorFor(gate.userId);
   const upstream = await runOnAinize({ language, entry, files, env, actor });
   if (upstream.status === 503) return NextResponse.json({ error: "runner unavailable" }, { status: 503 });
   if (upstream.status === 401 || upstream.status === 403) {

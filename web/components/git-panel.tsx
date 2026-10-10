@@ -112,11 +112,17 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
   // the last answers remembered per repo in this browser, sent as INPUT_<NAME> env with the run.
   const inputs = meta.manifest?.inputs ?? [];
   const { values, setValue } = useRunInputs(driveId, repo, inputs);
+  const [runTarget, setRunTarget] = useState<"working-tree" | "commit" | "deployed">("working-tree");
+  const [runSha, setRunSha] = useState("");
+  const selectedSha = runSha || meta.head?.sha || "";
   const startRun = () => {
     if (!entryPath) return;
     const missing = missingRequired(inputs, values);
     if (missing.length) { toast.error(`Fill in ${missing.join(", ")}`); return; }
-    runner.run(entryPath, inputsToEnv(inputs, values));
+    if (runTarget !== "working-tree" && !ainize.project) { toast.error("Push to bind this repository before running a version"); return; }
+    if (runTarget === "commit" && !selectedSha) { toast.error("Select a commit"); return; }
+    if (runTarget === "deployed" && !ainize.project?.activeCommit) { toast.error("No successful deployment is available"); return; }
+    runner.run(entryPath, inputsToEnv(inputs, values), { target: runTarget, ...(runTarget === "commit" ? { sha: selectedSha } : {}) });
   };
 
   async function copy() {
@@ -239,7 +245,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
       )}
 
       {/* 3. Run the project's entry */}
-      <div className={clsx(rowCls, "[&>span:last-of-type]:min-h-11 sm:[&>span:last-of-type]:min-h-0 [&_button]:min-h-11 sm:[&_button]:min-h-0")} data-testid="git-panel-run">
+      <div className={clsx(rowCls, "sm:flex-wrap [&>span:last-of-type]:min-h-11 sm:[&>span:last-of-type]:min-h-0 [&_button]:min-h-11 sm:[&_button]:min-h-0")} data-testid="git-panel-run">
         <span className={labelCls}>Run</span>
         {entryPath !== null && entry !== null ? (
           <>
@@ -256,6 +262,14 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
             ) : (
               <code className="flex-1 min-w-0 truncate font-mono text-caption text-drive-text" title={meta.manifest?.entry ? "entry from ainize.json" : "first runnable file in the repo root"}>{entry}</code>
             )}
+            <select aria-label="Run version" value={runTarget} onChange={(e) => setRunTarget(e.target.value as typeof runTarget)} className="w-full sm:w-auto min-w-0 h-11 sm:h-auto rounded border border-drive-border bg-drive-panel px-2 py-2 sm:py-0.5 text-base sm:text-caption">
+              <option value="working-tree">Working files · includes edits</option>
+              <option value="commit" disabled={!ainize.project}>Selected commit</option>
+              <option value="deployed" disabled={!ainize.project?.activeCommit}>Deployed version{ainize.project?.activeCommit ? ` · ${shortSha(ainize.project.activeCommit)}` : ""}</option>
+            </select>
+            {runTarget === "commit" && <select aria-label="Commit to run" value={selectedSha} onChange={(e) => setRunSha(e.target.value)} className="w-full sm:w-auto sm:max-w-48 min-w-0 h-11 sm:h-auto rounded border border-drive-border bg-drive-panel px-2 py-2 sm:py-0.5 font-mono text-base sm:text-caption">
+              {meta.commits.map((commit) => <option key={commit.sha} value={commit.sha}>{shortSha(commit.sha)} · {commit.subject}</option>)}
+            </select>}
             <RunActions
               state={run}
               isOpen={!!runner.open[entryPath]}

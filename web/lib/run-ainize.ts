@@ -134,3 +134,12 @@ export function runOnAinize(opts: { language: RunLanguage; entry: string; files:
     }),
   });
 }
+
+/** Run an immutable repository version on the bound project, with the same actor and SSE contract. */
+export function runProjectOnAinize(opts: { projectId: string; target: 'head' | 'commit' | 'deployed'; sha?: string; entry: string; env?: Record<string, string>; actor: RunActor; signal?: AbortSignal }): Promise<Response> {
+  return fetch(`${ainizeUrl()}/api/projects/${encodeURIComponent(opts.projectId)}/run`, {
+    method: "POST", signal: opts.signal,
+    headers: { "content-type": "application/json", accept: "text/event-stream", authorization: `Bearer ${opts.actor.token}`, "x-ain-actor": opts.actor.subject },
+    body: JSON.stringify({ target: opts.target, ...(opts.sha ? { sha: opts.sha } : {}), entry: opts.entry, env: opts.env ?? {} }),
+  });
+}
