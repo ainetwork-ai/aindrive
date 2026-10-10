@@ -26,7 +26,10 @@ import { notifyProjectOfPush } from "@/lib/git-project-hooks";
  * Credentials reach the gate as the `aindrive_session` cookie, `Authorization:
  * Bearer <session JWT>`, or — for a plain git client — HTTP Basic with the
  * session JWT as the password (`git clone https://x-access-token:<JWT>@host/…`),
- * which gitAuthRequest() translates to Bearer below.
+ * which gitAuthRequest() translates to Bearer below. A trusted first-party
+ * application (ainize-node cloning a project's repo) sends an AIN SSO machine
+ * token instead (lib/sso/service-principal.ts): viewer on org-shared drives,
+ * so upload-pack works and receive-pack is refused.
  *
  * Large packs never cross as one JSON: the POST body is streamed to an agent temp
  * file via upload-chunk, git runs with that as stdin and a temp file as stdout,
@@ -79,7 +82,7 @@ export async function gitHttpGET(driveId: string, path: string[], req: Request):
   }
   const svc = svcParam.slice("git-".length) as Service;
 
-  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req) });
+  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req), service: true });
   if (gate instanceof NextResponse) return gate.status === 403 && !gateUser(req) ? deny(401, "auth required") : gate;
   const { drive } = gate;
 
@@ -109,7 +112,7 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
   if (!parsed || parsed.kind === "info") return deny(404, "not found");
   const svc = parsed.kind;
 
-  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req) });
+  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req), service: true });
   if (gate instanceof NextResponse) return gate.status === 403 && !gateUser(req) ? deny(401, "auth required") : gate;
   const { drive } = gate;
   const secret = drive.drive_secret;
