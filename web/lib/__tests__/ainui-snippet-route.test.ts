@@ -191,6 +191,13 @@ describe("the file snippet", () => {
     expect(agent.calls.find((c) => c.method === "git-show")).toMatchObject({ repo: WC, ref: "main", path: "art_search.py" });
   });
 
+  it("`HEAD` means the checked-out branch — the same snippet and ▶ Run as the branch URL (a consumer that knows only the drive path)", async () => {
+    const byHead = await body(await ui("acc_member", ["clef", "blob", "HEAD", "art_search.py"]));
+    const byBranch = await body(await ui("acc_member", ["clef", "blob", "main", "art_search.py"]));
+    expect(byHead).toEqual(byBranch);
+    expect(byHead.actions.run).toBeDefined();
+  });
+
   it("at another ref the file is shown but not runnable (the run executes the working tree); a binary file says so", async () => {
     const other = await body(await ui("acc_member", ["clef", "blob", "dev", "art_search.py"]));
     expect(other.actions.run).toBeUndefined();
