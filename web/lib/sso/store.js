@@ -18,6 +18,7 @@ import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { db } from "../db.js";
 import { mergeRoleUpgradeOnly } from "../access-core.js";
+import { normalizedRecipientEmail } from "../recipient-address.js";
 import { claimInvitesForEmail } from "../invites.js";
 import { onMemberGranted } from "../share-events-core.js";
 
@@ -555,15 +556,17 @@ export function applyDesiredState(issuer, s) {
     const groups = active ? s.groups.map((g) => g.slug).sort() : [];
     db.prepare(
       `INSERT INTO sso_memberships (issuer, org_id, subject, user_id, org_slug, org_name, status, app_role, groups_json,
-                                    applied_version, legacy_user_id, ownership_transfer_to, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    applied_version, legacy_user_id, ownership_transfer_to, updated_at, work_email)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(issuer, org_id, subject) DO UPDATE SET
          user_id = excluded.user_id, org_slug = excluded.org_slug, org_name = excluded.org_name,
          status = excluded.status, app_role = excluded.app_role, groups_json = excluded.groups_json,
          applied_version = excluded.applied_version, legacy_user_id = excluded.legacy_user_id,
-         ownership_transfer_to = excluded.ownership_transfer_to, updated_at = excluded.updated_at`,
+         ownership_transfer_to = excluded.ownership_transfer_to, updated_at = excluded.updated_at, work_email = excluded.work_email`,
     ).run(issuer, s.org.id, s.sub, userId, s.org.slug, s.org.name, s.status, active ? s.appRole : null, json(groups),
-      s.version, s.legacyUserId, s.ownershipTransferTo, now());
+      s.version, s.legacyUserId, s.ownershipTransferTo, now(), normalizedRecipientEmail(s.profile.workEmail));
+
+    if (active && normalizedRecipientEmail(s.profile.workEmail)) claimInvitesForEmail(userId, s.profile.workEmail);
 
     const ev = (action, details) => audit({ actor: "ain-sso", action, issuer, subject: s.sub, orgId: s.org.id, userId, details: { version: s.version, ...details } });
     if (!active) {

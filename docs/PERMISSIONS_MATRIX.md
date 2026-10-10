@@ -160,7 +160,7 @@ dropped — except `private`:
 
 | ID | Requirement | Status |
 |----|-------------|--------|
-| `R-MEM-INVITE-001` | Invite by email: `owner at root`. Existing account → immediate grant; else pending invite (`202`) claimed on signup (upgrade-only). | CURRENT (`members/route.ts:56`) |
+| `R-MEM-INVITE-001` | Invite by email: `owner at root`. Unambiguous account email or active signed organization alias → immediate grant; conflicting addresses → 409; else pending invite (`202`) claimed on verified signup/provisioning (upgrade-only). | CURRENT (`members/route.ts:56`) |
 | `R-MEM-OWNER-001` | Granting/minting an **owner** is **creator-only**, and only at root (no non-root owner). | CURRENT (`members/route.ts`, `members/[memberId]/route.ts:71`) |
 | `R-MEM-LIST-001` | List roster: `editor+ at root`; pending invites visible to `owner+` only. | CURRENT (`members/route.ts:21`) |
 | `R-MEM-ROLE-001` | Change role (PATCH): `owner at root`; explicit downgrade allowed; the **creator row is immutable**; owner role whole-drive only. | CURRENT (`members/[memberId]/route.ts:59`) |
@@ -251,3 +251,19 @@ match.
 | `R-OAUTH-REVOKE-001` | A registered public client presenting its access, refresh or immediately previous refresh token can revoke that OAuth grant; both access and refresh stop working. | CURRENT (`oauth-revocation.test.ts`) |
 | `R-OAUTH-REVOKE-002` | Revocation cannot affect another client, another grant or personal access tokens. Unknown/replayed tokens return success without an existence oracle. | CURRENT (`oauth-revocation.test.ts`) |
 | `R-OAUTH-REVOKE-003` | Requests require token and registered client; rate limits and no-store apply. Metadata advertises the endpoint. | CURRENT (`oauth-revocation.test.ts`) |
+
+## 12. Verified organization recipient addresses
+
+An email selects a recipient for an explicit personal drive grant; it never
+links or merges login accounts. These grants stay with the canonical account
+when its organization address changes. Organization-wide drive access continues
+to follow active membership independently.
+
+| ID | Case | Required behavior | Status |
+|---|---|---|---|
+| R-RECIPIENT-001 | Signed active provisioning supplies workEmail after JIT login | Resolve that address to the same issuer/subject account; preserve users.email | CURRENT |
+| R-RECIPIENT-002 | Address changes, membership ends, issuer changes or adapter disabled | Former/inactive/untrusted organization aliases do not select a recipient; ignore older provisioning versions | CURRENT |
+| R-RECIPIENT-003 | Address belongs to multiple canonical accounts, including direct email collision | Reject sharing with 409; access-check reports none; never claim pending invites | CURRENT |
+| R-RECIPIENT-004 | Pending invitation followed by unambiguous active signed provisioning | Claim the invitation for the canonical account, preserving path and upgrade-only role | CURRENT |
+
+Mirrored tests: `web/lib/__tests__/organization-recipients.test.ts`.

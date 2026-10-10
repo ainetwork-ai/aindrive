@@ -578,6 +578,8 @@ function open() {
     // The OIDC prompt of a pending sign-in: 'none' = silent check (the callback
     // turns login_required & co. into an anonymous visit), 'create' = sign-up.
     "ALTER TABLE sso_login_requests ADD COLUMN prompt TEXT",
+    // Verified organization recipient alias; never overwrites the account email.
+    "ALTER TABLE sso_memberships ADD COLUMN work_email TEXT",
   ]) {
     try { handle.exec(stmt); } catch (e) {
       if (!/duplicate column/i.test(e.message)) throw e;

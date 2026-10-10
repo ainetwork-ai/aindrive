@@ -370,7 +370,8 @@ describe("a placeholder the adapter made gives way to the legacy account (app at
     // The placeholder gives up the address: a later share doesn't land on an account nobody uses.
     const held = (db.prepare("SELECT email FROM users WHERE id = ?").get(placeholder) as { email: string }).email;
     expect(store.isReservedEmail(held)).toBe(true);
-    expect((await share("drive_sh1", "viewer", "later")).status).toBe(202); // pending, visible to the owner
+    expect((await share("drive_sh1", "viewer", "later")).status).toBe(200); // active signed alias now resolves to L
+    expect(db.prepare("SELECT user_id, role FROM drive_members WHERE drive_id='drive_sh1' AND path='later'").get()).toEqual({ user_id: L, role: "viewer" });
     const ev = db.prepare("SELECT details FROM sso_audit WHERE subject = 'acc_sh' AND action = 'placeholder_replaced'").get() as { details: string };
     expect(JSON.parse(ev.details)).toMatchObject({ placeholderUserId: placeholder, grantsMoved: 3, emailReleased: true });
   });
@@ -514,4 +515,18 @@ describe("suspension and offboarding", () => {
     const transfer = db.prepare("SELECT details FROM sso_audit WHERE subject = ? AND action = 'ownership_transfer' ORDER BY id DESC").get(SUB) as { details: string };
     expect(JSON.parse(transfer.details)).toMatchObject({ to: "acc_heir", transferred: [] });
   });
+});
+
+it('R-RECIPIENT-001 signed provisioning after JIT allows the actual members route to grant the work address', async () => {
+  const sub='acc_mail_after_jit';
+  const uid=store.resolveOrCreateUserForSubject({issuer:ISSUER,subject:sub,name:'Mail member',email:'mail.member@personal.example',emailVerified:true}).userId;
+  const applied=await put(desired(sub));expect(applied.status).toBe(200);
+  expect((await applied.json()).localUserId).toBe(uid);
+  expect(db.prepare('SELECT email FROM users WHERE id=?').get(uid)).toEqual({email:'mail.member@personal.example'});
+  db.prepare('INSERT INTO users(id,email,name,password_hash) VALUES(?,?,?,?)').run('mail_share_owner','mail-owner@example.com','Owner','unused');
+  db.prepare('INSERT INTO drives(id,owner_id,name,agent_token_hash,drive_secret) VALUES(?,?,?,?,?)').run('mail_share_drive','mail_share_owner','Mail sharing','unused','unused');
+  jar.set('aindrive_session',await session.sign('mail_share_owner'));
+  const response=await membersRoute.POST(new Request(`${PUBLIC_URL}/api/drives/mail_share_drive/members`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:desired(sub).profile.workEmail,path:'plans/file.txt',role:'viewer'})}),{params:Promise.resolve({driveId:'mail_share_drive'})});
+  expect(response.status).toBe(200);expect(await response.json()).toEqual({ok:true,pending:false});
+  expect(db.prepare("SELECT user_id,path,role FROM drive_members WHERE drive_id='mail_share_drive'").get()).toEqual({user_id:uid,path:'plans/file.txt',role:'viewer'});
 });

@@ -1,6 +1,7 @@
 // Pending invites for emails without an account yet. Registered invitees are
 // granted immediately by the members route; only unknown emails land in
 // drive_invites, and convert to drive_members the moment that email signs up.
+import { recipientForEmail, normalizedRecipientEmail } from "./recipient-address.js";
 import { nanoid } from "nanoid";
 // Relative imports: lib/sso/store.js (plain ESM, also loaded by `node server.js`) uses it.
 import { db } from "./db.js";
@@ -32,6 +33,8 @@ export function deleteInvite(driveId, inviteId) {
 // Called right after the user row is created: legacy signup, and an account
 // created through AIN SSO with the AIN-verified address (lib/sso/store.js).
 export function claimInvitesForEmail(userId, email) {
+  email = normalizedRecipientEmail(email);
+  if (!email || recipientForEmail(email).userId !== userId) return 0;
   const invites = db.prepare(
     "SELECT id, drive_id, path, role FROM drive_invites WHERE email = lower(?)",
   ).all(email);
