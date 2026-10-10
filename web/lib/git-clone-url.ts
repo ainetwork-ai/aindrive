@@ -11,7 +11,10 @@ import { resolveGitSlug } from "./git-slug";
 export function gitCloneUrl(origin: string, driveId: string, repo: string): string {
   const base = origin.replace(/\/$/, "");
   const slug = orgSlugForDrive(driveId);
-  return slug ? `${base}/${slug}/git/${repo}` : `${base}/api/drives/${driveId}/git/${repo}`;
+  // Repos live under the drive's `repositories/` folder, but the pretty URL names only the repo
+  // (the slug route adds the folder back); the drive-id form addresses the real path.
+  const pretty = repo.replace(/^repositories\//, "");
+  return slug ? `${base}/${slug}/git/${pretty}` : `${base}/api/drives/${driveId}/git/${repo}`;
 }
 
 function orgSlugForDrive(driveId: string): string | null {
