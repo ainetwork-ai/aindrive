@@ -18,6 +18,10 @@ import { AgentError, callAgent } from "@/lib/rpc";
  * `viewer`, receive-pack needs `editor` — the same requireDriveRole() the fs/*
  * routes use, resolved against the repo path. A push to a not-yet-existing repo
  * `git-init`s a bare repo there (write-gated), so a fresh path is pushable.
+ * Credentials reach the gate as the `aindrive_session` cookie, `Authorization:
+ * Bearer <session JWT>`, or — for a plain git client — HTTP Basic with the
+ * session JWT as the password (`git clone https://x-access-token:<JWT>@host/…`),
+ * which gitAuthRequest() translates to Bearer below.
  *
  * Large packs never cross as one JSON: the POST body is streamed to an agent temp
  * file via upload-chunk, git runs with that as stdin and a temp file as stdout,
@@ -70,7 +74,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   }
   const svc = svcParam.slice("git-".length) as Service;
 
-  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req });
+  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req) });
   if (gate instanceof NextResponse) return gate.status === 403 && !gateUser(req) ? deny(401, "auth required") : gate;
   const { drive } = gate;
 
@@ -101,7 +105,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   if (!parsed || parsed.kind === "info") return deny(404, "not found");
   const svc = parsed.kind;
 
-  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req });
+  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req) });
   if (gate instanceof NextResponse) return gate.status === 403 && !gateUser(req) ? deny(401, "auth required") : gate;
   const { drive } = gate;
   const secret = drive.drive_secret;
@@ -143,11 +147,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   }
 }
 
-// Whether the request carried a user identity (cookie/bearer). On a 403 with no
-// identity we upgrade to 401 so git prompts for credentials instead of failing.
+// Whether the request carried a user identity (cookie/bearer/basic). On a 403
+// with no identity we upgrade to 401 so git prompts for credentials instead of
+// failing outright.
 function gateUser(req: Request): boolean {
   const c = req.headers.get("cookie") || "";
   return /(^|;\s*)(aindrive_session|session)=/.test(c) || !!req.headers.get("authorization");
+}
+
+// Git clients send credentials as HTTP Basic (`git clone https://x:<token>@host/…`,
+// or a credential helper). The drive gate reads identity from the `aindrive_session`
+// cookie or `Authorization: Bearer <session JWT>`, so translate Basic → Bearer using
+// the password half (the session JWT; the username is ignored, use anything, e.g.
+// `x-access-token`). A request already carrying a Bearer or the cookie is passed
+// through untouched. The returned request has NO body — it is only ever handed to the
+// gate, which reads headers; the original `req` keeps its body for the pack stream.
+function gitAuthRequest(req: Request): Request {
+  const auth = req.headers.get("authorization") || "";
+  const m = /^Basic\s+(.+)$/i.exec(auth);
+  if (!m) return req;
+  let token = "";
+  try {
+    const decoded = Buffer.from(m[1], "base64").toString("utf8");
+    const colon = decoded.indexOf(":");
+    token = colon >= 0 ? decoded.slice(colon + 1) : decoded;
+  } catch {
+    return req;
+  }
+  if (!token) return req;
+  const headers = new Headers(req.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  return new Request(req.url, { method: "GET", headers });
 }
 
 async function uploadBody(req: Request, driveId: string, secret: string, destPath: string): Promise<void> {
