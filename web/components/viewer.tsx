@@ -1,4 +1,5 @@
 "use client";
+import { AinizeMark, ainizeButtonClass } from "./ainize-brand";
 import { useEffect, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import dynamic from "next/dynamic";
@@ -472,8 +473,8 @@ export function Viewer({
             </div>
           )}
           <div className="mt-2 flex items-center gap-2">
-            <button type="button" onClick={() => void startRun()} disabled={running || saving} className="rounded bg-drive-accent text-white px-3 py-1 text-sm hover:bg-drive-accentHover disabled:opacity-50 inline-flex items-center gap-1">
-              <Play className="w-3.5 h-3.5" aria-hidden="true" /> {dirty && canEdit && isText ? "Save & Run" : "Run"}
+            <button type="button" onClick={() => void startRun()} disabled={running || saving} className={ainizeButtonClass} title="Run on ainize">
+              <AinizeMark /> <Play className="w-3.5 h-3.5" aria-hidden="true" /> {dirty && canEdit && isText ? "Save & Run" : "Run"}
             </button>
             <button type="button" onClick={() => setRunBarOpen(false)} className="text-sm text-drive-muted hover:text-drive-text">Hide</button>
           </div>
