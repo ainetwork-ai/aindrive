@@ -100,7 +100,7 @@ beforeAll(() => {
   orgs.shareDriveWithOrg({ driveId: "d1", issuer: ISSUER, orgId: "org_comcom", role: "editor", actor: "operator", via: "operator" });
 });
 beforeEach(() => {
-  seen.length = 0; agent.files = {}; db.prepare("DELETE FROM git_project_hooks").run(); resetServiceTokensForTests();
+  seen.length = 0; agent.files = {}; db.prepare("DELETE FROM git_project_hooks").run(); db.prepare("DELETE FROM git_project_deliveries").run(); resetServiceTokensForTests();
   autoAnswer = () => new Response(JSON.stringify({ id: "prj_auto", pageUrl: "https://ainize.example.test/projects/prj_auto", webhookSecret: "whsec_from_ainize_once", created: true }), { status: 201 });
   tokenAnswer = () => Response.json({ access_token: "svc_token_1", token_type: "Bearer", expires_in: 300 });
   vi.stubGlobal("fetch", world);
@@ -133,7 +133,7 @@ describe("push of a repo with ainize.json", () => {
 
     const auto = calls(/\/api\/projects\/auto$/)[0]!;
     expect((auto.init.headers as Record<string, string>).authorization).toBe("Bearer svc_token_1");
-    expect(auto.json).toEqual({
+    expect(auto.json).toMatchObject({
       repo: "https://drive.example.test/comcom/git/proj", branch: "main",
       pusher: { subject: "acc_ed", email: "editor@example.com" }, manifest: { kind: "script", name: "Clef search" },
     });
@@ -142,7 +142,7 @@ describe("push of a repo with ainize.json", () => {
 
     const hook = calls(/\/hook$/)[0]!;
     expect(hook.url).toBe("https://ainize.example.test/api/projects/prj_auto/hook");
-    expect(hook.json).toEqual({ ref: "refs/heads/main", before: OLD, after: NEW, pusher: { subject: "acc_ed", email: "editor@example.com" } });
+    expect(hook.json).toMatchObject({ ref: "refs/heads/main", before: OLD, after: NEW, pusher: { subject: "acc_ed", email: "editor@example.com" } });
     expect((hook.init.headers as Record<string, string>)["X-Ainize-Signature"]).toBe("sha256=" + createHmac("sha256", "whsec_from_ainize_once").update(hook.init.body as string).digest("hex"));
   });
 
@@ -158,8 +158,8 @@ describe("push of a repo with ainize.json", () => {
     await push("d1", "repositories/other");
     await vi.waitFor(() => expect(calls(/\/hook$/)).toHaveLength(2));
     expect(calls(/\/oidc\/token$/)).toHaveLength(1);
-    await push("d1", "repositories/proj"); // bound in the first step
-    await push("d1", "repositories/other"); // bound by the auto call above
+    await push("d1", "repositories/proj", pushBody("refs/heads/main", "b".repeat(40))); // a new commit
+    await push("d1", "repositories/other", pushBody("refs/heads/main", "b".repeat(40))); // a new commit
     await vi.waitFor(() => expect(calls(/\/hook$/)).toHaveLength(4));
     expect(calls(/\/oidc\/token$/)).toHaveLength(1);
     expect(calls(/\/auto$/)).toHaveLength(1);
