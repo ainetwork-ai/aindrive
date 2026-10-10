@@ -3,6 +3,9 @@ export const PROTOCOL_VERSION = 1;
 export type RpcMethod =
   | "list" | "stat" | "read" | "write" | "mkdir" | "rename" | "delete"
   | "upload-chunk" | "download-chunk"
+  // Folder download (fs/download-folder): the agent zips a folder to a temp file under
+  // .aindrive/uploads/zip/ that the web drains with download-chunk and then deletes.
+  | "zip-folder"
   | "yjs-write" | "yjs-read"
   | "agent-ask"
   // Device-only (mobile/): bytes of one file the owner registered for a handoff link (lib/handoff.ts).
@@ -35,6 +38,8 @@ export type RpcParams =
   | { method: "delete"; path: string }
   | { method: "upload-chunk"; path: string; chunkId: number; total: number; data: string }
   | { method: "download-chunk"; path: string; offset: number; length: number }
+  // `exclude`: '/'-paths relative to `path` the caller may not read (paid locks) — left out, counted in `skipped`.
+  | { method: "zip-folder"; path: string; out: string; exclude?: string[] }
   | { method: "yjs-write"; docId: string; data: string }
   | { method: "yjs-read"; docId: string }
   | { method: "agent-ask"; agentId: string; query: string }
@@ -144,6 +149,8 @@ export type RpcResult =
   | { method: "delete"; ok: true }
   | { method: "upload-chunk"; ok: true; receivedBytes: number }
   | { method: "download-chunk"; data: string; eof: boolean; mtimeMs?: number; size?: number }
+  /** `size`: bytes of the zip; `files`/`bytes`: what went in; `skipped`: excluded entries. */
+  | { method: "zip-folder"; ok: true; size: number; files: number; bytes: number; skipped: number }
   | { method: "yjs-write"; ok: true; bytes: number }
   | { method: "yjs-read"; data: string; bytes: number }
   | { method: "agent-ask"; answer: string; sources: AskSource[]; action?: Record<string, unknown> }

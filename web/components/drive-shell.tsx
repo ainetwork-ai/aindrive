@@ -17,6 +17,7 @@ import {
 import { GitPanel, type GitPanelMeta, type GitPanelUrls } from "./git-panel";
 import { RefSwitcher } from "./git-site";
 import { History, Rocket } from "lucide-react";
+import type { Action as RowAction } from "./row-menu";
 import { useAinizeProject } from "@/components/use-ainize-project";
 
 // These four are only rendered on user action (open a file, open chat, open
@@ -140,6 +141,8 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  // Folder being zipped for download (fs/download-folder?prepare=1), or null.
+  const [zipping, setZipping] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // List/grid preference. Starts "list" so SSR + first client render agree
   // (no hydration mismatch); the persisted choice is read in an effect below.
@@ -451,8 +454,40 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
     load();
   }
 
-  function onRowAction(entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") {
+  /**
+   * Download a folder as a zip. Two steps so the UI can show "preparing…" while
+   * the agent walks and compresses (a big repo takes a while): the prepare call
+   * zips and answers a tokenized URL; navigating to it streams the archive — a
+   * token rather than the cookie for the same reason as the file download
+   * (in-app webviews hand the attachment to a cookieless OS downloader).
+   */
+  async function downloadFolder(dir: string) {
+    if (zipping !== null) return;
+    const name = dir ? dir.split("/").pop()! : driveName;
+    const toastId = `zip-${dir}`;
+    setZipping(dir);
+    toast.loading(`Preparing ${name}.zip…`, { id: toastId });
+    try {
+      const res = await fetch(`/api/drives/${driveId}/fs/download-folder?path=${encodeURIComponent(dir)}&prepare=1`);
+      if (!res.ok) {
+        const msg = await res.json().then((j) => j.error as string).catch(() => null);
+        toast.error(res.status === 402 ? "This folder is locked — buy it to download." : msg || `Download failed (${res.status})`, { id: toastId });
+        return;
+      }
+      const j = await res.json() as { url: string; filename: string; files: number; skipped: number };
+      const left = j.skipped > 0 ? ` — ${j.skipped} locked item${j.skipped === 1 ? "" : "s"} left out` : "";
+      toast.success(`Downloading ${j.filename} (${j.files} file${j.files === 1 ? "" : "s"})${left}`, { id: toastId });
+      window.location.assign(j.url);
+    } catch {
+      toast.error("Download failed", { id: toastId });
+    } finally {
+      setZipping(null);
+    }
+  }
+
+  function onRowAction(entry: DriveEntry, action: RowAction) {
     switch (action) {
+      case "download": return void downloadFolder(entry.path);
       case "sell": return setShareOpen({ path: entry.path, focus: "sell" });
       case "share": return setShareOpen({ path: entry.path });
       case "rename": return onRename(entry);
@@ -501,6 +536,8 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
           setViewMode={changeViewMode}
           query={query}
           onQuery={setQuery}
+          onDownloadFolder={isSyntheticRoot ? undefined : () => void downloadFolder(path)}
+          downloading={zipping !== null}
         />
 
         <section className="flex-1 flex min-h-0">

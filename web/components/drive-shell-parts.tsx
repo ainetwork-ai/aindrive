@@ -9,7 +9,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
-  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut, EyeOff, Plug,
+  Search, X, ArrowUp, ArrowDown, SearchX, Settings, LogOut, EyeOff, Plug, Download, Loader2,
 } from "lucide-react";
 import type { DriveEntry } from "@/lib/protocol";
 import type { PaidLock } from "@/lib/paid-lock";
@@ -278,7 +278,7 @@ function dropTargetProps(
 
 export function DriveHeader({
   setSidebarOpen, crumbs, setPath, canEdit, onUpload, onNewFolder, onMove, setShareOpen, path, role,
-  setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery,
+  setChatOpen, chatOpen, isOwner, viewMode, setViewMode, query, onQuery, onDownloadFolder, downloading = false,
 }: {
   setSidebarOpen: (v: boolean) => void;
   crumbs: Crumb[];
@@ -297,6 +297,10 @@ export function DriveHeader({
   setViewMode: (v: ViewMode) => void;
   query: string;
   onQuery: (q: string) => void;
+  /** Download the current folder as a zip (fs/download-folder); absent where there is no folder (synthetic root). */
+  onDownloadFolder?: () => void;
+  /** The agent is zipping: the button shows "Preparing…" and ignores clicks. */
+  downloading?: boolean;
 }) {
   // Breadcrumb currently hovered by an in-drive drag (drop = move up the tree).
   const [dropCrumb, setDropCrumb] = useState<string | null>(null);
@@ -385,6 +389,20 @@ export function DriveHeader({
           )}
         </div>
         <ViewToggle viewMode={viewMode} setViewMode={setViewMode} />
+        {onDownloadFolder && (
+          <button
+            aria-label="Download folder"
+            title={downloading ? "Preparing the zip…" : "Download this folder as a .zip"}
+            onClick={onDownloadFolder}
+            disabled={downloading}
+            aria-busy={downloading || undefined}
+            data-testid="download-folder"
+            className="flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover disabled:opacity-60 disabled:cursor-progress"
+          >
+            {downloading ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Download className="w-4 h-4" aria-hidden="true" />}
+            <span className="hidden sm:inline">{downloading ? "Preparing…" : "Download"}</span>
+          </button>
+        )}
         {canEdit && (
           <button
             aria-label="New folder"
@@ -503,7 +521,7 @@ export function FileTable({
   setSelected: (e: DriveEntry | null) => void;
   setPath: (next: string) => void;
   canEdit: boolean;
-  onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
+  onRowAction: (entry: DriveEntry, action: Action) => void;
   onMove: (entry: DriveEntry, destDir: string) => void;
   isOwner: boolean;
   onUpload: (files: FileList | null) => void;
@@ -578,6 +596,8 @@ export function FileTable({
           onAction: (a: Action) => onRowAction(ctxMenu.entry!, a),
           canSell: isOwner,
           canManage: canEdit,
+          isDir: ctxMenu.entry.isDir,
+          locked: !!ctxMenu.entry.locked,
         })
       : canEdit
         ? [
@@ -724,12 +744,14 @@ export function FileTable({
                   </td>
                 )}
                 <td className="px-1 align-middle text-right whitespace-nowrap last:rounded-r-lg">
-                  {canEdit && (
+                  {(canEdit || e.isDir) && (
                     <RowMenu
                       hasPaidShare={!!paid}
                       onAction={(a) => onRowAction(e, a)}
                       canSell={isOwner}
                       canManage={canEdit}
+                      isDir={e.isDir}
+                      locked={!!e.locked}
                     />
                   )}
                 </td>
@@ -900,7 +922,7 @@ function FileGrid({
   setSelected: (e: DriveEntry | null) => void;
   setPath: (next: string) => void;
   canEdit: boolean;
-  onRowAction: (entry: DriveEntry, action: "sell" | "share" | "rename" | "delete") => void;
+  onRowAction: (entry: DriveEntry, action: Action) => void;
   isOwner: boolean;
   onContextMenuEntry: (ev: React.MouseEvent, entry: DriveEntry) => void;
   /** Drag-source + folder drop-target handlers for a card (see drag-move above). */
@@ -941,13 +963,15 @@ function FileGrid({
             }}
             onContextMenu={(ev) => onContextMenuEntry(ev, e)}
           >
-            {canEdit && (
+            {(canEdit || e.isDir) && (
               <div className="absolute top-1.5 right-1.5">
                 <RowMenu
                   hasPaidShare={!!paid}
                   onAction={(a) => onRowAction(e, a)}
                   canSell={isOwner}
                   canManage={canEdit}
+                  isDir={e.isDir}
+                  locked={!!e.locked}
                 />
               </div>
             )}

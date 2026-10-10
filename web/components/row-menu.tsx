@@ -4,27 +4,40 @@
 // right-click context menu (drive-shell-parts) render the exact same items with
 // the exact same permission gates. `rowMenuItems` is the single source of those
 // items; RowMenu wires them to the ⋮ IconButton trigger.
-import { DollarSign, Share2, Pencil, Trash2, MoreVertical } from "lucide-react";
+import { DollarSign, Share2, Pencil, Trash2, MoreVertical, Download } from "lucide-react";
 import { Menu, IconButton, type MenuItem } from "@/components/ui";
 
-export type Action = "sell" | "share" | "rename" | "delete";
+export type Action = "download" | "sell" | "share" | "rename" | "delete";
 
 /**
- * Build the action items for an entry. sell/share are owner-only (O2);
+ * Build the action items for an entry. A folder any caller can list downloads
+ * as a zip (fs/download-folder; a locked folder would only 402, so it gets no
+ * item). sell/share are owner-only (O2);
  * rename/delete follow canManage (editor or owner). A sale is ongoing — one
  * link, any number of buyers — never "consumed" by a purchase, so an existing
  * paid share relabels the item to "Manage sale…" (same drawer) instead of
  * disabling it.
  */
 export function rowMenuItems({
-  hasPaidShare, onAction, canSell, canManage,
+  hasPaidShare, onAction, canSell, canManage, isDir = false, locked = false,
 }: {
   hasPaidShare: boolean;
   onAction: (a: Action) => void;
   canSell: boolean;
   canManage: boolean;
+  /** A folder row: offers "Download" (as .zip) to anyone who can see it. */
+  isDir?: boolean;
+  /** A paid child the caller has not bought: nothing to download yet. */
+  locked?: boolean;
 }): MenuItem[] {
   const items: MenuItem[] = [];
+  if (isDir && !locked) {
+    items.push({
+      label: "Download",
+      icon: <Download className="w-4 h-4" />,
+      onClick: () => onAction("download"),
+    });
+  }
   if (canSell) {
     items.push({
       label: hasPaidShare ? "Manage sale…" : "Sell…",
@@ -58,6 +71,8 @@ export function RowMenu(props: {
   onAction: (a: Action) => void;
   canSell: boolean;
   canManage: boolean;
+  isDir?: boolean;
+  locked?: boolean;
 }) {
   const items = rowMenuItems(props);
   if (items.length === 0) return null;
