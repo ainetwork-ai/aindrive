@@ -17,7 +17,9 @@ const stripGit = (s: string) => (s.endsWith(".git") && s.length > 4 ? s.slice(0,
 
 /** `/<org>/git/<name>` → the working copy `repositories/<name>` (a `.git` suffix on the name is dropped). */
 export function workingCopyPath(name: string): string {
-  return `${GIT_REPOS_DIR}/${stripGit(name)}`;
+  // `/<org>/git/repositories/<name>` (URLs minted before the folder was implied) means the same repo.
+  const bare = name.startsWith(`${GIT_REPOS_DIR}/`) ? name.slice(GIT_REPOS_DIR.length + 1) : name;
+  return `${GIT_REPOS_DIR}/${stripGit(bare)}`;
 }
 
 /** The bare remote for a working copy path (`repositories/x` → `repositories/x.git`; already bare → itself). */
