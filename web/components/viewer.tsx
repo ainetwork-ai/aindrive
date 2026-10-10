@@ -1,5 +1,5 @@
 "use client";
-import { AinizeMark, ainizeButtonClass } from "./ainize-brand";
+import { ainizeButtonClass } from "./ainize-brand";
 import { useEffect, useRef, useState } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import dynamic from "next/dynamic";
@@ -423,7 +423,7 @@ export function Viewer({
       className={clsx("rounded px-2 py-1.5 text-sm flex items-center gap-1 disabled:opacity-50 font-medium transition-colors", running ? "text-red-600 hover:bg-drive-hover" : "text-[#8b3eeb] hover:bg-[#8b3eeb]/10")}
     >
       {run.status !== "idle" && <RunDot status={run.status} />}
-      {running ? <Square className="w-4 h-4" aria-hidden="true" /> : <><AinizeMark className="w-4 h-4" /><Play className="w-3.5 h-3.5" aria-hidden="true" /></>} {runLabel}
+      {running ? <Square className="w-4 h-4" aria-hidden="true" /> : <Play className="w-4 h-4" aria-hidden="true" />} {runLabel}
     </button>
   ) : null;
 
@@ -474,7 +474,7 @@ export function Viewer({
           )}
           <div className="mt-2 flex items-center gap-2">
             <button type="button" onClick={() => void startRun()} disabled={running || saving} className={ainizeButtonClass} title="Run on ainize">
-              <AinizeMark /> <Play className="w-3.5 h-3.5" aria-hidden="true" /> {dirty && canEdit && isText ? "Save & Run" : "Run"}
+              <Play className="w-3.5 h-3.5" aria-hidden="true" /> {dirty && canEdit && isText ? "Save & Run" : "Run"}
             </button>
             <button type="button" onClick={() => setRunBarOpen(false)} className="text-sm text-drive-muted hover:text-drive-text">Hide</button>
           </div>
