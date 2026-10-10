@@ -16,8 +16,14 @@ describe("middleware matcher", () => {
     }
   });
 
+  it("keeps friendly git smart-HTTP (/<slug>/git/…) out, like /api/drives/…/git", () => {
+    for (const p of ["/comcom/git/repo/info/refs", "/comcom/git/repo/git-receive-pack", "/comcom/git", "/comcom/git/"]) {
+      expect(reaches(p), p).toBe(false);
+    }
+  });
+
   it("still covers pages (security headers, silent SSO)", () => {
-    for (const p of ["/", "/login", "/d/abc", "/mcpanel", "/a2abc", "/docs/mcp"]) {
+    for (const p of ["/", "/login", "/d/abc", "/mcpanel", "/a2abc", "/docs/mcp", "/comcom", "/comcom/gitlab", "/d/abc/git-notes.md"]) {
       expect(reaches(p), p).toBe(true);
     }
   });

@@ -103,10 +103,16 @@ export default async function middleware(
 // carries the file as base64 in one JSON body, so going through middleware cut
 // every file over ~7.5 MB mid-JSON and the SDK answered "Parse error: Invalid
 // JSON" (the AIN Teams / AINMem NAS archives hit it on 2026-09-29).
+//
+// /<slug>/git/… is git smart-HTTP (app/[slug]/git/[...path], the friendly form
+// of /api/drives/<id>/git/…): a push body is a pack that may well exceed 10 MB,
+// and git needs the route's raw 401/JSON and pack bytes, so it stays out of the
+// middleware like /api does. (A git client never trips the silent-SSO redirect
+// — not a browser navigation — but the body cap alone would break pushes.)
 // `config` must be a literal (Next analyses it statically at build time); the
 // test keeps MIDDLEWARE_MATCHER and the literal in step.
-export const MIDDLEWARE_MATCHER = "/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)).*)";
+export const MIDDLEWARE_MATCHER = "/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)|[^/]+/git(?:/|$)).*)";
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)).*)"],
+  matcher: ["/((?!_next/static|_next/image|api/|mcp(?:/|$)|a2a(?:/|$)|[^/]+/git(?:/|$)).*)"],
 };
