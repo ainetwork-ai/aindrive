@@ -5,6 +5,9 @@ import { verifyPayload, signPayload } from "./sig.js";
 import { broadcastReload } from "./dochub.js";
 import { trace, docIdFor } from "./trace.js";
 import { log } from "./logger.js";
+import { onAgentOnlineChanged, onFsChanged } from "./share-events-core.js";
+import { dropGenerations, observeEntry } from "./path-generations.js";
+import { normalizePath } from "./path.js";
 
 /**
  * In-memory registry of currently-connected agent WebSockets.
@@ -25,6 +28,23 @@ const HEARTBEAT_INTERVAL_MS = 20_000;
 const ROTATION_GRACE_MS = 60_000;
 const ROTATION_SWEEP_MS = 5 * 60_000;
 
+/**
+ * HTTP status for an error the device agent answered with. The agent relays
+ * its own message (errno text from the device's filesystem, or its path
+ * guard's words); most are the device failing (502), but some are the
+ * request's fault or a plain answer, and a 502 for those tells a client to
+ * retry what can never work (plan 12.3: a 256-byte name answered 502).
+ */
+export function agentErrorStatus(message) {
+  const m = String(message || "");
+  if (/\bENOENT\b|no such file or directory/i.test(m)) return 404;
+  if (/\bENAMETOOLONG\b|name too long|path too long/i.test(m)) return 400;
+  if (/^invalid path|path escapes drive root|reserved path|cannot (?:rename|delete) root/i.test(m)) return 400;
+  if (/\bEISDIR\b|is a directory|\bENOTDIR\b|not a directory/i.test(m)) return 400;
+  if (/\bENOSPC\b|no space left|\bEDQUOT\b|quota exceeded/i.test(m)) return 507;
+  return 502;
+}
+
 export function isAgentConnected(driveId) {
   return agents.has(driveId);
 }
@@ -34,16 +54,32 @@ export function listConnectedDrives() {
 }
 
 /**
- * Drop the live agent for a drive that is being deleted. The agent's token
- * row goes away with the drive, so its next reconnect is refused (4404); this
- * just stops it answering in the meantime.
+ * Drop every live device socket of a drive — the RPC primary AND the other
+ * devices kept for sync — once its credentials stop being valid:
+ *   - drive deleted (4410): the token row goes with the drive, so a reconnect
+ *     is refused (4404);
+ *   - credentials rotated from the web (4401): a lost or removed device would
+ *     otherwise keep answering on its open socket — the server signs requests
+ *     with the secret it held when that socket connected — until it happened
+ *     to reconnect. Its reconnect with the old token is refused (4401).
+ * Returns how many sockets were closed.
  */
-export function disconnectAgent(driveId) {
+export function disconnectAgent(driveId, code = 4410, reason = "drive deleted") {
+  const sockets = new Set(globalThis.__aindrive_agents_by_drive?.get(driveId) ?? []);
   const entry = agents.get(driveId);
-  if (!entry) return false;
-  try { entry.ws.close(4410, "drive deleted"); } catch {}
-  agents.delete(driveId);
-  return true;
+  if (entry) {
+    sockets.add(entry.ws);
+    // Off the RPC map now, not when the close handshake ends: no request may
+    // reach the removed device in between (its "close" then records nothing).
+    agents.delete(driveId);
+    // A rotated drive still exists, so its audience hears it went offline.
+    if (code !== 4410) {
+      try { onAgentOnlineChanged(driveId, false); }
+      catch (e) { log.warn({ drive: driveId, err: e?.message || String(e) }, "[share-events] availability(offline) failed"); }
+    }
+  }
+  for (const ws of sockets) { try { ws.close(code, reason); } catch {} }
+  return sockets.size;
 }
 
 /**
@@ -158,9 +194,17 @@ export async function onAgentConnect(ws, req, query) {
     // multi-device. The most recent connection becomes the RPC target.
   }
 
+  // Change feed: `file.availability` only when the drive's online answer
+  // (isAgentConnected) actually flips — a second device joining an online
+  // drive, or a re-connect that replaces the primary, records nothing.
+  const wasOnline = agents.has(driveId);
   const entry = { ws, driveSecret: row.drive_secret, pending: new Map() };
   agents.set(driveId, entry);
   db.prepare("UPDATE drives SET last_seen_at = datetime('now') WHERE id = ?").run(driveId);
+  if (!wasOnline) {
+    try { onAgentOnlineChanged(driveId, true); }
+    catch (e) { log.warn({ drive: driveId, err: e?.message || String(e) }, "[share-events] availability(online) failed"); }
+  }
 
   log.info({ drive: driveId }, "agent connected");
   try { trace("server", "agent-connect", { docId: "agent-" + driveId }); } catch {}
@@ -195,6 +239,14 @@ export async function onAgentConnect(ws, req, query) {
     if (msg?.type === "fs-changed" && typeof msg.path === "string") {
       const sent = broadcastReload(driveId, msg.path);
       if (sent > 0) log.info({ drive: driveId, path: msg.path, editors: sent }, "[fs-changed] editors reloaded");
+      // Change feed: the frame names the path only (cli/src/agent.js sends
+      // {type, path}; fs.watch's rename/change kind is not carried), so stat it
+      // to tell a removal from a write. A rename thus lands as file.deleted
+      // (old path) + file.updated (new path) — Phase A of the plan's task 10.
+      // The RPC is best-effort: with no answer the change is still recorded as
+      // file.updated without a revision. Never lets an error reach the socket.
+      recordFsChange(driveId, msg.path).catch((e) =>
+        log.warn({ drive: driveId, path: msg.path, err: e?.message || String(e) }, "[share-events] fs-changed failed"));
       return;
     }
     // Multi-device sync frames — broadcast to OTHER connected agents on the same drive.
@@ -224,14 +276,19 @@ export async function onAgentConnect(ws, req, query) {
     if (msg.ok) pending.resolve(canonicalAgentResult(msg.result));
     else {
       const e = new Error(msg.error || "agent error");
-      e.status = 502;
+      e.status = agentErrorStatus(e.message);
       pending.reject(e);
     }
   });
 
   ws.on("close", () => {
     clearInterval(heartbeat);
-    if (agents.get(driveId) === entry) agents.delete(driveId);
+    if (agents.get(driveId) === entry) {
+      agents.delete(driveId);
+      // The drive's online answer just flipped (see onAgentOnlineChanged above).
+      try { onAgentOnlineChanged(driveId, false); }
+      catch (e) { log.warn({ drive: driveId, err: e?.message || String(e) }, "[share-events] availability(offline) failed"); }
+    }
     const peers = globalThis.__aindrive_agents_by_drive?.get(driveId);
     if (peers) {
       peers.delete(ws);
@@ -251,6 +308,32 @@ export async function onAgentConnect(ws, req, query) {
   ws.on("error", (e) => {
     log.warn({ drive: driveId, err: e?.message || String(e) }, "agent ws error");
   });
+}
+
+/**
+ * Record an `fs-changed` frame in the change feed: stat the path on the device
+ * (`exists` false → file.deleted, true → file.updated + revision, unknown →
+ * file.updated) and fan out to the drive's audience. See onFsChanged.
+ */
+async function recordFsChange(driveId, path) {
+  let info = {};
+  try {
+    const r = await sendRpc(driveId, { method: "stat", path: String(path).normalize("NFC") }, { timeoutMs: 10_000 });
+    info = r && "entry" in r ? { exists: !!r.entry, entry: r.entry ?? undefined } : {};
+  } catch (e) {
+    log.debug({ drive: driveId, path, err: e?.message || String(e) }, "[share-events] stat before fs-changed record failed");
+  }
+  // Per-path generations (task 10.2): a path the device says is gone loses its
+  // generation, so whatever is created there next gets a new one; a re-created
+  // file (another birth time) rotates it. Best-effort, like the feed itself.
+  try {
+    const p = normalizePath(String(path));
+    if (info.exists === false) dropGenerations(driveId, p);
+    else if (info.entry) observeEntry(driveId, p, info.entry);
+  } catch (e) {
+    log.debug({ drive: driveId, err: e?.message || String(e) }, "[path-generations] fs-changed not applied");
+  }
+  return onFsChanged(driveId, path, info);
 }
 
 function randomReqId() {

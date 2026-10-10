@@ -28,6 +28,7 @@ export function GET(req: Request) {
   const drives = listUserDrives(userId).map((d) => ({
     id: d.id,
     name: d.name,
+    orgId: d.org_id ?? null,
     online: isOnline(d.id),
     role: maxRoleInDrive(d.id, userId),
     orgId: d.org_id ?? null,

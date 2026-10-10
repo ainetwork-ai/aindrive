@@ -12,7 +12,7 @@ Auth / identity:
 
 | Route | Role / gate |
 |-------|-------------|
-| `auth/login`, `auth/signup`, `auth/logout` | email+password session cookie; rate-limited. First-ever signup → `admin`. Login CSRF guard (`lib/auth-csrf.ts`, also on `auth/google` POST and `wallet/login`): a cross-origin `Origin`/`Sec-Fetch-Site` → 403, a non-`application/json` body → 415 (logout: Origin only). |
+| `auth/login`, `auth/signup`, `auth/logout` | email+password session cookie; rate-limited. First-ever signup → `admin`. Login CSRF guard (`lib/auth-csrf.ts`, also on `auth/google` POST and `wallet/login`): a cross-origin `Origin`/`Sec-Fetch-Site` → 403, a non-`application/json` body → 415 (logout: Origin only). `auth/logout?everywhere=1` also ends every other session of the account — other browsers and the sign-in a CLI / Mac app / phone keeps from pairing (`lib/session.ts` `endAllSessionsOfCurrentUser`); the web's "Sign out on all devices". |
 | `handoffs` (POST/GET/DELETE `?audience`), `handoffs/[id]` (DELETE), `h/[id]` (GET, public) | file handoff links for A2A (`lib/handoff.ts`): the owner's device registers picked files, POST mints one short-lived link per file (`/api/h/<id>?k=<secret>`) plus one MCP view of the batch (`/mcp/h/<grant>`, `lib/handoff-mcp.ts`: only those files), a fetch is checked (secret/expiry/revocation), logged, and streamed from the device via the `handoff-read` RPC on a connected drive. Owners list (with fetch counts) and revoke. |
 | `auth/google` | GET → `{clientId}` (404 unless `AINDRIVE_GOOGLE_CLIENT_IDS`); POST `{idToken}` → verifies a Google ID token (`lib/google-auth.ts`: JWKS, issuer, our audience, verified email), reaches the linked account or creates one (409 `email_in_use` instead of linking by email), sets the cookie and returns `{token, user}` for native apps. |
 | `auth/sso`, `auth/sso/{start,callback,link}` | "Continue with AIN" (AIN SSO OIDC, `lib/sso/`): GET `auth/sso` → `{enabled, legacyLogin}` or 404 when off; `start` → AIN authorize (PKCE/state/nonce; `prompt=none` = the middleware's silent check, `prompt=create` = sign-up, `ain_idp=google`); `callback` → session, or `/sso/link` to connect an existing account (proof) or create one; a silent check that fails returns to the page anonymously. All 404 unless configured. |
@@ -25,6 +25,8 @@ Auth / identity:
 | `wallet/me` | current wallet address from cookie. |
 | `apps` (GET/POST), `apps/[appId]` (DELETE) | connected apps (`lib/connected-apps.ts`): another app (e.g. ainmem) registers itself on the signed-in account with `{name, url, key}` — its spaces URL (https, public address; re-checked on every call) and the Bearer key this server sends it. One row per app origin. Login required. |
 | `me/tier` | the caller's tier (free/pro/max, from the wallet cookie) + prices + limits + upgrade URLs. |
+| `me/shared` | the caller's reachable files in the cross-product list contract (`lib/shared-items.ts`: `scope=mine\|shared_with_me\|shared_with_org\|recent`, `q`, `cursor`, `limit`); contract error bodies; R-SHARE-LIST-002. With `AIN_INTEGRATION_ENABLED` a ref's `revision` ends in `-g<generation>` and every answer (also `oauth/shared`) carries `X-Request-Id` + one log line (`lib/request-id.ts`). |
+| `me/events` | the caller's change feed (`lib/share-events.ts`, plan task 10): `?cursor=ev_<seq>` → `{ contract, events: [{ kind: "file", type, eventId, resourceId, version, occurredAt, revision?, recipient }], nextCursor, gap }`, ≤500 per page; `gap: true` (malformed cursor / below the 10 000-event retention floor) means re-list `me/shared`. Contract error bodies. |
 
 Drives (`drives/[driveId]/…`, owner/member gated):
 
@@ -32,10 +34,10 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 |-------|------|
 | `drives` (GET/POST) | list user's drives (owned, shared with them, or shared with an organization they are an active member of — those carry `org`) / create (per-user drive limit). Auth. |
 | `drives/[driveId]` (GET/PATCH/DELETE) | drive settings: `payout_wallet`, `allowed_tokens` policy (validation shared with MCP `set_token_policy`). Owner only. DELETE = creator only; cascades members/shares/receipts, disconnects the agent, frees a drive-limit slot. Files on the agent are untouched. |
-| `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. |
+| `drives/[driveId]/rotate` | rotate agent token + drive secret. Owner only. Every device socket on the old pair is closed (4401) and refused after — the Manage page's "Remove device" (lost/replaced device; members and links stay). |
 | `members` (GET/POST), `members/[memberId]` (PATCH/DELETE) | roster + invite (owner). Re-invite is upgrade-only; creator row immutable. PATCH may downgrade. |
 | `members/invites/[inviteId]` (DELETE) | cancel a pre-account invite. Owner. |
-| `orgs` (GET/POST), `orgs/[orgId]` (DELETE) | share the whole drive with an AIN SSO organization (viewer/editor) / change its role / stop (`lib/orgs.js`, `lib/org-policy.js`). GET = owners (candidates for the creator only); POST = creator who is that org's admin or on `AINDRIVE_ORG_SHARE_ALLOWLIST`; DELETE = creator. Audited in `sso_audit`. |
+| `orgs` (GET/POST), `orgs/[orgId]` (DELETE) | share the whole drive with an AIN SSO organization (viewer/editor) / change its role / stop (`lib/orgs.js`, `lib/org-policy.js`). GET = owners (candidates for the creator only); POST = creator who is that org's admin or on `AINDRIVE_ORG_SHARE_ALLOWLIST`; DELETE = creator. Audited in `sso_audit`; a new share / an unshare reaches every active member's change feed (`file.shared` / `file.revoked`, root key). |
 | `leave` (POST) | drop my own grants. Creator can't; access through an organization is 409 (only the creator unshares it). |
 | `shares` (GET/POST), `shares/[shareId]` (PATCH/DELETE) | mint/list/edit/revoke share links. Create = editor-at-path through the caller's own grants (an organization's role never mints a link — it would become a durable grant); `listed` paid shares = owner only; edit (price/currency/listed) keeps the `/s` link + prior grants, gated owner-or-creator-still-editor with listing owner-only; revoke = owner or the link's creator. GET = editor at root: owners get every link, others their own + others' paid viewer links (never another's free link or an editor link). Gates live in `lib/sales.ts`, shared with the MCP sale tools. |
 | `apps` (GET `?path`), `apps/[appId]/spaces/[spaceId]` (PUT `{path, shared}`) | the share sheet's "Shared in apps": the creator's connected apps' spaces and whether this folder is shared into each; PUT relays the toggle to the app as `{driveId, path, shared, name, driveName}` — `name` is the folder's name (the drive's name when the whole drive is shared), what the app should show. Creator only (GET answers `{apps: []}` to anyone else). |
@@ -53,20 +55,20 @@ gated by `requireDriveRole` (read paths = viewer+, mutations = editor+):
 
 | Route | Notes |
 |-------|-------|
-| `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). |
-| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. |
+| `list` / `read` | dir listing / file content (`auto` picks utf8 vs base64 by mime; capped). Which children a listing shows is `lib/listing-visibility.ts` (the rule the skills share). With `AIN_INTEGRATION_ENABLED`: entries carry `generation` + `revision`, `read?generation=` (or `revision=…-g<gen>`) answers 410 `resource_deleted` once the path holds another file (`lib/path-generations.js`), and both answer with `X-Request-Id` (`lib/request-id.ts`; delegated calls are logged without the token). |
+| `write` | base64/utf8 JSON body, memory-bound (≤100 MB default). File-count cap on create, measured against the drive owner's tier (`lib/tier.ts` `getOwnerStorageCaps`), not the caller's. One write of a path at a time; optional `baseRevision` (or `If-Match`, `none`/`If-None-Match: *` = create only) → 409 `{error:{code:"conflict", currentRevision}}` when the file changed since; the answer carries the new `revision` (`lib/write-guard.ts`). Without it the last writer wins. |
 | `upload` | single-POST raw octet-stream for files ≤ one part (8 MiB) → re-chunked to agent's 4 MiB limit, temp `.aindrive/uploads/*.part` then atomic rename. Aborts never publish a partial file. |
 | `upload-sessions` | chunked + resumable upload for larger files (tus-style). POST opens a session; PATCH `:uploadId` appends sequential ≤8 MiB parts (`X-Upload-Offset` must equal server `receivedBytes`, else 409 + authoritative offset); final part renames atomically. Recovery truth = agent temp's stat size, so a part that died mid-append never double-appends. ≤2 GiB. |
 | `stream` | Range-aware inline media for `<video>`/`<img>` seek. XSS guard below. |
 | `download` | chunked stream, `Content-Disposition: attachment`, no size cap. |
 | `thumbnail` | 256px webp via sharp, disk cache keyed by `sha1(path)+mtime`. |
-| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. Deleting a file, or renaming onto an existing one, frees a slot in the owner's file count. |
+| `mkdir` / `rename` / `delete` | folder ops; mkdir has a tiered folder cap. Deleting a file, or renaming onto an existing one, frees a slot in the owner's file count. New names (write, upload*, mkdir, rename `to`) may not contain `\` (400). Agent errors map by cause (`lib/agents.js` `agentErrorStatus`): missing 404, name/path too long or invalid 400, device disk full 507, else 502. |
 
 Payments / capabilities:
 
 | Route | Gate |
 |-------|------|
-| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. Optional `Authorization: Bearer aind_aat_…` (a relaying app, server-to-server): the purchase is credited to that account instead of the payer wallet's; a bad account token → 401 before any payment. No CORS. |
+| `s/[token]` (GET) | share gate: free → ok; paid → x402 verify+settle, then writes the member grant + receipt + issues a cap. Owner/already-entitled bypass pay. Optional `Authorization: Bearer aind_aat_…` (a relaying app, server-to-server): the purchase is credited to that account instead of the payer wallet's; a bad account token → 401 before any payment. An authenticated account paying with EIP-3009 is never charged twice for a sale whose earlier settle has no known outcome (409 `payment_pending`, support resolves; no credit from the chain): `docs/X402_PAYMENT_PENDING.md`. A payload with both `authorization` and `permit2Authorization` → 400. No CORS. |
 | `s/[token]/accept` (POST) | redeem a free (or already-paid-covered) share into a `drive_members` grant. Login required; never settles payment. |
 | `x402/lift` (GET) | pay an AIN micropayment to lift a scoped limit / unlock a tier (`scope=tier:pro` etc.). |
 | `cap/verify` (POST) | decode + describe a Meadowcap capability token. |
@@ -82,6 +84,8 @@ Remote-MCP OAuth + account grant (both flows are described in `app/mcp/README.md
 | `oauth/authorize` (POST) | consent decision from `/oauth/authorize`; session + same-origin required; returns `{ redirect }`. Approves through `lib/oauth-authorize.ts` `approve`, as a trusted client's visit does without this POST. |
 | `oauth/token` (POST, CORS) | `authorization_code` (PKCE S256) / `refresh_token` (rotating) → drive-bound MCP tokens, or account-grant tokens. |
 | `oauth/userinfo`, `oauth/drives` (GET, CORS) | account-grant bearer (`aind_aat_…`): profile (`profile`) / drive list (`drives:read`). `drives:write` / `drives:sell` unlock tools on `/mcp/d/[id]` only. |
+| `oauth/shared` (GET, CORS) | the same list as `me/shared` for an account grant with `drives:read` — contract error bodies (401/403/429/415/503). |
+| `oauth/events` (GET, CORS) | the same change feed as `me/events` for an account grant with `drives:read`; poll it (30 s is plenty). Contract error bodies (401/403/429/415/503). |
 | `oauth/account-tokens` (GET), `oauth/account-tokens/[id]` (DELETE) | the session user's connected apps (account grants); DELETE needs same-origin. |
 
 Ops / dev:
@@ -112,6 +116,17 @@ Ops / dev:
   bytes, so inline same-origin HTML/script would be a stored-XSS vector.
 - **Paid share at creation requires the drive's own `payout_wallet`** (no
   global fallback) and a `currency` allowed by the drive policy.
+- **Every grant change is recorded in the change feed** (`lib/share-events-core.js`):
+  a `drive_members` insert (`members` POST, `s/[token]/accept`, paid settle,
+  invite claim on signup) records `file.shared` to that account; a removal
+  (`members/[id]` DELETE, `leave`) records `file.revoked`; an organization
+  share (`orgs` POST, new share only) records `file.shared` to every active
+  member of the org and `orgs/[orgId]` DELETE `file.revoked` (a membership
+  ending records nothing — reads re-check it); `drives/[id]` DELETE
+  records `file.deleted` to every member *before* the cascade; the agent socket
+  records `file.availability` on each online/offline flip and
+  `file.updated`/`file.deleted` for `fs-changed` frames (after a `stat`).
+  Revoking a share *link* records nothing — access granted through it stays.
 - **Post-settle is crash-safe:** the on-chain settle is irreversible, so grant
   and receipt writes are best-effort/idempotent (tx_hash UNIQUE → treated as
   replay) and never surface a 500 that would hide a settled payment.

@@ -93,6 +93,9 @@ aindrive              # this folder is now in aindrive`}
           <form action="/api/auth/logout" method="POST">
             <button className="text-sm text-drive-muted hover:text-drive-text">Sign out ({walletDisplayLabel(user.email, user.name)})</button>
           </form>
+          <form action="/api/auth/logout?everywhere=1" method="POST">
+            <button className="text-sm text-drive-muted hover:text-drive-text" title="Also signs out the CLI, Mac app and phones that use this account">Sign out on all devices</button>
+          </form>
         </div>
       </header>
 

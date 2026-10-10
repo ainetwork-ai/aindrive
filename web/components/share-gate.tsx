@@ -448,7 +448,8 @@ export function ShareGate({ token }: { token: string }) {
         // drive_members row and redirects into the drive.
         await accept(okBody.driveId, okBody.path);
       } else {
-        toast.error(body.error || "payment failed");
+        // 409 payment_pending etc. carry a human description (and a support link).
+        toast.error(body.error_description ? `${body.error_description}${body.reference ? ` (reference ${body.reference})` : ""}` : body.error || "payment failed");
       }
     } catch (e) {
       if (epoch === walletEpoch.current) toast.error((e as Error).message || "payment failed");

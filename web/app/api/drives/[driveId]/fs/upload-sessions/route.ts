@@ -7,6 +7,7 @@ import { zPath } from "@/lib/zod-helpers";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage } from "@/lib/storage-usage.js";
 import { createUploadSession, sweepStaleSessions, PART_BYTES } from "@/lib/upload-sessions";
+import { BACKSLASH_ERROR, hasBackslash } from "@/lib/write-guard";
 
 /**
  * POST /api/drives/:driveId/fs/upload-sessions  { path, size }
@@ -30,6 +31,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const { path, size } = body.data;
+  if (hasBackslash(path)) return NextResponse.json({ error: BACKSLASH_ERROR }, { status: 400 });
 
   if (size > MAX_UPLOAD_BYTES) {
     return NextResponse.json(

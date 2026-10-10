@@ -28,7 +28,7 @@ aindrive login             sign in and serve the current folder
 aindrive status [folder]   show drive id, server URL, and whether the agent is running
 aindrive logs [folder]     follow the background agent's output (tail -f; Ctrl+C to stop)
 aindrive stop [folder]     stop the background agent
-aindrive rotate-token      rotate the per-drive agent token
+aindrive rotate-token      rotate the per-drive agent token (other devices on the old token are disconnected)
 aindrive mcp               run a Model Context Protocol stdio server
 ```
 
@@ -92,6 +92,11 @@ State lives in two places:
 Pair a new folder with `aindrive` (uses your global login), or re-attach an
 existing drive by running `aindrive` inside a folder that already has
 `.aindrive/config.json`.
+
+A device removed from the web (drive Manage → **Remove device**, or the drive
+deleted) is disconnected and refused; the agent says `device refused` and
+retries only every 30 s–5 min. If that device was lost, also use **Sign out on
+all devices** so the sign-in in its `~/.aindrive/credentials.json` stops working.
 
 ## Self-hosting
 

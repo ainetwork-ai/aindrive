@@ -17,14 +17,17 @@ internals.
 | `commands/` | one file per verb: `login` `serve` `rotate` `status` `stop` `logs` `mcp` |
 | `agent.js` | WS bridge to the server: `agent-hello`, signed-RPC loop, `fs.watch` change gossip, graceful drain/shutdown. Pure helpers `toWsUrl`/`sanitize`/`agentHello` exported for test |
 | `agent-runner.js` | local `agent-ask` execution (knowledge fetch + LLM call). The API key never leaves this process — the whole point of running it here |
-| `rpc.js` | the RPC dispatch (`handleRpc`): fs `read`/`write`/`list`/`stat`, chunked `upload`/`download`, `yjs-*`, `agent-ask`. Path guard `safeResolve`: no root escape, and `.aindrive/` refused except `agents/` + `uploads/` (`isReservedRpcPath`) |
+| `rpc.js` | the RPC dispatch (`handleRpc`): fs `read`/`write`/`list`/`stat`, chunked `upload`/`download`, `yjs-*`, `agent-ask`. `write` runs one write per file at a time (`writeFileSerialized`), in place so the file keeps its inode (Linux recursive `fs.watch` loses a file replaced by rename). Path guard `safeResolve`: no root escape, and `.aindrive/` refused except `agents/` + `uploads/` (`isReservedRpcPath`) |
 | `willow-store.js` | the `yjs_entries` SQLite store — **authoritative for all reads**; the official Willow `Store` is also written but fire-and-forget / not read back (see Gotchas) |
 | `willow-sync.js` | multi-device sync wire protocol over the same WS (`attachSync`): summary → want → give |
 | `willow/` | `KvDriverSqlite` + `schemes` backing the official Willow `Store` |
 | `sig.js` | HMAC sign/verify of RPC frames — **mirrors `web/lib/sig.js`** (wire-compat) |
 | `config.js` | on-disk secret/cred store: drive config + global creds, written `0600` / dir `0700`; drive config replaced atomically |
-| `rotation.js` | live credential rotation pushed by the server (`rotate-credentials` RPC): persist new + previous pair, 60 s old-secret grace, revert on a 4401 handshake, commit on `hello` |
+| `rotation.js` | live credential rotation pushed by the server (`rotate-credentials` RPC): persist new + previous pair, 60 s old-secret grace, revert on a 4401 handshake, commit on `hello`; `adoptConfigOnDisk` picks up a pair `aindrive rotate-token` wrote while serving |
 | `api.js` | thin HTTP client (`apiFetch`) to the server |
+| `afan-bridge.js` | afan host bridge (opt-in: `"afanBridge": true` in `.aindrive/config.json` or `AINDRIVE_AFAN_BRIDGE=1`): answers `people/*/agent-requests/*.md` with `agent-results/<id>.md` — author confirmed by the server, owner-only handoff grant, A2A `message/send`. Spec: afan-soverign `docs/AGENT_BRIDGE.md` |
+| `handoffs.js` | `~/.aindrive/handoffs.json` device keys (0600): `handoff-read` serves only registered, unexpired keys; `writeHandoffs`/`removeHandoffs` (mirror of the Mac app's) for the afan bridge |
+| `afan-catalog.js` | Ainize registry listing (`AINIZE_URL`, `/api/shared-agents?scope=public`, 404 fallback) → the bundle's `_catalog.md` (owner host, ≤ every 10 min) |
 | `daemon.js` | detached background-agent management (spawn, pid file, logfile) |
 | `logger.js` | pino logger |
 | `knowledge/` | knowledge-base factory + impls (`resolveKnowledgeBase`) |
@@ -49,6 +52,9 @@ internals.
   what is running", not as a CLI release number.
 - **`willow-store.js`: the `yjs_entries` mirror is the source of truth for reads**;
   the Willow `Store` write is write-only decoration today.
+- **afan bridge never writes a credential into the served folder**: session, handoff grant token / link
+  secrets and `AINIZE_TOKEN` stay in memory, headers and the A2A message; every written result is scrubbed.
+  A handle is never trusted — an author the server cannot confirm gets an error result, never a call.
 - **Tests**: vitest (`npm test`). `__tests__/*.test.mjs` includes characterization
   suites that snapshot current behaviour (added during the agent-first migration);
   `QUIRK`/`CURRENT BEHAVIOUR`-labelled cases lock intentional-looking oddities so a

@@ -34,3 +34,4 @@ test-results/
 
 # brainstorming visual companion (local only)
 .superpowers/
+.dev-oauth-share/

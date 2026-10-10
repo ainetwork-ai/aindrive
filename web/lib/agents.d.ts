@@ -20,11 +20,20 @@ export function sendRpc<M extends RpcParams["method"]>(
 export function isAgentConnected(driveId: string): boolean;
 export function listConnectedDrives(): string[];
 /** Close the live agent socket for a drive being deleted; false if none was connected. */
-export function disconnectAgent(driveId: string): boolean;
+/** Closes every device socket of the drive (4410 drive deleted by default; 4401 after a rotation). Returns how many. */
+export function disconnectAgent(driveId: string, code?: number, reason?: string): number;
 /** An agent's list/stat result with entry names and paths in NFC (the server's path identity). */
 export function canonicalAgentResult<R>(result: R): R;
+/** HTTP status for an error message the device agent answered with (404 / 400 / 507 / 502). */
+export function agentErrorStatus(message: string): number;
 /** Ping every interval; terminate a socket whose previous ping got no pong. */
 export function startHeartbeat(
   ws: { on(event: "pong", cb: () => void): unknown; ping(): void; terminate(): void; readyState: number; OPEN: number },
   opts?: { intervalMs?: number; onBeat?: () => void; onDead?: () => void },
 ): ReturnType<typeof setInterval>;
+/** Accept a device agent's WebSocket (custom server): auth, registry, heartbeat, frames, change-feed availability. */
+export function onAgentConnect(
+  ws: { on(event: string, cb: (...args: any[]) => void): unknown; send(data: string): void; close(code?: number, reason?: string): void; ping(): void; terminate(): void; readyState: number; OPEN: number },
+  req: { headers: Record<string, string | string[] | undefined> },
+  query: { driveId?: string } | undefined,
+): Promise<void>;

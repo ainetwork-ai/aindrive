@@ -127,7 +127,7 @@ describe("handleRpc — stat", () => {
     });
     expect(typeof r.entry.mtimeMs).toBe("number");
     expect(Object.keys(r.entry).sort())
-      .toEqual(["ext", "isDir", "mime", "mtimeMs", "name", "path", "size"]);
+      .toEqual(["birthtimeMs", "ext", "isDir", "mime", "mtimeMs", "name", "path", "size"]);
   });
 
   it("reports a directory with mime='folder' and empty ext", async () => {
@@ -179,7 +179,7 @@ describe("handleRpc — list", () => {
     writeFileSync(path.join(tmp, "a.txt"), "a");
     const r = await handleRpc({ method: "list", path: "" }, tmp);
     expect(Object.keys(r.entries[0]).sort())
-      .toEqual(["ext", "isDir", "mime", "mtimeMs", "name", "path", "size"]);
+      .toEqual(["birthtimeMs", "ext", "isDir", "mime", "mtimeMs", "name", "path", "size"]);
   });
 
   it("hides exactly .aindrive / .DS_Store / .git but shows other dotfiles", async () => {

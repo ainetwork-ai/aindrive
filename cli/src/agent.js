@@ -7,12 +7,35 @@ import { handleRpc, cliTrace, docIdFor, setTraceServer, isSelfWrite, rpcMethodNa
 import { signPayload, verifyPayload } from "./sig.js";
 import { attachSync } from "./willow-sync.js";
 import { log } from "./logger.js";
-import { applyRotation, revertRotation, commitRotation, GRACE_MS } from "./rotation.js";
+import { applyRotation, revertRotation, commitRotation, adoptConfigOnDisk, GRACE_MS } from "./rotation.js";
+import { afanBridgeEnabled, createAfanBridge } from "./afan-bridge.js";
+import { readGlobalCreds } from "./config.js";
 
 const PROTOCOL_VERSION = 1;
 const require = createRequire(import.meta.url);
 const { version: APP_VERSION } = require("../package.json");
 const RECONNECT_BACKOFF_MS = [1000, 2000, 4000, 8000, 15_000];
+// The server accepted the socket and then refused this device (web/lib/agents.js):
+// its key was rotated from the web (4401) or the drive was deleted (4410, then
+// 4404). Retrying every second only burns a bcrypt compare per try on the
+// server; wait long, in case the owner re-attaches the folder.
+const REFUSED_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000];
+const REFUSAL_CODES = new Map([
+  [4401, "this device's key is no longer valid (rotated or removed from the web)"],
+  [4404, "the drive no longer exists"],
+  [4410, "the drive was deleted"],
+]);
+
+/** Why the server refused this device, from a close code — or null for an ordinary disconnect. */
+export function refusalOf(code) {
+  return REFUSAL_CODES.get(code) ?? null;
+}
+
+/** Wait before the next connect: the refused schedule after a refusal, the normal one otherwise. */
+export function reconnectWait(attempt, refused) {
+  const table = refused ? REFUSED_BACKOFF_MS : RECONNECT_BACKOFF_MS;
+  return table[Math.min(attempt, table.length - 1)];
+}
 const FS_DEBOUNCE_MS = 500;
 const DRAIN_TIMEOUT_MS = 10_000;
 const DRAIN_POLL_MS = 50;        // poll cadence while waiting for in-flight RPCs to drain
@@ -79,19 +102,53 @@ export async function runAgent({ root, drive, server }) {
 
   installShutdownHandlers();
 
+  const afanBridge = startAfanBridge({ root, drive, server });
+
+  let refusedAttempt = 0;
   while (!shuttingDown) {
+    let outcome = null;
     try {
-      await connectOnce({ root, drive, wsUrl });
+      outcome = await connectOnce({ root, drive, wsUrl, afanBridge });
       attempt = 0;
     } catch (e) {
       log.error({ err: e.message || String(e) }, "agent connection error");
     }
     if (shuttingDown) break;
-    const wait = RECONNECT_BACKOFF_MS[Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)];
-    attempt++;
-    log.info({ waitSec: wait / 1000 }, "reconnecting");
-    await new Promise((r) => setTimeout(r, wait));
+    if (outcome?.retryNow) continue; // new credentials on disk (`aindrive rotate-token`)
+    let wait;
+    if (outcome?.refused) {
+      // One stable message (the Mac app shows it as the folder's error, desktop/src/agents.js parseLine).
+      wait = reconnectWait(refusedAttempt++, true);
+      log.warn({ code: outcome.code, reason: outcome.refused, waitSec: wait / 1000,
+        hint: "the drive stays offline; its owner can re-attach this folder with `aindrive rotate-token`" }, "device refused");
+    } else {
+      refusedAttempt = 0;
+      wait = reconnectWait(attempt, false);
+      attempt++;
+      log.info({ waitSec: wait / 1000 }, "reconnecting");
+    }
+    if (outcome?.refused) {
+      // Refused: wait long, but reconnect as soon as the folder gets a new key
+      // (`aindrive rotate-token` here — it may finish just after the server
+      // already dropped us for the rotation it made).
+      if (await waitForNewKey({ root, drive, ms: wait })) log.info("new credentials in the folder's config — reconnecting with them");
+    } else {
+      await new Promise((r) => setTimeout(r, wait));
+    }
   }
+}
+
+const KEY_POLL_MS = 2000;
+
+/** Sleep up to `ms`, checking the folder's config for a new pair; true when one was adopted. */
+export async function waitForNewKey({ root, drive, ms, pollMs = KEY_POLL_MS, adopt = adoptConfigOnDisk }) {
+  const end = Date.now() + ms;
+  while (!shuttingDown && Date.now() < end) {
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(0, end - Date.now()))));
+    try { if (await adopt({ root, drive })) return true; }
+    catch (e) { log.warn({ err: e.message }, "re-reading the drive config failed"); }
+  }
+  return false;
 }
 
 /**
@@ -144,7 +201,33 @@ export function toWsUrl(server, driveId) {
   return u.toString();
 }
 
-function connectOnce({ root, drive, wsUrl }) {
+/**
+ * The afan host bridge (afan-bridge.js) for this folder, or null. Opt-in: `"afanBridge": true` in the
+ * folder's .aindrive/config.json, or AINDRIVE_AFAN_BRIDGE=1. It verifies authors with this machine's
+ * `aindrive login` session — only when that session is for this drive's server.
+ */
+export function startAfanBridge({ root, drive, server }, env = process.env) {
+  if (!afanBridgeEnabled(drive, env)) return null;
+  const serverUrl = drive.serverUrl || server;
+  const sameServer = (a, b) => { try { return new URL(a).origin === new URL(b).origin; } catch { return false; } };
+  const bridge = createAfanBridge({
+    root,
+    driveId: drive.driveId,
+    server: serverUrl,
+    getSession: async () => {
+      const creds = await readGlobalCreds();
+      return creds?.sessionCookie && sameServer(creds.server, serverUrl) ? creds.sessionCookie : null;
+    },
+    ainizeUrl: env.AINIZE_URL,
+    ainizeToken: env.AINIZE_TOKEN,
+    hostVersion: APP_VERSION,
+  });
+  bridge.startCatalogTimer();
+  log.info({ driveId: drive.driveId }, "afan bridge on");
+  return bridge;
+}
+
+function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
       headers: { authorization: `Bearer ${drive.agentToken}` },
@@ -165,6 +248,8 @@ function connectOnce({ root, drive, wsUrl }) {
       activeWs = ws;
       watchServerSilence(ws);
       log.info({ driveId: drive.driveId }, "connected");
+      // Requests written while this agent was offline — the watcher only sees new ones.
+      if (afanBridge) afanBridge.scan().catch((e) => log.warn({ err: e.message }, "afan bridge scan failed"));
       // Tell the server which machine this agent is running on (shown next to
       // the drive in the UI) and what it can do (phone protocol v2).
       try { ws.send(JSON.stringify(agentHello())); } catch {}
@@ -177,6 +262,8 @@ function connectOnce({ root, drive, wsUrl }) {
           if (!filename) return;
           const rel = filename.split(sep).join("/");
           if (rel.startsWith(".aindrive/") || rel === ".aindrive") return;
+          // afan requests (people/*/agent-requests/*.md) go to the bridge too; it ignores everything else.
+          if (afanBridge) afanBridge.notify(rel);
           const existing = recentChanges.get(rel);
           if (existing) clearTimeout(existing);
           const t = setTimeout(() => {
@@ -283,16 +370,24 @@ function connectOnce({ root, drive, wsUrl }) {
       const msg = `disconnected${code ? ` (${code}${reason ? `: ${reason.toString()}` : ""})` : ""}`;
       // Token refused right after a live rotation → the server never stored
       // the new pair (its ok was lost). Fall back to the pair it still has.
+      let outcome = null;
       if (code === 4401 && drive.previousCredentials) {
         try {
-          if (await revertRotation({ root, drive })) log.warn("token refused after rotation — reverted to previous credentials");
+          if (await revertRotation({ root, drive })) { log.warn("token refused after rotation — reverted to previous credentials"); outcome = { retryNow: true }; }
         } catch (e) { log.error({ err: e.message }, "revertRotation failed"); }
       }
+      // A key rotated on this machine (`aindrive rotate-token` while serving):
+      // the folder's config already has the new pair — take it and reconnect.
+      if (!outcome && code === 4401) {
+        try { if (await adoptConfigOnDisk({ root, drive })) { log.info("new credentials in the folder's config — reconnecting with them"); outcome = { retryNow: true }; } }
+        catch (e) { log.warn({ err: e.message }, "re-reading the drive config failed"); }
+      }
+      if (!outcome && refusalOf(code)) outcome = { refused: refusalOf(code), code };
       if (activeWs === ws) activeWs = null;
       if (watcher) { try { watcher.close(); } catch {} }
       for (const t of recentChanges.values()) clearTimeout(t);
       recentChanges.clear();
-      if (opened) { log.info({ msg }, "disconnected"); resolve(); }
+      if (opened) { log.info({ msg }, "disconnected"); resolve(outcome); }
       else reject(new Error(msg));
     });
 

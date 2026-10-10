@@ -258,6 +258,57 @@ function open() {
     SET currency = COALESCE((SELECT s.currency FROM shares s WHERE s.id = share_id), 'USDC')
     WHERE currency IS NULL;
   `);
+  // x402 settle attempts of AUTHENTICATED accounts paying an EIP-3009 paid
+  // share (lib/x402-account-settlements.js, docs/X402_PAYMENT_PENDING.md). A
+  // row is written after facilitator verify and right before settle, with a
+  // snapshot of the sale. One authorization (network, asset, payer, nonce)
+  // belongs to one account and one sale forever. status: 'unresolved' (settle
+  // outcome not known — blocks a NEW authorization by the same account for the
+  // same sale), 'credited' (this server's settle answered success, or support
+  // credited it), 'released' (settle refused before broadcast, or support
+  // released it). Nothing reads the chain to change a row; the support CLI
+  // (scripts/x402-settlements.mjs) resolves stuck rows, logged in _events.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS x402_account_settlements (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL,
+      share_id TEXT NOT NULL,
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      role TEXT NOT NULL,
+      amount_usdc REAL NOT NULL,
+      currency TEXT NOT NULL,
+      chain TEXT NOT NULL,
+      pay_to TEXT NOT NULL,
+      amount_atomic TEXT NOT NULL,
+      network TEXT NOT NULL,
+      asset TEXT NOT NULL,
+      payer TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      envelope_hash TEXT NOT NULL,
+      valid_before TEXT,
+      status TEXT NOT NULL DEFAULT 'unresolved' CHECK (status IN ('unresolved', 'credited', 'released')),
+      tx_hash TEXT,
+      last_error TEXT,
+      resolved_by TEXT,
+      resolution_note TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE (network, asset, payer, nonce)
+    );
+    CREATE INDEX IF NOT EXISTS idx_x402_account_settlements_sale
+      ON x402_account_settlements(account_id, status, drive_id, path, role);
+    CREATE INDEX IF NOT EXISTS idx_x402_account_settlements_tx ON x402_account_settlements(tx_hash);
+    CREATE TABLE IF NOT EXISTS x402_account_settlement_events (
+      id TEXT PRIMARY KEY,
+      settlement_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT NOT NULL,
+      detail TEXT,
+      at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_x402_account_settlement_events_row ON x402_account_settlement_events(settlement_id, at);
+  `);
   // Email OTP codes (lib/otp) — password reset now, reusable for signup/email
   // verification later. code_hash = sha256(`${salt}:${code}`); times are epoch
   // ms. One active (consumed=0, unexpired) row per (email, purpose) matters —
@@ -551,6 +602,51 @@ function open() {
     );
     CREATE INDEX IF NOT EXISTS idx_drive_org_shares_org ON drive_org_shares(issuer, org_id);
     CREATE INDEX IF NOT EXISTS idx_sso_memberships_org_user ON sso_memberships(issuer, org_id, user_id);
+  `);
+  // Change feed (lib/share-events-core.js, ain-integration plan task 10): one
+  // row per (event, recipient). `seq` is the global cursor (AUTOINCREMENT so a
+  // seq is never reused after a prune); `resource_key` is the contract's
+  // resource id (`<origin>#<driveId>#<fileId>`); `version` is strictly
+  // increasing per resource_key across every recipient (share_event_versions).
+  // No FK on drive_id on purpose: a drive's `file.deleted` must outlive the
+  // drive row. share_event_floors remembers, per recipient, the highest seq
+  // the retention prune removed, so a cursor below it answers `gap: true`.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS share_events (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipient_user_id TEXT NOT NULL,
+      resource_key TEXT NOT NULL,
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      revision TEXT,
+      occurred_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_share_events_recipient ON share_events(recipient_user_id, seq);
+    CREATE TABLE IF NOT EXISTS share_event_versions (
+      resource_key TEXT PRIMARY KEY,
+      version INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS share_event_floors (
+      recipient_user_id TEXT PRIMARY KEY,
+      pruned_to INTEGER NOT NULL
+    );
+  `);
+  // Per-path generations (lib/path-generations.js, ain-integration plan task
+  // 10.2): a nonce per (drive, path) handed out with a ref and dropped when the
+  // path is re-created or removed, so an old ref never resolves to a newer file
+  // at the same path. No FK: rows are dropped with the path, and a drive's rows
+  // are meaningless (never read) once the drive is gone.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS path_generations (
+      drive_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      generation TEXT NOT NULL,
+      birth_ms REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (drive_id, path)
+    );
   `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the

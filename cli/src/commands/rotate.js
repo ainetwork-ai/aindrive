@@ -19,5 +19,8 @@ export async function cmdRotate(args) {
   const { previousCredentials: _stale, ...rest } = drive;
   await writeDriveConfig(dir, { ...rest, agentToken, driveSecret, rotatedAt: Date.now() });
   console.log("  ✓ agent token rotated");
-  console.log("  restart the agent for this folder (`aindrive stop` then `aindrive`) so it uses the new token");
+  // The server drops every device on the old key (web rotate route); an agent
+  // serving this folder re-reads the config on that 4401 and reconnects
+  // (rotation.js adoptConfigOnDisk). A device elsewhere on the old key stays out.
+  console.log("  an agent serving this folder reconnects with it by itself; any other device on the old token is disconnected");
 }

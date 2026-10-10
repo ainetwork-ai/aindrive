@@ -93,6 +93,7 @@ const ACCOUNT_SCOPE_LINES: Record<AccountScope, string[]> = {
   profile: ["See your profile (email, name, wallet address)"],
   "drives:read": ["List your drives", "Read files in your drives (read-only)"],
   "drives:write": ["Upload and delete files in your drives"],
+  "drives:share": ["Share files and folders of drives you own with other people by email (viewer or editor)"],
   "drives:sell": ["List files for sale, set prices and your payout wallet, and read your sales"],
   "wallet:pay": ["Pay with your agent wallet (x402) — sign and settle payments as you"],
 };
@@ -125,6 +126,7 @@ export function AccountConsentForm({ params, clientName, redirectHost, userEmail
         {scopes.includes("drives:write")
           ? "The app never gets more than your own access in each drive."
           : "The app can't create, change or delete files, and never gets more than your own access."}
+        {scopes.includes("drives:share") && " Sharing only works on drives you own, and never grants the owner role."}
         {scopes.includes("drives:sell") && " Sales can only be managed on drives you created."}
       </p>
 

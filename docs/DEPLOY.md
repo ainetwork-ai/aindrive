@@ -215,3 +215,38 @@ Checked against a live `getSupported()` call with the prod CDP key:
 Rebuild from the previous good commit (same build command). Data persists in
 the Docker volume (`aindrive_aindrive-data`), so a code rollback doesn't touch
 SQLite/Yjs state. See DOCKER_PUBLISH_GUIDE for image/volume specifics.
+
+A rollback to a release without the change feed (before the AIN integration
+routes) writes no `share_events` while it runs: after rolling forward again,
+stop the container and run `scripts/after-restore.mjs` once (below) so products
+re-list instead of missing the changes made in between.
+
+## Backup and restore
+
+What the server owns is the SQLite database in the volume (`/data/data.sqlite`:
+accounts, drives, members, organization shares, share links, OAuth/account
+grants, handoff grants, the change feed). **Files are not on the server** — they
+stay on each owner's device, and backing them up is the owner's job (the
+device's `<folder>/.aindrive/` and `~/.aindrive/` hold its drive credentials:
+losing them means pairing the folder again, not losing data).
+
+- **Back up** with SQLite's online backup while the server runs (a plain `cp` of
+  a WAL database can be torn):
+  `sudo docker exec aindrive-web-1 node -e 'require("better-sqlite3")("/data/data.sqlite").backup("/data/backup-"+Date.now()+".sqlite").then(()=>console.log("ok"))'`
+  then move the file off the host. The session secret (`AINDRIVE_SESSION_SECRET`)
+  is in the env file, not the DB — keep it with the backup or every session ends.
+- **Restore**: stop the container, put the backup in place as
+  `/data/data.sqlite` (remove `data.sqlite-wal`/`-shm` next to it), then **before
+  starting**:
+  ```
+  sudo docker compose run --rm web node scripts/after-restore.mjs
+  ```
+  It moves the change feed past everything issued before the restore, so every
+  product's cursor answers `gap: true` and the product re-lists, and later
+  events outrank what products saw after the backup (lib/share-events-restore.js
+  has the why). Without it a product can keep a grant the restore removed and
+  drop a later revoke. Then start the container; devices reconnect by
+  themselves.
+- Changes made after the backup are gone (grants, shares, account tokens issued
+  since): products whose refresh token was issued or rotated after the backup
+  get `invalid_grant` and connect again.

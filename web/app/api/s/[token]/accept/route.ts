@@ -5,6 +5,7 @@ import { getUser } from "@/lib/session";
 import { personalRoleByUser, resolveRoleByUser, type Role } from "@/lib/access";
 import { holdsPaidShare } from "@/lib/sale-access.js";
 import { mergeRoleUpgradeOnly } from "@/lib/access-core.js";
+import { onMemberGranted } from "@/lib/share-events";
 
 type ShareRow = {
   id: string;
@@ -70,6 +71,8 @@ export async function POST(_req: Request, { params }: { params: Promise<{ token:
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(drive_id, user_id, path) DO UPDATE SET role = excluded.role
   `).run(nanoid(12), share.drive_id, user.id, share.path, nextRole);
+  // Change feed: the accepting account hears `file.shared` for the link's path.
+  onMemberGranted(share.drive_id, user.id, share.path);
 
   return NextResponse.json({ driveId: share.drive_id, path: share.path });
 }

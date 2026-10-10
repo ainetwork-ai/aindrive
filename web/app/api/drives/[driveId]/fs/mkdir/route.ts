@@ -4,7 +4,9 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
+import { BACKSLASH_ERROR, hasBackslash } from "@/lib/write-guard";
 
 const Body = z.object({ path: zRequiredPath });
 
@@ -12,6 +14,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   const { driveId } = await params;
   const body = Body.safeParse(await req.json());
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
+  if (hasBackslash(body.data.path)) return NextResponse.json({ error: BACKSLASH_ERROR }, { status: 400 });
   const gate = await requireDriveRole(driveId, body.data.path, { min: "editor" });
   if (gate instanceof NextResponse) return gate;
   const { drive } = gate;
@@ -41,6 +44,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   try {
     const result = await callAgent(driveId, drive.drive_secret, { method: "mkdir", path: body.data.path });
     bumpOwnerUsage(ownerId, { folders: 1 });
+    dropGenerations(driveId, body.data.path); // a new folder (task 10.2)
     return NextResponse.json(result);
   } catch (e) {
     const err = e as AgentError;

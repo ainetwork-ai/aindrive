@@ -26,6 +26,7 @@ import { db } from "./db.js";
 import { ROLE_RANK } from "./access-core.js";
 import { audit } from "./sso/store.js";
 import { ORG_SHARE_ROLES, landingPath, orgShareDecision, parseOrgShareAllowlist } from "./org-policy.js";
+import { onOrgShared, onOrgRevoked } from "./share-events-core.js";
 
 const now = () => Date.now();
 
@@ -71,15 +72,35 @@ export function orgRoleInDrive(driveId, userId) {
   return bestOrgRole(roleStmt.all({ driveId, issuer, userId }));
 }
 
-/** Drives `userId` reaches through an organization (one row per drive and org), newest first. */
+/**
+ * Drives `userId` reaches through an organization (one row per drive and org,
+ * in-force shares only), newest drive first. `org_shared_at` is when the
+ * share was made (epoch ms).
+ */
 export function orgDrivesForUser(userId) {
   const issuer = orgAccessIssuer();
   if (!issuer || !userId) return [];
   return db.prepare(
-    `SELECT d.*, s.org_id AS org_id, s.role AS org_role FROM drive_org_shares s JOIN drives d ON d.id = s.drive_id
+    `SELECT d.*, s.org_id AS org_id, s.role AS org_role, s.created_at AS org_shared_at
+     FROM drive_org_shares s JOIN drives d ON d.id = s.drive_id
      WHERE s.issuer = @issuer AND ${activeIn("@userId")} AND ${activeIn("d.owner_id")}
      ORDER BY d.created_at DESC, d.id`,
   ).all({ issuer, userId });
+}
+
+/**
+ * The accounts that are active members of (issuer, orgId) right now — every
+ * row for that (org, account) `active` — minus `except` (the drive's creator
+ * when a share of their drive is announced). The change feed's audience for an
+ * organization share (share-events-core.js onOrgShared/onOrgRevoked).
+ */
+export function activeOrgMemberIds(issuer, orgId, except = null) {
+  return db.prepare(
+    `SELECT DISTINCT ma.user_id FROM sso_memberships ma
+     WHERE ma.issuer = ? AND ma.org_id = ? AND ma.status = 'active'
+       AND NOT EXISTS (SELECT 1 FROM sso_memberships mb WHERE mb.issuer = ma.issuer AND mb.org_id = ma.org_id AND mb.user_id = ma.user_id AND mb.status != 'active')
+     ORDER BY ma.user_id`,
+  ).all(issuer, orgId).map((r) => r.user_id).filter((id) => id !== except);
 }
 
 /** The organizations `userId` is an active member of (current issuer), by name. */
@@ -236,10 +257,16 @@ export function revalidateOrgDrives(issuer, orgId) {
   return closed;
 }
 
+/** The drive's creator, or null for an unknown drive. */
+const driveOwnerId = (driveId) => db.prepare("SELECT owner_id FROM drives WHERE id = ?").get(driveId)?.owner_id ?? null;
+
 /**
  * Shares the whole drive with an organization (or changes its role). The
  * caller decided the actor may (checkOrgShare, or the operator script).
- * Audited in sso_audit. Returns the previous role (null = new share).
+ * Audited in sso_audit; a NEW share is announced to every active member of
+ * the organization in the change feed (`file.shared` on the root key — a role
+ * change is not a new share and records nothing). Returns the previous role
+ * (null = new share).
  */
 export function shareDriveWithOrg({ driveId, issuer, orgId, role, actor, actorUserId = null, subject = null, via = null }) {
   if (!ORG_SHARE_ROLES.includes(role)) throw new Error(`invalid organization role: ${role}`);
@@ -259,13 +286,15 @@ export function shareDriveWithOrg({ driveId, issuer, orgId, role, actor, actorUs
     return prev?.role ?? null;
   }).immediate();
   if (previousRole && previousRole !== role) revalidateDrive(driveId);
+  if (!previousRole) onOrgShared(driveId, activeOrgMemberIds(issuer, orgId, driveOwnerId(driveId)));
   return { previousRole };
 }
 
 /**
  * Stops sharing the drive with an organization (every issuer's row for that
  * org id when `issuer` is omitted). Open sockets of people who lose access
- * close. Audited. Returns how many shares were removed.
+ * close; every active member of the organization hears `file.revoked` on the
+ * root key. Audited. Returns how many shares were removed.
  */
 export function unshareDriveFromOrg({ driveId, orgId, issuer = null, actor, actorUserId = null, subject = null }) {
   const removed = db.transaction(() => {
@@ -276,10 +305,16 @@ export function unshareDriveFromOrg({ driveId, orgId, issuer = null, actor, acto
       db.prepare("DELETE FROM drive_org_shares WHERE drive_id = ? AND issuer = ? AND org_id = ?").run(driveId, r.issuer, orgId);
       audit({ actor, action: "org_drive_unshared", issuer: r.issuer, subject, orgId, userId: actorUserId, details: { driveId, role: r.role } });
     }
-    return rows.length;
+    return rows.map((r) => r.issuer);
   }).immediate();
-  if (removed > 0) revalidateDrive(driveId);
-  return removed;
+  if (removed.length > 0) {
+    revalidateDrive(driveId);
+    const owner = driveOwnerId(driveId);
+    const heard = new Set();
+    for (const iss of removed) for (const id of activeOrgMemberIds(iss, orgId, owner)) heard.add(id);
+    onOrgRevoked(driveId, [...heard]);
+  }
+  return removed.length;
 }
 
 /**

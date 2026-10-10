@@ -21,10 +21,15 @@ import { maxRoleInDrive } from "@/lib/mcp-tokens";
 import { getDrive, listUserDrives, listPayoutWallets, setDriveAllowedTokens, type DriveRow } from "@/lib/drives";
 import { resolveAccess, atLeast, type Role } from "@/lib/access";
 import { callAgent, AgentError } from "@/lib/rpc";
-import { paidAccessDenial, paidLocksForListing } from "@/lib/sale-access.js";
+import { paidAccessDenial } from "@/lib/sale-access.js";
+import { visibleChildren } from "@/lib/listing-visibility";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { normalizePath } from "@/lib/path";
 import { getOwnerStorageCaps } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import {
+  BACKSLASH_ERROR, baseRevisionOf, conflictWith, expectedRevision, hasBackslash, withPathLock, type Current,
+} from "@/lib/write-guard";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import { resolveDriveTokens } from "@/lib/payment-tokens";
 import {
@@ -32,6 +37,7 @@ import {
   revokeShare, shareUrl, tokenPolicyFromList, type SaleErr,
 } from "@/lib/sales";
 import { runPaySkill } from "@/lib/x402-pay-skills";
+import { FILE_LIST_SCOPES, MAX_LIMIT, isFileListScope, listSharedItems } from "@/lib/shared-items";
 import {
   MUTATING, isPaySkill, isSaleSkill, isSkillName, type SaleSkillName,
 } from "./skill-descriptors";
@@ -52,7 +58,7 @@ function splitPath(p: string): { parent: string; base: string } {
 /**
  * `driveId` pins every call to one drive (drive-scoped MCP endpoint /
  * token): `drive_id` defaults to it, any other drive is forbidden, and
- * `list_drives` is unavailable. `scope` is the token's ceiling — "read"
+ * `list_drives` / `list_shared` are unavailable. `scope` is the token's ceiling — "read"
  * forbids write_file regardless of the user's role. Both omitted = the
  * legacy account-wide surface (A2A executor, session-auth /mcp).
  * `sell` (account grant with `drives:sell`) unlocks the sale tools; they
@@ -95,6 +101,32 @@ export async function runSkill(
       ? "(no drives)"
       : rows.map((r) => `${r.id} — ${r.name}`).join("\n");
     return { kind: "ok", structured: { drives: rows }, text };
+  }
+
+  if (name === "list_shared") {
+    if (ctx.driveId) {
+      return { kind: "err", code: "forbidden", message: "list_shared is unavailable on a drive-scoped endpoint" };
+    }
+    const scopeArg = arg(args, "scope") ?? "shared_with_me";
+    if (!isFileListScope(scopeArg)) {
+      return { kind: "err", code: "invalid_params", message: `scope must be one of ${FILE_LIST_SCOPES.join(", ")}` };
+    }
+    const q = arg(args, "q");
+    const cursor = arg(args, "cursor");
+    const limit = arg(args, "limit");
+    if (q !== undefined && typeof q !== "string") return { kind: "err", code: "invalid_params", message: "q must be a string" };
+    if (cursor !== undefined && typeof cursor !== "string") return { kind: "err", code: "invalid_params", message: "cursor must be a string" };
+    if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT)) {
+      return { kind: "err", code: "invalid_params", message: `limit must be an integer from 1 to ${MAX_LIMIT}` };
+    }
+    const page = listSharedItems(ctx.userId, { scope: scopeArg, q, cursor, limit });
+    const text = page.items.length === 0
+      ? `(nothing ${scopeArg === "mine" ? "owned" : "shared"})`
+      : page.items.map((i) => {
+          const tag = i.paid ? (i.paid.entitled ? ", paid" : ", paid — not entitled") : "";
+          return `${i.ref.kind === "folder" ? "📁" : "📄"} ${i.ref.displayName} — ${i.ref.driveId}${i.ref.legacy?.path ?? ""} (${i.role}, ${i.shareOrigin}${tag})`;
+        }).join("\n") + (page.nextCursor ? `\n… more (cursor ${page.nextCursor})` : "");
+    return { kind: "ok", structured: page, text };
   }
 
   if (isPaySkill(name)) {
@@ -151,15 +183,12 @@ export async function runSkill(
     return { kind: "err", code: "forbidden", message: `payment required for ${path || "/"}` };
   }
 
-  // R-VIS-PAID-001, as in fs/list: listed paid children show as locked,
-  // unlisted (private, link-only) paid children are hidden entirely.
+  // The one listing rule, as in fs/list (lib/listing-visibility.ts): listed
+  // paid children show as locked, unlisted (private, link-only) paid children
+  // and the reserved subtree are hidden entirely.
   type Entry = { name: string; isDir: boolean; size?: number; locked?: boolean };
-  const visibleEntries = (dir: string, entries: Entry[]): Entry[] => {
-    const locks = paidLocksForListing(driveId, dir, entries.map((e) => e.name), role, ctx.userId);
-    return entries
-      .filter((e) => !(locks[e.name] && !locks[e.name].listed))
-      .map((e) => (locks[e.name] ? { ...e, locked: true } : e));
-  };
+  const visibleEntries = (dir: string, entries: Entry[]): Entry[] =>
+    visibleChildren(driveId, dir, entries, role, ctx.userId).map(({ entry, lock }) => (lock ? { ...entry, locked: true } : entry));
 
   try {
     switch (name) {
@@ -192,24 +221,45 @@ export async function runSkill(
         if (byteLength > MAX_WRITE_BYTES) {
           return { kind: "err", code: "invalid_params", message: `payload too large (limit ${MAX_WRITE_BYTES} bytes)` };
         }
-        const { parent, base } = splitPath(path);
-        let creating = true;
-        try {
-          const l = await callAgent(driveId, driveSecret, { method: "list", path: parent });
-          creating = !((l.entries ?? []) as Entry[]).some((e) => e.name === base && !e.isDir);
-        } catch { /* parent missing → create */ }
-        // The cap is the drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS),
-        // not the caller's: PAT / account-token calls carry no wallet cookie.
-        const ownerId = drive.owner_id as string;
-        if (creating) {
-          const { tier, fileLimit: limit } = getOwnerStorageCaps(ownerId);
-          if (Number.isFinite(limit) && getOwnerUsage(ownerId).files + 1 > limit) {
-            return { kind: "err", code: "forbidden", message: `file_limit_reached (tier ${tier}, limit ${limit})` };
+        if (hasBackslash(path)) return { kind: "err", code: "invalid_params", message: BACKSLASH_ERROR };
+        const baseRevision = arg(args, "base_revision");
+        const expected = expectedRevision(typeof baseRevision === "string" ? baseRevision : undefined, new Headers());
+        // As fs/write: one write of a path at a time, and an optional
+        // conditional write (lib/write-guard.ts) instead of a silent overwrite.
+        return withPathLock(driveId, path, async () => {
+          let current: Current = { exists: false };
+          try {
+            const st = await callAgent(driveId, driveSecret, { method: "stat", path });
+            if (st.entry) current = { exists: true, isDir: !!st.entry.isDir, revision: baseRevisionOf(st.entry) };
+          } catch (e) {
+            if (expected !== null) return { kind: "err" as const, code: "internal" as const, message: (e as Error).message };
           }
-        }
-        const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
-        if (creating) bumpOwnerUsage(ownerId, { files: 1 });
-        return { kind: "ok", structured: r, text: `wrote ${path}` };
+          const conflict = conflictWith(expected, current);
+          if (conflict) {
+            return { kind: "err" as const, code: "invalid_params" as const, message: `conflict: the file changed since that revision (current revision: ${conflict.currentRevision ?? "none"})` };
+          }
+          const creating = !current.exists || current.isDir;
+          // The cap is the drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS),
+          // not the caller's: PAT / account-token calls carry no wallet cookie.
+          const ownerId = drive.owner_id as string;
+          if (creating) {
+            const { tier, fileLimit: limit } = getOwnerStorageCaps(ownerId);
+            if (Number.isFinite(limit) && getOwnerUsage(ownerId).files + 1 > limit) {
+              return { kind: "err" as const, code: "forbidden" as const, message: `file_limit_reached (tier ${tier}, limit ${limit})` };
+            }
+          }
+          const r = await callAgent(driveId, driveSecret, { method: "write", path, content, encoding });
+          if (creating) {
+            bumpOwnerUsage(ownerId, { files: 1 });
+            dropGenerations(driveId, path); // a new file: no old ref names it (task 10.2)
+          }
+          let revision: string | undefined;
+          try {
+            const st = await callAgent(driveId, driveSecret, { method: "stat", path });
+            if (st.entry && !st.entry.isDir) revision = baseRevisionOf(st.entry);
+          } catch { /* the write itself succeeded */ }
+          return { kind: "ok" as const, structured: revision ? { ...r, revision } : r, text: `wrote ${path}` };
+        });
       }
       case "delete_path": {
         // "" is the drive root — the whole shared folder, never a delete target
@@ -226,6 +276,7 @@ export async function runSkill(
           kind = entry.isDir ? "folder" : "file";
         } catch { /* parent unlistable — let the agent decide */ }
         const r = await callAgent(driveId, driveSecret, { method: "delete", path });
+        dropGenerations(driveId, path); // task 10.2: old refs under the path never resolve to a newer file
         const ownerId = drive.owner_id as string;
         if (kind === "file") bumpOwnerUsage(ownerId, { files: -1 });
         else if (kind === "folder") bumpOwnerUsage(ownerId, { folders: -1 });

@@ -4,7 +4,11 @@ import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
 import { getOwnerStorageCaps, TIER_PRICE_AIN } from "@/lib/tier";
 import { getOwnerUsage, bumpOwnerUsage } from "@/lib/storage-usage.js";
+import { dropGenerations } from "@/lib/path-generations.js";
 import { zRequiredPath } from "@/lib/zod-helpers";
+import {
+  BACKSLASH_ERROR, baseRevisionOf, conflictBody, conflictWith, expectedRevision, hasBackslash, withPathLock, type Current,
+} from "@/lib/write-guard";
 
 // Default 100 MB so ordinary video/image uploads go through (16 MB rejected most
 // videos). This path base64-encodes the whole file into one JSON body, so it's
@@ -16,11 +20,18 @@ const Body = z.object({
   path: zRequiredPath,
   content: z.string(),
   encoding: z.enum(["utf8", "base64"]).optional(),
+  /**
+   * Optional optimistic concurrency (lib/write-guard.ts): the revision the
+   * writer last read (`m<mtimeMs>-s<size>`, a listing's `-g<gen>` suffix is
+   * ignored), or "none" to create only. Also accepted as `If-Match` /
+   * `If-None-Match: *`. A mismatch answers 409 `conflict` + currentRevision.
+   */
+  baseRevision: z.string().max(200).optional(),
 });
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
-  const body = Body.safeParse(await req.json());
+  const body = Body.safeParse(await req.json().catch(() => null));
   if (!body.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
   const gate = await requireDriveRole(driveId, body.data.path, { min: "editor" });
   if (gate instanceof NextResponse) return gate;
@@ -35,51 +46,72 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
       { status: 413, headers: { "X-Max-Bytes": String(MAX_WRITE_BYTES) } },
     );
   }
-  // Tiered file-count cap (per owner, summed across all of their drives).
-  // Only enforce on file creation — overwrites of existing files don't bump
-  // the count. We approximate "is this a new file?" by asking the agent for
-  // a stat first; if it errors as not-found, treat as create. The cap is the
-  // drive owner's (their tier, or AINDRIVE_UNLIMITED_OWNERS), not the caller's.
-  const ownerId = drive.owner_id as string;
-  const { tier, fileLimit } = getOwnerStorageCaps(ownerId);
-  let creating = false;
-  try {
-    const list = await callAgent(driveId, drive.drive_secret, { method: "list", path: dirOf(body.data.path) });
-    const exists = (list.entries ?? []).some((e: { name: string; isDir?: boolean }) => e.name === baseOf(body.data.path) && !e.isDir);
-    creating = !exists;
-  } catch { creating = true; }
-  if (creating && Number.isFinite(fileLimit)) {
-    const usage = getOwnerUsage(ownerId);
-    if (usage.files + 1 > fileLimit) {
-      return NextResponse.json(
-        {
-          error: "file_limit_reached",
-          tier,
-          limit: fileLimit,
-          current: usage.files,
-          upgrade: tier === "max" ? null : {
-            to: tier === "free" ? "pro" : "max",
-            priceAin: tier === "free" ? TIER_PRICE_AIN.pro : TIER_PRICE_AIN.max,
-            url: tier === "free"
-              ? `/api/x402/lift?scope=tier:pro&priceAin=${TIER_PRICE_AIN.pro}`
-              : `/api/x402/lift?scope=tier:max&priceAin=${TIER_PRICE_AIN.max}`,
-          },
-        },
-        { status: 429 },
-      );
+  if (hasBackslash(body.data.path)) return NextResponse.json({ error: BACKSLASH_ERROR }, { status: 400 });
+  const expected = expectedRevision(body.data.baseRevision, req.headers);
+  // One write of a path at a time (lib/write-guard.ts): the stat, the
+  // revision check and the write below see no other writer in between.
+  return withPathLock(driveId, body.data.path, async () => {
+    // Tiered file-count cap (per owner, summed across all of their drives).
+    // Only enforce on file creation — overwrites of existing files don't bump
+    // the count. The agent's stat matches the path in either Unicode spelling
+    // (an NFD name a Mac made is the same file). The cap is the drive owner's
+    // (their tier, or AINDRIVE_UNLIMITED_OWNERS), not the caller's.
+    const ownerId = drive.owner_id as string;
+    const { tier, fileLimit } = getOwnerStorageCaps(ownerId);
+    let current: Current = { exists: false };
+    try {
+      const st = await callAgent(driveId, drive.drive_secret, { method: "stat", path: body.data.path });
+      if (st.entry) current = { exists: true, isDir: !!st.entry.isDir, revision: baseRevisionOf(st.entry) };
+    } catch (e) {
+      // Without a stat a conditional write cannot be checked; say so instead of guessing.
+      if (expected !== null) {
+        const err = e as AgentError;
+        return NextResponse.json({ error: err.message }, { status: err.status ?? 502 });
+      }
     }
-  }
-  try {
-    const result = await callAgent(driveId, drive.drive_secret, {
-      method: "write", path: body.data.path, content, encoding: body.data.encoding,
-    });
-    if (creating) bumpOwnerUsage(ownerId, { files: 1 });
-    return NextResponse.json(result);
-  } catch (e) {
-    const err = e as AgentError;
-    return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
-  }
+    const conflict = conflictWith(expected, current);
+    if (conflict) return NextResponse.json(conflictBody(conflict.currentRevision), { status: 409 });
+    const creating = !current.exists || current.isDir;
+    if (creating && Number.isFinite(fileLimit)) {
+      const usage = getOwnerUsage(ownerId);
+      if (usage.files + 1 > fileLimit) {
+        return NextResponse.json(
+          {
+            error: "file_limit_reached",
+            tier,
+            limit: fileLimit,
+            current: usage.files,
+            upgrade: tier === "max" ? null : {
+              to: tier === "free" ? "pro" : "max",
+              priceAin: tier === "free" ? TIER_PRICE_AIN.pro : TIER_PRICE_AIN.max,
+              url: tier === "free"
+                ? `/api/x402/lift?scope=tier:pro&priceAin=${TIER_PRICE_AIN.pro}`
+                : `/api/x402/lift?scope=tier:max&priceAin=${TIER_PRICE_AIN.max}`,
+            },
+          },
+          { status: 429 },
+        );
+      }
+    }
+    try {
+      const result = await callAgent(driveId, drive.drive_secret, {
+        method: "write", path: body.data.path, content, encoding: body.data.encoding,
+      });
+      if (creating) {
+        bumpOwnerUsage(ownerId, { files: 1 });
+        dropGenerations(driveId, body.data.path); // a new file: no old ref names it (task 10.2)
+      }
+      // The revision the writer now holds, for its next conditional write.
+      let revision: string | undefined;
+      try {
+        const st = await callAgent(driveId, drive.drive_secret, { method: "stat", path: body.data.path });
+        if (st.entry && !st.entry.isDir) revision = baseRevisionOf(st.entry);
+      } catch { /* the write itself succeeded */ }
+      return NextResponse.json(revision ? { ...result, revision } : result);
+    } catch (e) {
+      const err = e as AgentError;
+      return NextResponse.json({ error: err.message }, { status: err.status ?? 500 });
+    }
+  });
 }
 
-function dirOf(p: string): string { const i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); }
-function baseOf(p: string): string { const i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); }

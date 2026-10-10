@@ -74,7 +74,9 @@ explicit role change (PATCH) can lower a role.
   account (`resolveAccountForWallet`) and writes the grant + an append-only
   `payment_receipts` row. A relaying app may name the buyer's account instead
   by sending its account-grant token (`Authorization: Bearer aind_aat_…`).
-  See `README.md` and `docs/*payment*`.
+  See `README.md` and `docs/*payment*`. An account whose settle answer was
+  lost is never credited from the chain and cannot be charged twice for the
+  same sale: `docs/X402_PAYMENT_PENDING.md`.
 
 ## Organizations (AIN SSO)
 
@@ -194,3 +196,61 @@ A wallet the owner **signs in with** (login-enabled) is also their default
 **payout** wallet: linking it or signing in with it sets it as the root payout
 wallet of every drive they own that has none (`adoptOwnerPayoutWallet`), and new
 drives start with it. Drives that already have a payout wallet keep theirs.
+
+## Delegated reads
+
+An agent can read **one file (or folder)** on a user's behalf without holding
+the user's session: a product (ainteams, ainmem, …) asks AIN SSO for a
+**resource delegation** (`ain-rdlg+jwt`, AIN SSO `wallet-and-delegation.md` §5)
+naming the account (`sub`), this server (`aud`), the resource keys
+(`https://<origin>#<driveId>#<fileId>`, the `fileId` of the shared-file list)
+and the actions, bound to the agent's key (`cnf`). The agent presents it to
+`GET /api/drives/:id/fs/read` or `fs/list` as `Authorization: Bearer …` with a
+per-request proof of possession (`X-AIN-PoP`). aindrive then applies the
+**three-check rule** (`web/lib/resource-delegation.ts`, matrix
+`R-DLG-READ-001`):
+
+1. **The user may.** `sub` must be linked to an account here
+   (`sso_identities`), and that account must hold `viewer+` at the path *at the
+   time of the call* — ownership or a `drive_members` grant, with the paid
+   carve-out and the reserved `.aindrive/` subtree exactly as for the account
+   itself. A delegation never widens what the account may do, and losing the
+   grant (or the AIN membership) ends the delegated access at once.
+2. **The grant names it.** The file's own key, or the key of an **ancestor
+   folder** (up to the drive root — the only inheritance; no wildcards), with
+   the action; the token is for this origin, unexpired and not revoked
+   (revocation is asked of AIN SSO and cached for at most 60 s; when AIN SSO
+   cannot be reached and nothing is cached, the read is refused, never
+   allowed).
+3. **Product context.** aindrive has no per-product rule for a read; `prd`
+   and `agt` are informational. The caller is bound to the **key** in `cnf`,
+   not to the agent's name — a proof signed by another key fails.
+
+Only `read` and `list` are delegated today. A `write` or `invoke` action in the
+grant authorises nothing: the write, delete, share and member routes do not
+accept the token, and the agent protocols (MCP/A2A/AG-UI) refuse it by name.
+Refusals use the cross-product error body (`auth_required`, `forbidden`,
+`source_offline`, `temporary_failure`) and never echo the token.
+
+## Change feed
+
+Every change to *who can reach what* is also written to a per-account **change
+feed** (`web/lib/share-events-core.js`, plan task 10 of ain-integration), read
+at `GET /api/me/events?cursor=` (session) and `GET /api/oauth/events?cursor=`
+(account grant with `drives:read`) in the cross-product event contract:
+`file.shared` when a grant reaches an account (invite, share-link accept, paid
+settle, invite claim on signup), `file.revoked` when the owner removes it or the
+member leaves, `file.deleted` to every member when the drive is deleted,
+`file.availability` (revision `online`/`offline`) to the creator and members
+when the drive's device connects or disconnects, and `file.updated` /
+`file.deleted` for paths the device reports as changed (a rename arrives as
+deleted + updated in Phase A). The `resourceId` is the shared-file list's key
+(`https://<origin>#<driveId>#<fileId>`), `version` is strictly increasing per
+resource, a page holds at most 500 events and `nextCursor` (`ev_<seq>`)
+continues it; `gap: true` (a malformed cursor, or one older than the 10 000
+newest events kept per account) tells the consumer to re-list
+`/api/me/shared` first. Events name no token, signed URL or secret, and they are
+**hints only**: revoking a share *link* records nothing (access already granted
+through it stays), and every real read still resolves the grant at call time
+(`resolveRoleByUser`) — a consumer that missed an event is never granted more
+than the origin allows.

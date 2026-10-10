@@ -139,11 +139,34 @@ export function matchSpelling(root, abs, fsx = { existsSync, readdirSync }) {
   return cur;
 }
 
+/**
+ * Write `data` to `abs`, one write per file at a time in this agent. Two
+ * overlapping `write` RPCs for one path used to run two `fs.writeFile`s at
+ * once: each truncated and wrote through its own fd, leaving a file whose head
+ * was one save and whose tail the other (plan 12.3). Chained here, each save
+ * lands whole and the last one wins.
+ *
+ * In place on purpose, not temp + rename: Node's recursive fs.watch on Linux
+ * watches each file's inode, so a file replaced by rename stops reporting
+ * later edits made on the device (the editor's reload). A reader racing a write
+ * can still see it half-written — web downloads catch that through
+ * download-chunk's mtimeMs/size and end the stream instead.
+ */
+const _writeChains = new Map(); // abs path → tail of its write chain
+export function writeFileSerialized(abs, data) {
+  const prev = _writeChains.get(abs) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => fsp.writeFile(abs, data));
+  const tail = run.catch(() => {});
+  _writeChains.set(abs, tail);
+  tail.then(() => { if (_writeChains.get(abs) === tail) _writeChains.delete(abs); });
+  return run;
+}
+
 export function toRel(root, abs) {
   return path.relative(root, abs).split(path.sep).join("/");
 }
 
-function guessMime(name) {
+export function guessMime(name) {
   const ext = path.extname(name).toLowerCase();
   const map = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -169,6 +192,9 @@ async function toEntry(root, abs) {
     isDir: stat.isDirectory(),
     size: stat.size,
     mtimeMs: stat.mtimeMs,
+    // When the file was created (0 where the filesystem does not record it): lets
+    // the web tell a re-created file from the one an old reference named (plan task 10.2).
+    birthtimeMs: stat.birthtimeMs || 0,
     ext: path.extname(name).slice(1).toLowerCase(),
     mime: stat.isDirectory() ? "folder" : guessMime(name),
   };
@@ -258,7 +284,7 @@ export async function handleRpc(params, root) {
       const data = Buffer.from(params.content, encoding);
       // Suppress fs-changed for 2s after our own write so reload loop doesn't fire
       try { _suppressFsChange(params.path); } catch {}
-      await fsp.writeFile(abs, data);
+      await writeFileSerialized(abs, data);
       try { cliTrace(root, docIdFor(root, params.path), "disk-write", { extra: { path: params.path, byteLen: data.length } }); } catch {}
       return { method: "write", ok: true, bytes: data.length };
     }
@@ -305,7 +331,9 @@ export async function handleRpc(params, root) {
         const buf = Buffer.alloc(length);
         const { bytesRead } = await fh.read(buf, 0, length, params.offset);
         const eof = params.offset + bytesRead >= st.size;
-        return { method: "download-chunk", data: buf.subarray(0, bytesRead).toString("base64"), eof };
+        // mtimeMs/size of the file this chunk came from: the web ends a stream
+        // whose file was replaced mid-way instead of splicing two versions.
+        return { method: "download-chunk", data: buf.subarray(0, bytesRead).toString("base64"), eof, mtimeMs: st.mtimeMs, size: st.size };
       } finally { await fh.close(); }
     }
     case "thumbnail": {

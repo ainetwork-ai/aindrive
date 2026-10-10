@@ -22,6 +22,7 @@ export const PAY_SKILL_NAMES = ["x402_wallet", "x402_sign", "x402_settle"] as co
 
 export const SKILL_NAMES = [
   "list_drives",
+  "list_shared",
   "list_files",
   "read_file",
   "write_file",
@@ -34,6 +35,9 @@ export const SKILL_NAMES = [
 
 /** Skills that change the drive: editor role, and never under a read scope. */
 export const MUTATING: readonly string[] = ["write_file", "delete_path"];
+
+/** Skills that span the whole account: unavailable on a drive-pinned surface. */
+export const ACCOUNT_ONLY: readonly string[] = ["list_drives", "list_shared"];
 
 export type SkillName = (typeof SKILL_NAMES)[number];
 export type SaleSkillName = (typeof SALE_SKILL_NAMES)[number];
@@ -65,6 +69,23 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
     name: "list_drives",
     description: "List the drives the authenticated user owns or is a member of.",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "list_shared",
+    description:
+      "The files the user can reach, as common file references (contract 1.0): scope `mine` = drives they created, " +
+      "`shared_with_me` = every folder/file shared with them by others (role, shareOrigin, paid entitlement), " +
+      "`shared_with_org` = drives shared with an organization they are an active member of (shareOrigin org), " +
+      "`recent` = shared_with_me newest first. Page with `cursor` = the previous page's nextCursor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["mine", "shared_with_me", "shared_with_org", "recent"], default: "shared_with_me" },
+        q: { type: "string", maxLength: 200, description: "case-insensitive substring over the name or path" },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+        cursor: { type: "string", description: "nextCursor of the previous page" },
+      },
+    },
   },
   {
     name: "list_files",
@@ -102,6 +123,10 @@ export const SKILL_DESCRIPTORS: SkillDescriptor[] = [
         path: { type: "string" },
         content: { type: "string" },
         encoding: { type: "string", enum: ["utf8", "base64"], default: "utf8" },
+        base_revision: {
+          type: "string",
+          description: "Optional. The revision you last read (a listing's `revision`); if the file changed since, nothing is written and the error names the current revision. \"none\" = only create a new file.",
+        },
       },
     },
   },
@@ -250,7 +275,7 @@ export const SALE_SKILL_DESCRIPTORS: SkillDescriptor[] = [
 ];
 
 /**
- * Descriptors for a drive-pinned surface: no list_drives, no drive_id
+ * Descriptors for a drive-pinned surface: no list_drives / list_shared, no drive_id
  * argument (the URL/token fixes the drive), no mutating skill (write_file,
  * delete_path) under a read scope, and the sale tools only with `sell` —
  * clients should not be offered a tool that always fails.
@@ -302,7 +327,7 @@ export const PAY_SKILL_DESCRIPTORS: SkillDescriptor[] = [
 
 export function driveScopedDescriptors(scope: "read" | "write", opts: { sell?: boolean; pay?: boolean } = {}): SkillDescriptor[] {
   const fileTools = SKILL_DESCRIPTORS
-    .filter((d) => d.name !== "list_drives" && (scope === "write" || !MUTATING.includes(d.name)))
+    .filter((d) => !ACCOUNT_ONLY.includes(d.name) && (scope === "write" || !MUTATING.includes(d.name)))
     .map((d) => {
       const schema = d.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
       const { drive_id: _omit, ...properties } = schema.properties ?? {};

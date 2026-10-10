@@ -126,7 +126,7 @@ describe("(a) validateAuthorize: account vs drive grants", () => {
 
   it("advertises account scopes + userinfo in AS metadata, drive scopes only in PRM", async () => {
     const meta = await asMetaRoute.GET().json();
-    expect(meta.scopes_supported).toEqual(["drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:sell", "wallet:pay"]);
+    expect(meta.scopes_supported).toEqual(["drive:read", "drive:write", "profile", "drives:read", "drives:write", "drives:share", "drives:sell", "wallet:pay"]);
     expect(meta.userinfo_endpoint).toBe("http://drive.test/api/oauth/userinfo");
     expect(oauth.protectedResourceMetadata("d1", "D1").scopes_supported).toEqual(["drive:read", "drive:write"]);
   });
@@ -279,7 +279,7 @@ describe("(d) userinfo", () => {
     expect(owner.drives.map((d: { id: string }) => d.id).sort()).toEqual(["d1", "d2"]);
     expect(owner.drives[0]).toMatchObject({ role: "owner", online: false });
     const viewer = await (await bearerGet(drivesRoute, issue("viewer1", "drives:read").access_token)).json();
-    expect(viewer.drives).toEqual([{ id: "d1", name: "D1", online: false, role: "viewer", orgId: null }]);
+    expect(viewer.drives).toEqual([{ id: "d1", name: "D1", orgId: null, online: false, role: "viewer" }]);
   });
 });
 
