@@ -44,7 +44,8 @@ services:
       - "127.0.0.1:3738:3737"
       # Published on loopback only: the host's front door (nginx `stream` or a
       # port forward, DEPLOY.md) is what exposes `git@aindrive.ainetwork.ai:22`.
-      - "127.0.0.1:2222:2222"
+      # git over SSH. Bind to 127.0.0.1 behind a stream proxy, or set AINDRIVE_SSH_BIND=0.0.0.0 to publish directly.
+      - "${AINDRIVE_SSH_BIND:-127.0.0.1}:2222:2222"
 
 volumes:
   aindrive-data:
