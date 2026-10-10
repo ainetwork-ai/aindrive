@@ -136,7 +136,7 @@ export function Modal({ open, onClose, title, children, footer, size = "md", var
         aria-labelledby={title ? titleId : undefined}
         tabIndex={-1}
         className={clsx(
-          "flex flex-col outline-none bg-drive-panel transition-all duration-150 ease-out",
+          "flex flex-col outline-hidden bg-drive-panel transition-all duration-150 ease-out",
           isDrawer
             ? clsx(
                 "h-full w-full sm:max-w-md border-l border-drive-border shadow-e3 sm:rounded-l-2xl",

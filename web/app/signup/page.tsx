@@ -149,7 +149,7 @@ function SignupForm() {
 
 export default function SignupPage() {
   return (
-    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
+    <main className="min-h-screen min-h-dvh flex items-center justify-center px-6">
       <Suspense fallback={null}>
         <SignupForm />
       </Suspense>

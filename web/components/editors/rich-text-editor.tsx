@@ -88,7 +88,7 @@ export function RichTextEditor({
       Markdown,
     ],
     editorProps: {
-      attributes: { class: "tiptap-prose focus:outline-none min-h-full px-5 py-4" },
+      attributes: { class: "tiptap-prose focus:outline-hidden min-h-full px-5 py-4" },
     },
   }, [provider]);
 

@@ -9,7 +9,7 @@ const TONE: Record<BadgeTone, string> = {
   neutral: "bg-drive-hover text-drive-muted",
   accent: "bg-drive-selected text-drive-accent",
   warning: "bg-amber-100 text-amber-800",
-  sale: "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-sm shadow-blue-500/30",
+  sale: "bg-linear-to-r from-blue-600 to-blue-500 text-white shadow-xs shadow-blue-500/30",
 };
 
 export interface BadgeProps {

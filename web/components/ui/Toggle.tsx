@@ -30,7 +30,7 @@ export const Toggle = forwardRef<HTMLButtonElement, ToggleProps>(function Toggle
       onClick={() => onChange(!on)}
       className={clsx(
         "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full",
-        "transition-colors duration-150 outline-none",
+        "transition-colors duration-150 outline-hidden",
         "focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:ring-offset-1 focus-visible:ring-offset-drive-panel",
         "disabled:cursor-not-allowed disabled:opacity-60",
         on ? "bg-drive-accent" : "bg-drive-border",
@@ -40,7 +40,7 @@ export const Toggle = forwardRef<HTMLButtonElement, ToggleProps>(function Toggle
     >
       <span
         className={clsx(
-          "inline-block h-4 w-4 rounded-full bg-white shadow transition-transform duration-150",
+          "inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-150",
           on ? "translate-x-6" : "translate-x-1",
         )}
       />

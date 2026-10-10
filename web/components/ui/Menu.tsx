@@ -121,7 +121,7 @@ export function Menu({ trigger, items, align = "start", className }: MenuProps) 
           // host's navigate handler (folder row onClick would also fire).
           onClick={(e) => e.stopPropagation()}
           className={clsx(
-            "absolute z-50 mt-1 min-w-[12rem] py-1",
+            "absolute z-50 mt-1 min-w-48 py-1",
             "bg-drive-panel rounded-md shadow-e2 border border-drive-border",
             "origin-top animate-[menu-in_120ms_ease-out]",
             align === "end" ? "right-0" : "left-0",
@@ -145,7 +145,7 @@ export function Menu({ trigger, items, align = "start", className }: MenuProps) 
               onMouseEnter={() => !item.disabled && setActive(i)}
               className={clsx(
                 "flex w-full items-center gap-2.5 px-3 h-9 text-body text-left",
-                "outline-none transition-colors",
+                "outline-hidden transition-colors",
                 "disabled:opacity-50 disabled:cursor-not-allowed",
                 item.danger ? "text-red-600" : "text-drive-text",
                 active === i && !item.disabled && (item.danger ? "bg-red-50" : "bg-drive-hover"),

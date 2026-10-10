@@ -75,6 +75,7 @@
   "devDependencies": {
     "@a2ui/web_core": "^0.11.0",
     "@playwright/test": "^1.59.1",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.12",
     "@types/mime-types": "^2.1.4",
@@ -88,7 +89,7 @@
     "autoprefixer": "^10.4.20",
     "esbuild": "^0.28.2",
     "postcss": "^8.5.28",
-    "tailwindcss": "^3.4.17",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.7.2",
     "vitest": "^5.0.2"
   },

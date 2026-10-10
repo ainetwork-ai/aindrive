@@ -36,7 +36,7 @@ export default function AccountWalletPage() {
   const short = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
 
   return (
-    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-6">
+    <main className="min-h-screen min-h-dvh flex items-center justify-center px-6">
       <div className="w-full max-w-sm bg-white border border-drive-border rounded-2xl p-6 shadow-drive">
         {done ? (
           <>

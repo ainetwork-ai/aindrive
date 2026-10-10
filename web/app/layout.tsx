@@ -12,10 +12,12 @@ const display = Instrument_Serif({
 });
 
 // sans face is self-hosted by next/font at build time (no remote @font-face /
-// CSP allowance needed). --font-sans is the head of tailwind fontFamily.sans.
+// CSP allowance needed). --font-inter is the head of the tailwind `--font-sans`
+// theme token (app/globals.css @theme); it must not share the token's name or the
+// custom property would reference itself.
 const sans = Inter({
   subsets: ["latin"],
-  variable: "--font-sans",
+  variable: "--font-inter",
   display: "swap",
 });
 

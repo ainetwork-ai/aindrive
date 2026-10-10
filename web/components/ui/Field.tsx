@@ -47,7 +47,7 @@ export function Field({ id, label, error, helper, className, children }: FieldPr
 export function controlClass(error?: boolean): string {
   return clsx(
     "w-full h-9 rounded-md border bg-drive-panel px-3 text-body text-drive-text",
-    "transition-colors duration-150 outline-none",
+    "transition-colors duration-150 outline-hidden",
     "placeholder:text-drive-muted",
     "focus-visible:ring-2 focus-visible:ring-drive-accent/40 focus-visible:border-drive-accent",
     "disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-drive-bg",

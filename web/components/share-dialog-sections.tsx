@@ -98,7 +98,7 @@ function InlineRoleSelect({
       disabled={disabled}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value as "viewer" | "editor" | "owner")}
-      className="shrink-0 rounded bg-transparent text-body text-drive-text focus:outline-none disabled:opacity-50"
+      className="shrink-0 rounded bg-transparent text-body text-drive-text focus:outline-hidden disabled:opacity-50"
     >
       <option value="viewer">Viewer</option>
       <option value="editor">Editor</option>

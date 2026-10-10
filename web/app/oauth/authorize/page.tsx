@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen min-h-[100dvh] flex items-center justify-center px-4">
+    <main className="min-h-screen min-h-dvh flex items-center justify-center px-4">
       <div className="w-full max-w-md bg-white border border-drive-border rounded-2xl p-6 shadow-drive">{children}</div>
     </main>
   );
