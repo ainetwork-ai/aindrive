@@ -66,7 +66,9 @@ export async function answerAinuiSnippet(req: Request, slug: string, path: strin
   const inputs = manifest?.inputs ?? [];
 
   if (target.view === "blob" || target.view === "raw") {
-    const ref = target.ref ?? meta.branch;
+    // `HEAD` names the checked-out branch: a consumer that only knows the drive path (AIN Teams' drive view asks for
+    // `…/blob/HEAD/<file>`) gets the same snippet — and the same ▶ Run — as the branch URL.
+    const ref = target.ref && target.ref !== "HEAD" ? target.ref : meta.branch;
     let shown;
     try { shown = await callAgent(driveId, drive.drive_secret, { method: "git-show", repo: repoPath, ref, path: target.path, maxBytes: 64 * 1024 }, { timeoutMs: 20_000 }); }
     catch (e) {
@@ -81,7 +83,9 @@ export async function answerAinuiSnippet(req: Request, slug: string, path: strin
     return snippetResponse(fileSnippet({
       org: slug, repo: target.repo, ref, path: target.path, size: shown.size,
       content: isText ? bytes.toString("utf8") : null,
-      pageUrl, rawUrl: `${origin}${gitUrl(site, { view: "raw", ref, path: target.path })}`,
+      // The page and raw links name the resolved ref, so a `HEAD` request yields the branch's canonical URLs.
+      pageUrl: `${origin}${gitUrl(site, { view: "blob", ref, path: target.path })}`,
+      rawUrl: `${origin}${gitUrl(site, { view: "raw", ref, path: target.path })}`,
       run: runnable ? { inputs, endpoint: runEndpoint, repoPath } : null,
     }));
   }
