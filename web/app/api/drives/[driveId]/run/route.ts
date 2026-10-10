@@ -5,6 +5,7 @@ import { AgentError } from "@/lib/rpc";
 import { zRequiredPath } from "@/lib/zod-helpers";
 import { collectRepoFiles, languageFor, runActorFor, runOnAinize } from "@/lib/run-ainize";
 import { validateRunEnv } from "@/lib/run-inputs";
+import { gateActingCaller, resolveActingCaller } from "@/lib/ainui-actor";
 
 const Body = z.object({
   repo: zRequiredPath,
@@ -28,6 +29,13 @@ const Body = z.object({
  * ainize answering 503 (runner not deployed / out of capacity) is relayed as
  * 503 `{ error: "runner unavailable" }`; a 401/403 about the person or about us
  * (`invalid_service_token`, `account_suspended`) is relayed with its status.
+ *
+ * A consumer application may press ▶ for a person (docs/AINUI-LINK-SNIPPETS.md
+ * §2.2): `Authorization: Bearer <its AIN SSO machine token>` + `X-AIN-Actor:
+ * <the person's subject>` (lib/ainui-actor.ts). The person is gated as the
+ * account they are linked to here and the run is for them, exactly as if they
+ * had pressed the button on the page; an application naming nobody is refused
+ * (a run is always for someone).
  */
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
@@ -41,8 +49,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
   }
   const language = languageFor(entry);
   if (!language) return NextResponse.json({ error: "only .py, .js and .mjs files can be run" }, { status: 400 });
-  const gate = await requireDriveRole(driveId, repo, { min: "viewer" });
-  if (gate instanceof NextResponse) return gate;
+  const acting = await resolveActingCaller(req);
+  let gate;
+  if (acting.kind === "refused") return NextResponse.json(acting.body, { status: acting.status, headers: acting.status === 401 ? { "WWW-Authenticate": 'Bearer error="invalid_token"' } : {} });
+  if (acting.kind === "app") return NextResponse.json({ error: "X-AIN-Actor required: a run is for a person" }, { status: 403 });
+  if (acting.kind === "actor") {
+    const g = await gateActingCaller(driveId, repo, acting, "viewer");
+    if ("denied" in g) return NextResponse.json(g.body, { status: g.status });
+    gate = g;
+  } else {
+    const g = await requireDriveRole(driveId, repo, { min: "viewer" });
+    if (g instanceof NextResponse) return g;
+    gate = g;
+  }
   let files;
   try {
     files = await collectRepoFiles(driveId, gate.drive.drive_secret, repo);
