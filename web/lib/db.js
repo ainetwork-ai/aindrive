@@ -378,6 +378,12 @@ function open() {
       redirect_uris TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    -- Identity handoff replay protection uses Unix seconds, matching JWT exp.
+    CREATE TABLE IF NOT EXISTS oauth_handoff_nonces (
+      id TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_oauth_handoff_nonce_expiry ON oauth_handoff_nonces(expires_at);
     CREATE TABLE IF NOT EXISTS oauth_codes (
       code_hash TEXT PRIMARY KEY,
       client_id TEXT NOT NULL,

@@ -1,0 +1,52 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resolveHandoffAccount, consumeHandoffNonce } from '../lib/oauth-handoff-account.js';
+
+test('provider lookup ignores email collisions and respects login/account gates', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE users(id TEXT PRIMARY KEY,email TEXT);
+    CREATE TABLE account_google(sub TEXT PRIMARY KEY,account_id TEXT);
+    CREATE TABLE account_wallets(wallet_address TEXT PRIMARY KEY,account_id TEXT,login_enabled INTEGER);
+    CREATE TABLE sso_identities(issuer TEXT,subject TEXT,user_id TEXT);
+    INSERT INTO users VALUES('actual','same@example.com'),('other','same@example.com');
+    INSERT INTO account_google VALUES('verified-sub','actual');
+    INSERT INTO account_wallets VALUES('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','actual',0);
+    INSERT INTO sso_identities VALUES('https://sso.example','acc_verified','actual');`);
+  const policy = { ssoIssuer: 'https://sso.example', accountBlocked: () => false, legacyRefusal: () => null };
+  const proof = { authType: 'google', principal: 'google:verified-sub' };
+  assert.equal(resolveHandoffAccount(db, proof, policy), 'actual');
+  assert.equal(resolveHandoffAccount(db, { ...proof, principal: 'google:missing-sub', email: 'same@example.com' }, policy), null);
+  assert.equal(resolveHandoffAccount(db, proof, { ...policy, accountBlocked: () => true }), null);
+  assert.equal(resolveHandoffAccount(db, proof, { ...policy, legacyRefusal: () => ({ error: 'sso_required' }) }), null);
+  const wallet = { authType: 'wallet', principal: '0x' + 'a'.repeat(40) };
+  assert.equal(resolveHandoffAccount(db, wallet, policy), null);
+  db.exec('UPDATE account_wallets SET login_enabled=1');
+  assert.equal(resolveHandoffAccount(db, wallet, policy), 'actual');
+  const sso = { ...proof, authType: 'sso', ssoSubject: 'acc_verified' };
+  assert.equal(resolveHandoffAccount(db, sso, { ...policy, legacyRefusal: () => ({ error: 'legacy_login_disabled' }) }), 'actual');
+  assert.equal(resolveHandoffAccount(db, sso, { ...policy, ssoIssuer: 'https://other.example' }), null);
+  assert.equal(resolveHandoffAccount(db, proof, { ssoIssuer: policy.ssoIssuer }), null);
+  db.close();
+});
+
+test('nonce consumption survives reopening and rolls back with failed grant issuance', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'drive-handoff-')), 'replay.sqlite');
+  let db = new DatabaseSync(path);
+  db.exec('CREATE TABLE oauth_handoff_nonces(id TEXT PRIMARY KEY,expires_at INTEGER NOT NULL)');
+  const proof = { issuer: 'https://ainize.ai', clientId: 'practice', nonce: 'n'.repeat(43), expires: 1060 };
+  assert.equal(consumeHandoffNonce(db, proof, 1000), true);
+  db.close();
+  db = new DatabaseSync(path);
+  assert.equal(consumeHandoffNonce(db, proof, 1000), false);
+  const retry = { ...proof, nonce: 'r'.repeat(43) };
+  db.exec('BEGIN');
+  assert.equal(consumeHandoffNonce(db, retry, 1000), true);
+  db.exec('ROLLBACK');
+  assert.equal(consumeHandoffNonce(db, retry, 1000), true);
+  assert.equal(consumeHandoffNonce(db, { ...proof, nonce: 'e'.repeat(43), expires: 1000 }, 1000), false);
+  db.close();
+});
