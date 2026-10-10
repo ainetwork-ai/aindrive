@@ -420,10 +420,10 @@ export function Viewer({
       title={dirty && canEdit && isText && !running ? "Unsaved edits are saved first, then the file runs" : undefined}
       data-testid="viewer-run"
       data-dirty={dirty || undefined}
-      className={clsx("rounded px-2 py-1.5 text-sm hover:bg-drive-hover flex items-center gap-1 disabled:opacity-50", running ? "text-red-600" : dirty && canEdit && isText ? "text-drive-accent font-medium" : "")}
+      className={clsx("rounded px-2 py-1.5 text-sm flex items-center gap-1 disabled:opacity-50 font-medium transition-colors", running ? "text-red-600 hover:bg-drive-hover" : "text-[#8b3eeb] hover:bg-[#8b3eeb]/10")}
     >
       {run.status !== "idle" && <RunDot status={run.status} />}
-      {running ? <Square className="w-4 h-4" aria-hidden="true" /> : <Play className="w-4 h-4" aria-hidden="true" />} {runLabel}
+      {running ? <Square className="w-4 h-4" aria-hidden="true" /> : <><AinizeMark className="w-4 h-4" /><Play className="w-3.5 h-3.5" aria-hidden="true" /></>} {runLabel}
     </button>
   ) : null;
 
