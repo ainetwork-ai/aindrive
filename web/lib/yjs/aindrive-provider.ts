@@ -64,18 +64,11 @@ export class AindriveProvider {
 
   setTracer(tracer: TraceEmitter) { this.tracer = tracer; }
 
-  private tag(origin: unknown): "remote" | "idb-restore" | "local" {
+  private tag(origin: unknown): string {
     if (origin === this) return "remote";
     if (origin === this.idb) return "idb-restore";
     return "local";
   }
-
-  /** Where a Y.Doc update came from: the wire ("remote"), the IndexedDB
-   *  restore ("idb-restore"), or this tab's editor ("local"). Editors arm
-   *  autosave on "local" only — a restore or a sync is not a user edit and must
-   *  never schedule a disk write (lib/doc-disk-sync.ts). Transactions the
-   *  editors run themselves with `provider` as origin count as "remote". */
-  originOf(origin: unknown): "remote" | "idb-restore" | "local" { return this.tag(origin); }
 
   private connect = () => {
     if (this.destroyed) return;
