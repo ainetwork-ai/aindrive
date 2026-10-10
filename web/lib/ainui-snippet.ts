@@ -84,7 +84,7 @@ function surface(surfaceId: string, components: A2uiComponent[], data: Record<st
 export function runBlock(entry: string, inputs: ManifestInput[]): { components: A2uiComponent[]; data: Record<string, unknown>; context: Record<string, unknown> } {
   const comps: A2uiComponent[] = [];
   const fields: string[] = [];
-  const inputsData: Record<string, string> = {};
+  const inputsData: Record<string, string | string[]> = {};
   const context: Record<string, unknown> = {};
   for (const i of inputs) {
     const id = `run.input.${i.name}`;
@@ -93,9 +93,10 @@ export function runBlock(entry: string, inputs: ManifestInput[]): { components: 
     if (i.required) label += " *";
     if (i.type === "choice" && i.options) label += ` (${i.options.join(" | ")})`;
     if (i.type === "boolean") label += " (true | false)";
-    comps.push({ id, component: "TextField", label, value: bind(path), ...(i.type === "number" ? { variant: "number" } : {}) });
+    const options = i.type === "choice" ? i.options : i.type === "boolean" ? ["true", "false"] : null;
+    comps.push(options ? { id, component: "ChoicePicker", label, value: bind(path), variant: "mutuallyExclusive", options: options.map((value) => ({ label: value, value })) } : { id, component: "TextField", label, value: bind(path), ...(i.type === "number" ? { variant: "number" } : {}) });
     fields.push(id);
-    inputsData[i.name] = i.default ?? "";
+    inputsData[i.name] = options ? (i.default === null ? [] : [i.default]) : i.default ?? "";
     context[inputEnvName(i.name)] = bind(path);
   }
   comps.push(text("run.entry", `▶ Run ${entry}`, "h5"));
