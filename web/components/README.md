@@ -28,9 +28,15 @@ Browser shell:
   grid+list, selection, sort/search, showcase section. Its location (listed
   folder + open file) is mirrored in `?path` and history state.
 - `git-panel` — shown above the listing when the folder is a git repo
-  (`GET git-meta` answers `exists:true`): branch, HEAD, recent commits, clone
-  URL + copy, and for editors with a dirty tree a commit box. Data lives in the
-  shell (one fetch per folder, refetched after a commit / a save).
+  (`GET git-meta` answers `exists:true`). Top to bottom: branch + HEAD (+
+  `ainize.json` name/kind) · clone URL + copy · **Run** (the project's entry:
+  manifest `entry`, else the root's first runnable file; shares `useRunner`, output
+  right under the panel) · **Deployments** (ainize Projects read from the browser,
+  `lib/ainize-projects.ts`: Vercel-style rows with status dot / sha / time /
+  Inspect / Visit, or "ainize에 연결 (Connect to ainize)" when no project; silent
+  on any failure; re-read when HEAD moves, polled while building) · recent commits
+  (toggle) · commit box (editors, dirty tree). git-meta lives in the shell (one
+  fetch per folder, refetched after a commit / a save).
 - `run-output` — ▶ Run for `.py`/`.js`/`.mjs` rows inside such a folder:
   `useRunner` streams `POST run` (ainize) into one state per file
   (`lib/git-panel.ts` reducer); `RunActions` = Vercel-style inline links + status

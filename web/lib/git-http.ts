@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { requireDriveRole } from "@/lib/require-access";
 import { AgentError, callAgent } from "@/lib/rpc";
+import { notifyProjectOfPush } from "@/lib/git-project-hooks";
 
 /**
  * Git smart-HTTP for a repo stored inside a drive: `git clone` / `git push`.
@@ -30,6 +31,10 @@ import { AgentError, callAgent } from "@/lib/rpc";
  * Large packs never cross as one JSON: the POST body is streamed to an agent temp
  * file via upload-chunk, git runs with that as stdin and a temp file as stdout,
  * and the result is streamed back via download-chunk, then both temps deleted.
+ *
+ * After a successful receive-pack on a repo bound to an ainize Project
+ * (lib/git-project-hooks.ts), the project's hook is called for each updated ref
+ * — fire-and-forget, so the push never waits for or fails on ainize.
  */
 const UPLOAD_CHUNK = 4 * 1024 * 1024; // == agent LIMITS.maxUploadChunkBytes
 const STREAM_CHUNK = 1024 * 1024;
@@ -121,12 +126,17 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
     }
 
     // Stream the request body to an agent temp file, 4 MiB per upload-chunk.
-    await uploadBody(req, driveId, secret, inPath);
+    // The head of a push carries the ref updates (pkt-lines before the pack).
+    const head = await uploadBody(req, driveId, secret, inPath);
 
     // Run git; stdout lands in the agent temp out file.
     const res = await callAgent(driveId, secret,
       { method: "git-service", repo: parsed.repo, service: svc, in: inPath, out: outPath },
       { timeoutMs: 300_000 });
+
+    if (svc === "receive-pack") {
+      void notifyProjectOfPush(driveId, parsed.repo, head, gate.userId).catch(() => {});
+    }
 
     // Drop the request temp now; stream the result, delete it on completion.
     callAgent(driveId, secret, { method: "delete", path: inPath }).catch(() => {});
@@ -179,17 +189,28 @@ function gitAuthRequest(req: Request): Request {
   return new Request(req.url, { method: "GET", headers });
 }
 
-async function uploadBody(req: Request, driveId: string, secret: string, destPath: string): Promise<void> {
+const HEAD_BYTES = 64 * 1024; // enough for the ref-update pkt-lines of any push
+
+/** Streams the body to the agent; resolves to the body's first bytes (ref updates of a push). */
+async function uploadBody(req: Request, driveId: string, secret: string, destPath: string): Promise<Buffer> {
   const reader = req.body?.getReader();
   let chunkId = 0;
   let acc: Uint8Array[] = [];
   let accLen = 0;
+  const headParts: Uint8Array[] = [];
+  let headLen = 0;
+  const keepHead = (buf: Uint8Array) => {
+    if (headLen >= HEAD_BYTES) return;
+    const take = buf.subarray(0, HEAD_BYTES - headLen);
+    headParts.push(take); headLen += take.length;
+  };
   const flush = async () => {
     const buf = Buffer.concat(acc, accLen);
+    keepHead(buf);
     await callAgent(driveId, secret, { method: "upload-chunk", path: destPath, chunkId, total: -1, data: buf.toString("base64") });
     chunkId += 1; acc = []; accLen = 0;
   };
-  if (!reader) { await flush(); return; } // empty body: create the file (chunkId 0 = truncate)
+  if (!reader) { await flush(); return Buffer.concat(headParts, headLen); } // empty body: create the file (chunkId 0 = truncate)
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -198,6 +219,7 @@ async function uploadBody(req: Request, driveId: string, secret: string, destPat
       // carve exactly UPLOAD_CHUNK out of the accumulator
       const joined = Buffer.concat(acc, accLen);
       const head = joined.subarray(0, UPLOAD_CHUNK);
+      keepHead(head);
       await callAgent(driveId, secret, { method: "upload-chunk", path: destPath, chunkId, total: -1, data: head.toString("base64") });
       chunkId += 1;
       const rest = joined.subarray(UPLOAD_CHUNK);
@@ -205,6 +227,7 @@ async function uploadBody(req: Request, driveId: string, secret: string, destPat
     }
   }
   await flush(); // final partial (or the only, possibly-empty, chunk)
+  return Buffer.concat(headParts, headLen);
 }
 
 function resultStream(driveId: string, secret: string, srcPath: string, size: number): ReadableStream<Uint8Array> {
