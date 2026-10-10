@@ -23,7 +23,7 @@ export type RpcParams =
   | { method: "list"; path: string }
   | { method: "stat"; path: string }
   | { method: "read"; path: string; encoding?: "utf8" | "base64"; maxBytes?: number }
-  | { method: "write"; path: string; content: string; encoding?: "utf8" | "base64"; source?: string }
+  | { method: "write"; path: string; content: string; encoding?: "utf8" | "base64" }
   | { method: "mkdir"; path: string }
   | { method: "rename"; from: string; to: string }
   | { method: "delete"; path: string }
