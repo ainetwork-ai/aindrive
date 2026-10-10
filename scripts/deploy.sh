@@ -37,7 +37,9 @@ main() {
 
   REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   cd "$REPO"
-  local -a COMPOSE=(sudo docker compose -f web/docker-compose.yml)
+  # --env-file: Compose only interpolates ${VAR} in the compose file from .env or the file named here,
+  # so build args and host bindings (NEXT_PUBLIC_*, AINDRIVE_SSH_BIND) must come from .env.production.
+  local -a COMPOSE=(sudo docker compose --env-file web/.env.production -f web/docker-compose.yml)
   HEALTH="https://aindrive.ainetwork.ai/api/healthz"
   LOCK=/tmp/aindrive-build.lock
 
