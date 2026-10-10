@@ -8,15 +8,14 @@
 // commit); the ainize reads live here and degrade silently.
 import { useEffect, useState } from "react";
 import clsx from "clsx";
-import { GitBranch, GitCommitHorizontal, Copy, Check, ChevronDown, ChevronUp, ExternalLink, Rocket } from "lucide-react";
+import { GitBranch, GitCommitHorizontal, Copy, Check, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import type { GitCommit } from "@/lib/protocol";
 import { apiFetch } from "@/lib/api-client";
 import { relativeTime, shortSha, RUN_IDLE } from "@/lib/git-panel";
-import {
-  connectProjectUrl, deploymentLogUrl, deploymentTime, fetchDeployments, fetchProjectByRepo,
-  type AinizeDeployment, type AinizeProject, type DeploymentStatus,
-} from "@/lib/ainize-projects";
+import { deploymentLogUrl, deploymentTime, type DeploymentStatus } from "@/lib/ainize-projects";
+import { inputsStorageKey, inputsToEnv, missingRequired, type ManifestInput } from "@/lib/run-inputs";
+import type { AinizeProjectState } from "./use-ainize-project";
 import { Button } from "@/components/ui";
 import { RunActions, RunOutput, useRunner } from "./run-output";
 
@@ -29,18 +28,22 @@ export type GitPanelMeta = {
   commits: GitCommit[];
   cloneUrl: string;
   ainizeUrl: string;
-  /** `ainize.json` at the repo root, when present */
-  manifest?: { entry: string | null; kind: string | null; name: string | null } | null;
-  /** what the panel's Run row runs (manifest entry, else the root's first .py/.js/.mjs); null = nothing runnable */
+  /** `ainize.json` at the repo root, when present (`inputs`: the fields the Run row asks for, lib/run-inputs.ts) */
+  manifest?: { entry: string | null; kind: string | null; name: string | null; inputs?: ManifestInput[] } | null;
+  /** what the panel's Run row runs by default (manifest entry, else the root's first .py/.js/.mjs); null = nothing runnable */
   entry?: string | null;
-  /** ainize project bound here through git-connect (its hook fires on push) */
+  /** every runnable file at the repo root — the Run row's choices */
+  runnable?: string[];
+  /** ainize project bound here (its hook fires on push) */
   projectId?: string | null;
 };
 
-export function GitPanel({ driveId, repo, meta, canEdit, onCommitted }: {
+export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted }: {
   driveId: string;
   repo: string;
   meta: GitPanelMeta;
+  /** the bound ainize project (components/use-ainize-project.ts), shared with the file rows */
+  ainize: AinizeProjectState;
   canEdit: boolean;
   /** called after a successful commit, so the shell refetches git-meta (and the listing) */
   onCommitted: () => void;
@@ -51,11 +54,38 @@ export function GitPanel({ driveId, repo, meta, canEdit, onCommitted }: {
   const [committing, setCommitting] = useState(false);
   const head = meta.head;
 
-  // The project's Run row shares the per-file runner (entry path = repo-relative → drive path).
+  // The project's Run row shares the per-file runner (entry path = repo-relative → drive path). The row runs
+  // the manifest's entry by default; any runnable file at the root can be picked instead.
   const runner = useRunner(driveId, repo);
-  const entry = meta.entry ?? null;
+  const choices = Array.from(new Set([...(meta.entry ? [meta.entry] : []), ...(meta.runnable ?? [])]));
+  const [picked, setPicked] = useState<string | null>(null);
+  const entry = picked && choices.includes(picked) ? picked : meta.entry ?? choices[0] ?? null;
   const entryPath = entry === null ? null : repo ? `${repo}/${entry}` : entry;
   const run = entryPath !== null ? runner.runs[entryPath] ?? RUN_IDLE : RUN_IDLE;
+  // Inputs (ainize.json `inputs`, the workflow_dispatch shape): one field each, prefilled with the default,
+  // the last answers remembered per repo in this browser, sent as INPUT_<NAME> env with the run.
+  const inputs = meta.manifest?.inputs ?? [];
+  const [values, setValues] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let saved: Record<string, string> = {};
+    try { saved = JSON.parse(localStorage.getItem(inputsStorageKey(driveId, repo)) ?? "{}") as Record<string, string>; } catch {}
+    const next: Record<string, string> = {};
+    for (const i of inputs) next[i.name] = typeof saved[i.name] === "string" ? saved[i.name] : i.default ?? (i.type === "boolean" ? "false" : "");
+    setValues(next);
+  }, [driveId, repo, meta.manifest]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setValue = (name: string, v: string) => {
+    setValues((prev) => {
+      const next = { ...prev, [name]: v };
+      try { localStorage.setItem(inputsStorageKey(driveId, repo), JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  const startRun = () => {
+    if (!entryPath) return;
+    const missing = missingRequired(inputs, values);
+    if (missing.length) { toast.error(`Fill in ${missing.join(", ")}`); return; }
+    runner.run(entryPath, inputsToEnv(inputs, values));
+  };
 
   async function copy() {
     try {
@@ -151,37 +181,57 @@ export function GitPanel({ driveId, repo, meta, canEdit, onCommitted }: {
         <span className={labelCls}>Run</span>
         {entryPath !== null && entry !== null ? (
           <>
-            <code className="flex-1 min-w-0 truncate font-mono text-caption text-drive-text" title={meta.manifest?.entry ? "entry from ainize.json" : "first runnable file in the repo root"}>{entry}</code>
+            {choices.length > 1 ? (
+              <select
+                aria-label="File to run"
+                value={entry}
+                onChange={(e) => setPicked(e.target.value)}
+                className="flex-1 min-w-0 truncate rounded border border-drive-border bg-drive-panel px-1.5 py-0.5 font-mono text-caption text-drive-text"
+                title={entry === meta.manifest?.entry ? "entry from ainize.json" : "a runnable file in the repo root"}
+              >
+                {choices.map((c) => <option key={c} value={c}>{c}{c === meta.manifest?.entry ? " · entry" : ""}</option>)}
+              </select>
+            ) : (
+              <code className="flex-1 min-w-0 truncate font-mono text-caption text-drive-text" title={meta.manifest?.entry ? "entry from ainize.json" : "first runnable file in the repo root"}>{entry}</code>
+            )}
             <RunActions
               state={run}
               isOpen={!!runner.open[entryPath]}
-              onRun={() => runner.run(entryPath)}
+              onRun={startRun}
               onStop={() => runner.stop(entryPath)}
               onToggle={() => runner.toggle(entryPath)}
             />
-            <a
-              href={meta.ainizeUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-caption font-medium text-drive-muted hover:text-drive-text"
-            >
-              Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
-            </a>
+            {ainize.projectUrl && (
+              <a
+                href={ainize.projectUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-caption font-medium text-drive-muted hover:text-drive-text"
+              >
+                Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
+              </a>
+            )}
           </>
         ) : (
           <span className="text-drive-muted">No entry — add <code className="font-mono">ainize.json</code> with <code className="font-mono">{"{ \"entry\": \"main.py\" }"}</code> or a .py / .js file at the root.</span>
         )}
       </div>
+      {entryPath !== null && inputs.length > 0 && (
+        <div className="grid gap-2 px-4 pb-3 sm:grid-cols-2" data-testid="git-panel-inputs">
+          {inputs.map((i) => <InputField key={i.name} input={i} value={values[i.name] ?? ""} onChange={(v) => setValue(i.name, v)} />)}
+        </div>
+      )}
       {entryPath !== null && entry !== null && run.status !== "idle" && runner.open[entryPath] && (
         <div className="px-4 pb-3">
-          <RunOutput state={run} entryName={entry} ainizeUrl={meta.ainizeUrl} />
+          <RunOutput state={run} entryName={entry} openUrl={ainize.projectUrl} />
         </div>
       )}
 
       {/* 4. Deployments (ainize Projects) — only for a repo that declares how it deploys (ainize.json). A repo
-          without a manifest has nothing for ainize to build, so no "Connect to ainize" nudge either. */}
+          without a manifest has nothing for ainize to build, so nothing is shown. With one and no project yet, the
+          next push binds and deploys it (lib/git-project-hooks.ts) — there is no step to take. */}
       {meta.manifest?.kind && (
-        <Deployments ainizeUrl={meta.ainizeUrl} cloneUrl={meta.cloneUrl} headSha={head?.sha ?? null} rowCls={rowCls} labelCls={labelCls} />
+        <Deployments ainizeUrl={meta.ainizeUrl} ainize={ainize} rowCls={rowCls} labelCls={labelCls} />
       )}
 
       {showLog && (
@@ -227,50 +277,48 @@ const DEPLOY_DOT: Record<DeploymentStatus, string> = {
   error: "bg-red-500",
 };
 
+/** One field of the manifest's `inputs`: text / select / checkbox / number, labelled by `description`. */
+function InputField({ input, value, onChange }: { input: ManifestInput; value: string; onChange: (v: string) => void }) {
+  const id = `run-input-${input.name}`;
+  const field = "w-full rounded border border-drive-border bg-drive-panel px-2 py-1 text-caption text-drive-text";
+  const label = <label htmlFor={id} className="text-label text-drive-muted truncate" title={input.name}>{input.description ?? input.name}{input.required ? " *" : ""}</label>;
+  if (input.type === "boolean") {
+    return (
+      <div className="flex items-center gap-2 text-caption">
+        <input id={id} type="checkbox" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} />
+        {label}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-0.5 min-w-0">
+      {label}
+      {input.type === "choice" ? (
+        <select id={id} className={field} value={value} onChange={(e) => onChange(e.target.value)}>
+          {(input.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : (
+        <input id={id} type={input.type === "number" ? "number" : "text"} className={field} value={value} onChange={(e) => onChange(e.target.value)} placeholder={input.default ?? ""} />
+      )}
+    </div>
+  );
+}
+
 /**
- * Vercel-style deployment rows from ainize (`GET /api/projects/by-repo`, then
- * `/api/projects/:id/deployments`), read straight from the browser (CORS for
- * aindrive's origin). No project → "Connect to ainize". Any failure → nothing.
- * Refetched when HEAD moves (a push just landed) and every 15 s while a
- * deployment is queued/building.
+ * Vercel-style deployment rows from ainize (components/use-ainize-project.ts).
+ * No project yet → one quiet line: the next push binds and deploys the repo
+ * (lib/git-project-hooks.ts autoBindProject). Any failure → nothing.
  */
-function Deployments({ ainizeUrl, cloneUrl, headSha, rowCls, labelCls }: {
-  ainizeUrl: string; cloneUrl: string; headSha: string | null; rowCls: string; labelCls: string;
+function Deployments({ ainizeUrl, ainize, rowCls, labelCls }: {
+  ainizeUrl: string; ainize: AinizeProjectState; rowCls: string; labelCls: string;
 }) {
-  const [project, setProject] = useState<AinizeProject | null | undefined>(undefined); // undefined = loading
-  const [deployments, setDeployments] = useState<AinizeDeployment[]>([]);
-  const active = deployments.some((d) => d.status === "queued" || d.status === "building");
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const load = async () => {
-      const p = await fetchProjectByRepo(ainizeUrl, cloneUrl, fetch, ctrl.signal);
-      if (ctrl.signal.aborted) return;
-      setProject(p);
-      if (!p) { setDeployments([]); return; }
-      const list = await fetchDeployments(ainizeUrl, p.id, fetch, ctrl.signal);
-      if (ctrl.signal.aborted) return;
-      setDeployments(list.length ? list : p.lastDeployment ? [p.lastDeployment] : []);
-      if (list.some((d) => d.status === "queued" || d.status === "building")) timer = setTimeout(load, 15_000);
-    };
-    load();
-    return () => { ctrl.abort(); if (timer) clearTimeout(timer); };
-  }, [ainizeUrl, cloneUrl, headSha]);
-
+  const { project, deployments, active } = ainize;
   if (project === undefined) return null;
   if (project === null) {
     return (
-      <div className={rowCls} data-testid="git-panel-deployments">
+      <div className={rowCls} data-testid="git-panel-deployments" data-project="none">
         <span className={labelCls}>Deploy</span>
-        <a
-          href={connectProjectUrl(ainizeUrl, cloneUrl)}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
-        >
-          <Rocket className="w-3.5 h-3.5" aria-hidden="true" /> ainize에 연결 (Connect to ainize) <ExternalLink className="w-3 h-3" aria-hidden="true" />
-        </a>
+        <span className="text-drive-muted">다음 push에서 자동 배포됩니다 · deploys on the next push</span>
       </div>
     );
   }

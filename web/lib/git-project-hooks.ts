@@ -3,6 +3,9 @@ import { db } from "./db";
 import { env } from "./env";
 import { log } from "./logger.js";
 import { ainizeUrl } from "./run-ainize";
+import { callAgent } from "./rpc";
+import { gitCloneUrl } from "./git-clone-url";
+import { serviceToken } from "./sso/service-token";
 
 /**
  * ainize Projects bound to a repo folder (ainize-node docs/PROJECTS.md).
@@ -10,12 +13,17 @@ import { ainizeUrl } from "./run-ainize";
  * A project on ainize binds to one aindrive repo URL + branch; on every push
  * aindrive must POST the project's hook with the updated ref, signed with the
  * project's `webhookSecret` (returned ONCE at project creation, never readable
- * again). So the browser's "Connect to ainize" flow posts `{repo, projectId,
- * webhookSecret}` back to `POST /api/drives/:id/git-connect` (editor), which
- * stores it here per (driveId, repo) — the secret sealed with AES-256-GCM
- * under the session secret, like agent-wallets.ts. After a successful
- * `git-receive-pack` lib/git-http.ts calls `fireProjectHook` for each updated
- * ref: fire-and-forget, 5 s timeout, failures logged, never blocking the push.
+ * again). The binding is made by aindrive itself: after a successful push of
+ * a repo whose root has `ainize.json` and that is bound to no project yet,
+ * `autoBindProject` asks ainize to create (or find) the project as aindrive —
+ * `POST ${AINIZE_URL}/api/projects/auto` with an AIN SSO machine token
+ * (lib/sso/service-token.ts) — and stores the returned `{id, webhookSecret}`
+ * here per (driveId, repo), the secret sealed with AES-256-GCM under the
+ * session secret, like agent-wallets.ts. "ainize.json이 있다는 건 자동 배포가
+ * 되었다는 것": the file is the whole opt-in; there is no "Connect to ainize"
+ * step (`POST /api/drives/:id/git-connect` remains for a project made by hand
+ * elsewhere). Then, for each updated ref, `fireProjectHook`: fire-and-forget,
+ * 5 s timeout, failures logged, never blocking the push.
  *
  *   POST ${AINIZE_URL}/api/projects/<id>/hook
  *   X-Ainize-Signature: sha256=<hex HMAC-SHA256(raw body, webhookSecret)>
@@ -137,13 +145,101 @@ export async function fireProjectHook(hook: ProjectHook, update: RefUpdate, push
   } finally { clearTimeout(timer); }
 }
 
-/** After a successful push: fire the hook for every updated ref of a bound repo (fire-and-forget). */
-export function notifyProjectOfPush(driveId: string, repo: string, head: Buffer, userId: string | null, fetchImpl: typeof fetch = fetch): Promise<number[]> {
+export type PushContext = {
+  /** The drive's secret for agent calls (reading `ainize.json`); without it no auto-binding is attempted. */
+  driveSecret: string;
+  /** This server's public origin, for the repo's friendly clone URL (default: AINDRIVE_PUBLIC_URL). */
+  origin?: string;
+};
+
+export type AutoBindResult =
+  | { bound: true; projectId: string; created: boolean }
+  | { bound: false; reason: "no_manifest" | "no_org_url" | "no_credentials" | "refused" | "exists_without_secret" | "error"; detail?: string };
+
+/** `ainize.json` at the repo root as the drive holds it after the push (receive.denyCurrentBranch=updateInstead). */
+async function readManifest(driveId: string, secret: string, repo: string): Promise<{ kind: string | null; name: string | null } | null> {
+  const p = repo ? `${repo}/ainize.json` : "ainize.json";
+  try {
+    const r = await callAgent(driveId, secret, { method: "read", path: p, encoding: "utf8", maxBytes: 64 * 1024 }, { timeoutMs: 5_000 });
+    const j = JSON.parse(r.content) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+    return { kind: str(j.kind), name: str(j.name) };
+  } catch { return null; }
+}
+
+/**
+ * Bind a just-pushed repo to an ainize project as aindrive itself. The repo
+ * must have `ainize.json` at its root and a friendly `/<org>/git/<repo>` URL
+ * (ainize binds only to an organization it knows; a drive-id URL names none).
+ * ainize answers 201 `{id, webhookSecret}` for a new project — stored here —
+ * or 200 `{id}` for one that already exists (bound by hand with a secret this
+ * server never saw: logged, nothing stored; `git-connect` can supply it).
+ * Never throws; every outcome is logged.
+ */
+export async function autoBindProject(driveId: string, repo: string, update: RefUpdate, userId: string | null, ctx: PushContext, fetchImpl: typeof fetch = fetch): Promise<AutoBindResult> {
+  const where = { driveId, repo, ref: update.ref };
+  const manifest = await readManifest(driveId, ctx.driveSecret, repo);
+  if (!manifest) return { bound: false, reason: "no_manifest" };
+  const cloneUrl = gitCloneUrl(ctx.origin ?? env.publicUrl, driveId, repo);
+  if (cloneUrl.includes("/api/drives/")) {
+    log.info(where, "ainize auto-bind skipped: the drive has no organization URL");
+    return { bound: false, reason: "no_org_url" };
+  }
+  let token: string | null;
+  try { token = await serviceToken(ainizeUrl()); }
+  catch (e) {
+    log.warn({ ...where, err: (e as Error).message }, "ainize auto-bind: no machine token");
+    return { bound: false, reason: "error", detail: (e as Error).message };
+  }
+  if (!token) {
+    log.info(where, "ainize auto-bind skipped: aindrive has no AIN SSO app credentials");
+    return { bound: false, reason: "no_credentials" };
+  }
+  const branch = update.ref.replace(/^refs\/heads\//, "");
+  const body = JSON.stringify({ repo: cloneUrl, branch, pusher: pusherOf(userId), manifest });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), HOOK_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(`${ainizeUrl()}/api/projects/auto`, {
+      method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body, signal: ctrl.signal,
+    });
+    const json = (await res.json().catch(() => ({}))) as { id?: unknown; webhookSecret?: unknown; error?: { code?: string; message?: string } };
+    if (res.status === 201 && typeof json.id === "string" && typeof json.webhookSecret === "string") {
+      storeProjectHook(driveId, repo, json.id, json.webhookSecret, userId);
+      log.info({ ...where, projectId: json.id }, "ainize project auto-bound");
+      return { bound: true, projectId: json.id, created: true };
+    }
+    if (res.status === 200 && typeof json.id === "string") {
+      log.warn({ ...where, projectId: json.id }, "ainize project exists but this server holds no webhook secret for it");
+      return { bound: false, reason: "exists_without_secret", detail: json.id };
+    }
+    log.warn({ ...where, status: res.status, code: json.error?.code }, "ainize auto-bind refused");
+    return { bound: false, reason: "refused", detail: `${res.status} ${json.error?.code ?? ""}`.trim() };
+  } catch (e) {
+    log.warn({ ...where, err: (e as Error).message }, "ainize auto-bind failed");
+    return { bound: false, reason: "error", detail: (e as Error).message };
+  } finally { clearTimeout(timer); }
+}
+
+/**
+ * After a successful push: bind the repo to an ainize project if `ainize.json`
+ * says so and nothing is bound yet (with `ctx`), then fire the hook for every
+ * updated ref of a bound repo (fire-and-forget). Resolves to the hook statuses.
+ */
+export async function notifyProjectOfPush(driveId: string, repo: string, head: Buffer, userId: string | null, fetchImpl: typeof fetch = fetch, ctx?: PushContext): Promise<number[]> {
+  const updates = parseReceivePackRefs(head);
+  if (updates.length === 0) return [];
   let hook: ProjectHook | null = null;
   try { hook = projectHookFor(driveId, repo); } catch { hook = null; }
-  if (!hook) return Promise.resolve([]);
-  const updates = parseReceivePackRefs(head);
-  if (updates.length === 0) return Promise.resolve([]);
+  if (!hook && ctx) {
+    // The branch that moved decides the project's branch; a deletion binds nothing.
+    const first = updates.find((u) => u.ref.startsWith("refs/heads/") && !/^0+$/.test(u.after));
+    if (first) {
+      const r = await autoBindProject(driveId, repo, first, userId, ctx, fetchImpl);
+      if (r.bound) hook = projectHookFor(driveId, repo);
+    }
+  }
+  if (!hook) return [];
   const pusher = pusherOf(userId);
   return Promise.all(updates.map((u) => fireProjectHook(hook!, u, pusher, fetchImpl)));
 }

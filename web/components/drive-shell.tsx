@@ -14,6 +14,7 @@ import {
   type DriveSummary, type ShareSummary, type ViewMode,
 } from "./drive-shell-parts";
 import { GitPanel, type GitPanelMeta } from "./git-panel";
+import { useAinizeProject } from "@/components/use-ainize-project";
 
 // These four are only rendered on user action (open a file, open chat, open
 // the share/agent modal), so we load them on demand instead of bundling them
@@ -229,12 +230,30 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
   // (null while unknown / not a repo), refetched after a commit. The synthetic
   // root is a listing of grants, never a folder on disk.
   const [gitMeta, setGitMeta] = useState<GitPanelMeta | null>(null);
+  // Inside a repo but below its root (a subfolder): no panel, but every runnable
+  // file row still gets ▶ Run — `gitRepo` is the nearest ancestor that is a repo.
+  const [gitRepo, setGitRepo] = useState<string | null>(null);
   const loadGitMeta = useCallback(async () => {
-    if (isSyntheticRoot) { setGitMeta(null); return; }
-    const res = await apiFetch<GitPanelMeta | { exists: false }>(`/api/drives/${driveId}/git-meta?repo=${encodeURIComponent(path)}`);
-    setGitMeta(res.ok && res.data.exists ? res.data : null);
+    if (isSyntheticRoot) { setGitMeta(null); setGitRepo(null); return; }
+    const meta = async (p: string) => {
+      const res = await apiFetch<GitPanelMeta | { exists: false }>(`/api/drives/${driveId}/git-meta?repo=${encodeURIComponent(p)}`);
+      return res.ok && res.data.exists ? res.data : null;
+    };
+    const here = await meta(path);
+    setGitMeta(here);
+    if (here) { setGitRepo(path); return; }
+    // Walk up (a few levels) for the repo this folder belongs to.
+    const parts = path.split("/").filter(Boolean);
+    for (let i = parts.length - 1; i >= 0 && parts.length - i <= 6; i--) {
+      const anc = parts.slice(0, i).join("/");
+      if (await meta(anc)) { setGitRepo(anc); return; }
+      if (anc === "") break;
+    }
+    setGitRepo(null);
   }, [driveId, path, isSyntheticRoot]);
-  useEffect(() => { setGitMeta(null); loadGitMeta(); }, [loadGitMeta]);
+  useEffect(() => { setGitMeta(null); setGitRepo(null); loadGitMeta(); }, [loadGitMeta]);
+  // The ainize project bound to this repo (one lookup, shared by the panel and the file rows).
+  const ainize = useAinizeProject(gitMeta?.ainizeUrl ?? null, gitMeta?.cloneUrl ?? null, gitMeta?.head?.sha ?? null, !!gitMeta?.manifest?.kind);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { loadDrives(); }, [loadDrives]);
@@ -440,6 +459,7 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
                 driveId={driveId}
                 repo={path}
                 meta={gitMeta}
+                ainize={ainize}
                 canEdit={canEdit}
                 onCommitted={() => { loadGitMeta(); load(); }}
               />
@@ -467,8 +487,8 @@ export function DriveShell({ driveId, driveName, initialFolder, scopeRoot, initi
               onNewFolder={onNewFolder}
               ctxMenu={ctxMenu}
               setCtxMenu={setCtxMenu}
-              gitRepo={gitMeta ? path : null}
-              ainizeUrl={gitMeta?.ainizeUrl ?? "https://ainize.ai"}
+              gitRepo={gitRepo}
+              ainizeProjectUrl={ainize.projectUrl}
             />
             {/* Entry views only (root/grant landing + synthetic root) — the
                 showcase is a discovery surface, not deep-navigation chrome. */}

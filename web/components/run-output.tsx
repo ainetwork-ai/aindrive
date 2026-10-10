@@ -13,7 +13,8 @@ import {
 export type Runner = {
   runs: Record<string, RunState>;
   open: Record<string, boolean>;
-  run: (entryPath: string) => void;
+  /** `env`: the answers to the manifest's inputs, already as `INPUT_<NAME>` (lib/run-inputs.ts inputsToEnv). */
+  run: (entryPath: string, env?: Record<string, string>) => void;
   stop: (entryPath: string) => void;
   toggle: (entryPath: string) => void;
 };
@@ -40,7 +41,7 @@ export function useRunner(driveId: string, repo: string | null): Runner {
     aborts.current.delete(p);
   }, []);
 
-  const run = useCallback(async (entryPath: string) => {
+  const run = useCallback(async (entryPath: string, env?: Record<string, string>) => {
     if (repo === null) return;
     stop(entryPath);
     const ctrl = new AbortController();
@@ -52,7 +53,7 @@ export function useRunner(driveId: string, repo: string | null): Runner {
     try {
       const res = await fetch(`/api/drives/${driveId}/run`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repo, entry }), signal: ctrl.signal,
+        body: JSON.stringify({ repo, entry, ...(env && Object.keys(env).length ? { env } : {}) }), signal: ctrl.signal,
       });
       if (res.status === 503) { dispatch(entryPath, { type: "unavailable" }); return; }
       if (!res.ok || !res.body) {
@@ -141,8 +142,12 @@ export function RunActions({ state, isOpen, onRun, onStop, onToggle }: {
   );
 }
 
-/** The output panel under a file row: stdout/stderr in order, exit code, duration, a link to ainize. */
-export function RunOutput({ state, entryName, ainizeUrl }: { state: RunState; entryName: string; ainizeUrl: string }) {
+/**
+ * The output panel under a file row: stdout/stderr in order, exit code, duration,
+ * and — when the repo is bound to an ainize project — a link to that project's
+ * page (`openUrl`; null hides the link rather than pointing at ainize's front page).
+ */
+export function RunOutput({ state, entryName, openUrl }: { state: RunState; entryName: string; openUrl: string | null }) {
   const bottom = useRef<HTMLDivElement>(null);
   useEffect(() => { bottom.current?.scrollIntoView({ block: "nearest" }); }, [state.chunks.length]);
   const summary =
@@ -157,14 +162,16 @@ export function RunOutput({ state, entryName, ainizeUrl }: { state: RunState; en
         <RunDot status={state.status} />
         <span className="font-mono text-drive-text truncate">{entryName}</span>
         <span className="truncate">{summary}</span>
-        <a
-          href={ainizeUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="ml-auto inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
-        >
-          Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
-        </a>
+        {openUrl && (
+          <a
+            href={openUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
+          >
+            Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
+          </a>
+        )}
       </div>
       <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap wrap-break-word text-drive-text">
         {state.chunks.length === 0 && state.status === "running" && <span className="text-drive-muted">waiting for output…</span>}
