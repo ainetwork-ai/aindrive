@@ -41,8 +41,9 @@ async function firstEntry(driveId: string, secret: string, repo: string): Promis
  * (lib/git-panel.ts), the project's `ainize.json` manifest (`entry`, `kind`,
  * `name`) or the root's first runnable file as `entry` for the panel's Run row,
  * and the ainize project bound to the repo (`projectId`, lib/git-project-hooks.ts)
- * when one was connected here. Viewer-gated at the folder, like fs/list. A plain
- * folder answers `{ exists: false }` so the panel simply stays hidden.
+ * when one was connected here. Viewer-gated at the folder, like fs/list — also
+ * for a trusted first-party application's machine token (lib/sso/service-principal.ts).
+ * A plain folder answers `{ exists: false }` so the panel simply stays hidden.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
   const { driveId } = await params;
@@ -51,7 +52,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ driveId:
   let repo: string;
   try { repo = normalizePath(raw); }
   catch { return NextResponse.json({ error: "invalid path" }, { status: 400 }); }
-  const gate = await requireDriveRole(driveId, repo, { min: "viewer" });
+  const gate = await requireDriveRole(driveId, repo, { min: "viewer", req, service: true });
   if (gate instanceof NextResponse) return gate;
   try {
     const meta = await callAgent(driveId, gate.drive.drive_secret, { method: "git-meta", repo }, { timeoutMs: 15_000 });

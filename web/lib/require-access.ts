@@ -11,7 +11,8 @@ import { bearerOf, isResourceDelegationToken, resolveDelegatedCaller, type Resou
 // lib/drive-gate.ts — no Next imports, so the git-over-SSH process can bundle
 // it; this module is its HTTP front (cookie / bearer / delegation → user id).
 export { readDenial, type ReadDenial, type DriveGate } from "./drive-gate";
-import { gateDriveRoleForUser as gateForUser, type DriveGate } from "./drive-gate";
+import { gateDriveRoleForUser as gateForUser, readDenial, type DriveGate } from "./drive-gate";
+import { isServiceToken, logServiceRead, serviceRoleInDrive, verifyServiceToken } from "./sso/service-principal";
 
 /**
  * Shared authorization gate for drive-scoped API routes (fs/*, yjs).
@@ -51,11 +52,21 @@ import { gateDriveRoleForUser as gateForUser, type DriveGate } from "./drive-gat
  * as for that account; `gate.delegation` carries the claims. Refusals use
  * the contract error body. Only `read` and `list` can be delegated: no write
  * route passes this option, and the module refuses other actions.
+ *
+ * `opts.service` (with `opts.req`; git upload-pack, git-meta) additionally
+ * accepts `Authorization: Bearer <AIN SSO machine token>` from a trusted
+ * first-party application acting as itself (lib/sso/service-principal.ts:
+ * signature, issuer, audience = this aindrive, expiry, `sub` on the trust
+ * list). Such a caller is a viewer on the drives shared with an organization
+ * the application is assigned in, and nothing more: a route asking for
+ * editor+ gets 403, the reserved subtree and the paid carve-out apply as for
+ * any viewer, and `gate.service` names the application. A token that looks
+ * like one but does not verify is a 401, never a fall back to the cookie.
  */
 export async function requireDriveRole(
   driveId: string,
   targetPath: string,
-  opts: { min: Role; req?: Request; delegation?: { req: Request; action: Extract<ResourceAction, "read" | "list"> } },
+  opts: { min: Role; req?: Request; delegation?: { req: Request; action: Extract<ResourceAction, "read" | "list"> }; service?: boolean },
 ): Promise<DriveGate | NextResponse> {
   // `.aindrive/` holds the agent token, drive secret and agent API keys: no
   // role, not even owner, reaches it through a drive route. Checked on the
@@ -81,6 +92,22 @@ export async function requireDriveRole(
   // Reserved subtree is refused before any identity is read (as it always was:
   // an invalid bearer on `.aindrive/…` is still a 403, not a 401).
   if (isSystemPath(canonical)) return NextResponse.json({ error: "reserved path" }, { status: 403 });
+  if (opts.service && opts.req && isServiceToken(bearerOf(opts.req))) {
+    // A first-party application acting as itself: the role comes from the token's organizations,
+    // never from a cookie; viewer is the ceiling, so this path is read-only by construction.
+    const v = await verifyServiceToken(bearerOf(opts.req)!);
+    if (!v.ok) {
+      return NextResponse.json({ error: "invalid service token", reason: v.reason }, { status: 401, headers: { "Cache-Control": "no-store", "WWW-Authenticate": 'Bearer error="invalid_token"' } });
+    }
+    const drive = getDrive(driveId);
+    if (!drive) return NextResponse.json({ error: "drive not found" }, { status: 404 });
+    const role = serviceRoleInDrive(driveId, v.principal);
+    if (role === "none" || !atLeast(role, opts.min)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    const denial = readDenial(driveId, canonical, role, null);
+    if (denial?.kind === "payment") return NextResponse.json({ error: "payment required", reason: "payment_required" }, { status: 402 });
+    logServiceRead(v.principal, driveId, canonical, `${opts.min} gate`);
+    return { drive, role, userId: null, service: v.principal };
+  }
   const user = opts.req ? await getRequestUser(opts.req) : await getUser();
   if (user === "invalid") return NextResponse.json({ error: "invalid bearer token" }, { status: 401 });
   const gate = await gateForUser(driveId, targetPath, { min: opts.min, userId: user?.id ?? null });

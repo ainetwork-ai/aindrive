@@ -4,6 +4,7 @@ import { paidAccessDenial, type PaidDenial } from "./sale-access.js";
 import { normalizePath } from "./path";
 import { isSystemPath } from "@/shared/domain/policy/system-paths";
 import type { DelegatedCaller } from "./resource-delegation";
+import type { ServicePrincipal } from "./sso/service-principal";
 
 /**
  * The drive gate's decision core, free of any HTTP or Next import: who may do
@@ -20,6 +21,8 @@ export type DriveGate = {
   userId: string | null;
   /** Set when the caller is an agent acting under a resource delegation (lib/resource-delegation.ts). */
   delegation?: DelegatedCaller;
+  /** Set when the caller is a first-party application acting as itself (lib/sso/service-principal.ts). */
+  service?: ServicePrincipal;
 };
 
 export type ReadDenial =

@@ -17,6 +17,7 @@ ADR-0003/0004/0005, `docs/runbooks/migration-rollback.md`.
 - `oidc.ts` — discovery, code + PKCE S256 + state + nonce (+ `prompt=none|create`, `ain_idp=google`), client_secret_basic exchange, ID-token validation (jose). `sessionOrg` = the org a session acts for.
 - `tokens.ts` — adapter request JWT (`ain-adapter+jwt`, htm/htu/bsh, ≤ 60 s, single-use jti) and logout token (`logout+jwt`) verification.
 - `adapter.ts` — `/api/sso/v1/{health, orgs/:orgId/users/:sub}`. `backchannel.ts` — `/api/auth/sso/backchannel-logout`.
+- `service-principal.ts` — a first-party application acting as itself with an AIN SSO machine token (`client_credentials`, `typ at+jwt`, `aud` = `AINDRIVE_PUBLIC_URL`, `sub` = `azp` = a client_id in `AINDRIVE_SSO_SERVICE_APPS`): viewer on the drives shared with an organization the application is assigned in (the token's `orgs`), on the routes that opt in (`requireDriveRole(..., { service: true })`: git upload-pack, git-meta). Read-only, logged; a bad token is 401, never a fall back.
 - `policy.ts` — legacy sign-in/reset refusals. `signin.ts` — SSO session + cookies. `app-proof.ts` — reports in-app links to AIN SSO.
 - Routes: `app/api/auth/sso/{route,start,callback,link,backchannel-logout}`, `app/api/sso/v1/…`; page `app/sso/link`; UI `components/{sso-signin-button,sso-signup-link,google-signin-button,use-sso-status}`.
 
