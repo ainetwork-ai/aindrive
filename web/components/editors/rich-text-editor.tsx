@@ -12,8 +12,15 @@
 //  - reloadEquals compares CANONICAL vs CANONICAL (getMarkdown is a normalizing
 //    serializer, so raw-disk byte compare would loop forever): canon(disk) ===
 //    canon(current). Only a genuine external change re-seeds.
-//  - Seed only when the fragment is truly empty (frag.length === 0) AND after the
-//    provider is ready — exactly one client seeds; others converge over Yjs.
+//  - The disk is consulted on EVERY open (lib/doc-disk-sync.ts): an empty
+//    fragment seeds from it; a stored fragment that disagrees with the disk is
+//    kept only when the disk still holds what this browser last loaded/wrote
+//    (our own unsaved edit) — otherwise the disk changed externally and wins.
+//  - Nothing is written without a LOCAL edit. Seed, reload and sync updates are
+//    not edits. Opening/closing a file never rewrites it.
+//  - Writes are source-preserving (lib/markdown-preserve.ts): blocks the user
+//    did not touch keep their original lines, and constructs the serializer
+//    cannot represent (tables — no table extension) are kept, never dropped.
 import { useEffect, useRef, useState } from "react";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -26,6 +33,9 @@ import {
   Bold, Italic, Heading1, Heading2, List, ListOrdered, Code, Quote, Undo2, Redo2,
 } from "lucide-react";
 import { AindriveProvider } from "@/lib/yjs/aindrive-provider";
+import { decideOnOpen, hashText, loadKnownDiskHash, markLoaded, shouldReloadFromDisk } from "@/lib/doc-disk-sync";
+import { openSession, sessionLoaded, sessionUpdate, writeVerdict, type EditorSession } from "@/lib/editor-session";
+import { mergePreservingSource } from "@/lib/markdown-preserve";
 import { colorForId, sha1Base64, bytesToBase64 } from "../viewer-utils";
 import type { DriveEntry } from "@/lib/protocol";
 import clsx from "clsx";
@@ -68,6 +78,21 @@ export function RichTextEditor({
   // whenReady lets that empty state autosave to disk and wipe the file, and a
   // pure open→close would rewrite (re-canonicalize) the file with no edit.
   const readyToSaveRef = useRef(false);
+  // The markdown exactly as it is on disk (last loaded or last written). The
+  // autosave merges the editor's serialization against it so untouched blocks
+  // keep their original text and unrepresentable blocks survive.
+  const sourceRef = useRef<string>("");
+  // One session per open (lib/editor-session.ts). This component IS keyed by
+  // path, but the session still names the path every write goes to and carries
+  // the cross-file guard, so a flush after unmount or a doc holding another
+  // file's bytes can never reach the disk.
+  const sessionRef = useRef<EditorSession | null>(null);
+  if (!sessionRef.current) sessionRef.current = openSession(driveId, entry.path);
+  const session = sessionRef.current;
+  const activeRef = useRef<EditorSession | null>(session);
+  // True while WE call setContent (seed / reload). y-prosemirror tags those
+  // Y.Doc updates like typing, so the flag is what tells them apart.
+  const programmaticRef = useRef(false);
   // Keep the parent callbacks in refs so the collab effect doesn't depend on
   // their identity — the parent passes inline arrows, and depending on them
   // would re-run the effect (→ refreshPresence → setState → re-render → loop).
@@ -92,22 +117,45 @@ export function RichTextEditor({
     },
   }, [provider]);
 
+  /** Replace the editor content from disk text without arming autosave. */
+  function setFromDisk(ed: Editor, text: string, replaced: boolean) {
+    programmaticRef.current = true;
+    try { ed.commands.setContent(text, { contentType: "markdown" } as never); }
+    finally { programmaticRef.current = false; }
+    sourceRef.current = text;
+    sessionLoaded(session, text, { replaced });
+  }
+
   // Debounced autosave: markdown body to disk + full Yjs update to the store.
   const debouncedAutosave = useDebouncedCallback(async () => {
     if (!canEdit || !editor || !docIdRef.current || !readyToSaveRef.current) return;
-    const md = editor.getMarkdown();
+    // No local edit since the last load/write → nothing to persist. (Opening a
+    // file, a sync from a peer or an fs-changed reload never reach here.)
+    if (!session.sync.dirty) return;
+    // Source-preserving: untouched blocks keep their disk text; a table (which
+    // the serializer drops) stays in place. Only edited blocks are re-serialized.
+    const blockCanon = (b: string) => canon(editor, b);
+    const md = mergePreservingSource(sourceRef.current, editor.getMarkdown(), blockCanon);
+    if (md === sourceRef.current) { session.sync = { ...session.sync, dirty: false }; return; }
+    // The session must still be the live one and the text must be this file's.
+    const v = writeVerdict(session, activeRef.current, md, { requireDirty: false });
+    if (!v.ok) { if (v.reason !== "unchanged") console.warn(`[richtext] write refused (${v.reason}): ${v.detail ?? ""}`); return; }
     const update = Y.encodeStateAsUpdate(provider.doc);
     try {
-      await Promise.all([
-        fetch(`/api/drives/${driveId}/fs/write`, {
+      const [w] = await Promise.all([
+        fetch(`/api/drives/${session.driveId}/fs/write`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: entry.path, content: md, encoding: "utf8" }),
+          body: JSON.stringify({ path: session.path, content: md, encoding: "utf8", source: "autosave" }),
         }),
-        fetch(`/api/drives/${driveId}/yjs`, {
+        fetch(`/api/drives/${session.driveId}/yjs`, {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
+          body: JSON.stringify({ path: session.path, data: bytesToBase64(update) }),
         }),
       ]);
+      if (w.ok) {
+        sourceRef.current = md;
+        sessionLoaded(session, md);
+      }
     } catch (e) { console.warn("richtext autosave failed:", e); }
   }, 5000, { maxWait: 15000 });
 
@@ -120,16 +168,18 @@ export function RichTextEditor({
       if (cancelled) return;
       if (ev === "status") onStatusRef.current(provider.status);
       if (ev === "reload") {
-        // External tool changed the .md on disk → re-seed, but only if the
-        // change is real. canon-vs-canon avoids the autosave→watch→reload loop.
+        // External tool changed the .md on disk → the disk wins, but only if
+        // the change is real. canon-vs-canon avoids the autosave→watch→reload loop.
         try {
           const res = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
           if (!res.ok) return;
           const { content } = await res.json();
-          const incoming = canon(editor, content as string);
-          const current = canon(editor, editor.getMarkdown());
-          if (incoming === current) return; // our own autosave — no-op
-          editor.commands.setContent(content as string, { contentType: "markdown" } as never);
+          const text = content as string;
+          const same = canon(editor, text) === canon(editor, editor.getMarkdown());
+          if (same) { sourceRef.current = text; return; } // our own write, or a re-spelling — its disk text is the source now
+          if (!shouldReloadFromDisk(session.sync, text, same)) return;
+          debouncedAutosave.cancel(); // a scheduled write of the now-stale doc must not fire
+          setFromDisk(editor, text, true);
         } catch (e) { console.warn("richtext reload failed:", e); }
       }
     });
@@ -145,15 +195,34 @@ export function RichTextEditor({
       // paragraph (frag.length becomes 1), so check the rendered text too. If the
       // CRDT already carries content (loaded from Yjs store), getText() is
       // non-empty → don't re-seed (CRDT is authoritative).
-      const effectivelyEmpty = editor.isEmpty || editor.getText().trim() === "";
-      if (!seededRef.current && effectivelyEmpty) {
+      // The disk is read on every open: an empty editor seeds from it; a stored
+      // fragment that disagrees with it is replaced unless the disk still holds
+      // what this browser last loaded/wrote (then the difference is ours).
+      if (!seededRef.current) {
         seededRef.current = true;
         try {
           const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
-          if (fileRes.ok) {
+          if (fileRes.ok && !cancelled) {
             const { content } = await fileRes.json();
-            if ((editor.isEmpty || editor.getText().trim() === "") && (content as string).length > 0) {
-              editor.commands.setContent(content as string, { contentType: "markdown" } as never);
+            const disk = content as string;
+            const effectivelyEmpty = editor.isEmpty || editor.getText().trim() === "";
+            const docEqualsDisk = !effectivelyEmpty && canon(editor, disk) === canon(editor, editor.getMarkdown());
+            const decision = decideOnOpen({
+              docEmpty: effectivelyEmpty,
+              docEqualsDisk,
+              diskHash: hashText(disk),
+              lastKnownDiskHash: loadKnownDiskHash(driveId, entry.path),
+            });
+            if (decision === "keep-doc") {
+              // The disk is the baseline; a doc that differs carries our own unsaved edits.
+              sourceRef.current = disk;
+              sessionLoaded(session, disk);
+              session.sync = { ...markLoaded(session.sync, disk), dirty: !docEqualsDisk };
+            } else if (disk.length > 0 || decision === "replace-from-disk") {
+              setFromDisk(editor, disk, decision === "replace-from-disk");
+            } else {
+              sourceRef.current = "";
+              sessionLoaded(session, "");
             }
           }
         } catch (e) { console.warn("richtext seed failed:", e); }
@@ -189,14 +258,20 @@ export function RichTextEditor({
     // updates synchronously before readyToSave flips, so they must not even
     // schedule a debounce (else it fires 5s later when readyToSave is true → a
     // no-edit rewrite of the file).
-    const triggerSave = () => { if (readyToSaveRef.current) void debouncedAutosave(); };
+    const triggerSave = (_update: Uint8Array, origin: unknown) => {
+      const kind = programmaticRef.current ? "programmatic" : provider.originOf(origin);
+      sessionUpdate(session, kind);
+      if (kind !== "local" || !readyToSaveRef.current) return;
+      void debouncedAutosave();
+    };
     provider.doc.on("update", triggerSave);
     const onUnload = () => debouncedAutosave.flush();
     window.addEventListener("beforeunload", onUnload);
 
     return () => {
       cancelled = true;
-      debouncedAutosave.flush();
+      debouncedAutosave.flush(); // while the session is still active → its own path
+      activeRef.current = null;  // anything later for this session is stale
       window.removeEventListener("beforeunload", onUnload);
       provider.doc.off("update", triggerSave);
       provider.awareness.off("change", refreshPresence);

@@ -10,6 +10,8 @@ import { traceClient, SESSION_ID } from "@/lib/yjs/trace-client";
 import type { TraceEmitter } from "@/lib/yjs/trace-client";
 import type { DriveEntry } from "@/lib/protocol";
 import { TEXT_EXT, colorForId, sha1Base64, bytesToBase64, b64ToBytes, languageFor } from "./viewer-utils";
+import { decideOnOpen, hashText, loadKnownDiskHash, markLoaded, shouldReloadFromDisk } from "@/lib/doc-disk-sync";
+import { openSession, sessionLoaded, sessionUpdate, writeVerdict, type EditorSession } from "@/lib/editor-session";
 import { ViewerHeader } from "./viewer-parts";
 import { fileIconForName } from "./file-icons";
 import { RichTextEditor } from "./editors/rich-text-editor";
@@ -66,26 +68,61 @@ export function Viewer({
   const providerRef = useRef<AindriveProvider | null>(null);
   const bindingRef = useRef<MonacoBinding | null>(null);
   const docIdRef = useRef<string>("");
+  // The open file's session (lib/editor-session.ts): path, generation, provider
+  // and disk-sync state in ONE object created when the file opens. This
+  // component is not keyed by path — switching files reuses it, its refs and
+  // the debounced autosave — so nothing that writes may read `entry.path` or
+  // `providerRef` from the render: a flush during the switch would pair the new
+  // path with the old doc (that wrote ainize.json into art_search.py). Every
+  // write names the session that produced the text and is refused unless that
+  // session is still the active one.
+  const sessionRef = useRef<(EditorSession & { provider: AindriveProvider }) | null>(null);
   const [presence, setPresence] = useState<Array<{ id: number; name: string; color: string }>>([]);
 
+  type Session = EditorSession & { provider: AindriveProvider };
+
+  // Replace the whole Y.Text with disk content, origin = provider so the
+  // update is tagged "remote" (not a local edit → does not arm autosave).
+  function replaceFromDisk(s: Session, text: string, replaced: boolean) {
+    const ytext = s.provider.doc.getText("content");
+    s.provider.doc.transact(() => {
+      if (ytext.length > 0) ytext.delete(0, ytext.length);
+      if (text.length > 0) ytext.insert(0, text);
+    }, s.provider);
+    sessionLoaded(s, text, { replaced });
+  }
+
+  /** Write `text` for session `s` — only if `s` is still the open file and the
+   *  text is its own (never another file's). Returns null when refused. */
+  async function writeToDisk(s: Session, text: string, source: "autosave" | "user-save"): Promise<Response | null> {
+    const v = writeVerdict(s, sessionRef.current, text, { requireDirty: source === "autosave" });
+    if (!v.ok) {
+      if (v.reason === "stale-session" || v.reason === "cross-file") console.warn(`[viewer] write refused (${v.reason}): ${v.detail ?? ""}`);
+      return null;
+    }
+    const res = await fetch(`/api/drives/${s.driveId}/fs/write`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: s.path, content: text, encoding: "utf8", source }),
+    });
+    if (res.ok && sessionRef.current === s) sessionLoaded(s, text);
+    return res;
+  }
+
   // Debounced autosave: trailing edge after 5s of no typing, max 15s between saves.
+  // Reads only the active session — never `entry.path` or `providerRef`.
   const debouncedAutosave = useDebouncedCallback(
     async () => {
-      if (!canEdit || !providerRef.current || !docIdRef.current) return;
-      const provider = providerRef.current;
-      const text = provider.doc.getText("content").toString();
-      const update = Y.encodeStateAsUpdate(provider.doc);
+      const s = sessionRef.current;
+      if (!canEdit || !s || !docIdRef.current) return;
+      const text = s.provider.doc.getText("content").toString();
+      const update = Y.encodeStateAsUpdate(s.provider.doc);
       try {
-        await Promise.all([
-          fetch(`/api/drives/${driveId}/fs/write`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
-          }),
-          fetch(`/api/drives/${driveId}/yjs`, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ path: entry.path, data: bytesToBase64(update) }),
-          }),
-        ]);
+        const w = await writeToDisk(s, text, "autosave");
+        if (w === null) return; // refused: not dirty / unchanged / stale / cross-file
+        await fetch(`/api/drives/${s.driveId}/yjs`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ path: s.path, data: bytesToBase64(update) }),
+        });
       } catch (e) { console.warn("autosave failed:", e); }
     },
     5000,
@@ -97,6 +134,8 @@ export function Viewer({
     if (!isText) return;
     const provider = new AindriveProvider(driveId, entry.path);
     providerRef.current = provider;
+    const session: Session = Object.assign(openSession(driveId, entry.path), { provider });
+    sessionRef.current = session;
     setLoading(true);
     let cancelled = false;
     let tracer: TraceEmitter | null = null;
@@ -108,24 +147,22 @@ export function Viewer({
         void payload;
       }
       if (ev === "reload") {
-        // External tool changed the file on disk — re-fetch and replace Y.Doc state.
-        // CRITICAL: skip if disk content already matches our ytext, otherwise
-        // our own autosave triggers fs.watch → reload → loop.
+        // External tool changed the file on disk — re-fetch and replace Y.Doc
+        // state. The disk is authoritative: a pending local edit is dropped in
+        // favor of what the external writer put there (it already won on disk).
+        // Skipped when the disk already matches the doc (our own autosave
+        // echoing through fs.watch → reload → loop).
         try {
           const res = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
           if (res.ok) {
             const data = await res.json();
-            const ytext = provider.doc.getText("content");
-            const current = ytext.toString();
+            if (cancelled || sessionRef.current !== session) return; // the file changed under the await
+            const current = provider.doc.getText("content").toString();
             const incoming = data.content as string;
-            if (current === incoming) {
-              // No-op: this reload was caused by our own autosave.
-              return;
-            }
-            provider.doc.transact(() => {
-              ytext.delete(0, ytext.length);
-              ytext.insert(0, incoming);
-            }, provider);
+            if (!shouldReloadFromDisk(session.sync, incoming, current === incoming)) return;
+            debouncedAutosave.cancel(); // a scheduled write of the now-stale doc must not fire
+            replaceFromDisk(session, incoming, true);
+            tracer?.("disk-reload-apply", { byteLen: new TextEncoder().encode(incoming).byteLength });
           }
         } catch (e) { console.warn("external reload failed:", e); }
       }
@@ -152,12 +189,8 @@ export function Viewer({
         // Wait for full readiness (IndexedDB + WS sync) before deciding whether to seed
         await provider.whenReady;
         const ytext = provider.doc.getText("content");
-        // Only seed if BOTH IndexedDB and the server-side Willow Store are empty.
-        // Otherwise the existing CRDT state is authoritative — re-seeding would
-        // duplicate content on every reload.
-        if (ytext.length > 0) {
-          tracer?.("disk-seed-skip");
-        } else {
+        if (ytext.length === 0) {
+          // Nothing local: try the server-side Willow Store before the file.
           const yjsRes = await fetch(`/api/drives/${driveId}/yjs?path=${encodeURIComponent(entry.path)}`);
           if (yjsRes.ok) {
             const { data } = await yjsRes.json();
@@ -170,16 +203,35 @@ export function Viewer({
               catch (e) { console.warn("y-apply-update failed:", e); }
             }
           }
-          if (provider.doc.getText("content").length === 0) {
-            const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
-            if (fileRes.ok) {
-              const fdata = await fileRes.json();
-              if (provider.doc.getText("content").length === 0) {
-                const seedContent = fdata.content as string;
-                provider.doc.transact(() => ytext.insert(0, seedContent), provider);
-                tracer?.("disk-seed-apply", { byteLen: new TextEncoder().encode(seedContent).byteLength });
-              }
-            }
+        }
+        // The file on disk is consulted on EVERY open. A stored CRDT (IndexedDB
+        // or Willow) is kept only when it agrees with the disk, or when the disk
+        // still holds what this browser last loaded/wrote (so the difference is
+        // our own unsaved edit). A disk changed by anything else — a git push
+        // into the working tree, another tool — wins and replaces the doc.
+        // Before this check the stored CRDT was treated as authoritative and
+        // the stale text was autosaved over the new file (incident 2026-10-10).
+        const fileRes = await fetch(`/api/drives/${driveId}/fs/read?path=${encodeURIComponent(entry.path)}&encoding=utf8`);
+        if (fileRes.ok && !cancelled && sessionRef.current === session) {
+          const fdata = await fileRes.json();
+          if (cancelled || sessionRef.current !== session) return;
+          const disk = fdata.content as string;
+          const current = provider.doc.getText("content").toString();
+          const decision = decideOnOpen({
+            docEmpty: current.length === 0,
+            docEqualsDisk: current === disk,
+            diskHash: hashText(disk),
+            lastKnownDiskHash: loadKnownDiskHash(driveId, entry.path),
+          });
+          if (decision === "keep-doc") {
+            // The disk is the baseline; with unsaved offline edits the doc is dirty.
+            sessionLoaded(session, disk);
+            session.sync = { ...markLoaded(session.sync, disk), dirty: current !== disk };
+            tracer?.("disk-seed-skip");
+          } else {
+            replaceFromDisk(session, disk, decision === "replace-from-disk");
+            tracer?.(decision === "seed-from-disk" ? "disk-seed-apply" : "disk-reload-apply",
+              { byteLen: new TextEncoder().encode(disk).byteLength });
           }
         }
         setLoading(false);
@@ -207,7 +259,13 @@ export function Viewer({
     refreshPresence();
 
     // Autosave: trailing-edge 5s debounce with maxWait 15s (via useDebouncedCallback above).
-    const triggerSave = () => {
+    // Armed by LOCAL updates only: the IndexedDB restore, the server sync and
+    // our own disk reload/seed (origin = provider) are not edits, and before
+    // this gate each of them scheduled a write of whatever the doc held.
+    const triggerSave = (_update: Uint8Array, origin: unknown) => {
+      const kind = provider.originOf(origin);
+      sessionUpdate(session, kind);
+      if (kind !== "local") return;
       tracer?.("autosave-trigger", { reason: "tick" });
       void debouncedAutosave();
     };
@@ -220,7 +278,12 @@ export function Viewer({
 
     return () => {
       cancelled = true;
+      // Flush while THIS session is still active: a pending edit of this file is
+      // written to this file's path. (The flush runs the latest autosave closure,
+      // which reads sessionRef — never the render's entry.path.) Then retire the
+      // session so any later callback for it is refused as stale.
       debouncedAutosave.flush();
+      if (sessionRef.current === session) sessionRef.current = null;
       window.removeEventListener("beforeunload", onUnload);
       provider.doc.off("update", triggerSave);
       off();
@@ -254,15 +317,14 @@ export function Viewer({
   }
 
   async function save() {
-    if (!canEdit || !providerRef.current) return;
+    const s = sessionRef.current;
+    if (!canEdit || !s) return;
     setSaving(true);
-    const text = providerRef.current.doc.getText("content").toString();
-    const res = await fetch(`/api/drives/${driveId}/fs/write`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: entry.path, content: text, encoding: "utf8" }),
-    });
+    const text = s.provider.doc.getText("content").toString();
+    const res = await writeToDisk(s, text, "user-save");
     setSaving(false);
-    if (!res.ok) alert((await res.json()).error);
+    if (res === null) alert("Save refused: this content belongs to another file or the file changed. Reload and try again.");
+    else if (!res.ok) alert((await res.json()).error);
     else onSaved();
   }
 
@@ -335,6 +397,8 @@ export function Viewer({
           <iframe src={streamUrl} title={entry.name} className="w-full h-full" />
         ) : isText ? (
           <MonacoEditor
+            key={entry.path}
+            path={entry.path}
             height="100%"
             defaultLanguage={languageFor(entry)}
             onMount={onMonacoMount}

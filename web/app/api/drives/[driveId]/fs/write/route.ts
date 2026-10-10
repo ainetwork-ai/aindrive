@@ -27,6 +27,9 @@ const Body = z.object({
    * `If-None-Match: *`. A mismatch answers 409 `conflict` + currentRevision.
    */
   baseRevision: z.string().max(200).optional(),
+  /** Who is writing (diagnostics only, logged by the agent when the write
+   *  changes a file inside a git working tree): "autosave" | "user-save" | … */
+  source: z.string().max(32).optional(),
 });
 
 export async function POST(req: Request, { params }: { params: Promise<{ driveId: string }> }) {
@@ -95,7 +98,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ driveId
     }
     try {
       const result = await callAgent(driveId, drive.drive_secret, {
-        method: "write", path: body.data.path, content, encoding: body.data.encoding,
+        method: "write", path: body.data.path, content, encoding: body.data.encoding, source: body.data.source,
       });
       if (creating) {
         bumpOwnerUsage(ownerId, { files: 1 });
