@@ -1,7 +1,7 @@
 // lib/git-panel.ts: the pure state behind the git panel and the ▶ Run output —
 // the reducer's running / success / failed / unavailable states, SSE parsing,
 // which files are runnable, and the relative-time / duration labels.
-import { parseRunEvent, describe, it, expect } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   RUN_IDLE, reduceRun, parseRunEvent, splitSse, runLanguageFor, relativeTime, formatDuration, shortSha, type RunEvent,
 } from "../git-panel";
