@@ -11,7 +11,8 @@ for permission *behaviour*.
   `docs/superpowers/specs/*permission*`. Those are immutable records; this file
   is kept current.
 - **Enforcement** → every requirement here has an ID (e.g. `R-ACC-PAID-001`)
-  mirrored by a test in `web/lib/__tests__/permission-matrix.test.ts`. The pure
+  mirrored by a test in `web/lib/__tests__/permission-matrix.test.ts` (access) or
+  `web/lib/__tests__/oauth-revocation.test.ts` (client token revocation). The pure
   decision rules live in `web/lib/access-core.js`.
 
 ## How to use / maintain this file (read before any permission change)
@@ -242,3 +243,11 @@ match.
 | `O-VIS-PAID` | Locked-and-visible vs hidden for paid children in listings. | **DECIDED by `listed`** (`R-VIS-PAID-001`): a **listed** sale is advertised → shown locked (name + price + lock, click → paywall); an **unlisted** sale is private → hidden from non-entitled viewers entirely. So `listed` is the single visibility switch. |
 | `O-PRIV-SCOPE` | A general **private** (free-but-restricted) classification. | **DEFERRED — not planned.** No concrete need; the paid carve-out + comp cover the stated cases. The §1/§2 2-axis layout stays as the extension point if a real need appears (and would decide then whether `private` excludes broad `editor` grants or only `viewer`). |
 | `O-PUBLIC-SCOPE` | Anonymous **public** read as a per-path flag. | **DEFERRED — not planned.** A separate "web publishing" concern; free share links already approximate "anyone with the link". |
+
+## 11. Client token revocation
+
+| ID | Requirement | Status |
+|----|-------------|--------|
+| `R-OAUTH-REVOKE-001` | A registered public client presenting its access, refresh or immediately previous refresh token can revoke that OAuth grant; both access and refresh stop working. | CURRENT (`oauth-revocation.test.ts`) |
+| `R-OAUTH-REVOKE-002` | Revocation cannot affect another client, another grant or personal access tokens. Unknown/replayed tokens return success without an existence oracle. | CURRENT (`oauth-revocation.test.ts`) |
+| `R-OAUTH-REVOKE-003` | Requests require token and registered client; rate limits and no-store apply. Metadata advertises the endpoint. | CURRENT (`oauth-revocation.test.ts`) |

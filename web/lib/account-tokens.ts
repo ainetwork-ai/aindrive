@@ -78,8 +78,8 @@ export function issueAccountTokens(opts: {
 export function refreshAccountTokens(refreshToken: string, clientId: string): AccountTokenPair | null {
   const presented = hashToken(refreshToken);
   const reused = db
-    .prepare("UPDATE account_tokens SET revoked_at = ? WHERE prev_refresh_hash = ? AND revoked_at IS NULL")
-    .run(Date.now(), presented);
+    .prepare("UPDATE account_tokens SET revoked_at = ? WHERE prev_refresh_hash = ? AND client_id = ? AND revoked_at IS NULL")
+    .run(Date.now(), presented, clientId);
   if (reused.changes > 0) return null;
   const row = db
     .prepare("SELECT id, scope, client_id, refresh_expires_at, revoked_at FROM account_tokens WHERE refresh_hash = ?")

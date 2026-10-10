@@ -47,6 +47,7 @@ export function authServerMetadata() {
     issuer: base,
     authorization_endpoint: `${base}/oauth/authorize`,
     token_endpoint: `${base}/api/oauth/token`,
+    revocation_endpoint: `${base}/api/oauth/revoke`,
     registration_endpoint: `${base}/api/oauth/register`,
     userinfo_endpoint: `${base}/api/oauth/userinfo`,
     response_types_supported: ["code"],
