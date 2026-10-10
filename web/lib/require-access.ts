@@ -12,6 +12,7 @@ import { bearerOf, isResourceDelegationToken, resolveDelegatedCaller, type Resou
 // it; this module is its HTTP front (cookie / bearer / delegation → user id).
 export { readDenial, type ReadDenial, type DriveGate } from "./drive-gate";
 import { gateDriveRoleForUser as gateForUser, readDenial, type DriveGate } from "./drive-gate";
+import { ACCOUNT_ACCESS_PREFIX, verifyAccountToken } from "./account-tokens";
 import { isServiceToken, logServiceRead, serviceRoleInDrive, verifyServiceToken } from "./sso/service-principal";
 
 /**
@@ -66,7 +67,7 @@ import { isServiceToken, logServiceRead, serviceRoleInDrive, verifyServiceToken 
 export async function requireDriveRole(
   driveId: string,
   targetPath: string,
-  opts: { min: Role; req?: Request; delegation?: { req: Request; action: Extract<ResourceAction, "read" | "list"> }; service?: boolean },
+  opts: { min: Role; req?: Request; delegation?: { req: Request; action: Extract<ResourceAction, "read" | "list"> }; service?: boolean; oauthGit?: boolean },
 ): Promise<DriveGate | NextResponse> {
   // `.aindrive/` holds the agent token, drive secret and agent API keys: no
   // role, not even owner, reaches it through a drive route. Checked on the
@@ -92,6 +93,15 @@ export async function requireDriveRole(
   // Reserved subtree is refused before any identity is read (as it always was:
   // an invalid bearer on `.aindrive/…` is still a 403, not a 401).
   if (isSystemPath(canonical)) return NextResponse.json({ error: "reserved path" }, { status: 403 });
+  if (opts.oauthGit && opts.req && bearerOf(opts.req)?.startsWith(ACCOUNT_ACCESS_PREFIX)) {
+    const token = verifyAccountToken(bearerOf(opts.req)!);
+    if (!token) return NextResponse.json({ error: "invalid_token" }, { status: 401, headers: { "Cache-Control": "no-store" } });
+    const scope = opts.min === "viewer" ? "drives:read" : "drives:write";
+    if (!token.scopes.includes(scope)) return NextResponse.json({ error: "insufficient_scope", scope }, { status: 403, headers: { "Cache-Control": "no-store" } });
+    const gate = await gateForUser(driveId, canonical, { min: opts.min, userId: token.userId });
+    if ("denied" in gate) return NextResponse.json(gate.body, { status: gate.status, headers: { "Cache-Control": "no-store" } });
+    return gate;
+  }
   if (opts.service && opts.req && isServiceToken(bearerOf(opts.req))) {
     // A first-party application acting as itself: the role comes from the token's organizations,
     // never from a cookie; viewer is the ceiling, so this path is read-only by construction.
