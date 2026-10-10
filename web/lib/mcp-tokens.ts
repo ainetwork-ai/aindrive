@@ -153,8 +153,8 @@ export function issueOAuthTokens(opts: {
 export function refreshOAuthTokens(refreshToken: string, clientId: string): OAuthTokenPair | null {
   const presented = hashToken(refreshToken);
   const reused = db
-    .prepare("UPDATE mcp_tokens SET revoked_at = ? WHERE prev_refresh_hash = ? AND kind = 'oauth' AND revoked_at IS NULL")
-    .run(Date.now(), presented);
+    .prepare("UPDATE mcp_tokens SET revoked_at = ? WHERE prev_refresh_hash = ? AND client_id = ? AND kind = 'oauth' AND revoked_at IS NULL")
+    .run(Date.now(), presented, clientId);
   if (reused.changes > 0) return null;
   const row = db
     .prepare(

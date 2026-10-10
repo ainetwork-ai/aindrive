@@ -44,3 +44,21 @@ ADR-0003/0004/0005, `docs/runbooks/migration-rollback.md`.
 - Single process: jti replay lives in SQLite (`sso_replay`), which also survives restarts.
 - The silent check reads `process.env` inside the Edge middleware sandbox (copied from the server process at runtime), so a restart applies a change; `silent.ts` mirrors `ssoLoginConfig()` because Edge can't import `lib/env`.
 - Tests: `lib/__tests__/sso-*.test.ts` (in-test issuer in `sso-test-issuer.ts`).
+
+## Client disconnect
+
+`POST /api/oauth/revoke` accepts form-encoded `client_id` and `token` for a
+registered public client; discovery advertises its URL. Production clients use
+HTTPS. Possession of the current access/refresh or immediately previous refresh
+token revokes the matching account or drive-bound OAuth grant, including both
+access and refresh tokens. Previous refresh matching covers disconnect overlapping
+rotation. Other clients/grants and personal keys are unaffected. Unknown and repeated
+requests return the same success response. Requests are rate-limited, and responses
+are not cached. Refresh reuse detection is also client-scoped.
+
+This is separate from SSO back-channel logout and organization provisioning.
+The existing session epoch, suspension and organization-scoping rules remain in
+force. Regression coverage: `lib/__tests__/oauth-revocation.test.ts` plus the
+existing SSO and organization OAuth tests.
+
+Protocol reference: [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009.html).
