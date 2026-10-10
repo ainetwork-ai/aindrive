@@ -262,13 +262,18 @@ function connectOnce({ root, drive, wsUrl, afanBridge = null }) {
           if (!filename) return;
           const rel = filename.split(sep).join("/");
           if (rel.startsWith(".aindrive/") || rel === ".aindrive") return;
-          // A git push into a bare repo in the drive churns transient quarantine
+          // A git push into a repo in the drive churns transient quarantine
           // and lock files (objects/incoming-*/…, *.lock, tmp_*) that appear and
           // vanish faster than we can act on them. Broadcasting them is pointless
           // and the vanished paths are exactly what races the recursive watcher
           // below, so skip them. The durable result (objects/pack/*, refs/*) is
           // not matched here and still syncs.
           if (/(^|\/)objects\/(incoming-|tmp_)/.test(rel) || /(^|\/)tmp_/.test(rel) || rel.endsWith(".lock")) return;
+          // A pushed repo is non-bare now (rpc.js git-init): its `.git/` is
+          // hidden from listings anyway and a push churns .git/objects/* heavily,
+          // so nothing under any .git/ is worth a frame. The working-tree files
+          // the push updates are not under it and still sync.
+          if (rel === ".git" || rel.startsWith(".git/") || rel.includes("/.git/") || rel.endsWith("/.git")) return;
           // afan requests (people/*/agent-requests/*.md) go to the bridge too; it ignores everything else.
           if (afanBridge) afanBridge.notify(rel);
           const existing = recentChanges.get(rel);
