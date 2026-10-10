@@ -2,6 +2,9 @@ import { callAgent } from "./rpc";
 import { classifyKind } from "./mime";
 import type { DriveEntry } from "./protocol";
 import { runLanguageFor } from "./git-panel";
+import { pusherOf } from "./git-project-hooks";
+import { serviceToken } from "./sso/service-token";
+import { log } from "./logger.js";
 
 /**
  * Running a repo file on ainize (the ▶ Run button of the web git panel).
@@ -11,16 +14,28 @@ import { runLanguageFor } from "./git-panel";
  * ainize's runner, then relays its event stream unchanged.
  *
  * Dependency — ainize `POST ${AINIZE_URL}/api/run` (env AINIZE_URL, default
- * https://ainize.ai; built alongside this feature, so this module codes against
- * the contract and the tests mock it):
+ * https://ainize.ai; ainize-node deploy/run-runtime/README.md):
  *   request  JSON { language: "python" | "node", entry: "<path in files>",
- *                   files: [{ path, content }], env: { ...inputs, AINIZE_DECIDE_URL }, timeoutMs }
+ *                   files: [{ path, content }], env: { ...inputs }, timeoutMs }
  *   response text/event-stream with events
  *     stdout {text}  stderr {text}  exit {code, durationMs}  error {message}
  *   503 = runner unavailable (not deployed / no capacity): the route relays it
  *   as 503 { error: "runner unavailable" } and the UI shows that state.
- * `AINIZE_DECIDE_URL` lets the program call ainize's decide endpoint without
- * knowing which host runs it.
+ *
+ * WHO the run is for: the person who pressed ▶. They are signed in here through
+ * AIN SSO, and the same account signs in to ainize, so ainize must hand their
+ * script THEIR ainize API key — not an anonymous grant, and not ours. aindrive
+ * proves itself with its machine token (`Authorization: Bearer <client_credentials
+ * at+jwt>` for the ainize origin, lib/sso/service-token.ts; ainize trusts the
+ * token's `sub` through its AIN_SSO_SERVICE_APPS) and names the person in
+ * `X-AIN-Actor: <their SSO subject>`. ainize resolves the subject to the account
+ * it knows from sign-in, issues that account's `aindrive run` key once, and the
+ * sandbox gets it as `AINIZE_API_KEY` beside `AINIZE_URL` — so a script is just
+ * `ainize.connect(os.environ["AINIZE_URL"], api_key=os.environ["AINIZE_API_KEY"])`
+ * with nothing secret in the repo, and its decisions are billed to the person.
+ * A person without an SSO identity here, or an aindrive without app credentials,
+ * runs anonymously: ainize sets no key and the script says so. Nothing here
+ * references ainize's free `/api/decide`.
  */
 export const DEFAULT_AINIZE_URL = "https://ainize.ai";
 export function ainizeUrl(): string {
@@ -78,17 +93,43 @@ export async function collectRepoFiles(driveId: string, driveSecret: string, rep
   return files;
 }
 
-export function runOnAinize(opts: { language: RunLanguage; entry: string; files: RunFile[]; env?: Record<string, string> }): Promise<Response> {
+/** Who a run is for, as ainize is told: aindrive's machine token for the ainize origin, and the person's SSO subject. */
+export type RunActor = { token: string; subject: string };
+
+/**
+ * The actor for a run pressed by `userId`: their most recently linked AIN SSO
+ * subject plus a machine token for ainize. Null — an anonymous run — when the
+ * person has no SSO identity here or aindrive has no app credentials; a token
+ * endpoint that refuses or cannot be reached is logged and also falls back,
+ * so a sign-in problem at AIN SSO degrades the run (no key) rather than
+ * blocking the button.
+ */
+export async function runActorFor(userId: string | null): Promise<RunActor | null> {
+  const subject = pusherOf(userId).subject;
+  if (!subject) return null;
+  try {
+    const token = await serviceToken(ainizeUrl());
+    return token ? { token, subject } : null;
+  } catch (e) {
+    log.warn({ ns: "aindrive.run", userId, err: (e as Error).message }, "no machine token for ainize; running anonymously");
+    return null;
+  }
+}
+
+export function runOnAinize(opts: { language: RunLanguage; entry: string; files: RunFile[]; env?: Record<string, string>; actor?: RunActor | null }): Promise<Response> {
   const base = ainizeUrl();
   return fetch(`${base}/api/run`, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "text/event-stream" },
+    headers: {
+      "content-type": "application/json", accept: "text/event-stream",
+      ...(opts.actor ? { authorization: `Bearer ${opts.actor.token}`, "x-ain-actor": opts.actor.subject } : {}),
+    },
     body: JSON.stringify({
       language: opts.language,
       entry: opts.entry,
       files: opts.files,
-      // The person's answers to the manifest's inputs (lib/run-inputs.ts) come first; the decide URL is ours to set.
-      env: { ...(opts.env ?? {}), AINIZE_DECIDE_URL: `${base}/api/decide` },
+      // The person's answers to the manifest's inputs (lib/run-inputs.ts); AINIZE_URL / AINIZE_API_KEY are the sandbox's to set.
+      env: { ...(opts.env ?? {}) },
       timeoutMs: RUN_TIMEOUT_MS,
     }),
   });

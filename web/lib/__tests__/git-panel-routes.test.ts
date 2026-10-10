@@ -146,26 +146,83 @@ describe("POST run", () => {
     expect(sent).toEqual({
       language: "python", entry: "main.py",
       files: [{ path: "main.py", content: "# proj/main.py\n" }, { path: "lib/util.py", content: "# proj/lib/util.py\n" }],
-      env: { AINIZE_DECIDE_URL: "https://ainize.example.test/api/decide" },
+      env: {},
       timeoutMs: 120000,
     });
+    // a viewer with no SSO identity: an anonymous run — no bearer, nobody named
+    expect((init.headers as Record<string, string>).authorization).toBeUndefined();
+    expect((init.headers as Record<string, string>)["x-ain-actor"]).toBeUndefined();
     // .git is hidden by the agent; node_modules was never listed into.
     expect(agent.calls.filter((c) => c.method === "list").map((c) => c.path)).toEqual(["proj", "proj/lib"]);
   });
 
-  it("forwards the person's answers to the manifest's inputs as env (INPUT_<NAME> first, the decide URL ours); refuses bad env", async () => {
+  it("forwards the person's answers to the manifest's inputs as env, nothing of ours; refuses bad env", async () => {
     await as("vw1");
     const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }));
     vi.stubGlobal("fetch", fetchMock);
-    const res = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py", env: { INPUT_DESC: "해질녘 바다", INPUT_TOP_K: 5, INPUT_DRY: true, AINIZE_DECIDE_URL: "https://evil" } }), ctx);
+    const res = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py", env: { INPUT_DESC: "해질녘 바다", INPUT_TOP_K: 5, INPUT_DRY: true } }), ctx);
     expect(res.status).toBe(200);
     const sent = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
-    expect(sent.env).toEqual({ INPUT_DESC: "해질녘 바다", INPUT_TOP_K: "5", INPUT_DRY: "true", AINIZE_DECIDE_URL: "https://ainize.example.test/api/decide" });
+    expect(sent.env).toEqual({ INPUT_DESC: "해질녘 바다", INPUT_TOP_K: "5", INPUT_DRY: "true" });
     for (const env of [{ "bad-name": "x" }, { A: "x".repeat(2049) }, Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`I${i}`, "v"])), [1], "x", { A: { nested: 1 } }]) {
       const bad = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py", env }), ctx);
       expect(bad.status, JSON.stringify(env).slice(0, 40)).toBe(400);
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs AS the person: aindrive's machine token for ainize + X-AIN-Actor = the viewer's SSO subject; ainize's 403 is relayed", async () => {
+    const ISSUER = "https://sso.example.test";
+    const saved = { ...process.env };
+    process.env.AINDRIVE_SSO_ISSUER = ISSUER;
+    process.env.AINDRIVE_SSO_CLIENT_ID = "aindrive";
+    process.env.AINDRIVE_SSO_CLIENT_SECRET = "aindrive-secret";
+    const { resetServiceTokensForTests } = await import("../sso/service-token");
+    resetServiceTokensForTests();
+    db.prepare("INSERT INTO sso_identities (issuer, subject, user_id, link_method, linked_at) VALUES (?,?,?,?,?)").run(ISSUER, "acc_viewer", "vw1", "test", Date.now());
+    const seen: { url: string; init: RequestInit }[] = [];
+    let runAnswer: () => Response = () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      seen.push({ url, init: init ?? {} });
+      if (url === `${ISSUER}/.well-known/openid-configuration`) return Response.json({ issuer: ISSUER, token_endpoint: `${ISSUER}/oidc/token`, jwks_uri: `${ISSUER}/oidc/jwks` });
+      if (url === `${ISSUER}/oidc/token`) {
+        // client_credentials for the ainize origin, as aindrive itself
+        expect(String(init?.body)).toBe("grant_type=client_credentials&resource=https%3A%2F%2Fainize.example.test");
+        return Response.json({ access_token: "svc_token_for_ainize", token_type: "Bearer", expires_in: 300 });
+      }
+      if (url === "https://ainize.example.test/api/run") return runAnswer();
+      return new Response("not found", { status: 404 });
+    }));
+    try {
+      await as("vw1");
+      const res = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx);
+      expect(res.status).toBe(200);
+      const run = seen.find((s) => s.url.endsWith("/api/run"))!;
+      const headers = run.init.headers as Record<string, string>;
+      expect(headers.authorization).toBe("Bearer svc_token_for_ainize");
+      expect(headers["x-ain-actor"]).toBe("acc_viewer");
+      expect(JSON.parse(run.init.body as string).env).toEqual({});
+      // the token is cached: a second press mints nothing new
+      await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx);
+      expect(seen.filter((s) => s.url === `${ISSUER}/oidc/token`)).toHaveLength(1);
+      // ainize refusing the person (suspended) or us (untrusted app) is seen as such, not as a runner error
+      runAnswer = () => Response.json({ error: "account_suspended", message: "This account is suspended." }, { status: 403 });
+      const refused = await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx);
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toEqual({ error: "account_suspended", detail: "This account is suspended." });
+      // a person with no SSO identity still runs — anonymously, with no key on ainize's side
+      await as("ed1");
+      runAnswer = () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+      await runRoute.POST(post("http://x/api", { repo: "proj", entry: "main.py" }), ctx);
+      const anon = seen.at(-1)!.init.headers as Record<string, string>;
+      expect(anon.authorization).toBeUndefined();
+      expect(anon["x-ain-actor"]).toBeUndefined();
+    } finally {
+      db.prepare("DELETE FROM sso_identities WHERE subject = ?").run("acc_viewer");
+      for (const k of ["AINDRIVE_SSO_ISSUER", "AINDRIVE_SSO_CLIENT_ID", "AINDRIVE_SSO_CLIENT_SECRET"]) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+      resetServiceTokensForTests();
+    }
   });
 
   it("relays ainize 503 as 'runner unavailable', and refuses bad entries / strangers before contacting ainize", async () => {
