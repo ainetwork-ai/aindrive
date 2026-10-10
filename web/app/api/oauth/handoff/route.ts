@@ -8,6 +8,7 @@ import { issueAccountTokens } from '@/lib/account-tokens';
 import { adapterConfig } from '@/lib/sso/config';
 import { isAccountBlocked, resolveOrCreateUserForSubject } from '@/lib/sso/store.js';
 import { legacyLoginRefusal } from '@/lib/sso/policy';
+import { resolveAccountForWallet } from '@/lib/wallet';
 import { tryConsume, clientKey } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -45,6 +46,7 @@ export async function POST(req: Request) {
   const pair = db.transaction(() => {
     const userId = resolveHandoffAccount(db, proof, {
       ssoIssuer: adapterConfig()?.issuer, accountBlocked: isAccountBlocked, legacyRefusal: legacyLoginRefusal,
+      createWalletAccount: resolveAccountForWallet,
       createSsoAccount: (issuer, subject) => resolveOrCreateUserForSubject({
         issuer, subject, name: null, email: null, emailVerified: false,
         method: 'jit', actor: 'aincode-identity-handoff',

@@ -30,11 +30,11 @@ process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${client.client_id}=drives:read+dr
 db.prepare('INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)').run('person', 'person@example.com', 'Person', 'unused');
 db.prepare('INSERT INTO account_google (sub, account_id, email) VALUES (?, ?, ?)').run('verified-sub', 'person', 'person@example.com');
 
-function proof(sub = 'verified-sub', sso = false) {
+function proof(sub = 'verified-sub', sso = false, wallet = false) {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'ainize-drive-handoff+jwt' })).toString('base64url');
   const body = Buffer.from(JSON.stringify({ iss: 'https://ainize.ai', aud: 'https://drive.test', azp: client.client_id,
-    sub: `google:${sub}`, auth_type: sso ? 'sso' : 'google', ...(sso ? { sso_sub: sub } : {}), iat: now, exp: now + 60, jti: randomBytes(32).toString('base64url') })).toString('base64url');
+    sub: wallet ? sub : `google:${sub}`, auth_type: wallet ? 'wallet' : sso ? 'sso' : 'google', ...(sso ? { sso_sub: sub } : {}), iat: now, exp: now + 60, jti: randomBytes(32).toString('base64url') })).toString('base64url');
   const data = `${header}.${body}`;
   return `${data}.${sign(null, Buffer.from(data), privateKey).toString('base64url')}`;
 }
@@ -123,4 +123,28 @@ it('uses the cookie-free handoff grant at the actual Git HTTP route and enforces
   db.prepare('UPDATE account_tokens SET revoked_at = ? WHERE user_id = ?').run(Date.now(), 'person');
   expect((await gitHttpGET('handoff-drive', ['repositories', 'docs', 'info', 'refs'], gitRequest('receive-pack'))).status).toBe(401);
   expect(agent.calls).toHaveLength(calls);
+});
+
+it('prepares an unknown wallet account but refuses a linked payment-only wallet', async () => {
+  const address = '0x' + 'a'.repeat(40);
+  const first = await POST(request(proof(address, false, true)));
+  expect(first.status).toBe(200);
+  const grant = verifyAccountToken((await first.json()).access_token)!;
+  expect(db.prepare('SELECT account_id, login_enabled FROM account_wallets WHERE wallet_address = ?').get(address))
+    .toEqual({ account_id: grant.userId, login_enabled: 1 });
+  const again = await POST(request(proof(address, false, true)));
+  expect(verifyAccountToken((await again.json()).access_token)?.userId).toBe(grant.userId);
+  db.prepare('UPDATE account_wallets SET login_enabled = 0 WHERE wallet_address = ?').run(address);
+  expect((await POST(request(proof(address, false, true)))).status).toBe(401);
+  expect(db.prepare('SELECT login_enabled FROM account_wallets WHERE wallet_address = ?').get(address))
+    .toEqual({ login_enabled: 0 });
+});
+
+it('rolls back a new wallet identity when grant persistence fails', async () => {
+  const address = '0x' + 'b'.repeat(40);
+  db.exec("CREATE TRIGGER fail_wallet_handoff BEFORE INSERT ON account_tokens BEGIN SELECT RAISE(ABORT, 'wallet grant failure'); END");
+  await expect(POST(request(proof(address, false, true)))).rejects.toThrow('wallet grant failure');
+  db.exec('DROP TRIGGER fail_wallet_handoff');
+  expect(db.prepare('SELECT account_id FROM account_wallets WHERE wallet_address = ?').get(address)).toBeUndefined();
+  expect(db.prepare('SELECT id FROM users WHERE email = ?').get(address + '@wallet.aindrive.local')).toBeUndefined();
 });

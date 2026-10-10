@@ -1,13 +1,19 @@
 import { createHash } from 'node:crypto';
 
 /** Resolve a verified provider subject; never use an email, display name or a requested user id. */
-export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, legacyRefusal, createSsoAccount }) {
+export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, legacyRefusal, createSsoAccount, createWalletAccount }) {
   if (typeof accountBlocked !== 'function' || typeof legacyRefusal !== 'function') return null;
   let row;
   if (proof.authType === 'google' && proof.principal.startsWith('google:')) {
     row = db.prepare('SELECT account_id AS id FROM account_google WHERE sub = ?').get(proof.principal.slice(7));
   } else if (proof.authType === 'wallet' && /^0x[0-9a-f]{40}$/.test(proof.principal)) {
     row = db.prepare('SELECT account_id AS id FROM account_wallets WHERE wallet_address = ? AND login_enabled = 1').get(proof.principal);
+    // A payment-only link must never be upgraded into login permission by a handoff.
+    if (!row && !db.prepare('SELECT account_id AS id FROM account_wallets WHERE wallet_address = ?').get(proof.principal)
+      && typeof createWalletAccount === 'function') {
+      const id = createWalletAccount(proof.principal);
+      if (id) row = { id };
+    }
   } else if (proof.authType === 'sso' && ssoIssuer && proof.ssoSubject) {
     row = db.prepare('SELECT user_id AS id FROM sso_identities WHERE issuer = ? AND subject = ?').get(ssoIssuer, proof.ssoSubject);
     if (!row && typeof createSsoAccount === 'function') {
