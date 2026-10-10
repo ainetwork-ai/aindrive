@@ -85,7 +85,10 @@ describe("GET git-meta", () => {
     expect(body).toMatchObject({ exists: true, branch: "main", dirty: 2, head: HEAD, commits: [HEAD] });
     expect(body.cloneUrl).toBe("https://drive.example.test/api/drives/d1/git/proj");
     expect(body.ainizeUrl).toBe("https://ainize.example.test");
-    expect(agent.calls).toEqual([{ method: "git-meta", repo: "proj" }]);
+    // git-meta first; then the manifest read / root list for the panel's Run row.
+    expect(agent.calls[0]).toEqual({ method: "git-meta", repo: "proj" });
+    expect(body.manifest).toBeNull();
+    expect(body.entry).toBe("main.py");
   });
 
   it("answers exists:false for a plain folder, and refuses a stranger before asking the agent", async () => {

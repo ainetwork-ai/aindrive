@@ -648,6 +648,21 @@ function open() {
       PRIMARY KEY (drive_id, path)
     );
   `);
+  // ainize Projects bound to a repo folder (lib/git-project-hooks.ts): the
+  // project id and its sealed webhook secret, written by POST git-connect,
+  // read after a successful push to sign the project's hook call.
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS git_project_hooks (
+      drive_id TEXT NOT NULL,
+      repo TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      secret_enc TEXT NOT NULL,
+      created_by TEXT,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (drive_id, repo),
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a
