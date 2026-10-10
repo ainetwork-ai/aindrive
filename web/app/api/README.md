@@ -48,6 +48,9 @@ Drives (`drives/[driveId]/…`, owner/member gated):
 | `agents/[agentId]/ask` | A2A ask; identity→policy→CLI execution. Tiered rate limit; outputs map to 200/401/402/429. |
 | `agents/[agentId]/.well-known/agent-card.json` | public A2A AgentCard (secrets stripped). |
 | `yjs` (GET/POST) | collaborative-doc read (viewer) / write (editor) via agent RPC. |
+| `git-meta` (GET `?repo=`) | the web git panel's data for a folder that is a git repo (`components/git-panel.tsx`): agent `git-meta` (branch, HEAD, last 10 commits, dirty count) + the clone URL (`lib/git-clone-url.ts`: friendly `/<org-slug>/git/<repo>` when the drive's org slug resolves back to it, else `/api/drives/<id>/git/<repo>`). Viewer at the folder; a plain folder answers `{exists:false}`. |
+| `git-commit` (POST `{repo, message}`) | `git add -A && git commit` on the agent, authored by the signed-in user's name + email. Editor at the repo (the role that may push). Empty message / clean tree / non-repo → 400 with the agent's message. |
+| `run` (POST `{repo, entry}`) | runs one `.py`/`.js`/`.mjs` file of a repo folder on **ainize**: the repo's text files are gathered through the agent (`lib/run-ainize.ts`: `.git`/deps skipped, 32 files / 2 MiB) and sent to `POST ${AINIZE_URL}/api/run`; its `text/event-stream` (`stdout`/`stderr`/`exit`/`error`) is relayed unchanged. Viewer at the repo (nothing runs on the agent). ainize 503 → 503 `runner unavailable`. |
 | `mcp-tokens` (GET/POST), `mcp-tokens/[tokenId]` (DELETE) | remote-MCP PATs + OAuth-connected apps. Any member issues (scope clamped to role); owner sees/revokes all. See `app/mcp/README.md`. |
 
 File ops (`drives/[driveId]/fs/…`) — all go through the agent WS bridge, all

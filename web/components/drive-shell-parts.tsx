@@ -5,7 +5,7 @@
 // markup only — behavior is unchanged because state ownership is unchanged.
 import Link from "next/link";
 import clsx from "clsx";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ChevronRight, FolderOpen, Upload, AlertTriangle, List, LayoutGrid,
   FolderPlus, Plus, Share2, HardDrive, Bot, MessageSquare, Menu as MenuIcon, Lock,
@@ -18,6 +18,8 @@ import type { ShowcaseItem } from "@/lib/showcase";
 import { RowMenu, rowMenuItems, type Action } from "./row-menu";
 import { fileIcon, fileIconForName, FileBadge } from "./file-icons";
 import { Badge, Button, Card, EmptyState, IconButton, Menu, Skeleton, Tooltip, type MenuItem } from "@/components/ui";
+import { RUN_IDLE, runLanguageFor } from "@/lib/git-panel";
+import { RunActions, RunOutput, useRunner } from "./run-output";
 
 // Shared grid track for FileGrid + its skeleton so the loading state matches.
 const GRID_CLASS = "grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3";
@@ -479,7 +481,7 @@ function ViewToggle({ viewMode, setViewMode }: { viewMode: ViewMode; setViewMode
 
 export function FileTable({
   loading, err, paywall, driveId, entries, sort, onSort, query, onQuery, paidByPath, selected, setSelected, setPath, canEdit, onRowAction, onMove, isOwner, onUpload, viewMode,
-  onNewFolder, ctxMenu, setCtxMenu,
+  onNewFolder, ctxMenu, setCtxMenu, gitRepo = null, ainizeUrl = "https://ainize.ai",
 }: {
   loading: boolean;
   err: string | null;
@@ -504,7 +506,14 @@ export function FileTable({
   onNewFolder: () => void;
   ctxMenu: { entry: DriveEntry | null; x: number; y: number } | null;
   setCtxMenu: (v: { entry: DriveEntry | null; x: number; y: number } | null) => void;
+  /** the listed folder when it is a git repo (git panel shown) — enables ▶ Run on its .py/.js/.mjs files */
+  gitRepo?: string | null;
+  ainizeUrl?: string;
 }) {
+  // ▶ Run (components/run-output.tsx): only inside a repo folder, list view.
+  const runner = useRunner(driveId, gitRepo);
+  const runnable = (e: DriveEntry) => gitRepo !== null && !e.isDir && !e.locked && runLanguageFor(e.name) !== null;
+
   // Hidden input backing the context-menu "Upload…" item (no label wrapper
   // here — the menu item clicks it programmatically).
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -645,6 +654,7 @@ export function FileTable({
             <SortHeader label="Name" k="name" sort={sort} onSort={onSort} className="text-left font-medium px-3 pb-2" />
             <SortHeader label="Modified" k="mtime" sort={sort} onSort={onSort} className="text-left font-medium px-3 pb-2 hidden sm:table-cell w-44" />
             <SortHeader label="Size" k="size" sort={sort} onSort={onSort} align="right" className="text-right font-medium px-3 pb-2 hidden md:table-cell w-28" />
+            {gitRepo !== null && <th className="w-40" />}
             <th className="w-10" />
           </tr>
         </thead>
@@ -653,9 +663,11 @@ export function FileTable({
             const paid = paidByPath.get(e.path);
             const ic = fileIcon(e);
             const isSelected = selected?.path === e.path;
+            const run = runner.runs[e.path];
+            const showOutput = !!run && run.status !== "idle" && !!runner.open[e.path];
             return (
+              <Fragment key={e.path}>
               <tr
-                key={e.path}
                 className={clsx(
                   "group h-11 cursor-pointer transition-colors",
                   isSelected ? "bg-drive-selected/60" : "hover:bg-drive-hover",
@@ -691,6 +703,19 @@ export function FileTable({
                 <td className="px-3 align-middle hidden md:table-cell text-right text-caption text-drive-muted tabular-nums">
                   {e.isDir ? "—" : prettyBytes(e.size)}
                 </td>
+                {gitRepo !== null && (
+                  <td className="px-3 align-middle text-right">
+                    {runnable(e) && (
+                      <RunActions
+                        state={run ?? RUN_IDLE}
+                        isOpen={!!runner.open[e.path]}
+                        onRun={() => runner.run(e.path)}
+                        onStop={() => runner.stop(e.path)}
+                        onToggle={() => runner.toggle(e.path)}
+                      />
+                    )}
+                  </td>
+                )}
                 <td className="px-1 align-middle text-right whitespace-nowrap last:rounded-r-lg">
                   {canEdit && (
                     <RowMenu
@@ -702,6 +727,14 @@ export function FileTable({
                   )}
                 </td>
               </tr>
+              {showOutput && run && (
+                <tr>
+                  <td colSpan={5} className="px-3 pb-2 pt-1">
+                    <RunOutput state={run} entryName={e.name} ainizeUrl={ainizeUrl} />
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             );
           })}
         </tbody>

@@ -27,6 +27,16 @@ Browser shell:
 - `drive-shell(.tsx/-parts)` — file browser: sidebar, header/breadcrumbs,
   grid+list, selection, sort/search, showcase section. Its location (listed
   folder + open file) is mirrored in `?path` and history state.
+- `git-panel` — shown above the listing when the folder is a git repo
+  (`GET git-meta` answers `exists:true`): branch, HEAD, recent commits, clone
+  URL + copy, and for editors with a dirty tree a commit box. Data lives in the
+  shell (one fetch per folder, refetched after a commit / a save).
+- `run-output` — ▶ Run for `.py`/`.js`/`.mjs` rows inside such a folder:
+  `useRunner` streams `POST run` (ainize) into one state per file
+  (`lib/git-panel.ts` reducer); `RunActions` = Vercel-style inline links + status
+  dot (grey pulsing running / green exit 0 / red failed / amber runner
+  unavailable); `RunOutput` = the panel under the row (stdout/stderr, exit code,
+  duration, "Open in ainize").
 - `file-icons` — file-type → icon+color map (list rows + grid cards share it).
 - `row-menu` — single source for the `⋮` dropdown + right-click context-menu
   items, with permission gates (sell/share owner-only; rename/delete = canManage).
