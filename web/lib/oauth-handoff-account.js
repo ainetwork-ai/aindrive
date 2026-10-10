@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 /** Resolve a verified provider subject; never use an email, display name or a requested user id. */
-export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, legacyRefusal }) {
+export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, legacyRefusal, createSsoAccount }) {
   if (typeof accountBlocked !== 'function' || typeof legacyRefusal !== 'function') return null;
   let row;
   if (proof.authType === 'google' && proof.principal.startsWith('google:')) {
@@ -10,6 +10,10 @@ export function resolveHandoffAccount(db, proof, { ssoIssuer, accountBlocked, le
     row = db.prepare('SELECT account_id AS id FROM account_wallets WHERE wallet_address = ? AND login_enabled = 1').get(proof.principal);
   } else if (proof.authType === 'sso' && ssoIssuer && proof.ssoSubject) {
     row = db.prepare('SELECT user_id AS id FROM sso_identities WHERE issuer = ? AND subject = ?').get(ssoIssuer, proof.ssoSubject);
+    if (!row && typeof createSsoAccount === 'function') {
+      const id = createSsoAccount(ssoIssuer, proof.ssoSubject);
+      if (id) row = { id };
+    }
   }
   if (!row || !db.prepare('SELECT id FROM users WHERE id = ?').get(row.id) || accountBlocked(row.id)) return null;
   if (proof.authType !== 'sso' && legacyRefusal(row.id)) return null;

@@ -19,11 +19,11 @@ process.env.AINDRIVE_TRUSTED_OAUTH_CLIENTS = `${client.client_id}=drives:read+dr
 db.prepare('INSERT INTO users (id, email, name, password_hash) VALUES (?, ?, ?, ?)').run('person', 'person@example.com', 'Person', 'unused');
 db.prepare('INSERT INTO account_google (sub, account_id, email) VALUES (?, ?, ?)').run('verified-sub', 'person', 'person@example.com');
 
-function proof(sub = 'verified-sub') {
+function proof(sub = 'verified-sub', sso = false) {
   const now = Math.floor(Date.now() / 1000);
   const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'ainize-drive-handoff+jwt' })).toString('base64url');
   const body = Buffer.from(JSON.stringify({ iss: 'https://ainize.ai', aud: 'https://drive.test', azp: client.client_id,
-    sub: `google:${sub}`, auth_type: 'google', iat: now, exp: now + 60, jti: randomBytes(32).toString('base64url') })).toString('base64url');
+    sub: `google:${sub}`, auth_type: sso ? 'sso' : 'google', ...(sso ? { sso_sub: sub } : {}), iat: now, exp: now + 60, jti: randomBytes(32).toString('base64url') })).toString('base64url');
   const data = `${header}.${body}`;
   return `${data}.${sign(null, Buffer.from(data), privateKey).toString('base64url')}`;
 }
@@ -58,4 +58,35 @@ it('rolls back nonce consumption when token persistence fails', async () => {
   db.exec('DROP TRIGGER fail_handoff_grant');
   expect((await POST(request(token))).status).toBe(200);
   expect(db.prepare('SELECT COUNT(*) AS n FROM account_tokens').get()).toEqual({ n: 2 });
+});
+
+it('prepares a first-time SSO account without cookies and reuses its exact subject mapping', async () => {
+  process.env.AINDRIVE_SSO_ISSUER = 'https://auth.test';
+  process.env.AINDRIVE_SSO_CLIENT_ID = 'drive';
+  const first = await POST(request(proof('first-time-sso', true)));
+  expect(first.status).toBe(200);
+  const pair = await first.json();
+  const grant = verifyAccountToken(pair.access_token)!;
+  const mapping = db.prepare('SELECT user_id FROM sso_identities WHERE issuer = ? AND subject = ?')
+    .get('https://auth.test', 'first-time-sso') as { user_id: string };
+  expect(mapping.user_id).toBe(grant.userId);
+  expect(grant.userId).not.toBe('person');
+  const second = await POST(request(proof('first-time-sso', true)));
+  expect(second.status).toBe(200);
+  expect(verifyAccountToken((await second.json()).access_token)?.userId).toBe(grant.userId);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM sso_identities WHERE issuer = ? AND subject = ?')
+    .get('https://auth.test', 'first-time-sso')).toEqual({ n: 1 });
+  db.prepare('INSERT INTO sso_memberships (issuer, org_id, subject, user_id, status, applied_version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run('https://auth.test', 'org', 'first-time-sso', grant.userId, 'suspended', 1, Date.now());
+  expect((await POST(request(proof('first-time-sso', true)))).status).toBe(401);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM sso_identities WHERE issuer = ? AND subject = ?')
+    .get('https://auth.test', 'first-time-sso')).toEqual({ n: 1 });
+});
+
+it('rolls back a newly prepared SSO account if grant persistence fails', async () => {
+  db.exec("CREATE TRIGGER fail_new_handoff BEFORE INSERT ON account_tokens BEGIN SELECT RAISE(ABORT, 'new account grant failure'); END");
+  await expect(POST(request(proof('rollback-sso', true)))).rejects.toThrow('new account grant failure');
+  db.exec('DROP TRIGGER fail_new_handoff');
+  expect(db.prepare('SELECT user_id FROM sso_identities WHERE issuer = ? AND subject = ?')
+    .get('https://auth.test', 'rollback-sso')).toBeUndefined();
 });

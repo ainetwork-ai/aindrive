@@ -6,7 +6,7 @@ import { parseTrustedOAuthClients } from '@/lib/oauth-trusted';
 import { baseUrl, getClient, type AccountScope } from '@/lib/oauth';
 import { issueAccountTokens } from '@/lib/account-tokens';
 import { adapterConfig } from '@/lib/sso/config';
-import { isAccountBlocked } from '@/lib/sso/store.js';
+import { isAccountBlocked, resolveOrCreateUserForSubject } from '@/lib/sso/store.js';
 import { legacyLoginRefusal } from '@/lib/sso/policy';
 import { tryConsume, clientKey } from '@/lib/rate-limit';
 
@@ -45,6 +45,10 @@ export async function POST(req: Request) {
   const pair = db.transaction(() => {
     const userId = resolveHandoffAccount(db, proof, {
       ssoIssuer: adapterConfig()?.issuer, accountBlocked: isAccountBlocked, legacyRefusal: legacyLoginRefusal,
+      createSsoAccount: (issuer, subject) => resolveOrCreateUserForSubject({
+        issuer, subject, name: null, email: null, emailVerified: false,
+        method: 'jit', actor: 'aincode-identity-handoff',
+      }).userId,
     });
     if (!userId || !consumeHandoffNonce(db, proof)) return null;
     return issueAccountTokens({ userId, clientId: client.client_id, clientName: client.client_name, scopes });
