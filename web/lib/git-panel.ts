@@ -80,13 +80,21 @@ export function parseRunEvent(block: string): RunEvent | null {
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
   }
   if (dataLines.length === 0) return null;
+  // ainize's run API sends each stdout/stderr chunk as a JSON *string* (`data: "line\n"`), and exit/error as
+  // objects/strings — so a parsed string IS the text, an object carries fields, and unparsable data is raw text.
   let data: Record<string, unknown> = {};
-  try { data = JSON.parse(dataLines.join("\n")) as Record<string, unknown>; } catch { data = { text: dataLines.join("\n") }; }
+  try {
+    const parsed: unknown = JSON.parse(dataLines.join("\n"));
+    data = typeof parsed === "string" ? { text: parsed } : (parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : { text: String(parsed) });
+  } catch { data = { text: dataLines.join("\n") }; }
   switch (event) {
     case "stdout":
     case "stderr": return { type: event, text: String(data.text ?? "") };
-    case "exit": return { type: "exit", code: Number(data.code ?? 0), durationMs: typeof data.durationMs === "number" ? data.durationMs : undefined };
-    case "error": return { type: "error", message: String(data.message ?? "run failed") };
+    case "exit": {
+      const ms = typeof data.durationMs === "number" ? data.durationMs : typeof data.ms === "number" ? data.ms : undefined;
+      return { type: "exit", code: Number(data.code ?? 0), durationMs: ms };
+    }
+    case "error": return { type: "error", message: String(data.message ?? data.text ?? "run failed") };
     default: return null;
   }
 }

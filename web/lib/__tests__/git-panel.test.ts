@@ -31,6 +31,11 @@ describe("reduceRun", () => {
 });
 
 describe("SSE parsing", () => {
+  it("accepts ainize's JSON-string chunks, {code, ms} exits and string errors", () => {
+    expect(parseSseEvent('event: stdout\ndata: "=== rank ===\\n  1. 0.69 a6\\n"')).toEqual({ type: "stdout", text: "=== rank ===\n  1. 0.69 a6\n" });
+    expect(parseSseEvent('event: exit\ndata: {"code":0,"ms":1315}')).toEqual({ type: "exit", code: 0, durationMs: 1315 });
+    expect(parseSseEvent('event: error\ndata: "timeout after 120000ms"')).toEqual({ type: "error", message: "timeout after 120000ms" });
+  });
   it("splits complete blocks and keeps the partial tail", () => {
     const { blocks, rest } = splitSse("event: stdout\ndata: {\"text\":\"x\"}\n\nevent: exit\ndata: {\"co");
     expect(blocks).toHaveLength(1);
