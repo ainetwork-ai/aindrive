@@ -94,7 +94,9 @@ export async function runSkill(
     }
     // Owned AND member drives (same set as /api/oauth/drives).
     // No owner_id: other users' internal ids stay private (as /api/oauth/drives).
-    const rows = listUserDrives(ctx.userId).map((d) => ({ id: d.id, name: d.name, role: maxRoleInDrive(d.id, ctx.userId) }));
+    const rows = listUserDrives(ctx.userId).map((d) => ({
+      id: d.id, name: d.name, role: maxRoleInDrive(d.id, ctx.userId), orgId: (d as { org_id?: string }).org_id ?? null,
+    }));
     const text = rows.length === 0
       ? "(no drives)"
       : rows.map((r) => `${r.id} — ${r.name}`).join("\n");
