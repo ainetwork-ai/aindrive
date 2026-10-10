@@ -5,6 +5,7 @@
  * (app/api/oauth/drives/[driveId]/{members,access-check}, scope drives:share /
  * drives:read), so both enforce the same rules.
  */
+import { recipientForEmail } from "./recipient-address.js";
 import { nanoid } from "nanoid";
 import { db } from "./db";
 import { getDrive } from "./drives";
@@ -36,7 +37,9 @@ export function grantByEmail(opts: { driveId: string; actorId: string; email: st
   if (role === "owner" && drive.owner_id !== actorId) {
     return { status: 403, body: { error: "only the drive creator can grant the owner role" } };
   }
-  const invitee = db.prepare("SELECT id FROM users WHERE lower(email) = lower(?)").get(email) as { id: string } | undefined;
+  const recipient = recipientForEmail(email);
+  if (recipient.ambiguous) return { status: 409, body: { error: "recipient_address_conflict" } };
+  const invitee = recipient.userId ? { id: recipient.userId } : null;
   if (!invitee) {
     addInvite(driveId, email, path, role, actorId);
     return { status: 202, body: { ok: true, pending: true } };
@@ -68,10 +71,11 @@ export type Access = "owner" | "editor" | "viewer" | "pending" | "none";
  * does not reveal whether an address has an account.
  */
 export function accessForEmails(driveId: string, path: string, emails: string[]): { email: string; access: Access }[] {
-  const findUser = db.prepare("SELECT id FROM users WHERE lower(email) = lower(?)");
   const invites = db.prepare("SELECT path, role FROM drive_invites WHERE drive_id = ? AND email = lower(?)");
   return emails.map((email) => {
-    const user = findUser.get(email) as { id: string } | undefined;
+    const recipient = recipientForEmail(email);
+    if (recipient.ambiguous) return { email, access: "none" };
+    const user = recipient.userId ? { id: recipient.userId } : null;
     if (user) {
       const role = resolveRole(driveId, user.id, path);
       if (role !== "none") return { email, access: role as Access };

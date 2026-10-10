@@ -62,3 +62,22 @@ force. Regression coverage: `lib/__tests__/oauth-revocation.test.ts` plus the
 existing SSO and organization OAuth tests.
 
 Protocol reference: [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009.html).
+
+### Organization recipient addresses
+
+Signed active provisioning stores `profile.workEmail` on the membership as a
+recipient alias, separately from `users.email`. Both member-sharing surfaces
+(cookie and OAuth) resolve the configured issuer's active alias through the
+canonical identity. JIT-first and provisioning-first accounts therefore share
+by the organization's address without rewriting personal email or linking by
+email. Turning off the adapter (issuer/client id unset) disables alias use.
+
+An address mapping to different accounts, including a direct email collision,
+returns `recipient_address_conflict` (409) when granting; access-check reports
+none. Pending invitations are claimed only after unambiguous active verified
+provisioning. Invalid and reserved addresses never become aliases. Changes are
+versioned with provisioning; suspension/deprovisioning and address changes stop
+alias resolution. Existing explicit personal grants stay on the same account
+and never move to someone who later receives that address. Organization grants
+still follow the separate live membership policy. Existing membership rows
+need a newer signed push to populate the new nullable work_email column.
