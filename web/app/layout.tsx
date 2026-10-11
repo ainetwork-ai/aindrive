@@ -21,9 +21,14 @@ const sans = Inter({
   display: "swap",
 });
 
+const title = "AIN Drive | Share files, edit code, run projects";
+const description = "Share files and Git repositories with your team and AI agents. Edit code in your browser and run projects from any branch or commit.";
+
 export const metadata: Metadata = {
-  title: "aindrive — your folder, on the web",
-  description: "Self-hosted Google Drive. Run `aindrive` in any local folder and share it like a Drive.",
+  title,
+  description,
+  openGraph: { type: "website", title, description },
+  twitter: { card: "summary", title, description },
 };
 
 export const viewport: Viewport = {
