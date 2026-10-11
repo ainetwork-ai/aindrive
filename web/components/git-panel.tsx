@@ -10,6 +10,8 @@
 // and is what deploys (POST git-sc). Data loading for git-meta stays in the
 // shell (one fetch per folder, refetched after every action); the ainize reads
 // live here and degrade silently.
+// Metadata and Run start collapsed so the file listing stays visible. Their
+// separate disclosures preserve the current form and running output.
 import { useEffect, useId, useState } from "react";
 import clsx from "clsx";
 import { GitBranch, GitCommitHorizontal, Copy, Check, ChevronDown, ChevronUp, ExternalLink, ArrowUp, ArrowDown, Plus, Minus, Undo2 } from "lucide-react";
@@ -65,6 +67,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
   onCommitted: () => void;
 }) {
   const [showLog, setShowLog] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
@@ -106,7 +109,8 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
   const runOptionsId = useId();
   const [runExpanded, setRunExpanded] = useState(false);
   useEffect(() => {
-    setRunExpanded(window.matchMedia('(min-width: 640px)').matches);
+    setRunExpanded(false);
+    setDetailsExpanded(false);
   }, [driveId, repo]);
   const [runTarget, setRunTarget] = useState<"working-tree" | "commit" | "deployed">("working-tree");
   const [runSha, setRunSha] = useState("");
@@ -180,7 +184,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
       data-testid="git-panel"
     >
       {/* 1. branch + HEAD */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 min-h-11">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 min-h-11">
         <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 font-medium">
           <GitBranch className="w-4 h-4 text-drive-muted" aria-hidden="true" />
           <span className="font-mono text-caption truncate" title={meta.branch}>{meta.branch}</span>
@@ -194,13 +198,13 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
         {head ? (
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 w-full sm:w-auto sm:flex-1 text-caption text-drive-muted">
             <span className="font-mono text-drive-text">{shortSha(head.sha)}</span>
-            <span className="truncate min-w-0 flex-1 text-drive-text" title={head.subject}>{head.subject}</span>
-            <span className="w-full sm:w-auto truncate">{head.author} · {relativeTime(head.date)}</span>
+            {detailsExpanded && <span className="truncate min-w-0 flex-1 text-drive-text" title={head.subject}>{head.subject}</span>}
+            {detailsExpanded && <span className="w-full sm:w-auto truncate">{head.author} · {relativeTime(head.date)}</span>}
           </span>
         ) : (
           <span className="text-caption text-drive-muted">No commits yet</span>
         )}
-        <span className="w-full sm:w-auto sm:ml-auto inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
+        <span className="ml-auto inline-flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
           {meta.dirty > 0 && (
             <span className="inline-flex items-center gap-1.5 text-drive-muted" title="Uncommitted changes in the working copy">
               <span className="inline-block h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
@@ -225,7 +229,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
           {isWorkingCopy && canEdit && ahead === 0 && behind === 0 && meta.dirty === 0 && head && (
             <span className="text-drive-muted" title="The working copy and the remote are the same">up to date</span>
           )}
-          {meta.commits.length > 0 && (
+          {detailsExpanded && meta.commits.length > 0 && (
             <button
               type="button"
               className="min-h-11 sm:min-h-0 inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
@@ -236,14 +240,18 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
               {showLog ? <ChevronUp className="w-3 h-3" aria-hidden="true" /> : <ChevronDown className="w-3 h-3" aria-hidden="true" />}
             </button>
           )}
-          {urls && (
+          {detailsExpanded && urls && (
             <a href={urls.commits} className="min-h-11 sm:min-h-0 inline-flex items-center font-medium text-drive-muted hover:text-drive-text" data-testid="git-panel-history">History</a>
           )}
+          <button type="button" aria-label="Repository details" aria-expanded={detailsExpanded} onClick={() => setDetailsExpanded((open) => !open)} className="inline-flex min-h-11 items-center gap-1 text-caption font-medium text-drive-muted hover:text-drive-text">
+            Details
+            {detailsExpanded ? <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" /> : <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />}
+          </button>
         </span>
       </div>
 
       {/* 2. clone URL */}
-      <div className={rowCls}>
+      {detailsExpanded && <div className={rowCls}>
         <span className={labelCls}>Clone</span>
         <code className="flex-1 min-w-0 truncate font-mono text-caption text-drive-text select-all" title={meta.cloneUrl}>{meta.cloneUrl}</code>
         <button
@@ -255,7 +263,7 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
           {copied ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Copy className="w-3.5 h-3.5" aria-hidden="true" />}
           {copied ? "Copied" : "Copy"}
         </button>
-      </div>
+      </div>}
 
       {meta.layout === "legacy" && (
         <div className={clsx(rowCls, "text-amber-800 bg-amber-50")} data-testid="git-panel-legacy" role="note">
@@ -343,11 +351,11 @@ export function GitPanel({ driveId, repo, meta, ainize, canEdit, onCommitted, ur
       {/* 4. Deployments (ainize Projects) — only for a repo that declares how it deploys (ainize.json). A repo
           without a manifest has nothing for ainize to build, so nothing is shown. With one and no project yet, the
           next push binds and deploys it (lib/git-project-hooks.ts) — there is no step to take. */}
-      {meta.manifest?.kind && (
+      {detailsExpanded && meta.manifest?.kind && (
         <Deployments ainizeUrl={meta.ainizeUrl} ainize={ainize} rowCls={rowCls} labelCls={labelCls} allHref={urls?.deployments} />
       )}
 
-      {showLog && (
+      {detailsExpanded && showLog && (
         <ol className="border-t border-drive-border divide-y divide-drive-border" aria-label="Recent commits">
           {meta.commits.map((c) => (
             <li key={c.sha} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 min-h-11 sm:min-h-9 py-2 text-caption min-w-0">
