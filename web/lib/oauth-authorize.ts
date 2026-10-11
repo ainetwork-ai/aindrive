@@ -9,11 +9,10 @@
  *   signed in through AIN SSO    (lib/oauth.ts skipsConsent + sameAinPerson)
  *   anything else              → the consent page
  *
- * Only an AIN SSO session skips consent: a password, Google or wallet session
- * can be planted by another site (login CSRF) or simply be another account
- * than the one the app signed in, and the consent screen's "Signed in as …" is
- * what stops that. With `login_hint` (the AIN subject the app signed the
- * person in with) the session must also be that subject's.
+ * A trusted client's exact login_hint can also name a verified Google subject
+ * or an enabled linked wallet. It must belong to the current Drive user;
+ * email/name matching and hints for another account never skip consent.
+ * With no hint, only a live AIN SSO session skips the screen, as before.
  *
  * Signing in, for a trusted client with AIN SSO login on: a silent check first
  * (prompt=none, once per browser per 30 min — the `ain_sso_checked` guard of
@@ -27,6 +26,7 @@
  * from "Not now" on /sso/link (signed in at AIN, no aindrive account linked).
  * With SSO login off: /login, as before.
  */
+import { db } from "./db";
 import { cookies } from "next/headers";
 import { currentSsoSession, getUser, type SessionUser } from "./session";
 import { clampScope, type McpScope } from "./mcp-tokens";
@@ -89,13 +89,23 @@ export async function signInLocation(params: AuthorizeParams): Promise<string> {
 /**
  * The session is the AIN person the trusted client means: a live AIN SSO
  * session (of the configured issuer) of this user and, when the request
- * carries `login_hint`, of that AIN subject. A legacy session never is.
+ * carries `login_hint`, of that AIN subject. Provider-prefixed hints additionally
+ * match the verified Google or wallet link of the current session account.
  */
 export async function sameAinPerson(userId: string, loginHint: string | null | undefined): Promise<boolean> {
+  // A fixed trusted callback and its PKCE/state bind the grant to the initiating
+  // Ainize account. Match provider subjects, never email addresses or names.
+  if (loginHint?.startsWith("google:")) {
+    return !!db.prepare("SELECT 1 FROM account_google WHERE account_id = ? AND sub = ?").get(userId, loginHint.slice(7));
+  }
+  if (/^0x[0-9a-f]{40}$/.test(loginHint ?? "")) {
+    return !!db.prepare("SELECT 1 FROM account_wallets WHERE account_id = ? AND wallet_address = ? AND login_enabled = 1").get(userId, loginHint);
+  }
   const cfg = ssoLoginConfig();
   const s = await currentSsoSession();
   if (!cfg || !s || s.user_id !== userId || s.issuer !== cfg.issuer) return false;
-  return !loginHint || s.subject === loginHint;
+  const subject = loginHint?.startsWith("sso:") ? loginHint.slice(4) : loginHint;
+  return !subject || s.subject === subject;
 }
 
 export type Approval = { ok: true; redirect: string } | { ok: false; error: string };

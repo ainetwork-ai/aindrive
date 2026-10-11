@@ -93,7 +93,7 @@ export async function gitHttpGET(driveId: string, path: string[], req: Request):
   }
   const svc = svcParam.slice("git-".length) as Service;
 
-  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req), service: true });
+  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req), service: true, oauthGit: true });
   if (gate instanceof NextResponse) return gate.status === 403 && !gateUser(req) ? deny(401, "auth required") : gate;
   const { drive } = gate;
 
@@ -131,7 +131,7 @@ export async function gitHttpPOST(driveId: string, path: string[], req: Request)
   if (!parsed || parsed.kind === "info") return deny(404, "not found");
   const svc = parsed.kind;
 
-  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req), service: true });
+  const gate = await requireDriveRole(driveId, parsed.repo, { min: minFor(svc), req: gitAuthRequest(req), service: true, oauthGit: true });
   if (gate instanceof NextResponse) return gate.status === 403 && !gateUser(req) ? deny(401, "auth required") : gate;
   const { drive } = gate;
   const secret = drive.drive_secret;

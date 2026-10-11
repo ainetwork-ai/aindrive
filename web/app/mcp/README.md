@@ -86,7 +86,7 @@ in (lib/sso), so it never gets a code.
 ### Trusted first-party clients — `AINDRIVE_TRUSTED_OAUTH_CLIENTS`
 
 The operator's own apps (AIN Teams) skip the consent screen: a visit of a
-valid request by a person signed in through AIN SSO is answered with the code
+valid request by a person whose verified account matches the first-party login hint is answered with the code
 at once (`lib/oauth.ts` `skipsConsent` + `lib/oauth-authorize.ts`
 `sameAinPerson`, list parsed by `lib/oauth-trusted.js`).
 
@@ -96,12 +96,19 @@ at once (`lib/oauth.ts` `skipsConsent` + `lib/oauth-authorize.ts`
   always needs the click. Unset = none (every client asks). Read per request;
   a malformed entry trusts nobody and fails the production boot. Register the
   client once (`POST /api/oauth/register`), then list its id.
-- Only an **AIN SSO session** (live, of the configured issuer) skips consent.
-  A password, Google or wallet session gets the consent screen, whose "Signed
-  in as …" is what stops a session another site planted (login CSRF) or
-  simply another account than the app's person. With `login_hint=<AIN sub>`
-  (the subject the app signed the person in with; first-party apps get public
-  subs) the session must also be that subject's; any other → consent screen.
+- A live AIN SSO session of the configured issuer must match the raw or
+  `sso:<subject>` hint. `google:<subject>` must match the account's verified
+  Google provider subject; a wallet hint must match an enabled linked wallet.
+  Email addresses and client names never prove identity. Password sessions
+  without the matching verified provider and mismatched hints still show consent.
+  Skipping consent does not replace authentication: a browser without an
+  AinDrive session still goes through its sign-in flow.
+- Ainize documentation practice uses one operator-registered client with the
+  exact `/code/_practice/drive/callback` and `/code-docs/_practice/drive/callback`
+  HTTPS callbacks and the `drives:read+drives:write` ceiling. Set its public
+  ID as `AINCODE_DRIVE_CLIENT_ID` in the AinCode gateway and persist the trusted
+  entry in AinDrive's deployment environment, preserving existing entries.
+  Do not register a new application for every practice or reconnect.
 - Only after the same validation as any client (registered exact
   `redirect_uri`, PKCE S256, valid scopes) and only for an **https**
   `redirect_uri` — loopback http / private-use schemes always ask (any program
