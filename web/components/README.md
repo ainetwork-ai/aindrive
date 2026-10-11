@@ -29,7 +29,9 @@ Browser shell:
   folder + open file) is mirrored in `?path` and history state.
 - `git-panel` — shown above the listing when the folder is a git repo
   (`GET git-meta` answers `exists:true`); the folder is the repo's **working
-  copy** (`lib/git-paths.ts`). Top to bottom: branch + HEAD (+ `ainize.json`
+  copy** (`lib/git-paths.ts`). It starts compact on every screen: **Details**
+  expands commit metadata, clone URL, deployments and history; **Run** independently
+  expands the saved execution form and output. Top to bottom: branch + HEAD (+ `ainize.json`
   name/kind) + **Push N / Pull N** (vs the bare remote; Pull only when clean) ·
   clone URL + copy · legacy-layout hint · **Run** (the project's entry: manifest
   `entry`, else the root's first runnable file; shares `useRunner`, output right
