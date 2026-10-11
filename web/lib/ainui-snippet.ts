@@ -33,6 +33,7 @@ export type A2uiMessage =
 
 export type SnippetAction =
   | { method: "GET"; url: string; navigate: true }
+  | { method: "GET"; url: string; navigate: false; replace: true }
   | { method: "POST"; url: string; body: Record<string, unknown>; stream?: "sse"; output?: { path: string; status: string } };
 
 export type SnippetKind = "aindrive.repo" | "aindrive.file" | "denied";
@@ -81,10 +82,10 @@ function surface(surfaceId: string, components: A2uiComponent[], data: Record<st
  * entry named, ▶ Run → `run` with the answers as `INPUT_<NAME>` context (what the
  * run route takes as `env`), status and output bound to `/run/*`.
  */
-export function runBlock(entry: string, inputs: ManifestInput[]): { components: A2uiComponent[]; data: Record<string, unknown>; context: Record<string, unknown> } {
+export function runBlock(entry: string, inputs: ManifestInput[], sha?: string): { components: A2uiComponent[]; data: Record<string, unknown>; context: Record<string, unknown> } {
   const comps: A2uiComponent[] = [];
   const fields: string[] = [];
-  const inputsData: Record<string, string> = {};
+  const inputsData: Record<string, string | string[]> = {};
   const context: Record<string, unknown> = {};
   for (const i of inputs) {
     const id = `run.input.${i.name}`;
@@ -93,17 +94,19 @@ export function runBlock(entry: string, inputs: ManifestInput[]): { components: 
     if (i.required) label += " *";
     if (i.type === "choice" && i.options) label += ` (${i.options.join(" | ")})`;
     if (i.type === "boolean") label += " (true | false)";
-    comps.push({ id, component: "TextField", label, value: bind(path), ...(i.type === "number" ? { variant: "number" } : {}) });
+    const options = i.type === "choice" ? i.options : i.type === "boolean" ? ["true", "false"] : null;
+    comps.push(options ? { id, component: "ChoicePicker", label, value: bind(path), variant: "mutuallyExclusive", options: options.map((value) => ({ label: value, value })) } : { id, component: "TextField", label, value: bind(path), ...(i.type === "number" ? { variant: "number" } : {}) });
     fields.push(id);
-    inputsData[i.name] = i.default ?? "";
+    inputsData[i.name] = options ? (i.default === null ? [] : [i.default]) : i.default ?? "";
     context[inputEnvName(i.name)] = bind(path);
   }
   comps.push(text("run.entry", `▶ Run ${entry}`, "h5"));
+  if (sha) comps.push(text("run.commit", `Commit ${shortSha(sha)}`, "caption"));
   comps.push(...button("run.button", "Run", "run", { context, variant: "primary" }));
   comps.push(row("run.controls", ["run.entry", "run.button", "run.status"]));
   comps.push(text("run.status", bind("/run/status"), "caption"));
   comps.push(text("run.output", bind("/run/output"), "body"));
-  comps.push(column("run.body", [...fields, "run.controls", "run.output"]));
+  comps.push(column("run.body", [...fields, ...(sha ? ["run.commit"] : []), "run.controls", "run.output"]));
   comps.push(card("run", "run.body"));
   return { components: comps, data: { inputs: inputsData, run: { status: "idle", output: "" } }, context };
 }
@@ -141,6 +144,19 @@ export function deploymentsBlock(project: AinizeProject, deployments: AinizeDepl
 
 // ------------------------------------------------------------------------------------------ snippets
 
+export type SourceVersions = { selected: string; baseUrl: string };
+function versionBlock(versions: SourceVersions, actions: Record<string, SnippetAction>): A2uiComponent[] {
+  const components: A2uiComponent[] = [text('source.selected', `Run version · ${versions.selected}`, 'caption')];
+  const children = ['source.selected'];
+  for (const [target, label] of [['head', 'Latest commit'], ['deployed', 'Deployed version'], ['working-tree', 'Working tree']] as const) {
+    const url = new URL(versions.baseUrl); url.searchParams.set('runTarget', target); url.searchParams.delete('runSha');
+    const name = `select:${target}`, id = `source.${target}`;
+    actions[name] = { method: 'GET', url: url.href, navigate: false, replace: true };
+    components.push(...button(id, label, name, { variant: 'borderless' })); children.push(id);
+  }
+  components.push(column('source', children)); return components;
+}
+
 export type RepoSnippetInput = {
   org: string;
   repo: string;
@@ -149,10 +165,11 @@ export type RepoSnippetInput = {
   /** canonical page URL of the repo (absolute) */
   pageUrl: string;
   /** the Run block, when `ainize.json` (or a runnable root file) says what to run */
-  run: { entry: string; inputs: ManifestInput[]; endpoint: string; repoPath: string } | null;
+  run: { entry: string; inputs: ManifestInput[]; endpoint: string; repoPath: string; sha?: string; target?: "working-tree" } | null;
   /** the bound ainize project and its newest deployments, when known */
   ainize: { project: AinizeProject; deployments: AinizeDeployment[]; pageUrl: string } | null;
   now?: number;
+  versions?: SourceVersions;
 };
 
 export function repoSnippet(i: RepoSnippetInput): AinuiSnippet {
@@ -162,11 +179,12 @@ export function repoSnippet(i: RepoSnippetInput): AinuiSnippet {
   const headSub = i.head ? `${shortSha(i.head.sha)} ${i.head.subject}` : "no commits yet";
   comps.push(text("header.title", `${i.org}/${i.repo}`, "h4"), text("header.sub", `${i.branch} · ${headSub}`, "caption"), row("header", ["header.title", "header.sub"]));
   let data: Record<string, unknown> = {};
+  if (i.versions) { comps.push(...versionBlock(i.versions, actions)); sections.push('source'); }
   if (i.run) {
-    const r = runBlock(i.run.entry, i.run.inputs);
+    const r = runBlock(i.run.entry, i.run.inputs, i.run.sha);
     comps.push(...r.components);
     data = { ...data, ...r.data };
-    actions.run = { method: "POST", url: i.run.endpoint, body: { repo: i.run.repoPath, entry: i.run.entry, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
+    actions.run = { method: "POST", url: i.run.endpoint, body: { ...(i.run.target ? { target: i.run.target } : {}), ...(i.run.sha ? { target: "commit", sha: i.run.sha } : {}), repo: i.run.repoPath, entry: i.run.entry, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
     sections.push("run");
   }
   if (i.ainize) {
@@ -211,14 +229,15 @@ export type FileSnippetInput = {
   content: string | null;
   size: number;
   pageUrl: string;
-  rawUrl: string;
-  run: { inputs: ManifestInput[]; endpoint: string; repoPath: string } | null;
+  rawUrl: string | null;
+  versions?: SourceVersions;
+  run: { inputs: ManifestInput[]; endpoint: string; repoPath: string; sha?: string; target?: "working-tree" } | null;
 };
 
 export function fileSnippet(i: FileSnippetInput): AinuiSnippet {
   const actions: Record<string, SnippetAction> = {
     "open:aindrive": { method: "GET", url: i.pageUrl, navigate: true },
-    "open:raw": { method: "GET", url: i.rawUrl, navigate: true },
+    ...(i.rawUrl ? { "open:raw": { method: "GET" as const, url: i.rawUrl, navigate: true as const } } : {}),
   };
   const comps: A2uiComponent[] = [];
   const sections = ["header", "file.code"];
@@ -230,14 +249,15 @@ export function fileSnippet(i: FileSnippetInput): AinuiSnippet {
     comps.push(text("file.code", p.text + (p.truncated ? `\n… (first ${FILE_PREVIEW_LINES} lines; open the file for the rest)` : ""), "body"));
   }
   let data: Record<string, unknown> = {};
+  if (i.versions) { comps.push(...versionBlock(i.versions, actions)); sections.push('source'); }
   if (i.run) {
-    const r = runBlock(i.path, i.run.inputs);
+    const r = runBlock(i.path, i.run.inputs, i.run.sha);
     comps.push(...r.components);
     data = { ...data, ...r.data };
-    actions.run = { method: "POST", url: i.run.endpoint, body: { repo: i.run.repoPath, entry: i.path, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
+    actions.run = { method: "POST", url: i.run.endpoint, body: { ...(i.run.target ? { target: i.run.target } : {}), ...(i.run.sha ? { target: "commit", sha: i.run.sha } : {}), repo: i.run.repoPath, entry: i.path, env: { $context: true } }, stream: "sse", output: { path: "/run/output", status: "/run/status" } };
     sections.push("run");
   }
-  comps.push(...button("links.aindrive", "Open", "open:aindrive", { variant: "borderless" }), ...button("links.raw", "Raw", "open:raw", { variant: "borderless" }), divider("links.divider"), row("links", ["links.aindrive", "links.raw"]));
+  comps.push(...button("links.aindrive", "Open", "open:aindrive", { variant: "borderless" }), ...(i.rawUrl ? button("links.raw", "Raw", "open:raw", { variant: "borderless" }) : []), divider("links.divider"), row("links", ["links.aindrive", ...(i.rawUrl ? ["links.raw"] : [])]));
   sections.push("links.divider", "links");
   comps.push(column("root", sections));
   return {

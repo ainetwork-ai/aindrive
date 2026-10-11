@@ -119,3 +119,9 @@ by hand into `cli/` (e.g. `protocol`, chunk sizes) — keep those in sync.
 ## Remote folder chat
 
 `cloud-agent.ts` uses `ain-ui`'s bounded recursive walker and A2A accumulator. It lists only the requested subtree (200 entries, 8 levels, 64 directories), reports incomplete inventories, and grants temporary read links for at most 50 files. The receiving model decides which granted files to read. `folder-chat-stream.ts` wraps updates as AG-UI SSE and AIN-UI activity snapshots. Never retry a submitted streaming turn as a new blocking request. Tests: `folder-chat-route.test.ts`, `cloud-agent-listing.test.ts`.
+
+## Repository deployment delivery
+
+`git-project-hooks.ts` owns project binding and signed webhook payloads. `git-project-deliveries.ts` persists immutable push events in `git_project_deliveries` before sending, captures the pusher, leases attempts, and retries failures with bounded exponential delay. Requests include a stable `deliveryId`; ainize deduplicates them. Pending events are ordered per repository and survive restart. The custom server loads the worker from `.ssh-server/project-deliveries.mjs` (built with `build:ssh`, independent of whether SSH is enabled). Credentials stay in the sealed hook store; queued records contain no secret. Delivered/ignored receipts expire after 30 days; pending records remain until handled.
+
+`run-ainize.ts` also forwards immutable HEAD/commit/deployed execution to the bound project's streaming run API. The run route gates the repository before either path and refuses version runs without a project/SSO actor instead of changing their source. Tests: `run-version-route.test.ts`; source selection and execution retention are tested with real Git in ainize-node.

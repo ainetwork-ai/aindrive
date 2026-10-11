@@ -19,6 +19,12 @@ process.env.AINDRIVE_SSO_CLIENT_ID = "app_aindrive";
 process.env.AINDRIVE_SSO_SERVICE_APPS = "ainteams, ainize";
 process.env.AINIZE_URL = "https://ainize.example.test";
 
+const versionActor = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../run-ainize', async () => {
+  const actual = await vi.importActual<typeof import('../run-ainize')>('../run-ainize');
+  return { ...actual, runActorFor: (userId: string | null) => versionActor.enabled ? Promise.resolve({ token: 'test-machine', subject: 'acc_member' }) : actual.runActorFor(userId) };
+});
+
 const cookieJar = new Map<string, string>();
 vi.mock("next/headers", () => ({
   cookies: () => Promise.resolve({
@@ -43,7 +49,7 @@ vi.mock("../rpc", () => ({
     if (req.method === "git-meta") return req.repo === WC
       ? { method: "git-meta", exists: true, branch: "main", head: { sha: HEAD, subject: "run as the person", author: "Ann", date: "2026-10-10" }, dirty: 0, commits: [], layout: "working-copy", ahead: 0, behind: 0 }
       : { method: "git-meta", exists: false };
-    if (req.method === "read") { if (agent.manifest && req.path === `${WC}/ainize.json`) return { method: "read", content: MANIFEST, encoding: "utf8" }; if (req.path === `${WC}/art_search.py`) return { method: "read", content: "print('hi')\n", encoding: "utf8" }; throw new Error("no such file"); }
+    if (req.method === "read") { if (agent.manifest && req.path === `${WC}/ainize.json`) return { method: "read", content: MANIFEST, encoding: "utf8" }; if (req.path === `${WC}/art_search.py`) return { method: "read", content: req.encoding === "base64" ? Buffer.from("print('hi')\n").toString("base64") : "print('hi')\n", encoding: req.encoding ?? "utf8" }; throw new Error("no such file"); }
     if (req.method === "list") return { entries: [{ name: "art_search.py", path: `${WC}/art_search.py`, isDir: false, size: 12 }, { name: "ainize.json", path: `${WC}/ainize.json`, isDir: false, size: MANIFEST.length }] };
     if (req.method === "git-show") {
       if (req.path === "missing.py") throw new Error("no such path at ref");
@@ -57,6 +63,7 @@ vi.mock("../rpc", () => ({
 const issuer = await createTestIssuer();
 const { db } = await import("../db.js");
 const orgs = await import("../orgs.js");
+const { storeProjectHook, removeProjectHook } = await import("../git-project-hooks");
 const { adapterJwksUrl, setJwksForTests } = await import("../sso/oidc");
 const { AINUI_MEDIA_TYPE } = await import("../ainui-snippet");
 const slugRoute = await import("../../app/[slug]/git/[...path]/route");
@@ -94,7 +101,7 @@ beforeAll(() => {
   ident.run(ISSUER, "acc_owner", "owner1", "jit", Date.now()); ident.run(ISSUER, "acc_member", "member1", "jit", Date.now()); ident.run(ISSUER, "acc_stranger", "stranger1", "jit", Date.now());
   orgs.shareDriveWithOrg({ driveId: "d1", issuer: ISSUER, orgId: COMCOM.id, role: "viewer", actor: "operator", via: "operator" });
 });
-beforeEach(() => { agent.calls.length = 0; agent.offline = false; agent.manifest = true; cookieJar.clear(); });
+beforeEach(() => { removeProjectHook('d1', WC); versionActor.enabled = false; agent.calls.length = 0; agent.offline = false; agent.manifest = true; cookieJar.clear(); });
 
 // ainize is not reachable from the test: by-repo answers 404 → no deployments block.
 const realFetch = globalThis.fetch;
@@ -284,5 +291,55 @@ describe("the run action pressed by a consumer for a person", () => {
     const bad = await press("acc_member", await appToken({ app: "stranger-app" }));
     expect(bad.status).toBe(401);
     expect(await body(bad)).toMatchObject({ error: "invalid service token" });
+  });
+});
+
+
+describe('version replacement cards', () => {
+  it('pins HEAD and deployed forms to the returned SHA and keeps mutable input separate', async () => {
+    versionActor.enabled = true;
+    storeProjectHook('d1', WC, 'prj_1', 'test-webhook-secret', 'owner1');
+    const old = 'b'.repeat(40), seen: { url: string; actor: string | null }[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      if (!url.pathname.endsWith('/source')) return Response.json({}, { status: 404 });
+      seen.push({ url: url.href, actor: new Headers(init?.headers).get('x-ain-actor') });
+      const sha = url.searchParams.get('target') === 'deployed' ? old : url.searchParams.get('sha') ?? HEAD;
+      return Response.json({ sha, manifest: { kind: 'script', entry: sha === old ? 'old.py' : 'art_search.py', inputs: { MODEL: { type: 'choice', options: [sha === old ? 'old-model' : 'new-model'], default: sha === old ? 'old-model' : 'new-model' } } } });
+    }) as typeof fetch;
+    const headers = { accept: AINUI_MEDIA_TYPE, authorization: `Bearer ${await appToken()}`, 'x-ain-actor': 'acc_member' };
+    const selected = async (query: string) => get(`${REPO}?${query}`, headers, ['comcom', 'git', 'clef']);
+    const head = await body(await selected('runTarget=head'));
+    expect(head.actions.run.body).toMatchObject({ target: 'commit', sha: HEAD });
+    expect(head.url).toContain(`runSha=${HEAD}`);
+    expect(head.surface[2].updateDataModel.value.inputs.MODEL).toEqual(['new-model']);
+    expect(head.actions['select:deployed']).toMatchObject({ method: 'GET', navigate: false, replace: true });
+    const deployed = await body(await selected('runTarget=deployed'));
+    expect(deployed.actions.run.body).toMatchObject({ target: 'commit', sha: old, entry: 'old.py' });
+    expect(deployed.surface[2].updateDataModel.value.inputs.MODEL).toEqual(['old-model']);
+    const pinned = await body(await get(deployed.url, headers, ['comcom', 'git', 'clef']));
+    expect(pinned.actions.run.body).toEqual(deployed.actions.run.body);
+    const tree = await body(await get(`${REPO}/tree/${old}`, headers, ['comcom', 'git', 'clef', 'tree', old]));
+    expect(tree.actions.run.body).toMatchObject({ target: 'commit', sha: old, entry: 'old.py' });
+    expect(seen.every((request) => request.actor === 'acc_member')).toBe(true);
+    const working = await body(await selected('runTarget=working-tree'));
+    expect(working.actions.run.body).toMatchObject({ target: 'working-tree', entry: 'art_search.py' });
+    expect(working.actions.run.body.sha).toBeUndefined();
+    expect(working.surface[2].updateDataModel.value.inputs.DESC).toBe('a harbour');
+    const file = await body(await get(`${REPO}/blob/HEAD/old.py?runTarget=deployed`, headers, ['comcom', 'git', 'clef', 'blob', 'HEAD', 'old.py']));
+    expect(file.actions.run.body).toMatchObject({ target: 'commit', sha: old, entry: 'old.py' });
+    expect(agent.calls.some((call) => call.method === 'git-show' && call.ref === old && call.path === 'old.py')).toBe(true);
+    const mutableFile = await body(await get(`${REPO}/blob/HEAD/art_search.py?runTarget=working-tree`, headers, ['comcom', 'git', 'clef', 'blob', 'HEAD', 'art_search.py']));
+    expect(mutableFile.actions.run.body.target).toBe('working-tree');
+    expect(mutableFile.actions['open:raw']).toBeUndefined();
+    expect(JSON.stringify(mutableFile.surface)).toContain("print('hi')");
+  });
+  it('does not fall back to mutable code when a selected version is refused', async () => {
+    versionActor.enabled = true;
+    storeProjectHook('d1', WC, 'prj_1', 'test-webhook-secret', 'owner1');
+    globalThis.fetch = (async () => Response.json({ error: 'forbidden' }, { status: 403 })) as typeof fetch;
+    const res = await get(`${REPO}?runTarget=deployed`, { accept: AINUI_MEDIA_TYPE, authorization: `Bearer ${await appToken()}`, 'x-ain-actor': 'acc_member' }, ['comcom', 'git', 'clef']);
+    expect(res.status).toBe(503);
+    expect(agent.calls.some((call) => call.method === 'read' || call.method === 'list')).toBe(false);
   });
 });

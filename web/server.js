@@ -71,6 +71,7 @@ server.listen(port, hostname, () => {
   log.info({ url: `http://${shown}:${port}` }, "▲ aindrive");
   startRotationSweeper();
   startGitSsh();
+  startProjectDeliveries();
 });
 
 // Git over SSH (ssh-server.ts, bundled to .ssh-server/ by scripts/build-ssh-server.mjs
@@ -84,6 +85,16 @@ async function startGitSsh() {
     sshServer = await mod.startGitSshServer();
   } catch (e) {
     log.warn({ err: e?.message || String(e) }, "[git-ssh] not started (run `node scripts/build-ssh-server.mjs`)");
+  }
+}
+
+let projectDeliveries = null;
+async function startProjectDeliveries() {
+  try {
+    const mod = await import("./.ssh-server/project-deliveries.mjs");
+    projectDeliveries = mod.startProjectDeliveryWorker();
+  } catch (e) {
+    log.error({ err: e?.message || String(e) }, "project delivery worker unavailable; queued events remain stored");
   }
 }
 
@@ -116,8 +127,9 @@ function shutdown(signal) {
 
   // Exit cleanly once both server and wss have closed.
   let closed = 0;
+  void Promise.resolve(projectDeliveries?.stop()).then(onClosed);
   function onClosed() {
-    if (++closed >= 2) {
+    if (++closed >= 3) {
       clearTimeout(forceExit);
       process.exit(0);
     }

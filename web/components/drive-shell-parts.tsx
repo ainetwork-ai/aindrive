@@ -305,12 +305,12 @@ export function DriveHeader({
   // Breadcrumb currently hovered by an in-drive drag (drop = move up the tree).
   const [dropCrumb, setDropCrumb] = useState<string | null>(null);
   return (
-    <header className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
-      <div className="flex items-center gap-1 min-w-0 text-sm">
+    <header className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-6 py-3 border-b border-drive-border bg-white">
+      <div className="flex w-full sm:w-auto sm:flex-1 items-center gap-1 min-w-0 text-sm">
         <button
           aria-label="Open menu"
           onClick={() => setSidebarOpen(true)}
-          className="md:hidden mr-1 p-1.5 -ml-1 rounded hover:bg-drive-hover shrink-0"
+          className="md:hidden mr-1 min-h-11 min-w-11 inline-flex items-center justify-center p-1.5 -ml-1 rounded hover:bg-drive-hover shrink-0"
         >
           <MenuIcon className="w-5 h-5" />
         </button>
@@ -365,7 +365,7 @@ export function DriveHeader({
           );
         })}
       </div>
-      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+      <div className="flex w-full sm:w-auto max-w-full flex-wrap items-center justify-end gap-1.5 sm:gap-2 shrink-0 [&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 [&_label]:min-h-11 [&_label]:min-w-11 sm:[&_label]:min-h-0 sm:[&_label]:min-w-0">
         {/* Folder-scoped filename filter (client-side). Hidden on <sm where the
             crumbs already fight for space — mobile search is a follow-up. */}
         <div className="relative hidden sm:block">
@@ -397,7 +397,7 @@ export function DriveHeader({
             disabled={downloading}
             aria-busy={downloading || undefined}
             data-testid="download-folder"
-            className="flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover disabled:opacity-60 disabled:cursor-progress"
+            className="flex items-center justify-center shrink-0 gap-2 rounded-full px-0 sm:px-3 py-0 sm:py-1.5 text-sm border border-drive-border hover:bg-drive-hover disabled:opacity-60 disabled:cursor-progress"
           >
             {downloading ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> : <Download className="w-4 h-4" aria-hidden="true" />}
             <span className="hidden sm:inline">{downloading ? "Preparing…" : "Download"}</span>
@@ -408,7 +408,7 @@ export function DriveHeader({
             aria-label="New folder"
             title="New folder"
             onClick={onNewFolder}
-            className="flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover"
+            className="flex items-center justify-center shrink-0 gap-2 rounded-full px-0 sm:px-3 py-0 sm:py-1.5 text-sm border border-drive-border hover:bg-drive-hover"
           >
             <FolderPlus className="w-4 h-4" /> <span className="hidden sm:inline">New folder</span>
           </button>
@@ -416,7 +416,7 @@ export function DriveHeader({
         <label
           aria-label="Upload"
           className={clsx(
-            "cursor-pointer flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-sm border border-drive-border hover:bg-drive-hover",
+            "cursor-pointer flex items-center justify-center shrink-0 gap-2 rounded-full px-0 sm:px-3 py-0 sm:py-1.5 text-sm border border-drive-border hover:bg-drive-hover",
             !canEdit && "opacity-50 pointer-events-none",
           )}
         >
@@ -427,7 +427,7 @@ export function DriveHeader({
           <button
             aria-label="Share"
             onClick={() => setShareOpen({ path })}
-            className="flex items-center gap-2 rounded-full bg-drive-accent text-white px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-accentHover"
+            className="flex items-center justify-center shrink-0 gap-2 rounded-full bg-drive-accent text-white px-0 sm:px-3 py-0 sm:py-1.5 text-sm hover:bg-drive-accentHover"
           >
             <Share2 className="w-4 h-4" /> <span className="hidden sm:inline">Share</span>
           </button>
@@ -437,7 +437,7 @@ export function DriveHeader({
           onClick={() => setChatOpen((v) => !v)}
           title="Folder chat"
           className={clsx(
-            "flex items-center gap-2 rounded-full border border-drive-border px-2.5 sm:px-3 py-1.5 text-sm hover:bg-drive-hover",
+            "flex items-center justify-center shrink-0 h-11 w-11 sm:h-9 sm:w-9 rounded-full border border-drive-border p-0 text-sm hover:bg-drive-hover",
             chatOpen && "bg-blue-50 border-blue-300",
           )}
         >

@@ -669,6 +669,17 @@ function open() {
       FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
     );
   `);
+  handle.exec(`
+    CREATE TABLE IF NOT EXISTS git_project_deliveries (
+      id TEXT PRIMARY KEY, drive_id TEXT NOT NULL, repo TEXT NOT NULL,
+      payload TEXT NOT NULL, user_id TEXT, origin TEXT,
+      status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at INTEGER NOT NULL, lease TEXT, lease_until INTEGER,
+      last_error TEXT, created_at INTEGER NOT NULL, delivered_at INTEGER,
+      FOREIGN KEY(drive_id) REFERENCES drives(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS git_project_deliveries_due ON git_project_deliveries(status, next_attempt_at);
+  `);
   // Backfill: a drive's old single payout_wallet becomes its root ("") path
   // wallet in the new per-path table. Idempotent — INSERT OR IGNORE on the
   // UNIQUE(drive_id, path) so it only seeds drives that don't already have a

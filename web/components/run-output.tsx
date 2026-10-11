@@ -11,11 +11,13 @@ import {
   RUN_IDLE, reduceRun, parseRunEvent, splitSse, formatDuration, type RunState, type RunStatus,
 } from "@/lib/git-panel";
 
+export type RunTarget = { target: "working-tree" | "head" | "commit" | "deployed"; sha?: string };
+
 export type Runner = {
   runs: Record<string, RunState>;
   open: Record<string, boolean>;
   /** `env`: the answers to the manifest's inputs, already as `INPUT_<NAME>` (lib/run-inputs.ts inputsToEnv). */
-  run: (entryPath: string, env?: Record<string, string>) => void;
+  run: (entryPath: string, env?: Record<string, string>, target?: RunTarget) => void;
   stop: (entryPath: string) => void;
   toggle: (entryPath: string) => void;
 };
@@ -42,7 +44,7 @@ export function useRunner(driveId: string, repo: string | null): Runner {
     aborts.current.delete(p);
   }, []);
 
-  const run = useCallback(async (entryPath: string, env?: Record<string, string>) => {
+  const run = useCallback(async (entryPath: string, env?: Record<string, string>, target?: RunTarget) => {
     if (repo === null) return;
     stop(entryPath);
     const ctrl = new AbortController();
@@ -54,12 +56,12 @@ export function useRunner(driveId: string, repo: string | null): Runner {
     try {
       const res = await fetch(`/api/drives/${driveId}/run`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repo, entry, ...(env && Object.keys(env).length ? { env } : {}) }), signal: ctrl.signal,
+        body: JSON.stringify({ repo, entry, ...(target ?? { target: "working-tree" }), ...(env && Object.keys(env).length ? { env } : {}) }), signal: ctrl.signal,
       });
       if (res.status === 503) { dispatch(entryPath, { type: "unavailable" }); return; }
       if (!res.ok || !res.body) {
         let msg = `run failed (${res.status})`;
-        try { const j = await res.json(); if (j?.error) msg = j.error; } catch {}
+        try { const j = await res.json(); if (j?.error) msg = typeof j.error === "string" ? j.error : j.error.message ?? msg; } catch {}
         dispatch(entryPath, { type: "error", message: msg });
         return;
       }
@@ -159,22 +161,22 @@ export function RunOutput({ state, entryName, openUrl }: { state: RunState; entr
     : state.error ?? "Failed";
   return (
     <div className="rounded-lg border border-drive-border bg-drive-panel text-caption overflow-hidden" data-run-status={state.status}>
-      <div className="flex items-center gap-2 px-3 h-8 border-b border-drive-border text-drive-muted">
+      <div className="flex flex-wrap items-center gap-2 px-3 min-h-11 sm:min-h-8 py-2 sm:py-0 border-b border-drive-border text-drive-muted">
         <RunDot status={state.status} />
-        <span className="font-mono text-drive-text truncate">{entryName}</span>
+        <span className="min-w-0 max-w-full font-mono text-drive-text truncate">{entryName}</span>
         <span className="truncate">{summary}</span>
         {openUrl && (
           <a
             href={openUrl}
             target="_blank"
             rel="noreferrer"
-            className="ml-auto inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
+            className="min-h-11 sm:min-h-0 sm:ml-auto inline-flex items-center gap-1 font-medium text-drive-muted hover:text-drive-text"
           >
             Open in ainize <ExternalLink className="w-3 h-3" aria-hidden="true" />
           </a>
         )}
       </div>
-      <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap wrap-break-word text-drive-text">
+      <pre className="m-0 max-h-72 overflow-auto scrollbar-thin px-3 py-2 font-mono text-[12px] leading-5 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-drive-text">
         {state.chunks.length === 0 && state.status === "running" && <span className="text-drive-muted">waiting for output…</span>}
         {state.chunks.map((c, i) => (
           <span key={i} className={c.stream === "stderr" ? "text-red-600" : undefined}>{c.text}</span>

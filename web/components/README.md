@@ -29,7 +29,9 @@ Browser shell:
   folder + open file) is mirrored in `?path` and history state.
 - `git-panel` — shown above the listing when the folder is a git repo
   (`GET git-meta` answers `exists:true`); the folder is the repo's **working
-  copy** (`lib/git-paths.ts`). Top to bottom: branch + HEAD (+ `ainize.json`
+  copy** (`lib/git-paths.ts`). It starts compact on every screen: **Details**
+  expands commit metadata, clone URL, deployments and history; **Run** independently
+  expands the saved execution form and output. Top to bottom: branch + HEAD (+ `ainize.json`
   name/kind) + **Push N / Pull N** (vs the bare remote; Pull only when clean) ·
   clone URL + copy · legacy-layout hint · **Run** (the project's entry: manifest
   `entry`, else the root's first runnable file; shares `useRunner`, output right
@@ -152,3 +154,7 @@ Design system:
 `folder-chat.tsx` mounts `ain-ui/react`'s FolderChat keyed by drive and folder. It offers exact-folder local agents and, for owners, remote agents from the folder-chat API. Remote exports are confirmed per agent and folder. Context IDs remain scoped to each agent and folder; unmount cancels the active response. Local agents retain their JSON response API.
 
 AIN-UI 0.2.1 fixes gallery tile sizing for long filenames and failed thumbnails. The producer displays counts from the current listing, with photos separate from folders and other files; these are not recursive totals.
+
+The repository panel and drive header wrap on phones: breadcrumbs get their own row, Run selectors and manifest inputs use 44px controls with 16px text, and commit/deployment rows grow with their contents. Desktop controls remain compact.
+
+The repository Run row chooses working files (including edits), a pinned commit, or the last successfully deployed version. Immutable versions go through the bound project with the signed-in person's actor; the working-file runner keeps its own target. `run-output.tsx` carries this target alongside inputs and consumes the common SSE output. Version selectors and commit controls wrap on narrow screens.

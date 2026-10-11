@@ -11,6 +11,9 @@ export type AinizeProject = {
   repoName?: string;
   repo: string;
   branch: string;
+  sourceCommit?: string | null;
+  activeCommit?: string | null;
+  activeDeploymentId?: string | null;
   kind: string;
   status: string;
   url?: string | null;
